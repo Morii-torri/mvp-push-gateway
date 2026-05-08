@@ -75,11 +75,66 @@ export const trendPoints = [
 ];
 
 export const platformRanking = [
-  { name: '省一体化政务服务平台', sent: '342,198', success: '98.83%', latency: '268 ms' },
-  { name: '省数据共享交换平台', sent: '238,765', success: '98.47%', latency: '305 ms' },
-  { name: '福州市政务平台', sent: '156,432', success: '97.88%', latency: '341 ms' },
-  { name: '厦门市政务平台', sent: '138,556', success: '98.24%', latency: '289 ms' },
-  { name: '泉州市政务平台', sent: '110,245', success: '98.08%', latency: '327 ms' },
+  {
+    name: '省一体化政务服务平台',
+    providerType: '随申办政务云',
+    sent: '342,198',
+    success: '98.83%',
+    qps: '412',
+    failures: '3,992',
+    rateLimited: 12,
+    latency: '268 ms',
+    p95: '612 ms',
+    lastError: '-',
+  },
+  {
+    name: '省数据共享交换平台',
+    providerType: '通用 Webhook',
+    sent: '238,765',
+    success: '98.47%',
+    qps: '305',
+    failures: '3,653',
+    rateLimited: 18,
+    latency: '305 ms',
+    p95: '733 ms',
+    lastError: '-',
+  },
+  {
+    name: '福州市政务平台',
+    providerType: '随申办政务云',
+    sent: '156,432',
+    success: '97.88%',
+    qps: '226',
+    failures: '3,312',
+    rateLimited: 28,
+    latency: '341 ms',
+    p95: '981 ms',
+    lastError: '目标平台超时',
+  },
+  {
+    name: '厦门市政务平台',
+    providerType: '通用 Webhook',
+    sent: '138,556',
+    success: '98.24%',
+    qps: '198',
+    failures: '2,444',
+    rateLimited: 9,
+    latency: '289 ms',
+    p95: '654 ms',
+    lastError: '-',
+  },
+  {
+    name: '泉州市政务平台',
+    providerType: '企业微信',
+    sent: '110,245',
+    success: '98.08%',
+    qps: '176',
+    failures: '2,120',
+    rateLimited: 16,
+    latency: '327 ms',
+    p95: '802 ms',
+    lastError: '频率限制',
+  },
 ];
 
 export const failureReasons = [
@@ -91,10 +146,10 @@ export const failureReasons = [
 ];
 
 export const recentAnomalies = [
-  { level: '高', title: '目标平台超时：福州市医保平台', time: '09:55:12' },
-  { level: '中', title: '签名验证失败：泉州市税务平台', time: '09:28:51' },
-  { level: '中', title: '路由未命中：莆田市住建平台', time: '09:17:33' },
-  { level: '低', title: '频率限制：漳州市教育平台', time: '09:05:44' },
+  { level: '高', title: '目标平台超时：福州市医保平台', time: '09:55:12', count: '981', ratio: 41 },
+  { level: '中', title: '签名验证失败：泉州市税务平台', time: '09:28:51', count: '421', ratio: 24 },
+  { level: '中', title: '路由未命中：莆田市住建平台', time: '09:17:33', count: '316', ratio: 18 },
+  { level: '低', title: '频率限制：漳州市教育平台', time: '09:05:44', count: '189', ratio: 11 },
 ];
 
 export type SourceRecord = {
@@ -171,11 +226,19 @@ export type ProviderRecord = {
   name: string;
   providerType: ProviderType;
   enabled: boolean;
+  description: string;
+  messageTypes: string[];
+  recipientFields: string;
+  tokenStrategy: string;
+  requestMethod: string;
+  requestUrl: string;
+  tokenPlacement: string;
   rateLimit: string;
   concurrency: number;
   timeout: string;
   retryPolicy: string;
   deadLetterPolicy: string;
+  lastTestResult: string;
   capability: string;
 };
 
@@ -185,11 +248,19 @@ export const providers: ProviderRecord[] = [
     name: '省一体化政务服务平台',
     providerType: 'gov_cloud',
     enabled: true,
+    description: '省级政务云统一消息能力',
+    messageTypes: ['文本', '卡片', '链接'],
+    recipientFields: 'mobile/open_id，写入 body.receivers',
+    tokenStrategy: 'OAuth2 client_credentials，提前 5 分钟刷新',
+    requestMethod: 'POST',
+    requestUrl: 'https://gov.example.cn/message/send',
+    tokenPlacement: 'Header: Authorization Bearer',
     rateLimit: '每秒 80 条',
     concurrency: 32,
     timeout: '3 秒',
     retryPolicy: '3 次指数退避',
     deadLetterPolicy: '重试耗尽进入死信',
+    lastTestResult: '2026-05-08 14:52 联调成功',
     capability: '文本、卡片、链接；接收人字段 mobile/open_id',
   },
   {
@@ -197,11 +268,19 @@ export const providers: ProviderRecord[] = [
     name: '内部通知企业微信',
     providerType: 'wecom',
     enabled: true,
+    description: '内部通知和运营告警主通道',
+    messageTypes: ['文本', 'Markdown'],
+    recipientFields: 'userid/department，写入 touser/toparty',
+    tokenStrategy: 'corpsecret 换取 access_token',
+    requestMethod: 'POST',
+    requestUrl: 'https://qyapi.weixin.qq.com/cgi-bin/message/send',
+    tokenPlacement: 'Query: access_token',
     rateLimit: '每秒 120 条',
     concurrency: 48,
     timeout: '2 秒',
     retryPolicy: '2 次固定间隔',
     deadLetterPolicy: '平台错误进入死信',
+    lastTestResult: '2026-05-08 14:20 联调成功',
     capability: '文本、Markdown；接收人字段 userid/department',
   },
   {
@@ -209,11 +288,19 @@ export const providers: ProviderRecord[] = [
     name: '协同办公飞书',
     providerType: 'feishu',
     enabled: true,
+    description: '协同办公富文本消息推送',
+    messageTypes: ['文本', '富文本'],
+    recipientFields: 'open_id，写入 receive_id',
+    tokenStrategy: 'tenant_access_token 缓存',
+    requestMethod: 'POST',
+    requestUrl: 'https://open.feishu.cn/open-apis/im/v1/messages',
+    tokenPlacement: 'Header: Authorization Bearer',
     rateLimit: '每秒 60 条',
     concurrency: 24,
     timeout: '3 秒',
     retryPolicy: '3 次指数退避',
     deadLetterPolicy: '超时进入死信',
+    lastTestResult: '2026-05-08 13:38 联调成功',
     capability: '文本、富文本；接收人字段 open_id',
   },
   {
@@ -221,11 +308,19 @@ export const providers: ProviderRecord[] = [
     name: '短信备用通道',
     providerType: 'sms',
     enabled: false,
+    description: '短信兜底发送通道',
+    messageTypes: ['短信'],
+    recipientFields: 'mobile，写入 body.phoneNumbers',
+    tokenStrategy: '固定 Token',
+    requestMethod: 'POST',
+    requestUrl: 'https://sms.example.cn/send',
+    tokenPlacement: 'Header: X-Access-Token',
     rateLimit: '每秒 20 条',
     concurrency: 8,
     timeout: '5 秒',
     retryPolicy: '1 次重试',
     deadLetterPolicy: '人工复核',
+    lastTestResult: '2026-05-07 16:22 联调失败：余额不足',
     capability: '短信文本；接收人字段 mobile',
   },
 ];
@@ -320,6 +415,8 @@ export type TemplateRecord = {
   source: string;
   messageType: string;
   targetProviderType: ProviderType;
+  targetField: string;
+  content: string;
   validationStatus: ValidationStatus;
   version: string;
   usedVariables: string[];
@@ -333,6 +430,8 @@ export const templates: TemplateRecord[] = [
     source: '省直单位上报',
     messageType: '文本卡片',
     targetProviderType: 'gov_cloud',
+    targetField: 'message.content',
+    content: '您好，{{ payload.sender.department }}的{{ payload.sender.name }}发送了消息：{{ payload.content }}',
     validationStatus: 'valid',
     version: 'v1.2.1',
     usedVariables: ['payload.title', 'payload.content', 'payload.sentAt'],
@@ -344,6 +443,8 @@ export const templates: TemplateRecord[] = [
     source: '运维监控系统',
     messageType: 'Markdown',
     targetProviderType: 'wecom',
+    targetField: 'markdown.content',
+    content: '### {{ payload.title }}\n负责人：{{ payload.owner }}\n错误码：{{ payload.error.code }}',
     validationStatus: 'invalid',
     version: 'v1.1.0',
     usedVariables: ['payload.title', 'payload.error.code', 'payload.owner'],
@@ -355,6 +456,8 @@ export const templates: TemplateRecord[] = [
     source: '市级业务系统',
     messageType: '富文本',
     targetProviderType: 'feishu',
+    targetField: 'content.text',
+    content: '{{ payload.title }}：请 {{ payload.sender.department }} 及时处理。',
     validationStatus: 'draft',
     version: 'v0.9.4',
     usedVariables: ['payload.title', 'payload.sender.department'],
@@ -380,8 +483,15 @@ export type UserContact = {
   mobile: string;
   email: string;
   status: boolean;
-  identities: string[];
+  identities: UserIdentity[];
   updatedAt: string;
+};
+
+export type UserIdentity = {
+  platform: string;
+  fieldName: string;
+  value: string;
+  primary: boolean;
 };
 
 export const userContacts: UserContact[] = [
@@ -392,7 +502,10 @@ export const userContacts: UserContact[] = [
     mobile: '13800005678',
     email: 'zhangwei@example.gov.cn',
     status: true,
-    identities: ['企业微信 userid: zhangwei', '飞书 open_id: ou_12a8'],
+    identities: [
+      { platform: '企业微信', fieldName: 'userid', value: 'zhangwei', primary: true },
+      { platform: '飞书', fieldName: 'open_id', value: 'ou_12a8', primary: false },
+    ],
     updatedAt: '2026-05-08 14:20:31',
   },
   {
@@ -402,7 +515,10 @@ export const userContacts: UserContact[] = [
     mobile: '13900001234',
     email: 'lina@example.gov.cn',
     status: true,
-    identities: ['短信 mobile: 13900001234', '政务云 user_id: gov_1024'],
+    identities: [
+      { platform: '短信', fieldName: 'mobile', value: '13900001234', primary: true },
+      { platform: '随申办政务云', fieldName: 'user_id', value: 'gov_1024', primary: false },
+    ],
     updatedAt: '2026-05-08 11:42:02',
   },
   {
@@ -412,7 +528,7 @@ export const userContacts: UserContact[] = [
     mobile: '13700004321',
     email: 'wangqiang@example.gov.cn',
     status: false,
-    identities: ['企业微信 userid: wangqiang'],
+    identities: [{ platform: '企业微信', fieldName: 'userid', value: 'wangqiang', primary: true }],
     updatedAt: '2026-05-07 18:12:45',
   },
 ];
@@ -519,10 +635,10 @@ export const messageLogs: MessageLog[] = [
 ];
 
 export const logTimeline = [
-  { title: '入站接收', description: '完成来源鉴权和限流校验' },
-  { title: '路由规划', description: '命中规则：省直单位紧急告警优先' },
-  { title: '模板渲染', description: '使用模板版本 v1.2.1' },
-  { title: '出站发送', description: '省一体化政务服务平台返回成功' },
+  { time: '14:58:12.120', title: '入站接收', description: '完成来源鉴权和限流校验' },
+  { time: '14:58:12.184', title: '路由规划', description: '命中规则：省直单位紧急告警优先' },
+  { time: '14:58:12.236', title: '模板渲染', description: '使用模板版本 v1.2.1' },
+  { time: '14:58:12.406', title: '出站发送', description: '省一体化政务服务平台返回成功' },
 ];
 
 export type QueueMetric = Metric & {
