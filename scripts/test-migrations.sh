@@ -11,4 +11,4 @@ if [[ -z "${MGP_TEST_DATABASE_URL:-}" ]]; then
 fi
 
 cd "$ROOT_DIR/backend"
-go test ./internal/db -run TestMigrationsApplyToPostgres -count=1
+go test ./internal/db -count=1

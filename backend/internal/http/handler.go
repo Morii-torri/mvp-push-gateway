@@ -8,7 +8,10 @@ import (
 
 	"mvp-push-gateway/backend/internal/auth"
 	"mvp-push-gateway/backend/internal/config"
+	"mvp-push-gateway/backend/internal/provider"
+	"mvp-push-gateway/backend/internal/recipient"
 	"mvp-push-gateway/backend/internal/source"
+	msgtemplate "mvp-push-gateway/backend/internal/template"
 )
 
 type authService interface {
@@ -21,9 +24,12 @@ type authService interface {
 }
 
 type Handler struct {
-	cfg     config.Config
-	auth    authService
-	sources sourceService
+	cfg        config.Config
+	auth       authService
+	sources    sourceService
+	providers  providerService
+	recipients recipientService
+	templates  templateService
 }
 
 type Option func(*Handler)
@@ -37,6 +43,52 @@ type sourceService interface {
 	Ingest(context.Context, source.IngestInput) (source.IngestResult, error)
 }
 
+type providerService interface {
+	SeedProviderCapabilities(context.Context) error
+	ListProviderCapabilities(context.Context) ([]provider.Capability, error)
+	ListChannels(context.Context) ([]provider.Channel, error)
+	CreateChannel(context.Context, provider.CreateChannelInput) (provider.Channel, error)
+	GetChannel(context.Context, string) (provider.Channel, error)
+	UpdateChannel(context.Context, string, provider.UpdateChannelInput) (provider.Channel, error)
+	DeleteChannel(context.Context, string) error
+	BuildRequest(context.Context, string, provider.BuildRequestInput) (provider.BuiltRequest, error)
+}
+
+type recipientService interface {
+	ListOrgUnits(context.Context) ([]recipient.OrgUnit, error)
+	CreateOrgUnit(context.Context, recipient.OrgUnitInput) (recipient.OrgUnit, error)
+	GetOrgUnit(context.Context, string) (recipient.OrgUnit, error)
+	UpdateOrgUnit(context.Context, string, recipient.OrgUnitInput) (recipient.OrgUnit, error)
+	DeleteOrgUnit(context.Context, string) error
+	ListUsers(context.Context) ([]recipient.User, error)
+	CreateUser(context.Context, recipient.UserInput) (recipient.User, error)
+	GetUser(context.Context, string) (recipient.User, error)
+	UpdateUser(context.Context, string, recipient.UserInput) (recipient.User, error)
+	DeleteUser(context.Context, string) error
+	ListUserIdentities(context.Context, string) ([]recipient.UserIdentity, error)
+	CreateUserIdentity(context.Context, recipient.UserIdentityInput) (recipient.UserIdentity, error)
+	UpdateUserIdentity(context.Context, string, recipient.UserIdentityInput) (recipient.UserIdentity, error)
+	DeleteUserIdentity(context.Context, string) error
+	FindUserIdentity(context.Context, string, string, string) (recipient.UserIdentity, error)
+	ListRecipientGroups(context.Context) ([]recipient.RecipientGroup, error)
+	CreateRecipientGroup(context.Context, recipient.RecipientGroupInput) (recipient.RecipientGroup, error)
+	GetRecipientGroup(context.Context, string) (recipient.RecipientGroup, error)
+	UpdateRecipientGroup(context.Context, string, recipient.RecipientGroupInput) (recipient.RecipientGroup, error)
+	DeleteRecipientGroup(context.Context, string) error
+}
+
+type templateService interface {
+	ListTemplates(context.Context) ([]msgtemplate.Template, error)
+	CreateTemplate(context.Context, msgtemplate.TemplateInput) (msgtemplate.Template, error)
+	GetTemplate(context.Context, string) (msgtemplate.Template, error)
+	UpdateTemplate(context.Context, string, msgtemplate.TemplateInput) (msgtemplate.Template, error)
+	DeleteTemplate(context.Context, string) error
+	Parse(msgtemplate.VersionInput) (msgtemplate.ValidationResult, error)
+	Preview(msgtemplate.VersionInput) (msgtemplate.ValidationResult, error)
+	Validate(msgtemplate.VersionInput) msgtemplate.ValidationResult
+	Publish(context.Context, string, msgtemplate.VersionInput) (msgtemplate.TemplateVersion, error)
+}
+
 func WithAuthService(service authService) Option {
 	return func(h *Handler) {
 		h.auth = service
@@ -46,6 +98,24 @@ func WithAuthService(service authService) Option {
 func WithSourceService(service sourceService) Option {
 	return func(h *Handler) {
 		h.sources = service
+	}
+}
+
+func WithProviderService(service providerService) Option {
+	return func(h *Handler) {
+		h.providers = service
+	}
+}
+
+func WithRecipientService(service recipientService) Option {
+	return func(h *Handler) {
+		h.recipients = service
+	}
+}
+
+func WithTemplateService(service templateService) Option {
+	return func(h *Handler) {
+		h.templates = service
 	}
 }
 
@@ -73,6 +143,22 @@ func NewHandler(cfg config.Config, options ...Option) http.Handler {
 	mux.HandleFunc(cfg.Server.APIPrefix+"/sources", handler.sourcesHandler)
 	mux.HandleFunc(cfg.Server.APIPrefix+"/sources/", handler.sourceDetailHandler)
 	mux.HandleFunc(cfg.Server.APIPrefix+"/ingest/", handler.ingestHandler)
+	mux.HandleFunc(cfg.Server.APIPrefix+"/provider-capabilities", handler.providerCapabilitiesHandler)
+	mux.HandleFunc(cfg.Server.APIPrefix+"/channels", handler.channelsHandler)
+	mux.HandleFunc(cfg.Server.APIPrefix+"/channels/", handler.channelDetailHandler)
+	mux.HandleFunc(cfg.Server.APIPrefix+"/org-units", handler.orgUnitsHandler)
+	mux.HandleFunc(cfg.Server.APIPrefix+"/org-units/", handler.orgUnitDetailHandler)
+	mux.HandleFunc(cfg.Server.APIPrefix+"/users", handler.usersHandler)
+	mux.HandleFunc(cfg.Server.APIPrefix+"/users/", handler.userDetailHandler)
+	mux.HandleFunc(cfg.Server.APIPrefix+"/user-identities/lookup", handler.userIdentityLookupHandler)
+	mux.HandleFunc(cfg.Server.APIPrefix+"/user-identities/", handler.userIdentityDetailHandler)
+	mux.HandleFunc(cfg.Server.APIPrefix+"/recipient-groups", handler.recipientGroupsHandler)
+	mux.HandleFunc(cfg.Server.APIPrefix+"/recipient-groups/", handler.recipientGroupDetailHandler)
+	mux.HandleFunc(cfg.Server.APIPrefix+"/templates/parse", handler.templateParseHandler)
+	mux.HandleFunc(cfg.Server.APIPrefix+"/templates/preview", handler.templatePreviewHandler)
+	mux.HandleFunc(cfg.Server.APIPrefix+"/templates/validate", handler.templateValidateHandler)
+	mux.HandleFunc(cfg.Server.APIPrefix+"/templates", handler.templatesHandler)
+	mux.HandleFunc(cfg.Server.APIPrefix+"/templates/", handler.templateDetailHandler)
 	return mux
 }
 
@@ -134,6 +220,30 @@ func (h *Handler) requireSourceService(w http.ResponseWriter) bool {
 		return true
 	}
 	writeAPIError(w, http.StatusServiceUnavailable, "MGP-SRC-001", "来源服务未启用，请先配置数据库")
+	return false
+}
+
+func (h *Handler) requireProviderService(w http.ResponseWriter) bool {
+	if h.providers != nil {
+		return true
+	}
+	writeAPIError(w, http.StatusServiceUnavailable, "MGP-CHN-001", "平台服务未启用，请先配置数据库")
+	return false
+}
+
+func (h *Handler) requireRecipientService(w http.ResponseWriter) bool {
+	if h.recipients != nil {
+		return true
+	}
+	writeAPIError(w, http.StatusServiceUnavailable, "MGP-RCP-001", "接收人服务未启用，请先配置数据库")
+	return false
+}
+
+func (h *Handler) requireTemplateService(w http.ResponseWriter) bool {
+	if h.templates != nil {
+		return true
+	}
+	writeAPIError(w, http.StatusServiceUnavailable, "MGP-TPL-001", "模板服务未启用，请先配置数据库")
 	return false
 }
 
