@@ -1153,15 +1153,24 @@ export function RoutesPage({ lastUpdated, onRefresh }: ConsolePageProps) {
     selectedElement?.type === 'node' ? flowNodes.find((node) => node.id === selectedElement.id) : undefined;
   const selectedEdge =
     selectedElement?.type === 'edge' ? flowEdges.find((edge) => edge.id === selectedElement.id) : undefined;
-  const openGroup = (group: RouteGroup) => {
+  const loadCanvasForGroup = (group: RouteGroup) => {
     const snapshot = canvasSnapshots[group.id] ?? buildInitialRouteFlow(group, ruleRows);
     const initial = cloneRouteCanvasSnapshot(snapshot);
-    setSelectedGroup(group);
-    setMode('canvas');
-    setRuleKeyword('');
     setFlowNodes(initial.nodes);
     setFlowEdges(initial.edges);
     setSelectedElement({ type: 'node', id: 'source-start' });
+  };
+  const openGroup = (group: RouteGroup) => {
+    setSelectedGroup(group);
+    setMode('canvas');
+    setRuleKeyword('');
+    loadCanvasForGroup(group);
+  };
+  const switchRouteMode = (nextMode: 'canvas' | 'table') => {
+    setMode(nextMode);
+    if (nextMode === 'canvas' && selectedGroup) {
+      loadCanvasForGroup(selectedGroup);
+    }
   };
   const openCreateGroup = () => {
     setEditingGroupId(null);
@@ -1228,6 +1237,12 @@ export function RoutesPage({ lastUpdated, onRefresh }: ConsolePageProps) {
       }
       if (sourceChanged) {
         clearGroupCanvasSnapshot(editingGroupId);
+        if (selectedGroup?.id === editingGroupId && nextSelectedGroup) {
+          const initial = buildInitialRouteFlow(nextSelectedGroup, ruleRows);
+          setFlowNodes(initial.nodes);
+          setFlowEdges(initial.edges);
+          setSelectedElement({ type: 'node', id: 'source-start' });
+        }
       }
     } else {
       const nextGroup: RouteGroup = {
@@ -1609,7 +1624,7 @@ export function RoutesPage({ lastUpdated, onRefresh }: ConsolePageProps) {
           </Button>
           <Segmented
             value={mode}
-            onChange={(value) => setMode(value as 'canvas' | 'table')}
+            onChange={(value) => switchRouteMode(value as 'canvas' | 'table')}
             options={[
               { label: '画布模式', value: 'canvas' },
               { label: '传统表格', value: 'table' },
