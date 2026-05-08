@@ -169,7 +169,7 @@ export type SourceRecord = {
 export const sources: SourceRecord[] = [
   {
     id: 'src-1',
-    code: 'gov-service',
+    code: 'govservice',
     name: '省直单位上报',
     authMode: 'token',
     enabled: true,
@@ -182,7 +182,7 @@ export const sources: SourceRecord[] = [
   },
   {
     id: 'src-2',
-    code: 'city-service',
+    code: 'cityservice',
     name: '市级业务系统',
     authMode: 'token_and_hmac',
     enabled: true,
@@ -195,7 +195,7 @@ export const sources: SourceRecord[] = [
   },
   {
     id: 'src-3',
-    code: 'legacy-alert',
+    code: 'legacyalert',
     name: '运维监控系统',
     authMode: 'hmac',
     enabled: true,
@@ -208,7 +208,7 @@ export const sources: SourceRecord[] = [
   },
   {
     id: 'src-4',
-    code: 'open-demo',
+    code: 'opendemo',
     name: '测试开放来源',
     authMode: 'none',
     enabled: false,
@@ -340,6 +340,18 @@ export type RouteRule = {
   lastHitAt: string;
 };
 
+export type RouteGroup = {
+  id: string;
+  name: string;
+  sourceName: string;
+  sourceCode: string;
+  enabled: boolean;
+  currentVersion: string;
+  ruleIds: string[];
+  totalHitCount: number;
+  updatedAt: string;
+};
+
 export const routeRules: RouteRule[] = [
   {
     id: 'rule-1',
@@ -396,6 +408,53 @@ export const routeRules: RouteRule[] = [
     hitCount: 892,
     enabled: true,
     lastHitAt: '2026-05-08 13:59:08',
+  },
+];
+
+export const routeGroups: RouteGroup[] = [
+  {
+    id: 'flow-1',
+    name: '省直单位上报路由大组',
+    sourceName: '省直单位上报',
+    sourceCode: 'govservice',
+    enabled: true,
+    currentVersion: 'v1.2.2',
+    ruleIds: ['rule-1'],
+    totalHitCount: 62418,
+    updatedAt: '2026-05-08 14:57:10',
+  },
+  {
+    id: 'flow-2',
+    name: '市级业务系统路由大组',
+    sourceName: '市级业务系统',
+    sourceCode: 'cityservice',
+    enabled: true,
+    currentVersion: 'v1.1.4',
+    ruleIds: ['rule-2'],
+    totalHitCount: 24387,
+    updatedAt: '2026-05-08 14:52:48',
+  },
+  {
+    id: 'flow-3',
+    name: '运维监控路由大组',
+    sourceName: '运维监控系统',
+    sourceCode: 'legacyalert',
+    enabled: true,
+    currentVersion: 'v1.0.8',
+    ruleIds: ['rule-3'],
+    totalHitCount: 18742,
+    updatedAt: '2026-05-08 14:48:33',
+  },
+  {
+    id: 'flow-4',
+    name: '开放测试兜底路由大组',
+    sourceName: '测试开放来源',
+    sourceCode: 'opendemo',
+    enabled: false,
+    currentVersion: 'v0.3.1',
+    ruleIds: ['rule-4'],
+    totalHitCount: 892,
+    updatedAt: '2026-05-08 13:59:08',
   },
 ];
 

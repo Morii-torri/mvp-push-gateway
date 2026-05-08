@@ -24,13 +24,32 @@ import {
 } from 'antd';
 import type { TableProps } from 'antd';
 import {
+  ArrowLeftOutlined,
   CopyOutlined,
+  DeleteOutlined,
   DeploymentUnitOutlined,
   EditOutlined,
   NodeIndexOutlined,
   PlayCircleOutlined,
 } from '@ant-design/icons';
-import { useState, type ReactNode } from 'react';
+import {
+  Background,
+  Controls,
+  Handle,
+  MiniMap,
+  Position,
+  ReactFlow,
+  ReactFlowProvider,
+  addEdge,
+  useEdgesState,
+  useNodesState,
+  type Connection,
+  type Edge,
+  type Node,
+  type NodeProps,
+  type OnSelectionChangeParams,
+} from '@xyflow/react';
+import { useCallback, useMemo, useState, type DragEvent, type ReactNode } from 'react';
 
 import {
   ListContainer,
@@ -42,7 +61,6 @@ import {
 } from '../components/ConsolePrimitives';
 import {
   auditLogs,
-  canvasLanes,
   failureReasons,
   logTimeline,
   matchGroups,
@@ -55,6 +73,7 @@ import {
   providers,
   queueMetrics,
   recentAnomalies,
+  routeGroups,
   routeRules,
   slowRules,
   sources,
@@ -66,6 +85,7 @@ import {
   type MessageLog,
   type PlatformHealth,
   type ProviderRecord,
+  type RouteGroup,
   type RouteRule,
   type SlowRule,
   type SourceRecord,
@@ -145,12 +165,23 @@ function CreateDrawer({
   );
 }
 
+const base62Chars = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz';
+
+function sanitizeAlphanumeric(value: string) {
+  return value.replace(/[^A-Za-z0-9]/g, '');
+}
+
+function randomBase62(length: number) {
+  return Array.from({ length }, () => base62Chars[Math.floor(Math.random() * base62Chars.length)]).join('');
+}
+
 function randomSecret(prefix: string) {
-  return `${prefix}_${Math.random().toString(36).slice(2, 10)}${Date.now().toString(36).slice(-4)}`;
+  return `${prefix}${randomBase62(18)}`;
 }
 
 function SourceConfigForm({ initialAuth = 'token' }: { initialAuth?: SourceRecord['authMode'] }) {
   const [authMode, setAuthMode] = useState<SourceRecord['authMode']>(initialAuth);
+  const [sourceCode, setSourceCode] = useState('newsource');
   const [token, setToken] = useState(randomSecret('src'));
   const [secret, setSecret] = useState(randomSecret('hmac'));
 
@@ -159,8 +190,12 @@ function SourceConfigForm({ initialAuth = 'token' }: { initialAuth?: SourceRecor
       <Form.Item label="来源名称" required>
         <Input defaultValue="新来源" placeholder="请输入来源名称" />
       </Form.Item>
-      <Form.Item label="来源编码" required>
-        <Input defaultValue="new-source" placeholder="请输入来源编码" />
+      <Form.Item label="来源编码" required extra="仅允许字母和数字，输入中的其他字符会自动移除。">
+        <Input
+          value={sourceCode}
+          placeholder="请输入来源编码"
+          onChange={(event) => setSourceCode(sanitizeAlphanumeric(event.target.value))}
+        />
       </Form.Item>
       <Form.Item label="鉴权方式">
         <Select
@@ -184,7 +219,7 @@ function SourceConfigForm({ initialAuth = 'token' }: { initialAuth?: SourceRecor
           className="drawer-form-gap"
         >
           <Space.Compact className="full-width">
-            <Input value={token} onChange={(event) => setToken(event.target.value)} />
+            <Input value={token} onChange={(event) => setToken(sanitizeAlphanumeric(event.target.value))} />
             <Button onClick={() => setToken(randomSecret('src'))}>随机生成</Button>
           </Space.Compact>
         </Form.Item>
@@ -192,7 +227,7 @@ function SourceConfigForm({ initialAuth = 'token' }: { initialAuth?: SourceRecor
       {authMode === 'hmac' || authMode === 'token_and_hmac' ? (
         <Form.Item label="HMAC 共享密钥" className="drawer-form-gap">
           <Space.Compact className="full-width">
-            <Input value={secret} onChange={(event) => setSecret(event.target.value)} />
+            <Input value={secret} onChange={(event) => setSecret(sanitizeAlphanumeric(event.target.value))} />
             <Button onClick={() => setSecret(randomSecret('hmac'))}>随机生成</Button>
           </Space.Compact>
         </Form.Item>
@@ -463,7 +498,7 @@ export function OverviewPage({ lastUpdated, onRefresh }: ConsolePageProps) {
   return (
     <PageFrame
       title="总览"
-      description="按 24 小时窗口汇总消息吞吐、成功率、异常和平台排行。"
+      description="按 24 小时窗口汇总消息吞吐、成功率、异常和平台排行。当前为演示数据，待 Step10 接入后端统计 API。"
       lastUpdated={lastUpdated}
       onRefresh={onRefresh}
     >
@@ -556,7 +591,7 @@ export function SourcesPage({ lastUpdated, onRefresh }: ConsolePageProps) {
       setSourceRows((current) => [
         {
           id: `src-local-${Date.now()}`,
-          code: `local-${current.length + 1}`,
+          code: `local${current.length + 1}`,
           name: `本地新增来源 ${current.length + 1}`,
           authMode: editingAuth,
           enabled: true,
@@ -833,7 +868,7 @@ export function ProvidersPage({ lastUpdated, onRefresh }: ConsolePageProps) {
             <Select placeholder="平台类型" />
             <Select placeholder="状态" />
           </QueryBar>
-          <ListContainer title="平台实例列表" total={filteredRows.length} fill scrollY={560}>
+          <ListContainer title="平台实例列表" total={filteredRows.length} fill scrollY={520}>
             <Table
               rowKey="id"
               size="middle"
@@ -884,78 +919,410 @@ export function ProvidersPage({ lastUpdated, onRefresh }: ConsolePageProps) {
   );
 }
 
+function RouteGroupForm() {
+  return (
+    <Form layout="vertical">
+      <Form.Item label="路由大组名称" required>
+        <Input defaultValue="新路由大组" />
+      </Form.Item>
+      <Form.Item label="绑定来源" required extra="启用状态下每个来源只能绑定一个路由大组。">
+        <Select
+          defaultValue="govservice"
+          options={sources.map((source) => ({
+            label: `${source.name} / ${source.code}`,
+            value: source.code,
+          }))}
+        />
+      </Form.Item>
+      <Form.Item label="执行语义">
+        <Input value="按顺序匹配，第一条命中即发送并停止" readOnly />
+      </Form.Item>
+      <Form.Item label="状态">
+        <Switch defaultChecked checkedChildren="启用" unCheckedChildren="停用" />
+      </Form.Item>
+    </Form>
+  );
+}
+
+type RouteNodeKind = 'source' | 'condition' | 'template' | 'recipient' | 'platform';
+
+type RouteNodeData = Record<string, unknown> & {
+  kind: RouteNodeKind;
+  title: string;
+  description: string;
+  condition?: string;
+  hitCount?: number;
+};
+
+type RouteFlowNode = Node<RouteNodeData, 'routeNode'>;
+type RouteFlowEdge = Edge<Record<string, unknown>>;
+
+type SelectedFlowElement =
+  | { type: 'node'; id: string }
+  | { type: 'edge'; id: string }
+  | null;
+
+const routeNodeCatalog: Array<{
+  kind: RouteNodeKind;
+  title: string;
+  description: string;
+}> = [
+  { kind: 'source', title: '来源开始', description: '固定接收当前路由大组绑定来源' },
+  { kind: 'condition', title: '条件判断', description: '按 payload 字段、匹配组或系统值判断' },
+  { kind: 'template', title: '模板渲染', description: '选择模板并渲染消息内容' },
+  { kind: 'recipient', title: '接收人', description: '系统接收人组或 payload 接收人' },
+  { kind: 'platform', title: '发送平台/结束', description: '调用上级平台并结束当前命中链路' },
+];
+
+const routeNodeDefaults = Object.fromEntries(
+  routeNodeCatalog.map((item) => [item.kind, item]),
+) as Record<RouteNodeKind, (typeof routeNodeCatalog)[number]>;
+
+function RouteFlowNodeView({ data, selected }: NodeProps<RouteFlowNode>) {
+  return (
+    <div className={`route-flow-node route-flow-node--${data.kind}${selected ? ' route-flow-node--selected' : ''}`}>
+      {data.kind !== 'source' ? <Handle type="target" position={Position.Left} /> : null}
+      <div className="route-flow-node__type">{routeNodeDefaults[data.kind].title}</div>
+      <strong>{data.title}</strong>
+      <span>{data.description}</span>
+      {typeof data.hitCount === 'number' ? <em>命中 {formatHitCount(data.hitCount)}</em> : null}
+      <Handle type="source" position={Position.Right} />
+    </div>
+  );
+}
+
+function buildInitialRouteFlow(group: RouteGroup, rules: RouteRule[]) {
+  const groupRules = rules.filter((rule) => group.ruleIds.includes(rule.id));
+  const nodes: RouteFlowNode[] = [
+    {
+      id: 'source-start',
+      type: 'routeNode',
+      position: { x: 32, y: 180 },
+      deletable: false,
+      data: {
+        kind: 'source',
+        title: group.sourceName,
+        description: `来源编码 ${group.sourceCode}，当前组内固定不可切换`,
+      },
+    },
+  ];
+  const edges: RouteFlowEdge[] = [];
+
+  groupRules.forEach((rule, index) => {
+    const y = 42 + index * 140;
+    const conditionId = `${rule.id}-condition`;
+    const templateId = `${rule.id}-template`;
+    const recipientId = `${rule.id}-recipient`;
+    const platformId = `${rule.id}-platform`;
+
+    nodes.push(
+      {
+        id: conditionId,
+        type: 'routeNode',
+        position: { x: 300, y },
+        data: {
+          kind: 'condition',
+          title: `${rule.sortOrder}. ${rule.name}`,
+          description: rule.condition,
+          condition: rule.condition,
+          hitCount: rule.hitCount,
+        },
+      },
+      {
+        id: templateId,
+        type: 'routeNode',
+        position: { x: 560, y },
+        data: { kind: 'template', title: rule.template, description: '命中后渲染模板' },
+      },
+      {
+        id: recipientId,
+        type: 'routeNode',
+        position: { x: 820, y },
+        data: { kind: 'recipient', title: rule.recipientStrategy, description: '解析接收人并映射身份字段' },
+      },
+      {
+        id: platformId,
+        type: 'routeNode',
+        position: { x: 1080, y },
+        data: {
+          kind: 'platform',
+          title: rule.targetProviders.join('、'),
+          description: '发送成功或失败后结束当前规则链路',
+        },
+      },
+    );
+
+    [
+      ['source-start', conditionId, `顺序 ${rule.sortOrder}`],
+      [conditionId, templateId, '命中'],
+      [templateId, recipientId, '渲染完成'],
+      [recipientId, platformId, '发送'],
+    ].forEach(([source, target, label]) => {
+      edges.push({
+        id: `${source}-${target}`,
+        source,
+        target,
+        label,
+        type: 'smoothstep',
+        animated: source === 'source-start',
+      });
+    });
+  });
+
+  return { nodes, edges };
+}
+
 export function RoutesPage({ lastUpdated, onRefresh }: ConsolePageProps) {
   const { message } = App.useApp();
-  const { drawer, openDrawer, closeDrawer } = useCreateDrawer('新增路由规则');
+  const { drawer: groupDrawer, openDrawer: openGroupDrawer, closeDrawer: closeGroupDrawer } = useCreateDrawer('新增路由大组');
+  const { drawer: ruleDrawer, openDrawer: openRuleDrawer, closeDrawer: closeRuleDrawer } = useCreateDrawer('新增路由规则');
   const [mode, setMode] = useState<'canvas' | 'table'>('canvas');
+  const [groupRows, setGroupRows] = useState<RouteGroup[]>(routeGroups);
+  const [selectedGroup, setSelectedGroup] = useState<RouteGroup | null>(null);
   const [ruleRows, setRuleRows] = useState<RouteRule[]>(routeRules);
+  const [groupKeyword, setGroupKeyword] = useState('');
+  const [groupSource, setGroupSource] = useState<string>('all');
   const [ruleKeyword, setRuleKeyword] = useState('');
-  const [selectedNodeId, setSelectedNodeId] = useState('source-start');
-  const [canvasNodes, setCanvasNodes] = useState(() => [
-    { id: 'source-start', type: '来源开始', title: '来源开始', subtitle: '省直单位上报', color: 'green' },
-    ...canvasLanes.flatMap((lane) => [
-      { id: `${lane.id}-condition`, type: '条件判断', title: '条件判断', subtitle: lane.condition, color: 'orange' },
-      { id: `${lane.id}-template`, type: '模板', title: '模板', subtitle: lane.template, color: 'blue' },
-      { id: `${lane.id}-recipient`, type: '接收人', title: '接收人', subtitle: lane.recipients, color: 'purple' },
-      { id: `${lane.id}-platform`, type: '平台动作', title: '平台动作', subtitle: lane.providers, color: 'cyan' },
-    ]),
-  ]);
-  const selectedNode = canvasNodes.find((node) => node.id === selectedNodeId) ?? canvasNodes[0];
-  const filteredRules = ruleRows.filter(
+  const [selectedElement, setSelectedElement] = useState<SelectedFlowElement>(null);
+  const [flowNodes, setFlowNodes, onFlowNodesChange] = useNodesState<RouteFlowNode>([]);
+  const [flowEdges, setFlowEdges, onFlowEdgesChange] = useEdgesState<RouteFlowEdge>([]);
+  const nodeTypes = useMemo(() => ({ routeNode: RouteFlowNodeView }), []);
+  const filteredGroups = groupRows.filter((row) => {
+    const keywordMatched =
+      !groupKeyword || row.name.includes(groupKeyword) || row.sourceName.includes(groupKeyword);
+    const sourceMatched = groupSource === 'all' || row.sourceCode === groupSource;
+    return keywordMatched && sourceMatched;
+  });
+  const groupRules = selectedGroup
+    ? ruleRows.filter((rule) => selectedGroup.ruleIds.includes(rule.id)).sort((a, b) => a.sortOrder - b.sortOrder)
+    : [];
+  const filteredRules = groupRules.filter(
     (row) => !ruleKeyword || row.name.includes(ruleKeyword) || row.condition.includes(ruleKeyword),
   );
-  const addCanvasNode = (type: string, subtitle: string, color: string) => {
-    if (type === '来源开始' && canvasNodes.some((node) => node.type === '来源开始')) {
-      message.warning('画布仅允许一个来源开始节点');
-      return;
-    }
-    const node = {
-      id: `canvas-${Date.now()}`,
-      type,
-      title: type,
-      subtitle: type === '来源开始' ? '点击配置来源' : subtitle,
-      color,
-    };
-    setCanvasNodes((current) => [...current, node]);
-    setSelectedNodeId(node.id);
-    message.success(`已新增节点：${type}`);
+  const selectedNode =
+    selectedElement?.type === 'node' ? flowNodes.find((node) => node.id === selectedElement.id) : undefined;
+  const selectedEdge =
+    selectedElement?.type === 'edge' ? flowEdges.find((edge) => edge.id === selectedElement.id) : undefined;
+  const openGroup = (group: RouteGroup) => {
+    const initial = buildInitialRouteFlow(group, ruleRows);
+    setSelectedGroup(group);
+    setMode('canvas');
+    setRuleKeyword('');
+    setFlowNodes(initial.nodes);
+    setFlowEdges(initial.edges);
+    setSelectedElement({ type: 'node', id: 'source-start' });
   };
-  const saveRule = () => {
-    if (!drawer.title.startsWith('编辑')) {
-      setRuleRows((current) => [
-        ...current,
+  const saveGroup = () => {
+    if (!groupDrawer.title.startsWith('编辑')) {
+      setGroupRows((current) => [
         {
-          id: `rule-local-${Date.now()}`,
-          sortOrder: current.length + 1,
-          name: `本地新增规则 ${current.length + 1}`,
-          source: '省直单位上报',
-          condition: '业务类型 = 民生诉求 且 影响范围 >= 市级',
-          template: '民生诉求模板',
-          recipientStrategy: '接收人组',
-          targetProviders: ['福州市政务平台'],
-          dedupe: '按 Trace ID',
-          hitCount: 0,
-          enabled: true,
-          lastHitAt: '-',
+          id: `flow-local-${Date.now()}`,
+          name: `本地新增路由大组 ${current.length + 1}`,
+          sourceName: '测试开放来源',
+          sourceCode: 'opendemo',
+          enabled: false,
+          currentVersion: 'v0.1.0',
+          ruleIds: [],
+          totalHitCount: 0,
+          updatedAt: '2026-05-08 15:30:00',
         },
+        ...current,
       ]);
     }
-    closeDrawer();
+    closeGroupDrawer();
+    message.success('路由大组已保存到本地演示数据');
+  };
+  const addRouteNode = useCallback(
+    (kind: RouteNodeKind, position?: { x: number; y: number }) => {
+      if (kind === 'source' && flowNodes.some((node) => node.data.kind === 'source')) {
+        message.warning('画布仅允许一个来源开始节点');
+        return;
+      }
+      const preset = routeNodeDefaults[kind];
+      const node: RouteFlowNode = {
+        id: `${kind}-${Date.now()}`,
+        type: 'routeNode',
+        position: position ?? { x: 260 + flowNodes.length * 24, y: 80 + flowNodes.length * 18 },
+        deletable: kind !== 'source',
+        data: {
+          kind,
+          title: preset.title,
+          description: kind === 'source' && selectedGroup ? selectedGroup.sourceName : preset.description,
+        },
+      };
+      setFlowNodes((current) => [...current, node]);
+      setSelectedElement({ type: 'node', id: node.id });
+      message.success(`已新增节点：${preset.title}`);
+    },
+    [flowNodes, message, selectedGroup, setFlowNodes],
+  );
+  const onConnect = useCallback(
+    (connection: Connection) => {
+      setFlowEdges((current) =>
+        addEdge({ ...connection, type: 'smoothstep', label: '下一步', animated: false }, current),
+      );
+    },
+    [setFlowEdges],
+  );
+  const onSelectionChange = useCallback((params: OnSelectionChangeParams<RouteFlowNode, RouteFlowEdge>) => {
+    if (params.nodes[0]) {
+      setSelectedElement({ type: 'node', id: params.nodes[0].id });
+      return;
+    }
+    if (params.edges[0]) {
+      setSelectedElement({ type: 'edge', id: params.edges[0].id });
+      return;
+    }
+    setSelectedElement(null);
+  }, []);
+  const onDragStart = (event: DragEvent<HTMLButtonElement>, kind: RouteNodeKind) => {
+    event.dataTransfer.setData('application/reactflow', kind);
+    event.dataTransfer.effectAllowed = 'move';
+  };
+  const onDrop = useCallback(
+    (event: DragEvent<HTMLDivElement>) => {
+      event.preventDefault();
+      const kind = event.dataTransfer.getData('application/reactflow') as RouteNodeKind;
+      if (!routeNodeDefaults[kind]) {
+        return;
+      }
+      const bounds = event.currentTarget.getBoundingClientRect();
+      addRouteNode(kind, { x: event.clientX - bounds.left - 96, y: event.clientY - bounds.top - 42 });
+    },
+    [addRouteNode],
+  );
+  const onDragOver = useCallback((event: DragEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    event.dataTransfer.dropEffect = 'move';
+  }, []);
+  const updateSelectedNode = (patch: Partial<RouteNodeData>) => {
+    if (!selectedNode) {
+      return;
+    }
+    setFlowNodes((current) =>
+      current.map((node) => (node.id === selectedNode.id ? { ...node, data: { ...node.data, ...patch } } : node)),
+    );
+  };
+  const deleteSelectedElement = () => {
+    if (!selectedElement) {
+      message.warning('请先选择节点或连线');
+      return;
+    }
+    if (selectedElement.type === 'node') {
+      if (selectedElement.id === 'source-start') {
+        message.warning('来源开始节点固定保留');
+        return;
+      }
+      setFlowNodes((current) => current.filter((node) => node.id !== selectedElement.id));
+      setFlowEdges((current) =>
+        current.filter((edge) => edge.source !== selectedElement.id && edge.target !== selectedElement.id),
+      );
+    } else {
+      setFlowEdges((current) => current.filter((edge) => edge.id !== selectedElement.id));
+    }
+    setSelectedElement(null);
+    message.success('已删除选中元素');
+  };
+  const saveCanvas = () => {
+    message.success('路由画布已保存到本地状态');
+  };
+  const saveRule = () => {
+    if (!selectedGroup) {
+      return;
+    }
+    if (!ruleDrawer.title.startsWith('编辑')) {
+      const newRule: RouteRule = {
+        id: `rule-local-${Date.now()}`,
+        sortOrder: groupRules.length + 1,
+        name: `本地新增规则 ${groupRules.length + 1}`,
+        source: selectedGroup.sourceName,
+        condition: '业务类型 = 民生诉求 且 影响范围 >= 市级',
+        template: '民生诉求模板',
+        recipientStrategy: '接收人组',
+        targetProviders: ['福州市政务平台'],
+        dedupe: '按 Trace ID',
+        hitCount: 0,
+        enabled: true,
+        lastHitAt: '-',
+      };
+      setRuleRows((current) => [...current, newRule]);
+      setGroupRows((current) =>
+        current.map((group) =>
+          group.id === selectedGroup.id
+            ? { ...group, ruleIds: [...group.ruleIds, newRule.id], updatedAt: '2026-05-08 15:30:00' }
+            : group,
+        ),
+      );
+      setSelectedGroup((current) =>
+        current
+          ? { ...current, ruleIds: [...current.ruleIds, newRule.id], updatedAt: '2026-05-08 15:30:00' }
+          : current,
+      );
+    }
+    closeRuleDrawer();
     message.success('路由规则已保存到本地演示数据');
   };
   const moveRule = (id: string, direction: -1 | 1) => {
     setRuleRows((current) => {
-      const index = current.findIndex((item) => item.id === id);
+      const groupIds = selectedGroup?.ruleIds ?? [];
+      const scoped = current.filter((item) => groupIds.includes(item.id)).sort((a, b) => a.sortOrder - b.sortOrder);
+      const index = scoped.findIndex((item) => item.id === id);
       const target = index + direction;
-      if (index < 0 || target < 0 || target >= current.length) {
+      if (index < 0 || target < 0 || target >= scoped.length) {
         message.warning('已经到达排序边界');
         return current;
       }
-      const next = [...current];
-      [next[index], next[target]] = [next[target], next[index]];
-      return next.map((item, order) => ({ ...item, sortOrder: order + 1 }));
+      const nextScoped = [...scoped];
+      [nextScoped[index], nextScoped[target]] = [nextScoped[target], nextScoped[index]];
+      const orderById = new Map(nextScoped.map((item, order) => [item.id, order + 1]));
+      return current.map((item) =>
+        orderById.has(item.id) ? { ...item, sortOrder: orderById.get(item.id) ?? item.sortOrder } : item,
+      );
     });
   };
+  const groupColumns: TableProps<RouteGroup>['columns'] = [
+    { title: '路由大组名称', dataIndex: 'name', width: 220 },
+    {
+      title: '绑定来源',
+      width: 210,
+      render: (_, record) => (
+        <Space direction="vertical" size={0}>
+          <span>{record.sourceName}</span>
+          <Typography.Text code>{record.sourceCode}</Typography.Text>
+        </Space>
+      ),
+    },
+    {
+      title: '状态',
+      dataIndex: 'enabled',
+      width: 100,
+      render: (enabled: boolean) => <StatusTag meta={getEnabledMeta(enabled)} />,
+    },
+    { title: '当前版本', dataIndex: 'currentVersion', width: 120 },
+    { title: '规则数', width: 100, render: (_, record) => record.ruleIds.length },
+    {
+      title: '总命中次数',
+      dataIndex: 'totalHitCount',
+      width: 130,
+      render: (value: number) => formatHitCount(value),
+    },
+    { title: '更新时间', dataIndex: 'updatedAt', width: 170 },
+    {
+      title: '操作',
+      fixed: 'right',
+      width: 190,
+      render: (_, record) => (
+        <Space>
+          <Button type="link" onClick={() => openGroup(record)}>
+            进入编排
+          </Button>
+          <Button type="link" onClick={() => openGroupDrawer(`编辑路由大组：${record.name}`)}>
+            编辑
+          </Button>
+        </Space>
+      ),
+    },
+  ];
   const columns: TableProps<RouteRule>['columns'] = [
     {
       title: '顺序',
@@ -1016,7 +1383,7 @@ export function RoutesPage({ lastUpdated, onRefresh }: ConsolePageProps) {
           <Button type="link" onClick={() => moveRule(record.id, 1)}>
             下移
           </Button>
-          <Button type="link" onClick={() => openDrawer(`编辑规则：${record.name}`)}>
+          <Button type="link" onClick={() => openRuleDrawer(`编辑规则：${record.name}`)}>
             编辑
           </Button>
         </Space>
@@ -1024,51 +1391,129 @@ export function RoutesPage({ lastUpdated, onRefresh }: ConsolePageProps) {
     },
   ];
 
+  if (!selectedGroup) {
+    return (
+      <PageFrame
+        title="路由编排"
+        description="先选择路由大组并固定来源，再进入组内维护顺序规则和画布。"
+        lastUpdated={lastUpdated}
+        onRefresh={onRefresh}
+      >
+        <Alert
+          type="info"
+          showIcon
+          className="semantic-alert"
+          message="路由大组按来源隔离；同一来源只允许一个启用大组，组内规则按顺序匹配，第一条命中即发送并停止。"
+        />
+        <QueryBar
+          onCreate={() => openGroupDrawer()}
+          onSearch={() => message.success(`已筛选出 ${filteredGroups.length} 个路由大组`)}
+          onReset={() => {
+            setGroupKeyword('');
+            setGroupSource('all');
+            message.info('路由大组查询条件已重置');
+          }}
+          createText="新增路由大组"
+        >
+          <Input
+            placeholder="路由大组 / 来源"
+            value={groupKeyword}
+            onChange={(event) => setGroupKeyword(event.target.value)}
+          />
+          <Select
+            value={groupSource}
+            onChange={setGroupSource}
+            options={[
+              { label: '全部来源', value: 'all' },
+              ...sources.map((source) => ({ label: `${source.name} / ${source.code}`, value: source.code })),
+            ]}
+          />
+          <Select placeholder="状态" />
+        </QueryBar>
+        <ListContainer title="路由大组列表" total={filteredGroups.length} fill scrollY={560}>
+          <Table
+            rowKey="id"
+            size="middle"
+            pagination={false}
+            columns={groupColumns}
+            dataSource={filteredGroups}
+            scroll={{ x: 1250 }}
+          />
+        </ListContainer>
+        <CreateDrawer title={groupDrawer.title} open={groupDrawer.open} onClose={closeGroupDrawer} onSave={saveGroup}>
+          <RouteGroupForm />
+        </CreateDrawer>
+      </PageFrame>
+    );
+  }
+
   return (
     <PageFrame
-      title="路由编排"
-      description="支持画布模式和传统表格模式，发布后共享同一套顺序执行模型。"
+      title={selectedGroup.name}
+      description="路由大组详情页。当前来源固定，画布模式和传统表格共享同一套顺序执行模型。"
       lastUpdated={lastUpdated}
       onRefresh={onRefresh}
       extra={
-        <Segmented
-          value={mode}
-          onChange={(value) => setMode(value as 'canvas' | 'table')}
-          options={[
-            { label: '画布模式', value: 'canvas' },
-            { label: '传统表格', value: 'table' },
-          ]}
-        />
+        <Space>
+          <Button icon={<ArrowLeftOutlined />} onClick={() => setSelectedGroup(null)}>
+            返回大组列表
+          </Button>
+          <Segmented
+            value={mode}
+            onChange={(value) => setMode(value as 'canvas' | 'table')}
+            options={[
+              { label: '画布模式', value: 'canvas' },
+              { label: '传统表格', value: 'table' },
+            ]}
+          />
+        </Space>
       }
     >
+      <Space className="route-breadcrumb" split={<span>/</span>}>
+        <Button type="link" onClick={() => setSelectedGroup(null)}>
+          路由大组列表
+        </Button>
+        <Typography.Text>{selectedGroup.name}</Typography.Text>
+      </Space>
+      <section className="route-group-summary">
+        <Descriptions column={4} size="small" bordered>
+          <Descriptions.Item label="绑定来源">{selectedGroup.sourceName}</Descriptions.Item>
+          <Descriptions.Item label="来源编码">
+            <Typography.Text code>{selectedGroup.sourceCode}</Typography.Text>
+          </Descriptions.Item>
+          <Descriptions.Item label="当前版本">{selectedGroup.currentVersion}</Descriptions.Item>
+          <Descriptions.Item label="规则数">{selectedGroup.ruleIds.length}</Descriptions.Item>
+          <Descriptions.Item label="总命中">{formatHitCount(selectedGroup.totalHitCount)}</Descriptions.Item>
+          <Descriptions.Item label="更新时间">{selectedGroup.updatedAt}</Descriptions.Item>
+          <Descriptions.Item label="状态">
+            <StatusTag meta={getEnabledMeta(selectedGroup.enabled)} />
+          </Descriptions.Item>
+          <Descriptions.Item label="执行语义">按顺序匹配，命中即停止</Descriptions.Item>
+        </Descriptions>
+      </section>
       <Alert
         type="info"
         showIcon
         className="semantic-alert"
-        message="规则执行语义：按顺序执行，第一条命中即发送并停止继续匹配。命中次数不会因排序、编辑或发布新版本清零。"
+        message={`当前编排固定来源：${selectedGroup.sourceName} / ${selectedGroup.sourceCode}。规则按顺序执行，第一条命中即发送并停止继续匹配；命中次数不会因排序、编辑或发布新版本清零。`}
       />
 
       {mode === 'canvas' ? (
         <div className="route-canvas-layout">
           <section className="node-library">
             <Typography.Title level={4}>节点库</Typography.Title>
-            {[
-              ['来源开始', '接收下级来源消息', 'green'],
-              ['条件判断', '根据条件路由', 'orange'],
-              ['模板', '选择消息模板', 'blue'],
-              ['接收人', '选择接收组或 payload', 'purple'],
-              ['平台动作', '调用上级平台发送', 'cyan'],
-              ['异常处理', '记录日志并告警', 'red'],
-            ].map(([title, subtitle, color]) => (
+            {routeNodeCatalog.map((item) => (
               <button
                 type="button"
-                className={`node-card node-card--${color}`}
-                key={title}
-                onClick={() => addCanvasNode(title, subtitle, color)}
+                className={`node-card node-card--${item.kind}`}
+                key={item.kind}
+                draggable
+                onDragStart={(event) => onDragStart(event, item.kind)}
+                onClick={() => addRouteNode(item.kind)}
               >
-                <strong>{title}</strong>
-                <span>{subtitle}</span>
-                <em>点击新增</em>
+                <strong>{item.title}</strong>
+                <span>{item.description}</span>
+                <em>点击或拖拽新增</em>
               </button>
             ))}
           </section>
@@ -1076,55 +1521,97 @@ export function RoutesPage({ lastUpdated, onRefresh }: ConsolePageProps) {
           <section className="canvas-surface">
             <div className="canvas-toolbar">
               <Space>
-                <Button icon={<DeploymentUnitOutlined />}>自动布局</Button>
+                <Button icon={<DeploymentUnitOutlined />} onClick={() => openGroup(selectedGroup)}>
+                  重置布局
+                </Button>
                 <Button icon={<PlayCircleOutlined />}>模拟运行</Button>
-                <Button type="primary">发布版本</Button>
+                <Button icon={<DeleteOutlined />} onClick={deleteSelectedElement}>
+                  删除选中
+                </Button>
+                <Button type="primary" onClick={saveCanvas}>
+                  保存画布
+                </Button>
               </Space>
-              <Tag color="success">校验通过</Tag>
+              <Space>
+                <Tag color="blue">按顺序匹配</Tag>
+                <Tag color="success">第一条命中即停止</Tag>
+              </Space>
             </div>
-            <div className="free-canvas">
-              {canvasNodes.map((node, index) => (
-                <button
-                  type="button"
-                  key={node.id}
-                  className={`canvas-node canvas-node--${node.color} ${
-                    selectedNodeId === node.id ? 'canvas-node--selected' : ''
-                  } ${node.type === '来源开始' ? 'canvas-node--source' : ''}`}
-                  onClick={() => {
-                    setSelectedNodeId(node.id);
-                    if (node.type === '来源开始') {
-                      message.info('可在右侧属性面板配置来源');
-                    }
-                  }}
-                  style={{
-                    left: `${40 + (index % 4) * 210}px`,
-                    top: `${50 + Math.floor(index / 4) * 130}px`,
-                  }}
+            <div className="react-flow-shell" onDrop={onDrop} onDragOver={onDragOver}>
+              <ReactFlowProvider>
+                <ReactFlow
+                  nodes={flowNodes}
+                  edges={flowEdges}
+                  nodeTypes={nodeTypes}
+                  onNodesChange={onFlowNodesChange}
+                  onEdgesChange={onFlowEdgesChange}
+                  onConnect={onConnect}
+                  onSelectionChange={onSelectionChange}
+                  fitView
+                  deleteKeyCode={['Backspace', 'Delete']}
                 >
-                  <strong>{node.title}</strong>
-                  <span>{node.subtitle}</span>
-                </button>
-              ))}
-              <div className="canvas-semantics">第一条命中即停止继续匹配</div>
+                  <Background gap={24} color="#d8e5f7" />
+                  <Controls />
+                  <MiniMap pannable zoomable />
+                </ReactFlow>
+              </ReactFlowProvider>
             </div>
           </section>
 
           <section className="property-panel">
-            <Typography.Title level={4}>节点属性</Typography.Title>
-            <Descriptions column={1} size="small" bordered>
-              <Descriptions.Item label="当前选择">{selectedNode.title}</Descriptions.Item>
-              <Descriptions.Item label="节点类型">{selectedNode.type}</Descriptions.Item>
-              <Descriptions.Item label="配置摘要">{selectedNode.subtitle}</Descriptions.Item>
-              <Descriptions.Item label="当前执行版本">v1.2.2</Descriptions.Item>
-            </Descriptions>
+            <Typography.Title level={4}>配置面板</Typography.Title>
+            {selectedNode ? (
+              <Space direction="vertical" size={12} className="full-width">
+                <Form layout="vertical">
+                  <Form.Item label="节点标题">
+                    <Input
+                      value={selectedNode.data.title}
+                      onChange={(event) => updateSelectedNode({ title: event.target.value })}
+                    />
+                  </Form.Item>
+                  <Form.Item label="说明">
+                    <Input.TextArea
+                      rows={3}
+                      value={selectedNode.data.description}
+                      onChange={(event) => updateSelectedNode({ description: event.target.value })}
+                    />
+                  </Form.Item>
+                  {selectedNode.data.kind === 'condition' ? (
+                    <Form.Item label="条件表达式">
+                      <Input.TextArea
+                        rows={3}
+                        value={selectedNode.data.condition ?? selectedNode.data.description}
+                        onChange={(event) =>
+                          updateSelectedNode({ condition: event.target.value, description: event.target.value })
+                        }
+                      />
+                    </Form.Item>
+                  ) : null}
+                </Form>
+                <Descriptions column={1} size="small" bordered>
+                  <Descriptions.Item label="节点类型">{routeNodeDefaults[selectedNode.data.kind].title}</Descriptions.Item>
+                  <Descriptions.Item label="当前版本">{selectedGroup.currentVersion}</Descriptions.Item>
+                </Descriptions>
+              </Space>
+            ) : selectedEdge ? (
+              <Descriptions column={1} size="small" bordered>
+                <Descriptions.Item label="连线">{selectedEdge.label}</Descriptions.Item>
+                <Descriptions.Item label="起点">{selectedEdge.source}</Descriptions.Item>
+                <Descriptions.Item label="终点">{selectedEdge.target}</Descriptions.Item>
+              </Descriptions>
+            ) : (
+              <Alert type="info" showIcon message="选择节点或连线后可编辑配置。" />
+            )}
             <Divider />
             <Space direction="vertical" className="full-width">
-              <Button block>校验</Button>
+              <Button block onClick={() => message.success('画布校验通过：来源唯一，规则链路完整')}>
+                校验
+              </Button>
               <Button block icon={<PlayCircleOutlined />}>
                 模拟运行
               </Button>
-              <Button block type="primary">
-                发布版本
+              <Button block type="primary" onClick={saveCanvas}>
+                保存
               </Button>
             </Space>
           </section>
@@ -1132,7 +1619,7 @@ export function RoutesPage({ lastUpdated, onRefresh }: ConsolePageProps) {
       ) : (
         <>
           <QueryBar
-            onCreate={() => openDrawer()}
+            onCreate={() => openRuleDrawer()}
             onSearch={() => message.success(`已筛选出 ${filteredRules.length} 条规则`)}
             onReset={() => {
               setRuleKeyword('');
@@ -1145,7 +1632,7 @@ export function RoutesPage({ lastUpdated, onRefresh }: ConsolePageProps) {
               value={ruleKeyword}
               onChange={(event) => setRuleKeyword(event.target.value)}
             />
-            <Select placeholder="来源" />
+            <Input value={selectedGroup.sourceName} readOnly />
             <Select placeholder="目标平台" />
             <Select placeholder="状态" />
           </QueryBar>
@@ -1178,7 +1665,7 @@ export function RoutesPage({ lastUpdated, onRefresh }: ConsolePageProps) {
         </>
       )}
 
-      <CreateDrawer title={drawer.title} open={drawer.open} onClose={closeDrawer} onSave={saveRule} width={720}>
+      <CreateDrawer title={ruleDrawer.title} open={ruleDrawer.open} onClose={closeRuleDrawer} onSave={saveRule} width={720}>
         <RouteRuleForm />
       </CreateDrawer>
     </PageFrame>

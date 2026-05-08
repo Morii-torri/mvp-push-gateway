@@ -20,12 +20,12 @@ func TestIngestRejectsLegacyXMGPTokens(t *testing.T) {
 		Name:      "Orders",
 		Enabled:   true,
 		AuthMode:  AuthModeToken,
-		AuthToken: "source-token",
+		AuthToken: "sourceToken",
 	})
 	service := NewService(store, WithTraceIDGenerator(func() string { return "trace-x-token" }))
 
 	headers := http.Header{}
-	headers.Set("X-MGP-Token", "source-token")
+	headers.Set("X-MGP-Token", "sourceToken")
 	_, err := service.Ingest(context.Background(), IngestInput{
 		SourceCode: "orders",
 		Method:     http.MethodPost,
@@ -50,12 +50,12 @@ func TestIngestAcceptsBearerSourceToken(t *testing.T) {
 		Name:      "Orders",
 		Enabled:   true,
 		AuthMode:  AuthModeToken,
-		AuthToken: "source-token",
+		AuthToken: "sourceToken",
 	})
 	service := NewService(store, WithTraceIDGenerator(func() string { return "trace-token" }))
 
 	headers := http.Header{}
-	headers.Set("Authorization", "Bearer source-token")
+	headers.Set("Authorization", "Bearer sourceToken")
 	result, err := service.Ingest(context.Background(), IngestInput{
 		SourceCode: "orders",
 		Method:     http.MethodPost,
@@ -84,14 +84,14 @@ func TestIngestAcceptsBearerSourceToken(t *testing.T) {
 
 func TestIngestAcceptsValidHMACSignature(t *testing.T) {
 	body := []byte(`{"title":"paid"}`)
-	headers := signedHeaders("hmac-secret", http.MethodPost, "/api/v1/ingest/orders", body)
+	headers := signedHeaders("hmacSecret", http.MethodPost, "/api/v1/ingest/orders", body)
 	store := newMemoryStore(Source{
 		ID:         "source-1",
 		Code:       "orders",
 		Name:       "Orders",
 		Enabled:    true,
 		AuthMode:   AuthModeHMAC,
-		HMACSecret: "hmac-secret",
+		HMACSecret: "hmacSecret",
 	})
 	service := NewService(store, WithTraceIDGenerator(func() string { return "trace-hmac" }))
 
@@ -119,13 +119,13 @@ func TestIngestRequiresTokenAndHMACWhenConfigured(t *testing.T) {
 		Name:       "Orders",
 		Enabled:    true,
 		AuthMode:   AuthModeTokenAndHMAC,
-		AuthToken:  "source-token",
-		HMACSecret: "hmac-secret",
+		AuthToken:  "sourceToken",
+		HMACSecret: "hmacSecret",
 	})
 	service := NewService(store, WithTraceIDGenerator(func() string { return "trace-both" }))
 
 	missingHMAC := http.Header{}
-	missingHMAC.Set("Authorization", "Bearer source-token")
+	missingHMAC.Set("Authorization", "Bearer sourceToken")
 	if _, err := service.Ingest(context.Background(), IngestInput{
 		SourceCode: "orders",
 		Method:     http.MethodPost,
@@ -137,8 +137,8 @@ func TestIngestRequiresTokenAndHMACWhenConfigured(t *testing.T) {
 		t.Fatalf("expected unauthorized without hmac, got %v", err)
 	}
 
-	headers := signedHeaders("hmac-secret", http.MethodPost, "/api/v1/ingest/orders", body)
-	headers.Set("Authorization", "Bearer source-token")
+	headers := signedHeaders("hmacSecret", http.MethodPost, "/api/v1/ingest/orders", body)
+	headers.Set("Authorization", "Bearer sourceToken")
 	result, err := service.Ingest(context.Background(), IngestInput{
 		SourceCode: "orders",
 		Method:     http.MethodPost,
@@ -243,6 +243,66 @@ func TestIngestInvalidJSONDoesNotUpdateLatestPayload(t *testing.T) {
 	}
 	if store.latestPayloadUpdates != 0 {
 		t.Fatalf("expected latest payload to remain unchanged, got %d updates", store.latestPayloadUpdates)
+	}
+}
+
+func TestCreateSourceRejectsNonAlphanumericCredentials(t *testing.T) {
+	tests := []struct {
+		name  string
+		input CreateSourceInput
+	}{
+		{
+			name: "source code with hyphen",
+			input: CreateSourceInput{
+				Code:      "orders-api",
+				Name:      "Orders",
+				AuthMode:  AuthModeToken,
+				AuthToken: "sourceToken",
+			},
+		},
+		{
+			name: "auth token with hyphen",
+			input: CreateSourceInput{
+				Code:      "ordersapi",
+				Name:      "Orders",
+				AuthMode:  AuthModeToken,
+				AuthToken: "source-token",
+			},
+		},
+		{
+			name: "hmac secret with hyphen",
+			input: CreateSourceInput{
+				Code:       "ordersapi",
+				Name:       "Orders",
+				AuthMode:   AuthModeHMAC,
+				HMACSecret: "hmac-secret",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := normalizeSourceInput(tt.input)
+			if !errors.Is(err, ErrInvalidInput) {
+				t.Fatalf("expected invalid input, got %v", err)
+			}
+		})
+	}
+}
+
+func TestCreateSourceAcceptsAlphanumericCredentials(t *testing.T) {
+	created, err := normalizeSourceInput(CreateSourceInput{
+		Code:       "ordersapi",
+		Name:       "Orders",
+		AuthMode:   AuthModeTokenAndHMAC,
+		AuthToken:  "sourceToken",
+		HMACSecret: "hmacSecret",
+	})
+	if err != nil {
+		t.Fatalf("create source with alphanumeric credentials: %v", err)
+	}
+	if created.Code != "ordersapi" || created.AuthToken != "sourceToken" || created.HMACSecret != "hmacSecret" {
+		t.Fatalf("unexpected created source: %+v", created)
 	}
 }
 

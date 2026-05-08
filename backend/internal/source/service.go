@@ -314,6 +314,11 @@ func normalizeSourceInput(input CreateSourceInput) (CreateSourceParams, error) {
 	if input.Code == "" || input.Name == "" {
 		return CreateSourceParams{}, ErrInvalidInput
 	}
+	if !isAlphanumeric(input.Code) ||
+		(input.AuthToken != "" && !isAlphanumeric(input.AuthToken)) ||
+		(input.HMACSecret != "" && !isAlphanumeric(input.HMACSecret)) {
+		return CreateSourceParams{}, ErrInvalidInput
+	}
 	if input.AuthMode == "" {
 		input.AuthMode = AuthModeToken
 	}
@@ -371,6 +376,19 @@ func validDedupeStrategy(strategy DedupeStrategy) bool {
 	default:
 		return false
 	}
+}
+
+func isAlphanumeric(value string) bool {
+	if value == "" {
+		return false
+	}
+	for _, char := range value {
+		if (char >= 'a' && char <= 'z') || (char >= 'A' && char <= 'Z') || (char >= '0' && char <= '9') {
+			continue
+		}
+		return false
+	}
+	return true
 }
 
 func normalizeJSONConfig(raw json.RawMessage) (json.RawMessage, error) {

@@ -62,7 +62,7 @@ func TestSourceCRUDRoutesUseAdminAuthentication(t *testing.T) {
 		},
 		updateResult: source.Source{
 			ID:       "source-1",
-			Code:     "orders-updated",
+			Code:     "ordersUpdated",
 			Name:     "Orders Updated",
 			Enabled:  true,
 			AuthMode: source.AuthModeHMAC,
@@ -81,9 +81,9 @@ func TestSourceCRUDRoutesUseAdminAuthentication(t *testing.T) {
 		body           string
 		expectedStatus int
 	}{
-		{name: "create", method: http.MethodPost, path: "/api/v1/sources", body: `{"code":"orders","name":"Orders","auth_mode":"token","auth_token":"source-token"}`, expectedStatus: http.StatusCreated},
+		{name: "create", method: http.MethodPost, path: "/api/v1/sources", body: `{"code":"orders","name":"Orders","auth_mode":"token","auth_token":"sourceToken"}`, expectedStatus: http.StatusCreated},
 		{name: "get", method: http.MethodGet, path: "/api/v1/sources/source-1", expectedStatus: http.StatusOK},
-		{name: "update", method: http.MethodPut, path: "/api/v1/sources/source-1", body: `{"code":"orders-updated","name":"Orders Updated","auth_mode":"hmac","hmac_secret":"hmac-secret"}`, expectedStatus: http.StatusOK},
+		{name: "update", method: http.MethodPut, path: "/api/v1/sources/source-1", body: `{"code":"ordersUpdated","name":"Orders Updated","auth_mode":"hmac","hmac_secret":"hmacSecret"}`, expectedStatus: http.StatusOK},
 		{name: "delete", method: http.MethodDelete, path: "/api/v1/sources/source-1", expectedStatus: http.StatusOK},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -117,10 +117,10 @@ func TestSourcePUTDoesNotPassLatestPayloadFieldsToServiceInput(t *testing.T) {
 	)
 
 	req := httptest.NewRequest(http.MethodPut, "/api/v1/sources/source-1", strings.NewReader(`{
-		"code":"orders-updated",
+		"code":"ordersUpdated",
 		"name":"Orders Updated",
 		"auth_mode":"token",
-		"auth_token":"source-token",
+		"auth_token":"sourceToken",
 		"latest_payload_sample":{"title":"should-not-pass"},
 		"latest_payload_sample_updated_at":"2026-05-08T10:30:00Z"
 	}`))
@@ -150,7 +150,7 @@ func TestIngestHandlerReturnsAcceptedResponse(t *testing.T) {
 	handler := httpapi.NewHandler(testConfig(), httpapi.WithSourceService(sourceService))
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/ingest/orders", strings.NewReader(`{"title":"paid"}`))
-	req.Header.Set("Authorization", "Bearer source-token")
+	req.Header.Set("Authorization", "Bearer sourceToken")
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 
@@ -182,13 +182,13 @@ func TestIngestWithOnlyXMGPTokensReturnsPublishedAuthErrorCode(t *testing.T) {
 			Name:      "Orders",
 			Enabled:   true,
 			AuthMode:  source.AuthModeToken,
-			AuthToken: "source-token",
+			AuthToken: "sourceToken",
 		},
 	}
 	handler := httpapi.NewHandler(testConfig(), httpapi.WithSourceService(source.NewService(store)))
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/ingest/orders", strings.NewReader(`{"title":"paid"}`))
-	req.Header.Set("X-MGP-Token", "source-token")
+	req.Header.Set("X-MGP-Token", "sourceToken")
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 

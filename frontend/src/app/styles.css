@@ -495,7 +495,8 @@ body {
 
 .split-layout--fill,
 .list-stack {
-  min-height: calc(100vh - 146px);
+  height: calc(100vh - 146px);
+  min-height: 640px;
 }
 
 .list-stack {
@@ -506,8 +507,15 @@ body {
 
 .side-filter,
 .capability-panel {
+  height: calc(100vh - 146px);
+  min-height: 640px;
   max-height: calc(100vh - 146px);
   overflow: auto;
+}
+
+.split-layout--provider .list-container--fill {
+  min-height: 0;
+  height: 100%;
 }
 
 .tree-panel .panel-heading,
@@ -563,23 +571,28 @@ body {
   font-style: normal;
 }
 
-.node-card--green {
+.node-card--green,
+.node-card--source {
   color: #12b76a;
 }
 
-.node-card--orange {
+.node-card--orange,
+.node-card--condition {
   color: #f79009;
 }
 
-.node-card--blue {
+.node-card--blue,
+.node-card--template {
   color: #1677ff;
 }
 
-.node-card--purple {
+.node-card--purple,
+.node-card--recipient {
   color: #7a5af8;
 }
 
-.node-card--cyan {
+.node-card--cyan,
+.node-card--platform {
   color: #06aed4;
 }
 
@@ -589,19 +602,19 @@ body {
 
 .canvas-surface {
   position: relative;
-  min-height: 610px;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  min-height: 640px;
   padding: 16px;
-  overflow: auto;
-  background:
-    linear-gradient(#eaf1fb 1px, transparent 1px) 0 0 / 32px 32px,
-    linear-gradient(90deg, #eaf1fb 1px, transparent 1px) 0 0 / 32px 32px,
-    #fbfdff;
+  overflow: hidden;
+  background: #fbfdff;
 }
 
-.free-canvas {
-  position: relative;
-  min-width: 900px;
-  min-height: 520px;
+.react-flow-shell {
+  height: 560px;
+  overflow: hidden;
+  border: 1px solid #d7e3f4;
+  border-radius: 8px;
 }
 
 .canvas-toolbar {
@@ -609,6 +622,70 @@ body {
   align-items: center;
   justify-content: space-between;
   margin-bottom: 18px;
+}
+
+.route-breadcrumb {
+  padding: 0 2px;
+}
+
+.route-group-summary {
+  overflow: hidden;
+  background: #ffffff;
+  border: 1px solid #d7e3f4;
+  border-radius: 8px;
+}
+
+.route-flow-node {
+  position: relative;
+  display: grid;
+  gap: 6px;
+  width: 210px;
+  min-height: 96px;
+  padding: 12px 14px;
+  color: #12213f;
+  background: #ffffff;
+  border: 1px solid #bfd4f5;
+  border-radius: 8px;
+  box-shadow: 0 10px 22px rgb(15 60 120 / 8%);
+}
+
+.route-flow-node__type,
+.route-flow-node em {
+  color: #667085;
+  font-size: 12px;
+  font-style: normal;
+}
+
+.route-flow-node span {
+  color: #475467;
+  font-size: 12px;
+}
+
+.route-flow-node--source {
+  color: #027a48;
+  background: #ecfdf3;
+  border-color: #75e0a7;
+}
+
+.route-flow-node--condition {
+  border-color: #f7b27a;
+}
+
+.route-flow-node--template {
+  border-color: #9ec5fe;
+}
+
+.route-flow-node--recipient {
+  border-color: #bdb4fe;
+}
+
+.route-flow-node--platform {
+  border-color: #67e3f9;
+}
+
+.route-flow-node--selected {
+  outline: 3px solid rgb(22 119 255 / 22%);
+  border-color: #1677ff;
 }
 
 .canvas-start {

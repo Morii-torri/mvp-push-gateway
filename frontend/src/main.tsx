@@ -1,5 +1,6 @@
 import React from 'react';
 import ReactDOM from 'react-dom/client';
+import '@xyflow/react/dist/style.css';
 
 import { AppShell } from './app/AppShell';
 import './app/styles.css';

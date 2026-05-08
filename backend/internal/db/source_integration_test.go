@@ -132,17 +132,17 @@ func TestRepositoryUpdateSourcePreservesLatestPayloadSample(t *testing.T) {
 			latest_payload_sample,
 			latest_payload_sample_updated_at
 		)
-		VALUES ($1, 'orders', 'Orders', 'token', 'source-token', '{"title":"old"}'::jsonb, $2)
+		VALUES ($1, 'orders', 'Orders', 'token', 'sourceToken', '{"title":"old"}'::jsonb, $2)
 	`, sourceID, latestAt); err != nil {
 		t.Fatalf("insert source: %v", err)
 	}
 
 	updated, err := NewRepository(pool).UpdateSource(ctx, sourceID, source.UpdateSourceParams{
-		Code:                  "orders-updated",
+		Code:                  "ordersUpdated",
 		Name:                  "Orders Updated",
 		Enabled:               true,
 		AuthMode:              source.AuthModeHMAC,
-		HMACSecret:            "hmac-secret",
+		HMACSecret:            "hmacSecret",
 		CompatMode:            "standard",
 		InboundDedupeStrategy: source.DedupeStrategyPayloadHash,
 		InboundDedupeConfig:   json.RawMessage(`{}`),
