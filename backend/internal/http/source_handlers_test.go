@@ -1,0 +1,408 @@
+package httpapi_test
+
+import (
+	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+
+	"mvp-push-gateway/backend/internal/auth"
+	httpapi "mvp-push-gateway/backend/internal/http"
+	"mvp-push-gateway/backend/internal/source"
+)
+
+func TestSourceCRUDRequiresAdminBearerAuthentication(t *testing.T) {
+	sourceService := &fakeSourceService{
+		listResult: []source.Source{{
+			ID:       "source-1",
+			Code:     "orders",
+			Name:     "Orders",
+			Enabled:  true,
+			AuthMode: source.AuthModeToken,
+		}},
+	}
+	handler := httpapi.NewHandler(
+		testConfig(),
+		httpapi.WithAuthService(fakeAuthService{authenticatedToken: "admin-session"}),
+		httpapi.WithSourceService(sourceService),
+	)
+
+	unauthenticated := httptest.NewRequest(http.MethodGet, "/api/v1/sources", nil)
+	unauthenticatedRec := httptest.NewRecorder()
+	handler.ServeHTTP(unauthenticatedRec, unauthenticated)
+	if unauthenticatedRec.Code != http.StatusUnauthorized {
+		t.Fatalf("expected source list without admin bearer to return 401, got %d", unauthenticatedRec.Code)
+	}
+	if sourceService.listCalls != 0 {
+		t.Fatalf("expected source service not to be called without admin auth, got %d calls", sourceService.listCalls)
+	}
+
+	authenticated := httptest.NewRequest(http.MethodGet, "/api/v1/sources", nil)
+	authenticated.Header.Set("Authorization", "Bearer admin-session")
+	authenticatedRec := httptest.NewRecorder()
+	handler.ServeHTTP(authenticatedRec, authenticated)
+	if authenticatedRec.Code != http.StatusOK {
+		t.Fatalf("expected source list with admin bearer to return 200, got %d", authenticatedRec.Code)
+	}
+	if sourceService.listCalls != 1 {
+		t.Fatalf("expected one source list call, got %d", sourceService.listCalls)
+	}
+}
+
+func TestSourceCRUDRoutesUseAdminAuthentication(t *testing.T) {
+	sourceService := &fakeSourceService{
+		getResult: source.Source{
+			ID:       "source-1",
+			Code:     "orders",
+			Name:     "Orders",
+			Enabled:  true,
+			AuthMode: source.AuthModeToken,
+		},
+		updateResult: source.Source{
+			ID:       "source-1",
+			Code:     "orders-updated",
+			Name:     "Orders Updated",
+			Enabled:  true,
+			AuthMode: source.AuthModeHMAC,
+		},
+	}
+	handler := httpapi.NewHandler(
+		testConfig(),
+		httpapi.WithAuthService(fakeAuthService{authenticatedToken: "admin-session"}),
+		httpapi.WithSourceService(sourceService),
+	)
+
+	for _, tc := range []struct {
+		name           string
+		method         string
+		path           string
+		body           string
+		expectedStatus int
+	}{
+		{name: "create", method: http.MethodPost, path: "/api/v1/sources", body: `{"code":"orders","name":"Orders","auth_mode":"token","auth_token":"source-token"}`, expectedStatus: http.StatusCreated},
+		{name: "get", method: http.MethodGet, path: "/api/v1/sources/source-1", expectedStatus: http.StatusOK},
+		{name: "update", method: http.MethodPut, path: "/api/v1/sources/source-1", body: `{"code":"orders-updated","name":"Orders Updated","auth_mode":"hmac","hmac_secret":"hmac-secret"}`, expectedStatus: http.StatusOK},
+		{name: "delete", method: http.MethodDelete, path: "/api/v1/sources/source-1", expectedStatus: http.StatusOK},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			req := httptest.NewRequest(tc.method, tc.path, strings.NewReader(tc.body))
+			req.Header.Set("Authorization", "Bearer admin-session")
+			rec := httptest.NewRecorder()
+			handler.ServeHTTP(rec, req)
+
+			if rec.Code != tc.expectedStatus {
+				t.Fatalf("expected status %d, got %d body=%s", tc.expectedStatus, rec.Code, rec.Body.String())
+			}
+		})
+	}
+
+	if sourceService.createCalls != 1 || sourceService.getCalls != 1 || sourceService.updateCalls != 1 || sourceService.deleteCalls != 1 {
+		t.Fatalf("unexpected CRUD calls: create=%d get=%d update=%d delete=%d",
+			sourceService.createCalls,
+			sourceService.getCalls,
+			sourceService.updateCalls,
+			sourceService.deleteCalls,
+		)
+	}
+}
+
+func TestSourcePUTDoesNotPassLatestPayloadFieldsToServiceInput(t *testing.T) {
+	sourceService := &fakeSourceService{}
+	handler := httpapi.NewHandler(
+		testConfig(),
+		httpapi.WithAuthService(fakeAuthService{authenticatedToken: "admin-session"}),
+		httpapi.WithSourceService(sourceService),
+	)
+
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/sources/source-1", strings.NewReader(`{
+		"code":"orders-updated",
+		"name":"Orders Updated",
+		"auth_mode":"token",
+		"auth_token":"source-token",
+		"latest_payload_sample":{"title":"should-not-pass"},
+		"latest_payload_sample_updated_at":"2026-05-08T10:30:00Z"
+	}`))
+	req.Header.Set("Authorization", "Bearer admin-session")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	if len(sourceService.updateInput.LatestPayloadSample) != 0 {
+		t.Fatalf("expected latest payload not to be passed to service update input, got %s", sourceService.updateInput.LatestPayloadSample)
+	}
+	if sourceService.updateInput.LatestPayloadSampleUpdatedAt != nil {
+		t.Fatalf("expected latest payload timestamp not to be passed to service update input, got %v", sourceService.updateInput.LatestPayloadSampleUpdatedAt)
+	}
+}
+
+func TestIngestHandlerReturnsAcceptedResponse(t *testing.T) {
+	sourceService := &fakeSourceService{
+		ingestResult: source.IngestResult{
+			TraceID: "trace-http",
+			Status:  "accepted",
+			Message: "accepted",
+		},
+	}
+	handler := httpapi.NewHandler(testConfig(), httpapi.WithSourceService(sourceService))
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/ingest/orders", strings.NewReader(`{"title":"paid"}`))
+	req.Header.Set("Authorization", "Bearer source-token")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("expected 202 accepted, got %d body=%s", rec.Code, rec.Body.String())
+	}
+
+	var body struct {
+		TraceID string `json:"trace_id"`
+		Status  string `json:"status"`
+		Message string `json:"message"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
+		t.Fatalf("decode ingest response: %v", err)
+	}
+	if body.TraceID != "trace-http" || body.Status != "accepted" || body.Message != "accepted" {
+		t.Fatalf("unexpected ingest response: %+v", body)
+	}
+	if sourceService.ingestInput.SourceCode != "orders" || sourceService.ingestInput.Path != "/api/v1/ingest/orders" {
+		t.Fatalf("unexpected ingest input: %+v", sourceService.ingestInput)
+	}
+}
+
+func TestIngestWithOnlyXMGPTokensReturnsPublishedAuthErrorCode(t *testing.T) {
+	store := &httpSourceStore{
+		configuredSource: source.Source{
+			ID:        "source-1",
+			Code:      "orders",
+			Name:      "Orders",
+			Enabled:   true,
+			AuthMode:  source.AuthModeToken,
+			AuthToken: "source-token",
+		},
+	}
+	handler := httpapi.NewHandler(testConfig(), httpapi.WithSourceService(source.NewService(store)))
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/ingest/orders", strings.NewReader(`{"title":"paid"}`))
+	req.Header.Set("X-MGP-Token", "source-token")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401 unauthorized, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	if got := responseErrorCode(t, rec); got != "MGP-AUTH-001" {
+		t.Fatalf("expected MGP-AUTH-001, got %q", got)
+	}
+	if store.latestPayloadUpdates != 0 {
+		t.Fatalf("expected latest payload to remain unchanged, got %d updates", store.latestPayloadUpdates)
+	}
+}
+
+func TestIngestErrorCodesMatchPublishedContract(t *testing.T) {
+	for _, tc := range []struct {
+		name           string
+		err            error
+		expectedStatus int
+		expectedCode   string
+	}{
+		{name: "source unauthorized", err: source.ErrUnauthorized, expectedStatus: http.StatusUnauthorized, expectedCode: "MGP-AUTH-001"},
+		{name: "source not found", err: source.ErrNotFound, expectedStatus: http.StatusNotFound, expectedCode: "MGP-SRC-001"},
+		{name: "source disabled", err: source.ErrDisabled, expectedStatus: http.StatusForbidden, expectedCode: "MGP-SRC-001"},
+		{name: "ip denied", err: source.ErrIPNotAllowed, expectedStatus: http.StatusForbidden, expectedCode: "MGP-SRC-002"},
+		{name: "invalid json", err: source.ErrInvalidJSON, expectedStatus: http.StatusBadRequest, expectedCode: "MGP-PAYLOAD-001"},
+		{name: "payload too large", err: source.ErrPayloadTooLarge, expectedStatus: http.StatusRequestEntityTooLarge, expectedCode: "MGP-PAYLOAD-002"},
+		{name: "duplicate inbound", err: source.ErrDuplicateInbound, expectedStatus: http.StatusConflict, expectedCode: "MGP-DEDUPE-001"},
+		{name: "invalid dedupe config", err: source.ErrInvalidDedupeConfig, expectedStatus: http.StatusBadRequest, expectedCode: "MGP-DEDUPE-001"},
+		{name: "rate limited", err: source.ErrRateLimited, expectedStatus: http.StatusTooManyRequests, expectedCode: "MGP-RATE-001"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			handler := httpapi.NewHandler(testConfig(), httpapi.WithSourceService(&fakeSourceService{ingestErr: tc.err}))
+			req := httptest.NewRequest(http.MethodPost, "/api/v1/ingest/orders", strings.NewReader(`{"title":"paid"}`))
+			rec := httptest.NewRecorder()
+			handler.ServeHTTP(rec, req)
+
+			if rec.Code != tc.expectedStatus {
+				t.Fatalf("expected status %d, got %d body=%s", tc.expectedStatus, rec.Code, rec.Body.String())
+			}
+			if got := responseErrorCode(t, rec); got != tc.expectedCode {
+				t.Fatalf("expected error code %q, got %q", tc.expectedCode, got)
+			}
+		})
+	}
+}
+
+func TestSourceCRUDErrorCodesAvoidLegacySourceCodes(t *testing.T) {
+	handler := httpapi.NewHandler(
+		testConfig(),
+		httpapi.WithAuthService(fakeAuthService{authenticatedToken: "admin-session"}),
+		httpapi.WithSourceService(&fakeSourceService{createErr: source.ErrAlreadyExists, getErr: source.ErrNotFound}),
+	)
+
+	create := httptest.NewRequest(http.MethodPost, "/api/v1/sources", strings.NewReader(`{"code":"orders","name":"Orders"}`))
+	create.Header.Set("Authorization", "Bearer admin-session")
+	createRec := httptest.NewRecorder()
+	handler.ServeHTTP(createRec, create)
+	if createRec.Code != http.StatusConflict {
+		t.Fatalf("expected duplicate source conflict, got %d body=%s", createRec.Code, createRec.Body.String())
+	}
+	if got := responseErrorCode(t, createRec); got != "MGP-SRC-001" {
+		t.Fatalf("expected duplicate source to use MGP-SRC-001, got %q", got)
+	}
+
+	get := httptest.NewRequest(http.MethodGet, "/api/v1/sources/source-1", nil)
+	get.Header.Set("Authorization", "Bearer admin-session")
+	getRec := httptest.NewRecorder()
+	handler.ServeHTTP(getRec, get)
+	if getRec.Code != http.StatusNotFound {
+		t.Fatalf("expected missing source 404, got %d body=%s", getRec.Code, getRec.Body.String())
+	}
+	if got := responseErrorCode(t, getRec); got != "MGP-SRC-001" {
+		t.Fatalf("expected missing source to use MGP-SRC-001, got %q", got)
+	}
+}
+
+type fakeSourceService struct {
+	listResult   []source.Source
+	getResult    source.Source
+	updateResult source.Source
+	ingestResult source.IngestResult
+
+	createErr error
+	getErr    error
+	updateErr error
+	deleteErr error
+	ingestErr error
+
+	listCalls   int
+	createCalls int
+	getCalls    int
+	updateCalls int
+	deleteCalls int
+
+	ingestInput source.IngestInput
+	updateInput source.UpdateSourceInput
+}
+
+func (f *fakeSourceService) ListSources(context.Context) ([]source.Source, error) {
+	f.listCalls++
+	return f.listResult, nil
+}
+
+func (f *fakeSourceService) CreateSource(_ context.Context, input source.CreateSourceInput) (source.Source, error) {
+	f.createCalls++
+	if f.createErr != nil {
+		return source.Source{}, f.createErr
+	}
+	return source.Source{
+		ID:        "source-1",
+		Code:      input.Code,
+		Name:      input.Name,
+		Enabled:   input.Enabled,
+		AuthMode:  input.AuthMode,
+		AuthToken: input.AuthToken,
+	}, nil
+}
+
+func (f *fakeSourceService) GetSource(context.Context, string) (source.Source, error) {
+	f.getCalls++
+	if f.getErr != nil {
+		return source.Source{}, f.getErr
+	}
+	return f.getResult, nil
+}
+
+func (f *fakeSourceService) UpdateSource(_ context.Context, _ string, input source.UpdateSourceInput) (source.Source, error) {
+	f.updateCalls++
+	f.updateInput = input
+	if f.updateErr != nil {
+		return source.Source{}, f.updateErr
+	}
+	if f.updateResult.ID != "" {
+		return f.updateResult, nil
+	}
+	return source.Source{
+		ID:       "source-1",
+		Code:     input.Code,
+		Name:     input.Name,
+		Enabled:  input.Enabled,
+		AuthMode: input.AuthMode,
+	}, nil
+}
+
+func (f *fakeSourceService) DeleteSource(context.Context, string) error {
+	f.deleteCalls++
+	if f.deleteErr != nil {
+		return f.deleteErr
+	}
+	return nil
+}
+
+func (f *fakeSourceService) Ingest(_ context.Context, input source.IngestInput) (source.IngestResult, error) {
+	f.ingestInput = input
+	if f.ingestErr != nil {
+		return source.IngestResult{}, f.ingestErr
+	}
+	return f.ingestResult, nil
+}
+
+type httpSourceStore struct {
+	configuredSource     source.Source
+	latestPayloadUpdates int
+}
+
+func (s *httpSourceStore) ListSources(context.Context) ([]source.Source, error) {
+	return nil, nil
+}
+
+func (s *httpSourceStore) CreateSource(context.Context, source.CreateSourceParams) (source.Source, error) {
+	return source.Source{}, nil
+}
+
+func (s *httpSourceStore) GetSource(context.Context, string) (source.Source, error) {
+	return source.Source{}, source.ErrNotFound
+}
+
+func (s *httpSourceStore) GetSourceByCode(_ context.Context, code string) (source.Source, error) {
+	if s.configuredSource.Code != code {
+		return source.Source{}, source.ErrNotFound
+	}
+	return s.configuredSource, nil
+}
+
+func (s *httpSourceStore) UpdateSource(context.Context, string, source.UpdateSourceParams) (source.Source, error) {
+	return source.Source{}, nil
+}
+
+func (s *httpSourceStore) DeleteSource(context.Context, string) error {
+	return nil
+}
+
+func (s *httpSourceStore) UpdateLatestPayloadSample(context.Context, string, json.RawMessage) error {
+	s.latestPayloadUpdates++
+	return nil
+}
+
+func (s *httpSourceStore) EnqueueInbound(context.Context, source.EnqueueInboundParams) error {
+	return nil
+}
+
+func responseErrorCode(t *testing.T, rec *httptest.ResponseRecorder) string {
+	t.Helper()
+
+	var body struct {
+		Error struct {
+			Code string `json:"code"`
+		} `json:"error"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
+		t.Fatalf("decode error response: %v body=%s", err, rec.Body.String())
+	}
+	return body.Error.Code
+}
+
+var _ = auth.Admin{}

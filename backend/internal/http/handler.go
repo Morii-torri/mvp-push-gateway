@@ -8,6 +8,7 @@ import (
 
 	"mvp-push-gateway/backend/internal/auth"
 	"mvp-push-gateway/backend/internal/config"
+	"mvp-push-gateway/backend/internal/source"
 )
 
 type authService interface {
@@ -20,15 +21,31 @@ type authService interface {
 }
 
 type Handler struct {
-	cfg  config.Config
-	auth authService
+	cfg     config.Config
+	auth    authService
+	sources sourceService
 }
 
 type Option func(*Handler)
 
+type sourceService interface {
+	ListSources(context.Context) ([]source.Source, error)
+	CreateSource(context.Context, source.CreateSourceInput) (source.Source, error)
+	GetSource(context.Context, string) (source.Source, error)
+	UpdateSource(context.Context, string, source.UpdateSourceInput) (source.Source, error)
+	DeleteSource(context.Context, string) error
+	Ingest(context.Context, source.IngestInput) (source.IngestResult, error)
+}
+
 func WithAuthService(service authService) Option {
 	return func(h *Handler) {
 		h.auth = service
+	}
+}
+
+func WithSourceService(service sourceService) Option {
+	return func(h *Handler) {
+		h.sources = service
 	}
 }
 
@@ -53,6 +70,9 @@ func NewHandler(cfg config.Config, options ...Option) http.Handler {
 	mux.HandleFunc(cfg.Server.APIPrefix+"/auth/logout", handler.logoutHandler)
 	mux.HandleFunc(cfg.Server.APIPrefix+"/auth/me", handler.meHandler)
 	mux.HandleFunc(cfg.Server.APIPrefix+"/auth/change-password", handler.changePasswordHandler)
+	mux.HandleFunc(cfg.Server.APIPrefix+"/sources", handler.sourcesHandler)
+	mux.HandleFunc(cfg.Server.APIPrefix+"/sources/", handler.sourceDetailHandler)
+	mux.HandleFunc(cfg.Server.APIPrefix+"/ingest/", handler.ingestHandler)
 	return mux
 }
 
@@ -106,6 +126,14 @@ func (h *Handler) requireAuthService(w http.ResponseWriter) bool {
 		return true
 	}
 	writeAPIError(w, http.StatusServiceUnavailable, "MGP-SETUP-000", "认证服务未启用，请先配置数据库")
+	return false
+}
+
+func (h *Handler) requireSourceService(w http.ResponseWriter) bool {
+	if h.sources != nil {
+		return true
+	}
+	writeAPIError(w, http.StatusServiceUnavailable, "MGP-SRC-001", "来源服务未启用，请先配置数据库")
 	return false
 }
 

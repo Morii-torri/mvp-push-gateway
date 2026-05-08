@@ -124,7 +124,8 @@ func testConfig() config.Config {
 }
 
 type fakeAuthService struct {
-	status auth.SetupStatus
+	status             auth.SetupStatus
+	authenticatedToken string
 }
 
 func (f fakeAuthService) GetSetupStatus(context.Context) (auth.SetupStatus, error) {
@@ -139,7 +140,15 @@ func (fakeAuthService) Login(context.Context, auth.LoginInput) (auth.LoginResult
 	return auth.LoginResult{}, nil
 }
 
-func (fakeAuthService) Authenticate(context.Context, string) (auth.Admin, error) {
+func (f fakeAuthService) Authenticate(_ context.Context, token string) (auth.Admin, error) {
+	if f.authenticatedToken != "" && token == f.authenticatedToken {
+		return auth.Admin{
+			ID:          "admin-1",
+			Username:    "admin",
+			DisplayName: "Admin",
+			Enabled:     true,
+		}, nil
+	}
 	return auth.Admin{}, auth.ErrUnauthorized
 }
 

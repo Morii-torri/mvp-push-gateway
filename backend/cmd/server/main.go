@@ -15,6 +15,7 @@ import (
 	"mvp-push-gateway/backend/internal/config"
 	"mvp-push-gateway/backend/internal/db"
 	httpapi "mvp-push-gateway/backend/internal/http"
+	"mvp-push-gateway/backend/internal/source"
 )
 
 func main() {
@@ -36,7 +37,12 @@ func main() {
 			log.Fatalf("database ping failed: %v", err)
 		}
 		authService := auth.NewService(repository)
-		handlerOptions = append(handlerOptions, httpapi.WithAuthService(authService))
+		sourceService := source.NewService(repository)
+		handlerOptions = append(
+			handlerOptions,
+			httpapi.WithAuthService(authService),
+			httpapi.WithSourceService(sourceService),
+		)
 	}
 
 	server := &http.Server{
