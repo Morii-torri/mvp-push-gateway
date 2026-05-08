@@ -3,6 +3,7 @@ package db
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"testing"
 	"time"
 
@@ -146,6 +147,82 @@ func TestRepositoryCompleteDeliveryUpdatesAttemptAndJob(t *testing.T) {
 	}
 }
 
+func TestRepositoryClaimSendJobsFairlyAcrossChannels(t *testing.T) {
+	pool := openMigratedPool(t)
+	defer pool.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	repository := NewRepository(pool)
+	slowChannel := createTestChannel(t, ctx, repository, "webhook-slow")
+	fastChannel := createTestChannel(t, ctx, repository, "webhook-fast")
+	now := time.Date(2026, 5, 8, 16, 0, 0, 0, time.UTC)
+
+	for i := 1; i <= 4; i++ {
+		sourceID := testUUID(9100 + i)
+		messageID := testUUID(9200 + i)
+		attemptID := testUUID(9300 + i)
+		jobID := testUUID(9400 + i)
+		insertSourceMessageAndAttempt(t, ctx, pool, sourceID, messageID, attemptID, slowChannel.ID)
+		if _, err := repository.EnqueueJob(ctx, queue.EnqueueParams{
+			ID:          jobID,
+			Type:        queue.JobTypeSendMessage,
+			Payload:     json.RawMessage(`{"delivery_attempt_id":"` + attemptID + `"}`),
+			RunAt:       now,
+			MaxAttempts: 3,
+			ChannelID:   slowChannel.ID,
+			QueueKey:    slowChannel.ID,
+		}); err != nil {
+			t.Fatalf("enqueue slow send job %d: %v", i, err)
+		}
+	}
+
+	fastSourceID := testUUID(9501)
+	fastMessageID := testUUID(9502)
+	fastAttemptID := testUUID(9503)
+	fastJobID := testUUID(9504)
+	insertSourceMessageAndAttempt(t, ctx, pool, fastSourceID, fastMessageID, fastAttemptID, fastChannel.ID)
+	if _, err := repository.EnqueueJob(ctx, queue.EnqueueParams{
+		ID:          fastJobID,
+		Type:        queue.JobTypeSendMessage,
+		Payload:     json.RawMessage(`{"delivery_attempt_id":"` + fastAttemptID + `"}`),
+		RunAt:       now,
+		MaxAttempts: 3,
+		ChannelID:   fastChannel.ID,
+		QueueKey:    fastChannel.ID,
+	}); err != nil {
+		t.Fatalf("enqueue fast send job: %v", err)
+	}
+
+	claimed, err := repository.ClaimSendJobs(ctx, queue.ClaimParams{
+		WorkerID: "sender-1",
+		Limit:    4,
+		Now:      now,
+	})
+	if err != nil {
+		t.Fatalf("claim send jobs fairly: %v", err)
+	}
+	if len(claimed) != 4 {
+		t.Fatalf("expected 4 claimed send jobs, got %d", len(claimed))
+	}
+
+	channelCounts := map[string]int{}
+	fastClaimed := false
+	for _, job := range claimed {
+		channelCounts[job.ChannelID]++
+		if job.ChannelID == fastChannel.ID {
+			fastClaimed = true
+		}
+	}
+	if !fastClaimed {
+		t.Fatalf("expected fast-channel send job to be claimed in the same batch, got %+v", claimed)
+	}
+	if channelCounts[slowChannel.ID] != 3 || channelCounts[fastChannel.ID] != 1 {
+		t.Fatalf("unexpected fair claim distribution: %+v", channelCounts)
+	}
+}
+
 func jsonEqual(t *testing.T, left json.RawMessage, right json.RawMessage) bool {
 	t.Helper()
 
@@ -164,6 +241,10 @@ func deepEqualJSON(left any, right any) bool {
 	leftBytes, _ := json.Marshal(left)
 	rightBytes, _ := json.Marshal(right)
 	return string(leftBytes) == string(rightBytes)
+}
+
+func testUUID(value int) string {
+	return fmt.Sprintf("00000000-0000-0000-0000-%012d", value)
 }
 
 func createTestChannel(t *testing.T, ctx context.Context, repository Repository, name string) provider.Channel {

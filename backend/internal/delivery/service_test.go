@@ -399,6 +399,109 @@ func TestWorkerPerChannelIsolationForConcurrencyAndRateLimit(t *testing.T) {
 	}
 }
 
+func TestWorkerProcessBatchFairlyClaimsAcrossChannels(t *testing.T) {
+	type marker struct {
+		name string
+		at   time.Time
+	}
+
+	var markersMu sync.Mutex
+	markers := []marker{}
+	record := func(name string) {
+		markersMu.Lock()
+		defer markersMu.Unlock()
+		markers = append(markers, marker{name: name, at: time.Now()})
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/slow":
+			record("slow-start")
+			time.Sleep(80 * time.Millisecond)
+			record("slow-done")
+		case "/fast":
+			record("fast-start")
+			record("fast-done")
+		default:
+			http.NotFound(w, r)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	}))
+	defer server.Close()
+
+	store := newMemoryRepository()
+	store.channels["channel-slow"] = provider.Channel{
+		ID:               "channel-slow",
+		Name:             "Slow Channel",
+		Enabled:          true,
+		ConcurrencyLimit: 1,
+		TimeoutMS:        1000,
+		SendConfig:       json.RawMessage(`{"method":"POST","url":"` + server.URL + `/slow"}`),
+	}
+	store.channels["channel-fast"] = provider.Channel{
+		ID:               "channel-fast",
+		Name:             "Fast Channel",
+		Enabled:          true,
+		ConcurrencyLimit: 1,
+		TimeoutMS:        1000,
+		SendConfig:       json.RawMessage(`{"method":"POST","url":"` + server.URL + `/fast"}`),
+	}
+
+	for i := 1; i <= 4; i++ {
+		attemptID := "attempt-slow-" + string(rune('0'+i))
+		jobID := "job-slow-" + string(rune('0'+i))
+		store.addAttempt(Attempt{ID: attemptID, MessageID: "message-slow-" + string(rune('0'+i)), ChannelID: "channel-slow", Status: StatusQueued})
+		store.addJob(newSendJob(jobID, "channel-slow", 3, time.Now().Add(-time.Second), SendMessageJobPayload{
+			DeliveryAttemptID: attemptID,
+			Body:              json.RawMessage(`{"title":"slow"}`),
+		}))
+	}
+	store.addAttempt(Attempt{ID: "attempt-fast-1", MessageID: "message-fast-1", ChannelID: "channel-fast", Status: StatusQueued})
+	store.addJob(newSendJob("job-fast-1", "channel-fast", 3, time.Now().Add(-time.Second), SendMessageJobPayload{
+		DeliveryAttemptID: "attempt-fast-1",
+		Body:              json.RawMessage(`{"title":"fast"}`),
+	}))
+
+	worker := NewWorker(store,
+		WithWorkerID("sender-1"),
+		WithHTTPClientFactory(func(timeout time.Duration) *http.Client {
+			client := server.Client()
+			client.Timeout = timeout
+			return client
+		}),
+	)
+
+	processed, err := worker.ProcessBatch(context.Background(), 4)
+	if err != nil {
+		t.Fatalf("process fair claim batch: %v", err)
+	}
+	if processed != 4 {
+		t.Fatalf("expected 4 processed jobs, got %d", processed)
+	}
+	if store.attempts["attempt-fast-1"].Status != StatusSent {
+		t.Fatalf("expected fast-channel job to be included in the same batch, got %s", store.attempts["attempt-fast-1"].Status)
+	}
+	if store.jobs["job-slow-4"].Status != queue.JobStatusQueued {
+		t.Fatalf("expected one slow-channel job to remain queued after fair claim, got %s", store.jobs["job-slow-4"].Status)
+	}
+
+	indexOf := func(name string) int {
+		markersMu.Lock()
+		defer markersMu.Unlock()
+		for idx, marker := range markers {
+			if marker.name == name {
+				return idx
+			}
+		}
+		return -1
+	}
+	if indexOf("fast-done") == -1 {
+		t.Fatalf("expected fast-channel send to execute in the claimed batch, got %+v", markers)
+	}
+}
+
 func jsonContains(t *testing.T, raw json.RawMessage, needle string) bool {
 	t.Helper()
 	return strings.Contains(string(raw), needle)
@@ -432,29 +535,58 @@ func (m *memoryRepository) addJob(job queue.Job) {
 	m.jobOrder = append(m.jobOrder, job.ID)
 }
 
-func (m *memoryRepository) ClaimJobs(_ context.Context, params queue.ClaimParams) ([]queue.Job, error) {
+func (m *memoryRepository) ClaimSendJobs(_ context.Context, params queue.ClaimParams) ([]queue.Job, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	claimed := make([]queue.Job, 0, params.Limit)
+	byChannel := map[string][]string{}
 	for _, jobID := range m.jobOrder {
-		if len(claimed) >= params.Limit {
-			break
-		}
 		job := m.jobs[jobID]
 		if job.Status != queue.JobStatusQueued || job.RunAt.After(params.Now) || job.Type != queue.JobTypeSendMessage {
 			continue
 		}
-		job.Status = queue.JobStatusProcessing
-		job.Attempts++
-		job.LockedBy = params.WorkerID
-		now := params.Now
-		job.LockedAt = &now
-		job.HeartbeatAt = &now
-		m.jobs[jobID] = job
-		claimed = append(claimed, job)
+		channelID := job.ChannelID
+		if channelID == "" {
+			channelID = job.ID
+		}
+		byChannel[channelID] = append(byChannel[channelID], jobID)
+	}
+
+	claimed := make([]queue.Job, 0, params.Limit)
+	for round := 0; len(claimed) < params.Limit; round++ {
+		progressed := false
+		for _, jobID := range m.jobOrder {
+			if len(claimed) >= params.Limit {
+				break
+			}
+			job := m.jobs[jobID]
+			channelID := job.ChannelID
+			if channelID == "" {
+				channelID = job.ID
+			}
+			channelJobs := byChannel[channelID]
+			if round >= len(channelJobs) || channelJobs[round] != jobID {
+				continue
+			}
+			progressed = true
+			job.Status = queue.JobStatusProcessing
+			job.Attempts++
+			job.LockedBy = params.WorkerID
+			now := params.Now
+			job.LockedAt = &now
+			job.HeartbeatAt = &now
+			m.jobs[jobID] = job
+			claimed = append(claimed, job)
+		}
+		if !progressed {
+			break
+		}
 	}
 	return claimed, nil
+}
+
+func (m *memoryRepository) ClaimJobs(_ context.Context, _ queue.ClaimParams) ([]queue.Job, error) {
+	return nil, errors.New("ClaimJobs should not be used by delivery worker")
 }
 
 func (m *memoryRepository) GetChannel(_ context.Context, id string) (provider.Channel, error) {

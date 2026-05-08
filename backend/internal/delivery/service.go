@@ -121,7 +121,7 @@ type DeadLetterDeliveryParams struct {
 }
 
 type Repository interface {
-	ClaimJobs(context.Context, queue.ClaimParams) ([]queue.Job, error)
+	ClaimSendJobs(context.Context, queue.ClaimParams) ([]queue.Job, error)
 	GetChannel(context.Context, string) (provider.Channel, error)
 	GetAttempt(context.Context, string) (Attempt, error)
 	MarkAttemptProcessing(context.Context, MarkAttemptProcessingParams) error
@@ -194,7 +194,7 @@ func (w *Worker) ProcessBatch(ctx context.Context, limit int) (int, error) {
 		limit = 1
 	}
 	now := w.now()
-	jobs, err := w.repo.ClaimJobs(ctx, queue.ClaimParams{
+	jobs, err := w.repo.ClaimSendJobs(ctx, queue.ClaimParams{
 		WorkerID: w.workerID,
 		Types:    []queue.JobType{queue.JobTypeSendMessage},
 		Limit:    limit,

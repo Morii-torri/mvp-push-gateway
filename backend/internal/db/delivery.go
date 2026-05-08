@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -11,6 +13,139 @@ import (
 	"mvp-push-gateway/backend/internal/delivery"
 	"mvp-push-gateway/backend/internal/queue"
 )
+
+func (r Repository) ClaimSendJobs(ctx context.Context, params queue.ClaimParams) ([]queue.Job, error) {
+	if r.pool == nil {
+		return nil, errors.New("postgres pool is nil")
+	}
+	if strings.TrimSpace(params.WorkerID) == "" || params.Limit <= 0 {
+		return nil, queue.ErrInvalidInput
+	}
+
+	now := params.Now
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+
+	tx, err := r.pool.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return nil, fmt.Errorf("begin claim send jobs transaction: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	rows, err := tx.Query(ctx, `
+		WITH ranked_jobs AS (
+			SELECT
+				job.id,
+				job.priority,
+				job.run_at,
+				job.created_at,
+				row_number() OVER (
+					PARTITION BY COALESCE(job.channel_id::text, job.id::text)
+					ORDER BY job.priority ASC, job.run_at ASC, job.created_at ASC, job.id ASC
+				) AS channel_rank,
+				GREATEST(COALESCE(channel.concurrency_limit, 1), 1)::bigint AS channel_concurrency_limit
+			FROM jobs AS job
+			LEFT JOIN delivery_channels AS channel ON channel.id = job.channel_id
+			WHERE job.status = 'queued'
+				AND job.run_at <= $1
+				AND job.type = 'send_message'
+		),
+		candidate_jobs AS (
+			SELECT
+				ranked.id,
+				row_number() OVER (
+					ORDER BY
+						((ranked.channel_rank - 1) / ranked.channel_concurrency_limit) ASC,
+						ranked.channel_rank ASC,
+						ranked.priority ASC,
+						ranked.run_at ASC,
+						ranked.created_at ASC,
+						ranked.id ASC
+				) AS claim_order
+			FROM ranked_jobs AS ranked
+		),
+		selected_jobs AS (
+			SELECT
+				job.id,
+				candidate.claim_order
+			FROM jobs AS job
+			JOIN candidate_jobs AS candidate ON candidate.id = job.id
+			ORDER BY
+				candidate.claim_order ASC
+			LIMIT $2
+			FOR UPDATE OF job SKIP LOCKED
+		),
+		updated_jobs AS (
+			UPDATE jobs AS job
+			SET status = 'processing',
+				attempts = job.attempts + 1,
+				locked_by = $3,
+				locked_at = $1,
+				heartbeat_at = $1,
+				started_at = COALESCE(job.started_at, $1),
+				updated_at = $1
+			FROM selected_jobs
+			WHERE job.id = selected_jobs.id
+			RETURNING
+				selected_jobs.claim_order AS claim_order,
+				job.id,
+				job.type,
+				job.status,
+				job.payload,
+				job.run_at,
+				job.attempts,
+				job.max_attempts,
+				COALESCE(job.locked_by, '') AS locked_by,
+				job.locked_at,
+				job.heartbeat_at,
+				job.processing_timeout_seconds,
+				COALESCE(job.last_error, '') AS last_error,
+				COALESCE(job.channel_id::text, '') AS channel_id,
+				job.priority,
+				COALESCE(job.queue_key, '') AS queue_key,
+				job.started_at,
+				job.finished_at,
+				job.duration_ms,
+				job.created_at,
+				job.updated_at
+		)
+		SELECT
+			id,
+			type,
+			status,
+			payload,
+			run_at,
+			attempts,
+			max_attempts,
+			locked_by,
+			locked_at,
+			heartbeat_at,
+			processing_timeout_seconds,
+			last_error,
+			channel_id,
+			priority,
+			queue_key,
+			started_at,
+			finished_at,
+			duration_ms,
+			created_at,
+			updated_at
+		FROM updated_jobs
+		ORDER BY claim_order
+	`, now, params.Limit, params.WorkerID)
+	if err != nil {
+		return nil, fmt.Errorf("claim send jobs: %w", err)
+	}
+	claimed, err := scanJobs(rows)
+	if err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, fmt.Errorf("commit claim send jobs transaction: %w", err)
+	}
+	return claimed, nil
+}
 
 func (r Repository) GetAttempt(ctx context.Context, attemptID string) (delivery.Attempt, error) {
 	var attempt delivery.Attempt
