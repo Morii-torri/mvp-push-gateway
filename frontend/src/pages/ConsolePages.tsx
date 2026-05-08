@@ -106,6 +106,7 @@ import {
   getValidationStatusMeta,
   templateVariable,
 } from '../utils/labels';
+import { canEnableRouteGroupSource, routeRulesForGroup } from '../utils/routeFlow';
 
 export type ConsolePageProps = {
   lastUpdated: Date;
@@ -919,26 +920,54 @@ export function ProvidersPage({ lastUpdated, onRefresh }: ConsolePageProps) {
   );
 }
 
-function RouteGroupForm() {
+type RouteGroupDraft = {
+  name: string;
+  sourceCode: string;
+  enabled: boolean;
+  currentVersion: string;
+};
+
+function RouteGroupForm({
+  value,
+  onChange,
+}: {
+  value: RouteGroupDraft;
+  onChange: (value: RouteGroupDraft) => void;
+}) {
   return (
     <Form layout="vertical">
       <Form.Item label="路由大组名称" required>
-        <Input defaultValue="新路由大组" />
+        <Input
+          value={value.name}
+          onChange={(event) => onChange({ ...value, name: event.target.value })}
+        />
       </Form.Item>
       <Form.Item label="绑定来源" required extra="启用状态下每个来源只能绑定一个路由大组。">
         <Select
-          defaultValue="govservice"
+          value={value.sourceCode}
+          onChange={(sourceCode) => onChange({ ...value, sourceCode })}
           options={sources.map((source) => ({
             label: `${source.name} / ${source.code}`,
             value: source.code,
           }))}
         />
       </Form.Item>
+      <Form.Item label="当前版本">
+        <Input
+          value={value.currentVersion}
+          onChange={(event) => onChange({ ...value, currentVersion: event.target.value })}
+        />
+      </Form.Item>
       <Form.Item label="执行语义">
         <Input value="按顺序匹配，第一条命中即发送并停止" readOnly />
       </Form.Item>
       <Form.Item label="状态">
-        <Switch defaultChecked checkedChildren="启用" unCheckedChildren="停用" />
+        <Switch
+          checked={value.enabled}
+          checkedChildren="启用"
+          unCheckedChildren="停用"
+          onChange={(enabled) => onChange({ ...value, enabled })}
+        />
       </Form.Item>
     </Form>
   );
@@ -956,6 +985,10 @@ type RouteNodeData = Record<string, unknown> & {
 
 type RouteFlowNode = Node<RouteNodeData, 'routeNode'>;
 type RouteFlowEdge = Edge<Record<string, unknown>>;
+type RouteCanvasSnapshot = {
+  nodes: RouteFlowNode[];
+  edges: RouteFlowEdge[];
+};
 
 type SelectedFlowElement =
   | { type: 'node'; id: string }
@@ -992,7 +1025,7 @@ function RouteFlowNodeView({ data, selected }: NodeProps<RouteFlowNode>) {
 }
 
 function buildInitialRouteFlow(group: RouteGroup, rules: RouteRule[]) {
-  const groupRules = rules.filter((rule) => group.ruleIds.includes(rule.id));
+  const groupRules = routeRulesForGroup(group, rules);
   const nodes: RouteFlowNode[] = [
     {
       id: 'source-start',
@@ -1072,6 +1105,17 @@ function buildInitialRouteFlow(group: RouteGroup, rules: RouteRule[]) {
   return { nodes, edges };
 }
 
+function cloneRouteCanvasSnapshot(snapshot: RouteCanvasSnapshot): RouteCanvasSnapshot {
+  return {
+    nodes: snapshot.nodes.map((node) => ({
+      ...node,
+      data: { ...node.data },
+      position: { ...node.position },
+    })),
+    edges: snapshot.edges.map((edge) => ({ ...edge })),
+  };
+}
+
 export function RoutesPage({ lastUpdated, onRefresh }: ConsolePageProps) {
   const { message } = App.useApp();
   const { drawer: groupDrawer, openDrawer: openGroupDrawer, closeDrawer: closeGroupDrawer } = useCreateDrawer('新增路由大组');
@@ -1079,11 +1123,19 @@ export function RoutesPage({ lastUpdated, onRefresh }: ConsolePageProps) {
   const [mode, setMode] = useState<'canvas' | 'table'>('canvas');
   const [groupRows, setGroupRows] = useState<RouteGroup[]>(routeGroups);
   const [selectedGroup, setSelectedGroup] = useState<RouteGroup | null>(null);
+  const [editingGroupId, setEditingGroupId] = useState<string | null>(null);
+  const [groupDraft, setGroupDraft] = useState<RouteGroupDraft>({
+    name: '新路由大组',
+    sourceCode: sources[0]?.code ?? '',
+    enabled: true,
+    currentVersion: 'v0.1.0',
+  });
   const [ruleRows, setRuleRows] = useState<RouteRule[]>(routeRules);
   const [groupKeyword, setGroupKeyword] = useState('');
   const [groupSource, setGroupSource] = useState<string>('all');
   const [ruleKeyword, setRuleKeyword] = useState('');
   const [selectedElement, setSelectedElement] = useState<SelectedFlowElement>(null);
+  const [canvasSnapshots, setCanvasSnapshots] = useState<Record<string, RouteCanvasSnapshot>>({});
   const [flowNodes, setFlowNodes, onFlowNodesChange] = useNodesState<RouteFlowNode>([]);
   const [flowEdges, setFlowEdges, onFlowEdgesChange] = useEdgesState<RouteFlowEdge>([]);
   const nodeTypes = useMemo(() => ({ routeNode: RouteFlowNodeView }), []);
@@ -1093,9 +1145,7 @@ export function RoutesPage({ lastUpdated, onRefresh }: ConsolePageProps) {
     const sourceMatched = groupSource === 'all' || row.sourceCode === groupSource;
     return keywordMatched && sourceMatched;
   });
-  const groupRules = selectedGroup
-    ? ruleRows.filter((rule) => selectedGroup.ruleIds.includes(rule.id)).sort((a, b) => a.sortOrder - b.sortOrder)
-    : [];
+  const groupRules = selectedGroup ? routeRulesForGroup(selectedGroup, ruleRows) : [];
   const filteredRules = groupRules.filter(
     (row) => !ruleKeyword || row.name.includes(ruleKeyword) || row.condition.includes(ruleKeyword),
   );
@@ -1104,7 +1154,8 @@ export function RoutesPage({ lastUpdated, onRefresh }: ConsolePageProps) {
   const selectedEdge =
     selectedElement?.type === 'edge' ? flowEdges.find((edge) => edge.id === selectedElement.id) : undefined;
   const openGroup = (group: RouteGroup) => {
-    const initial = buildInitialRouteFlow(group, ruleRows);
+    const snapshot = canvasSnapshots[group.id] ?? buildInitialRouteFlow(group, ruleRows);
+    const initial = cloneRouteCanvasSnapshot(snapshot);
     setSelectedGroup(group);
     setMode('canvas');
     setRuleKeyword('');
@@ -1112,24 +1163,87 @@ export function RoutesPage({ lastUpdated, onRefresh }: ConsolePageProps) {
     setFlowEdges(initial.edges);
     setSelectedElement({ type: 'node', id: 'source-start' });
   };
-  const saveGroup = () => {
-    if (!groupDrawer.title.startsWith('编辑')) {
-      setGroupRows((current) => [
-        {
-          id: `flow-local-${Date.now()}`,
-          name: `本地新增路由大组 ${current.length + 1}`,
-          sourceName: '测试开放来源',
-          sourceCode: 'opendemo',
-          enabled: false,
-          currentVersion: 'v0.1.0',
-          ruleIds: [],
-          totalHitCount: 0,
-          updatedAt: '2026-05-08 15:30:00',
-        },
-        ...current,
-      ]);
-    }
+  const openCreateGroup = () => {
+    setEditingGroupId(null);
+    setGroupDraft({
+      name: '新路由大组',
+      sourceCode: sources[0]?.code ?? '',
+      enabled: true,
+      currentVersion: 'v0.1.0',
+    });
+    openGroupDrawer('新增路由大组');
+  };
+  const openEditGroup = (group: RouteGroup) => {
+    setEditingGroupId(group.id);
+    setGroupDraft({
+      name: group.name,
+      sourceCode: group.sourceCode,
+      enabled: group.enabled,
+      currentVersion: group.currentVersion,
+    });
+    openGroupDrawer(`编辑路由大组：${group.name}`);
+  };
+  const closeGroupEditor = () => {
     closeGroupDrawer();
+    setEditingGroupId(null);
+  };
+  const clearGroupCanvasSnapshot = (groupId: string) => {
+    setCanvasSnapshots((current) => {
+      const { [groupId]: _removed, ...rest } = current;
+      return rest;
+    });
+  };
+  const saveGroup = () => {
+    const source = sources.find((item) => item.code === groupDraft.sourceCode);
+    const name = groupDraft.name.trim();
+    const currentVersion = groupDraft.currentVersion.trim() || 'v0.1.0';
+    if (!name || !source) {
+      message.error('请填写路由大组名称并选择来源');
+      return;
+    }
+    if (groupDraft.enabled && !canEnableRouteGroupSource(groupRows, editingGroupId, groupDraft.sourceCode)) {
+      message.error('该来源已存在启用路由大组');
+      return;
+    }
+    const updatedAt = '2026-05-08 15:30:00';
+    if (editingGroupId) {
+      const currentEditingGroup = groupRows.find((group) => group.id === editingGroupId);
+      const sourceChanged = currentEditingGroup?.sourceCode !== source.code;
+      const nextSelectedGroup = currentEditingGroup
+        ? {
+            ...currentEditingGroup,
+            name,
+            sourceName: source.name,
+            sourceCode: source.code,
+            enabled: groupDraft.enabled,
+            currentVersion,
+            updatedAt,
+          }
+        : null;
+      setGroupRows((current) =>
+        current.map((group) => (group.id === editingGroupId && nextSelectedGroup ? nextSelectedGroup : group)),
+      );
+      if (selectedGroup?.id === editingGroupId && nextSelectedGroup) {
+        setSelectedGroup(nextSelectedGroup);
+      }
+      if (sourceChanged) {
+        clearGroupCanvasSnapshot(editingGroupId);
+      }
+    } else {
+      const nextGroup: RouteGroup = {
+        id: `flow-local-${Date.now()}`,
+        name,
+        sourceName: source.name,
+        sourceCode: source.code,
+        enabled: groupDraft.enabled,
+        currentVersion,
+        ruleIds: [],
+        totalHitCount: 0,
+        updatedAt,
+      };
+      setGroupRows((current) => [nextGroup, ...current]);
+    }
+    closeGroupEditor();
     message.success('路由大组已保存到本地演示数据');
   };
   const addRouteNode = useCallback(
@@ -1203,6 +1317,14 @@ export function RoutesPage({ lastUpdated, onRefresh }: ConsolePageProps) {
       current.map((node) => (node.id === selectedNode.id ? { ...node, data: { ...node.data, ...patch } } : node)),
     );
   };
+  const updateSelectedEdge = (patch: Partial<RouteFlowEdge>) => {
+    if (!selectedEdge) {
+      return;
+    }
+    setFlowEdges((current) =>
+      current.map((edge) => (edge.id === selectedEdge.id ? { ...edge, ...patch } : edge)),
+    );
+  };
   const deleteSelectedElement = () => {
     if (!selectedElement) {
       message.warning('请先选择节点或连线');
@@ -1224,7 +1346,25 @@ export function RoutesPage({ lastUpdated, onRefresh }: ConsolePageProps) {
     message.success('已删除选中元素');
   };
   const saveCanvas = () => {
+    if (!selectedGroup) {
+      return;
+    }
+    setCanvasSnapshots((current) => ({
+      ...current,
+      [selectedGroup.id]: cloneRouteCanvasSnapshot({ nodes: flowNodes, edges: flowEdges }),
+    }));
     message.success('路由画布已保存到本地状态');
+  };
+  const resetCanvasLayout = () => {
+    if (!selectedGroup) {
+      return;
+    }
+    const initial = buildInitialRouteFlow(selectedGroup, ruleRows);
+    setFlowNodes(initial.nodes);
+    setFlowEdges(initial.edges);
+    clearGroupCanvasSnapshot(selectedGroup.id);
+    setSelectedElement({ type: 'node', id: 'source-start' });
+    message.success('已从规则顺序重建画布布局');
   };
   const saveRule = () => {
     if (!selectedGroup) {
@@ -1246,6 +1386,7 @@ export function RoutesPage({ lastUpdated, onRefresh }: ConsolePageProps) {
         lastHitAt: '-',
       };
       setRuleRows((current) => [...current, newRule]);
+      clearGroupCanvasSnapshot(selectedGroup.id);
       setGroupRows((current) =>
         current.map((group) =>
           group.id === selectedGroup.id
@@ -1263,22 +1404,30 @@ export function RoutesPage({ lastUpdated, onRefresh }: ConsolePageProps) {
     message.success('路由规则已保存到本地演示数据');
   };
   const moveRule = (id: string, direction: -1 | 1) => {
+    const index = groupRules.findIndex((item) => item.id === id);
+    const target = index + direction;
+    if (index < 0 || target < 0 || target >= groupRules.length) {
+      message.warning('已经到达排序边界');
+      return;
+    }
+    const nextScoped = [...groupRules];
+    [nextScoped[index], nextScoped[target]] = [nextScoped[target], nextScoped[index]];
+    const orderById = new Map(nextScoped.map((item, order) => [item.id, order + 1]));
     setRuleRows((current) => {
-      const groupIds = selectedGroup?.ruleIds ?? [];
-      const scoped = current.filter((item) => groupIds.includes(item.id)).sort((a, b) => a.sortOrder - b.sortOrder);
-      const index = scoped.findIndex((item) => item.id === id);
-      const target = index + direction;
-      if (index < 0 || target < 0 || target >= scoped.length) {
-        message.warning('已经到达排序边界');
-        return current;
-      }
-      const nextScoped = [...scoped];
-      [nextScoped[index], nextScoped[target]] = [nextScoped[target], nextScoped[index]];
-      const orderById = new Map(nextScoped.map((item, order) => [item.id, order + 1]));
       return current.map((item) =>
         orderById.has(item.id) ? { ...item, sortOrder: orderById.get(item.id) ?? item.sortOrder } : item,
       );
     });
+    if (selectedGroup) {
+      clearGroupCanvasSnapshot(selectedGroup.id);
+    }
+    message.success('规则顺序已更新，旧画布快照已失效');
+  };
+  const saveRuleOrder = () => {
+    if (selectedGroup) {
+      clearGroupCanvasSnapshot(selectedGroup.id);
+    }
+    message.success('排序已保存，画布将在重置或重新进入时按最新顺序生成');
   };
   const groupColumns: TableProps<RouteGroup>['columns'] = [
     { title: '路由大组名称', dataIndex: 'name', width: 220 },
@@ -1316,7 +1465,7 @@ export function RoutesPage({ lastUpdated, onRefresh }: ConsolePageProps) {
           <Button type="link" onClick={() => openGroup(record)}>
             进入编排
           </Button>
-          <Button type="link" onClick={() => openGroupDrawer(`编辑路由大组：${record.name}`)}>
+          <Button type="link" onClick={() => openEditGroup(record)}>
             编辑
           </Button>
         </Space>
@@ -1406,7 +1555,7 @@ export function RoutesPage({ lastUpdated, onRefresh }: ConsolePageProps) {
           message="路由大组按来源隔离；同一来源只允许一个启用大组，组内规则按顺序匹配，第一条命中即发送并停止。"
         />
         <QueryBar
-          onCreate={() => openGroupDrawer()}
+          onCreate={() => openCreateGroup()}
           onSearch={() => message.success(`已筛选出 ${filteredGroups.length} 个路由大组`)}
           onReset={() => {
             setGroupKeyword('');
@@ -1440,8 +1589,8 @@ export function RoutesPage({ lastUpdated, onRefresh }: ConsolePageProps) {
             scroll={{ x: 1250 }}
           />
         </ListContainer>
-        <CreateDrawer title={groupDrawer.title} open={groupDrawer.open} onClose={closeGroupDrawer} onSave={saveGroup}>
-          <RouteGroupForm />
+        <CreateDrawer title={groupDrawer.title} open={groupDrawer.open} onClose={closeGroupEditor} onSave={saveGroup}>
+          <RouteGroupForm value={groupDraft} onChange={setGroupDraft} />
         </CreateDrawer>
       </PageFrame>
     );
@@ -1521,7 +1670,7 @@ export function RoutesPage({ lastUpdated, onRefresh }: ConsolePageProps) {
           <section className="canvas-surface">
             <div className="canvas-toolbar">
               <Space>
-                <Button icon={<DeploymentUnitOutlined />} onClick={() => openGroup(selectedGroup)}>
+                <Button icon={<DeploymentUnitOutlined />} onClick={resetCanvasLayout}>
                   重置布局
                 </Button>
                 <Button icon={<PlayCircleOutlined />}>模拟运行</Button>
@@ -1594,11 +1743,20 @@ export function RoutesPage({ lastUpdated, onRefresh }: ConsolePageProps) {
                 </Descriptions>
               </Space>
             ) : selectedEdge ? (
-              <Descriptions column={1} size="small" bordered>
-                <Descriptions.Item label="连线">{selectedEdge.label}</Descriptions.Item>
-                <Descriptions.Item label="起点">{selectedEdge.source}</Descriptions.Item>
-                <Descriptions.Item label="终点">{selectedEdge.target}</Descriptions.Item>
-              </Descriptions>
+              <Space direction="vertical" size={12} className="full-width">
+                <Form layout="vertical">
+                  <Form.Item label="连线标签 / 分支语义">
+                    <Input
+                      value={String(selectedEdge.label ?? '')}
+                      onChange={(event) => updateSelectedEdge({ label: event.target.value })}
+                    />
+                  </Form.Item>
+                </Form>
+                <Descriptions column={1} size="small" bordered>
+                  <Descriptions.Item label="起点">{selectedEdge.source}</Descriptions.Item>
+                  <Descriptions.Item label="终点">{selectedEdge.target}</Descriptions.Item>
+                </Descriptions>
+              </Space>
             ) : (
               <Alert type="info" showIcon message="选择节点或连线后可编辑配置。" />
             )}
@@ -1643,7 +1801,7 @@ export function RoutesPage({ lastUpdated, onRefresh }: ConsolePageProps) {
             scrollY={560}
             extra={
               <Space>
-                <Button onClick={() => message.success('排序已保存到本地规则列表')}>排序保存</Button>
+                <Button onClick={saveRuleOrder}>排序保存</Button>
                 <Button icon={<PlayCircleOutlined />} onClick={() => message.success('模拟运行命中第 1 条规则')}>
                   模拟运行
                 </Button>
