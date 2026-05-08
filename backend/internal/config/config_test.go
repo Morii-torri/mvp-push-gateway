@@ -12,6 +12,7 @@ func TestLoadUsesSafeDefaults(t *testing.T) {
 	t.Setenv("MGP_API_PREFIX", "")
 	t.Setenv("MGP_APP_NAME", "")
 	t.Setenv("MGP_ENVIRONMENT", "")
+	t.Setenv("MGP_POSTGRES_DSN", "")
 
 	cfg := config.Load()
 
