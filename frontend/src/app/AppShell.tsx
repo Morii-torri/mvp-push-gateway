@@ -1,39 +1,66 @@
 import {
-  ApartmentOutlined,
-  ApiOutlined,
-  DashboardOutlined,
-  DeploymentUnitOutlined,
-  FileTextOutlined,
-  HistoryOutlined,
-  MonitorOutlined,
-  TeamOutlined,
+  BellOutlined,
+  QuestionCircleOutlined,
+  ReloadOutlined,
+  UserOutlined,
 } from '@ant-design/icons';
-import { ConfigProvider, Layout, Menu, Space, Tag, Typography, theme } from 'antd';
+import {
+  App as AntdApp,
+  Avatar,
+  Badge,
+  Button,
+  ConfigProvider,
+  Layout,
+  Menu,
+  Space,
+  Tag,
+  Typography,
+  theme,
+} from 'antd';
+import zhCN from 'antd/locale/zh_CN';
+import { useEffect, useMemo, useState } from 'react';
+
+import { navigationItems, type PageKey } from './navigation';
+import { pages } from '../pages/ConsolePages';
 
 const { Header, Sider, Content } = Layout;
 
-const navigationItems = [
-  { key: 'overview', icon: <DashboardOutlined />, label: '总览' },
-  { key: 'sources', icon: <ApiOutlined />, label: '来源接入' },
-  { key: 'providers', icon: <ApartmentOutlined />, label: '上级平台' },
-  { key: 'routes', icon: <DeploymentUnitOutlined />, label: '路由编排' },
-  { key: 'templates', icon: <FileTextOutlined />, label: '模板中心' },
-  { key: 'users', icon: <TeamOutlined />, label: '组织人员' },
-  { key: 'logs', icon: <HistoryOutlined />, label: '消息日志' },
-  { key: 'queue', icon: <MonitorOutlined />, label: '队列监控' },
-];
-
 export function AppShell() {
+  const [activePage, setActivePage] = useState<PageKey>('overview');
+  const [lastUpdated, setLastUpdated] = useState(() => new Date());
+
+  useEffect(() => {
+    const timer = window.setInterval(() => setLastUpdated(new Date()), 5000);
+    return () => window.clearInterval(timer);
+  }, []);
+
+  const menuItems = useMemo(
+    () =>
+      navigationItems.map((item) => ({
+        key: item.key,
+        icon: item.icon,
+        label: item.label,
+      })),
+    [],
+  );
+
+  const CurrentPage = pages[activePage];
+  const refresh = () => setLastUpdated(new Date());
+
   return (
     <ConfigProvider
+      locale={zhCN}
       theme={{
         algorithm: theme.defaultAlgorithm,
         token: {
           colorPrimary: '#1677ff',
           colorBgLayout: '#eef5ff',
+          colorText: '#12213f',
+          colorTextSecondary: '#667085',
+          colorBorderSecondary: '#d7e3f4',
           borderRadius: 6,
           fontFamily:
-            '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
+            '-apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif',
         },
         components: {
           Layout: {
@@ -41,71 +68,87 @@ export function AppShell() {
             siderBg: '#ffffff',
           },
           Menu: {
-            itemSelectedBg: '#e6f4ff',
+            itemSelectedBg: '#e8f3ff',
             itemSelectedColor: '#0958d9',
+            itemHoverBg: '#f3f8ff',
+          },
+          Table: {
+            headerBg: '#f4f8ff',
+            headerColor: '#344054',
+            rowHoverBg: '#f7fbff',
+          },
+          Button: {
+            controlHeight: 34,
+          },
+          Input: {
+            controlHeight: 34,
+          },
+          Select: {
+            controlHeight: 34,
           },
         },
       }}
     >
-      <Layout className="app-shell">
-        <Header className="app-header">
-          <Space align="center" size={12}>
-            <div className="brand-mark">M</div>
-            <div>
-              <Typography.Title level={4} className="brand-title">
-                MVP Push Gateway
-              </Typography.Title>
-              <Typography.Text type="secondary">综合消息推送网关</Typography.Text>
-            </div>
-          </Space>
-          <Tag color="blue">Step 1</Tag>
-        </Header>
+      <AntdApp>
+        <Layout className="app-shell">
+          <Header className="app-header">
+            <Space align="center" size={14} className="brand-area">
+              <div className="brand-mark">政</div>
+              <div>
+                <Typography.Title level={4} className="brand-title">
+                  政务消息中台
+                </Typography.Title>
+                <Typography.Text type="secondary">MVP Push Gateway 管理台</Typography.Text>
+              </div>
+            </Space>
 
-        <Layout>
-          <Sider width={224} className="app-sider">
             <Menu
-              mode="inline"
-              selectedKeys={['overview']}
-              items={navigationItems}
-              className="app-menu"
+              mode="horizontal"
+              selectedKeys={[activePage]}
+              items={menuItems.slice(0, 8)}
+              onClick={(event) => setActivePage(event.key as PageKey)}
+              className="top-menu"
             />
-          </Sider>
-          <Content className="app-content">
-            <section className="workspace-panel">
-              <Space direction="vertical" size={18}>
-                <Space size={10} wrap>
-                  <Tag color="processing">项目初始化</Tag>
-                  <Tag color="success">健康检查</Tag>
-                  <Tag color="default">未接入真实 API</Tag>
-                </Space>
-                <div>
-                  <Typography.Title level={2} className="workspace-title">
-                    Step 1 项目骨架 / 健康检查占位
-                  </Typography.Title>
-                  <Typography.Paragraph className="workspace-copy">
-                    当前页面仅保留管理台外壳。后端健康检查约定为
-                    <Typography.Text code>GET /api/v1/health</Typography.Text>。
-                  </Typography.Paragraph>
-                </div>
-                <div className="status-strip">
-                  <div>
-                    <span className="status-label">后端</span>
-                    <strong>Go HTTP Skeleton</strong>
-                  </div>
-                  <div>
-                    <span className="status-label">前端</span>
-                    <strong>Vite + React + Ant Design</strong>
-                  </div>
-                  <div>
-                    <span className="status-label">阶段</span>
-                    <strong>Project Skeleton</strong>
-                  </div>
+
+            <Space size={14} className="header-actions">
+              <Tag color="success">5 秒轮询</Tag>
+              <Button icon={<ReloadOutlined />} onClick={refresh}>
+                手动刷新
+              </Button>
+              <Badge count={12} size="small">
+                <Button shape="circle" icon={<BellOutlined />} />
+              </Badge>
+              <Button shape="circle" icon={<QuestionCircleOutlined />} />
+              <Space size={8}>
+                <Avatar icon={<UserOutlined />} />
+                <div className="user-block">
+                  <strong>张伟</strong>
+                  <span>市大数据局</span>
                 </div>
               </Space>
-            </section>
-          </Content>
+            </Space>
+          </Header>
+
+          <Layout>
+            <Sider width={232} className="app-sider">
+              <Menu
+                mode="inline"
+                selectedKeys={[activePage]}
+                items={menuItems}
+                onClick={(event) => setActivePage(event.key as PageKey)}
+                className="app-menu"
+              />
+              <div className="sider-footer">
+                <span>部署环境：生产</span>
+                <span>版本：v0.9.0-step9</span>
+              </div>
+            </Sider>
+            <Content className="app-content">
+              <CurrentPage lastUpdated={lastUpdated} onRefresh={refresh} />
+            </Content>
+          </Layout>
         </Layout>
-      </Layout>
+      </AntdApp>
     </ConfigProvider>
   );
 }
