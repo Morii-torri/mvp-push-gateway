@@ -221,6 +221,10 @@
 - First matched rule stops traversal.
 - Hit counter does not reset after reorder/edit/publish.
 
+**Controller review note:**
+
+- Step 7 currently keeps coarse filtering as a placeholder (`coarse_skipped=false`). Real coarse filtering, slow-rule metrics, and route planning cache behavior must be completed when the `route_plan` worker and monitoring steps are implemented.
+
 ## Step 8: Delivery Worker
 
 **Ask AI to do:**
