@@ -3,6 +3,7 @@ package db
 import (
 	"context"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -10,7 +11,7 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-func TestInitialMigrationAppliesToPostgres(t *testing.T) {
+func TestMigrationsApplyToPostgres(t *testing.T) {
 	dsn := os.Getenv("MGP_TEST_DATABASE_URL")
 	if dsn == "" {
 		t.Skip("MGP_TEST_DATABASE_URL is not set")
@@ -35,8 +36,10 @@ func TestInitialMigrationAppliesToPostgres(t *testing.T) {
 		t.Fatalf("set search_path: %v", err)
 	}
 
-	if _, err := conn.Exec(ctx, extractGooseUp(readInitialMigration(t))); err != nil {
-		t.Fatalf("apply initial migration: %v", err)
+	for _, migration := range readGooseUpMigrations(t) {
+		if _, err := conn.Exec(ctx, migration); err != nil {
+			t.Fatalf("apply migration: %v", err)
+		}
 	}
 
 	assertDuplicateEnabledRouteFlowBlocked(ctx, t, conn)
@@ -97,4 +100,26 @@ func extractGooseUp(migration string) string {
 		builder.WriteByte('\n')
 	}
 	return builder.String()
+}
+
+func readGooseUpMigrations(t *testing.T) []string {
+	t.Helper()
+
+	paths, err := filepath.Glob("../../migrations/*.sql")
+	if err != nil {
+		t.Fatalf("list migrations: %v", err)
+	}
+	if len(paths) == 0 {
+		t.Fatal("expected at least one migration")
+	}
+
+	migrations := make([]string, 0, len(paths))
+	for _, path := range paths {
+		content, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("read migration %s: %v", path, err)
+		}
+		migrations = append(migrations, extractGooseUp(string(content)))
+	}
+	return migrations
 }

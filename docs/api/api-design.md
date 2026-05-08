@@ -86,6 +86,13 @@ SHA256_HEX(raw_body)
 | `POST` | `/auth/change-password` | 修改密码 |
 | `POST` | `/auth/logout` | 登出 |
 
+第一版管理台认证实现约定：
+
+- 空库迁移完成后，`GET /setup/status` 返回 `setup_open=true`；创建管理员后返回 `setup_open=false`。
+- `POST /setup/admin` 只允许成功一次，密码使用 Argon2id 哈希保存，不写死初始化账号或密码。
+- 登录成功返回 Bearer 会话令牌，后续管理台接口使用 `Authorization: Bearer <token>`。
+- 第一版不做 RBAC，登录用户即管理员。
+
 ## 来源管理
 
 | 方法 | 路径 |
@@ -318,8 +325,12 @@ SHA256_HEX(raw_body)
 
 | 错误码 | 说明 |
 |---|---|
+| `MGP-REQ-001` | 请求参数或 JSON 不合法 |
+| `MGP-SETUP-000` | 管理台认证服务未启用 |
+| `MGP-SETUP-001` | 初始化入口已关闭 |
 | `MGP-AUTH-001` | 来源鉴权失败 |
 | `MGP-AUTH-002` | 管理台凭证无效 |
+| `MGP-AUTH-003` | 管理台未登录或登录已过期 |
 | `MGP-SRC-001` | 来源不存在或禁用 |
 | `MGP-SRC-002` | 来源 IP 白名单不通过 |
 | `MGP-PAYLOAD-001` | 请求 Body 不是合法 JSON |

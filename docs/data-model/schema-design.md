@@ -399,6 +399,7 @@ worker、队列和平台实例运行指标。
 | 表 | 作用 |
 |---|---|
 | `admin_users` | 管理台用户 |
+| `admin_sessions` | 管理台 Bearer 会话，保存 token hash、过期时间和撤销时间 |
 | `setup_state` | 首次启动初始化状态 |
 | `audit_logs` | 配置、安全和测试发送审计 |
 | `hourly_stats` | 小时聚合 |

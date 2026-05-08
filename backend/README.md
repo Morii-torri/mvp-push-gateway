@@ -14,6 +14,7 @@ The initial health endpoint is `GET /api/v1/health`. PostgreSQL configuration is
 Step 2 adds the PostgreSQL baseline schema in `migrations/000001_init.sql`.
 
 ```bash
+../scripts/apply-migrations.sh
 ../scripts/test-migrations.sh
 ```
 

@@ -11,15 +11,37 @@ import (
 	"syscall"
 	"time"
 
+	"mvp-push-gateway/backend/internal/auth"
 	"mvp-push-gateway/backend/internal/config"
+	"mvp-push-gateway/backend/internal/db"
 	httpapi "mvp-push-gateway/backend/internal/http"
 )
 
 func main() {
 	cfg := config.Load()
+	ctx := context.Background()
+
+	var handlerOptions []httpapi.Option
+	var pools *db.PoolSet
+	if cfg.Postgres.DSN != "" {
+		var err error
+		pools, err = db.OpenPools(ctx, cfg.Postgres)
+		if err != nil {
+			log.Fatalf("database connection failed: %v", err)
+		}
+		defer pools.Close()
+
+		repository := db.NewRepository(pools.API)
+		if err := repository.Ping(ctx); err != nil {
+			log.Fatalf("database ping failed: %v", err)
+		}
+		authService := auth.NewService(repository)
+		handlerOptions = append(handlerOptions, httpapi.WithAuthService(authService))
+	}
+
 	server := &http.Server{
 		Addr:              net.JoinHostPort(cfg.Server.Host, cfg.Server.Port),
-		Handler:           httpapi.NewHandler(cfg),
+		Handler:           httpapi.NewHandler(cfg, handlerOptions...),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 
