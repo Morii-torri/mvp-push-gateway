@@ -145,103 +145,6 @@ function CreateDrawer({
   );
 }
 
-function ConfigForm({ type }: { type: 'source' | 'provider' | 'route' | 'template' | 'user' | 'match' }) {
-  const authHelp =
-    type === 'source'
-      ? '默认使用 Token，调用方通过 Authorization: Bearer <source_token> 传入。选择无鉴权时建议配置 CIDR 白名单。'
-      : undefined;
-
-  return (
-    <Form layout="vertical">
-      <Form.Item label="名称" required>
-        <Input placeholder="请输入名称" />
-      </Form.Item>
-      <Form.Item label="编码" required>
-        <Input placeholder="请输入唯一编码" />
-      </Form.Item>
-      {type === 'source' ? (
-        <>
-          <Form.Item label="鉴权方式">
-            <Select
-              defaultValue="token"
-              options={[
-                { label: 'Token', value: 'token' },
-                { label: 'HMAC', value: 'hmac' },
-                { label: 'Token + HMAC 双校验', value: 'token_and_hmac' },
-                { label: '无鉴权', value: 'none' },
-              ]}
-            />
-          </Form.Item>
-          <Alert type="warning" showIcon message={authHelp} />
-          <Form.Item label="CIDR IP 白名单" className="drawer-form-gap">
-            <Input.TextArea placeholder="每行一个 CIDR，例如 10.20.0.0/16" rows={3} />
-          </Form.Item>
-        </>
-      ) : null}
-      {type === 'provider' ? (
-        <>
-          <Form.Item label="平台类型">
-            <Select
-              defaultValue="gov_cloud"
-              options={[
-                { label: '随申办政务云', value: 'gov_cloud' },
-                { label: '企业微信', value: 'wecom' },
-                { label: '飞书', value: 'feishu' },
-                { label: '钉钉', value: 'dingtalk' },
-                { label: '通用 Webhook', value: 'webhook' },
-              ]}
-            />
-          </Form.Item>
-          <Form.Item label="主动限流">
-            <Input placeholder="例如：每秒 80 条" />
-          </Form.Item>
-          <Form.Item label="并发上限">
-            <Input placeholder="例如：32" />
-          </Form.Item>
-        </>
-      ) : null}
-      {type === 'route' ? (
-        <>
-          <Form.Item label="匹配条件">
-            <Input.TextArea rows={3} placeholder="例如：消息级别 = 紧急" />
-          </Form.Item>
-          <Form.Item label="目标平台">
-            <Select mode="multiple" placeholder="请选择目标平台" />
-          </Form.Item>
-        </>
-      ) : null}
-      {type === 'template' ? (
-        <>
-          <Form.Item label="模板引擎">
-            <Select defaultValue="jinja-like" options={[{ label: 'Jinja-like', value: 'jinja-like' }]} />
-          </Form.Item>
-          <Form.Item label="模板内容">
-            <Input.TextArea rows={8} placeholder="{{ payload.title }}" />
-          </Form.Item>
-        </>
-      ) : null}
-      {type === 'user' ? (
-        <>
-          <Form.Item label="所属组织">
-            <Input placeholder="请选择组织" />
-          </Form.Item>
-          <Form.Item label="平台身份字段">
-            <Input.TextArea rows={3} placeholder="企业微信 userid / 飞书 open_id / 手机号" />
-          </Form.Item>
-        </>
-      ) : null}
-      {type === 'match' ? (
-        <Form.Item label="组内值">
-          <Input.TextArea rows={4} placeholder="每行一个匹配值" />
-        </Form.Item>
-      ) : null}
-      <Form.Item label="状态">
-        <Switch defaultChecked checkedChildren="启用" unCheckedChildren="停用" />
-      </Form.Item>
-    </Form>
-  );
-}
-
 function randomSecret(prefix: string) {
   return `${prefix}_${Math.random().toString(36).slice(2, 10)}${Date.now().toString(36).slice(-4)}`;
 }
@@ -280,28 +183,18 @@ function SourceConfigForm({ initialAuth = 'token' }: { initialAuth?: SourceRecor
           extra="调用方通过 Authorization: Bearer <source_token> 传入。"
           className="drawer-form-gap"
         >
-          <Input
-            value={token}
-            onChange={(event) => setToken(event.target.value)}
-            addonAfter={
-              <Button type="link" size="small" onClick={() => setToken(randomSecret('src'))}>
-                随机生成
-              </Button>
-            }
-          />
+          <Space.Compact className="full-width">
+            <Input value={token} onChange={(event) => setToken(event.target.value)} />
+            <Button onClick={() => setToken(randomSecret('src'))}>随机生成</Button>
+          </Space.Compact>
         </Form.Item>
       ) : null}
       {authMode === 'hmac' || authMode === 'token_and_hmac' ? (
         <Form.Item label="HMAC 共享密钥" className="drawer-form-gap">
-          <Input
-            value={secret}
-            onChange={(event) => setSecret(event.target.value)}
-            addonAfter={
-              <Button type="link" size="small" onClick={() => setSecret(randomSecret('hmac'))}>
-                随机生成
-              </Button>
-            }
-          />
+          <Space.Compact className="full-width">
+            <Input value={secret} onChange={(event) => setSecret(event.target.value)} />
+            <Button onClick={() => setSecret(randomSecret('hmac'))}>随机生成</Button>
+          </Space.Compact>
         </Form.Item>
       ) : null}
       <Form.Item label="CIDR IP 白名单" className="drawer-form-gap">
