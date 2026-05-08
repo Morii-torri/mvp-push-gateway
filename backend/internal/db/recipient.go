@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -63,15 +64,35 @@ func (r Repository) GetOrgUnit(ctx context.Context, id string) (recipient.OrgUni
 }
 
 func (r Repository) UpdateOrgUnit(ctx context.Context, id string, params recipient.UpdateOrgUnitParams) (recipient.OrgUnit, error) {
-	path := params.Code
-	if params.ParentID != "" {
-		parent, err := r.GetOrgUnit(ctx, params.ParentID)
-		if err != nil {
-			return recipient.OrgUnit{}, err
-		}
-		path = parent.Path + "/" + params.Code
+	if params.ParentID == id {
+		return recipient.OrgUnit{}, recipient.ErrInvalidInput
 	}
-	item, err := r.queryOrgUnit(ctx, `
+
+	tx, err := r.pool.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return recipient.OrgUnit{}, fmt.Errorf("begin update org unit transaction: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	current, err := scanOrgUnit(tx.QueryRow(ctx, orgUnitSelectSQL()+` WHERE id = $1 FOR UPDATE`, id))
+	if err != nil {
+		return recipient.OrgUnit{}, mapRecipientQueryError("lock org unit", err)
+	}
+
+	oldPath := current.Path
+	newPath := params.Code
+	if params.ParentID != "" {
+		parent, err := scanOrgUnit(tx.QueryRow(ctx, orgUnitSelectSQL()+` WHERE id = $1 FOR UPDATE`, params.ParentID))
+		if err != nil {
+			return recipient.OrgUnit{}, mapRecipientQueryError("lock parent org unit", err)
+		}
+		if parent.Path == oldPath || strings.HasPrefix(parent.Path, oldPath+"/") {
+			return recipient.OrgUnit{}, recipient.ErrInvalidInput
+		}
+		newPath = parent.Path + "/" + params.Code
+	}
+
+	item, err := scanOrgUnit(tx.QueryRow(ctx, `
 		UPDATE org_units
 		SET parent_id = NULLIF($2, '')::uuid,
 			code = $3,
@@ -81,13 +102,28 @@ func (r Repository) UpdateOrgUnit(ctx context.Context, id string, params recipie
 			updated_at = now()
 		WHERE id = $1
 		RETURNING `+orgUnitSelectColumns(),
-		id, params.ParentID, params.Code, params.Name, params.SortOrder, path,
-	)
+		id, params.ParentID, params.Code, params.Name, params.SortOrder, newPath,
+	))
 	if err != nil {
 		if isUniqueViolation(err) {
 			return recipient.OrgUnit{}, recipient.ErrAlreadyExists
 		}
 		return recipient.OrgUnit{}, mapRecipientQueryError("update org unit", err)
+	}
+
+	if oldPath != newPath {
+		if _, err := tx.Exec(ctx, `
+			UPDATE org_units
+			SET path = $2 || substring(path from length($1) + 1),
+				updated_at = now()
+			WHERE starts_with(path, $1 || '/')
+		`, oldPath, newPath); err != nil {
+			return recipient.OrgUnit{}, fmt.Errorf("update descendant org paths: %w", err)
+		}
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return recipient.OrgUnit{}, fmt.Errorf("commit update org unit transaction: %w", err)
 	}
 	return item, nil
 }

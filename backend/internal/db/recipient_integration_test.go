@@ -92,3 +92,144 @@ func TestRecipientIdentityLookupAndCRUD(t *testing.T) {
 		t.Fatalf("expected missing identity after delete, got %v", err)
 	}
 }
+
+func TestUpdateOrgUnitMoveRefreshesDescendantPaths(t *testing.T) {
+	dsn := os.Getenv("MGP_TEST_DATABASE_URL")
+	if dsn == "" {
+		t.Skip("MGP_TEST_DATABASE_URL is not set")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	repository, cleanup := newRecipientIntegrationRepository(ctx, t, dsn)
+	defer cleanup()
+
+	root, err := repository.CreateOrgUnit(ctx, recipient.CreateOrgUnitParams{
+		Code: "root",
+		Name: "根组织",
+	})
+	if err != nil {
+		t.Fatalf("create root org: %v", err)
+	}
+	child, err := repository.CreateOrgUnit(ctx, recipient.CreateOrgUnitParams{
+		ParentID: root.ID,
+		Code:     "child",
+		Name:     "子组织",
+	})
+	if err != nil {
+		t.Fatalf("create child org: %v", err)
+	}
+	grandchild, err := repository.CreateOrgUnit(ctx, recipient.CreateOrgUnitParams{
+		ParentID: child.ID,
+		Code:     "grandchild",
+		Name:     "孙组织",
+	})
+	if err != nil {
+		t.Fatalf("create grandchild org: %v", err)
+	}
+	newParent, err := repository.CreateOrgUnit(ctx, recipient.CreateOrgUnitParams{
+		Code: "new-parent",
+		Name: "新父组织",
+	})
+	if err != nil {
+		t.Fatalf("create new parent org: %v", err)
+	}
+
+	moved, err := repository.UpdateOrgUnit(ctx, child.ID, recipient.UpdateOrgUnitParams{
+		ParentID: newParent.ID,
+		Code:     "child",
+		Name:     "子组织",
+	})
+	if err != nil {
+		t.Fatalf("move child org: %v", err)
+	}
+	if moved.Path != "new-parent/child" {
+		t.Fatalf("expected moved child path new-parent/child, got %q", moved.Path)
+	}
+
+	reloadedGrandchild, err := repository.GetOrgUnit(ctx, grandchild.ID)
+	if err != nil {
+		t.Fatalf("reload grandchild org: %v", err)
+	}
+	if reloadedGrandchild.Path != "new-parent/child/grandchild" {
+		t.Fatalf("expected descendant path new-parent/child/grandchild, got %q", reloadedGrandchild.Path)
+	}
+}
+
+func TestUpdateOrgUnitRejectsMovingToSelfOrDescendant(t *testing.T) {
+	dsn := os.Getenv("MGP_TEST_DATABASE_URL")
+	if dsn == "" {
+		t.Skip("MGP_TEST_DATABASE_URL is not set")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	repository, cleanup := newRecipientIntegrationRepository(ctx, t, dsn)
+	defer cleanup()
+
+	root, err := repository.CreateOrgUnit(ctx, recipient.CreateOrgUnitParams{
+		Code: "root",
+		Name: "根组织",
+	})
+	if err != nil {
+		t.Fatalf("create root org: %v", err)
+	}
+	child, err := repository.CreateOrgUnit(ctx, recipient.CreateOrgUnitParams{
+		ParentID: root.ID,
+		Code:     "child",
+		Name:     "子组织",
+	})
+	if err != nil {
+		t.Fatalf("create child org: %v", err)
+	}
+	grandchild, err := repository.CreateOrgUnit(ctx, recipient.CreateOrgUnitParams{
+		ParentID: child.ID,
+		Code:     "grandchild",
+		Name:     "孙组织",
+	})
+	if err != nil {
+		t.Fatalf("create grandchild org: %v", err)
+	}
+
+	if _, err := repository.UpdateOrgUnit(ctx, child.ID, recipient.UpdateOrgUnitParams{
+		ParentID: child.ID,
+		Code:     "child",
+		Name:     "子组织",
+	}); !errors.Is(err, recipient.ErrInvalidInput) {
+		t.Fatalf("expected moving org to itself to return ErrInvalidInput, got %v", err)
+	}
+
+	if _, err := repository.UpdateOrgUnit(ctx, child.ID, recipient.UpdateOrgUnitParams{
+		ParentID: grandchild.ID,
+		Code:     "child",
+		Name:     "子组织",
+	}); !errors.Is(err, recipient.ErrInvalidInput) {
+		t.Fatalf("expected moving org under descendant to return ErrInvalidInput, got %v", err)
+	}
+}
+
+func newRecipientIntegrationRepository(ctx context.Context, t *testing.T, dsn string) (Repository, func()) {
+	t.Helper()
+
+	schemaName := createMigratedTestSchema(ctx, t, dsn)
+	poolConfig, err := pgxpool.ParseConfig(dsn)
+	if err != nil {
+		dropTestSchema(schemaName)
+		t.Fatalf("parse pool config: %v", err)
+	}
+	poolConfig.ConnConfig.RuntimeParams["search_path"] = schemaName
+
+	pool, err := pgxpool.NewWithConfig(ctx, poolConfig)
+	if err != nil {
+		dropTestSchema(schemaName)
+		t.Fatalf("open test pool: %v", err)
+	}
+
+	cleanup := func() {
+		pool.Close()
+		dropTestSchema(schemaName)
+	}
+	return NewRepository(pool), cleanup
+}
