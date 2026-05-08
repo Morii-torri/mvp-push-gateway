@@ -10,6 +10,7 @@ import (
 	"mvp-push-gateway/backend/internal/config"
 	"mvp-push-gateway/backend/internal/provider"
 	"mvp-push-gateway/backend/internal/recipient"
+	"mvp-push-gateway/backend/internal/route"
 	"mvp-push-gateway/backend/internal/source"
 	msgtemplate "mvp-push-gateway/backend/internal/template"
 )
@@ -29,6 +30,7 @@ type Handler struct {
 	sources    sourceService
 	providers  providerService
 	recipients recipientService
+	routes     routeService
 	templates  templateService
 }
 
@@ -89,6 +91,24 @@ type templateService interface {
 	Publish(context.Context, string, msgtemplate.VersionInput) (msgtemplate.TemplateVersion, error)
 }
 
+type routeService interface {
+	ListFlows(context.Context) ([]route.Flow, error)
+	CreateFlow(context.Context, route.CreateFlowInput) (route.Flow, error)
+	GetFlow(context.Context, string) (route.Flow, error)
+	UpdateFlow(context.Context, string, route.UpdateFlowInput) (route.Flow, error)
+	DeleteFlow(context.Context, string) error
+	ListVersions(context.Context, string) ([]route.Version, error)
+	ActivateVersion(context.Context, string, string) (route.Flow, error)
+	GetCanvas(context.Context, string) (route.CanvasState, error)
+	SaveCanvas(context.Context, string, route.SaveCanvasInput) (route.CanvasState, error)
+	GetRules(context.Context, string) (route.RuleSet, error)
+	SaveRules(context.Context, string, route.SaveRulesInput) (route.RuleSet, error)
+	ReorderRules(context.Context, string, route.ReorderRulesInput) (route.RuleSet, error)
+	Validate(context.Context, string) (route.ValidationResult, error)
+	Publish(context.Context, string) (route.Version, error)
+	Simulate(context.Context, string, route.SimulateInput) (route.SimulationResult, error)
+}
+
 func WithAuthService(service authService) Option {
 	return func(h *Handler) {
 		h.auth = service
@@ -116,6 +136,12 @@ func WithRecipientService(service recipientService) Option {
 func WithTemplateService(service templateService) Option {
 	return func(h *Handler) {
 		h.templates = service
+	}
+}
+
+func WithRouteService(service routeService) Option {
+	return func(h *Handler) {
+		h.routes = service
 	}
 }
 
@@ -154,6 +180,8 @@ func NewHandler(cfg config.Config, options ...Option) http.Handler {
 	mux.HandleFunc(cfg.Server.APIPrefix+"/user-identities/", handler.userIdentityDetailHandler)
 	mux.HandleFunc(cfg.Server.APIPrefix+"/recipient-groups", handler.recipientGroupsHandler)
 	mux.HandleFunc(cfg.Server.APIPrefix+"/recipient-groups/", handler.recipientGroupDetailHandler)
+	mux.HandleFunc(cfg.Server.APIPrefix+"/route-flows", handler.routeFlowsHandler)
+	mux.HandleFunc(cfg.Server.APIPrefix+"/route-flows/", handler.routeFlowDetailHandler)
 	mux.HandleFunc(cfg.Server.APIPrefix+"/templates/parse", handler.templateParseHandler)
 	mux.HandleFunc(cfg.Server.APIPrefix+"/templates/preview", handler.templatePreviewHandler)
 	mux.HandleFunc(cfg.Server.APIPrefix+"/templates/validate", handler.templateValidateHandler)
@@ -244,6 +272,14 @@ func (h *Handler) requireTemplateService(w http.ResponseWriter) bool {
 		return true
 	}
 	writeAPIError(w, http.StatusServiceUnavailable, "MGP-TPL-001", "模板服务未启用，请先配置数据库")
+	return false
+}
+
+func (h *Handler) requireRouteService(w http.ResponseWriter) bool {
+	if h.routes != nil {
+		return true
+	}
+	writeAPIError(w, http.StatusServiceUnavailable, "MGP-ROUTE-002", "路由服务未启用，请先配置数据库")
 	return false
 }
 

@@ -17,6 +17,7 @@ import (
 	httpapi "mvp-push-gateway/backend/internal/http"
 	"mvp-push-gateway/backend/internal/provider"
 	"mvp-push-gateway/backend/internal/recipient"
+	"mvp-push-gateway/backend/internal/route"
 	"mvp-push-gateway/backend/internal/source"
 	msgtemplate "mvp-push-gateway/backend/internal/template"
 )
@@ -46,6 +47,7 @@ func main() {
 			log.Fatalf("seed provider capabilities failed: %v", err)
 		}
 		recipientService := recipient.NewService(repository)
+		routeService := route.NewService(repository)
 		templateService := msgtemplate.NewService(repository)
 		handlerOptions = append(
 			handlerOptions,
@@ -53,6 +55,7 @@ func main() {
 			httpapi.WithSourceService(sourceService),
 			httpapi.WithProviderService(providerService),
 			httpapi.WithRecipientService(recipientService),
+			httpapi.WithRouteService(routeService),
 			httpapi.WithTemplateService(templateService),
 		)
 	}
