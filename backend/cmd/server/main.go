@@ -15,10 +15,12 @@ import (
 	"mvp-push-gateway/backend/internal/config"
 	"mvp-push-gateway/backend/internal/db"
 	httpapi "mvp-push-gateway/backend/internal/http"
+	"mvp-push-gateway/backend/internal/monitoring"
 	"mvp-push-gateway/backend/internal/provider"
 	"mvp-push-gateway/backend/internal/recipient"
 	"mvp-push-gateway/backend/internal/route"
 	"mvp-push-gateway/backend/internal/source"
+	"mvp-push-gateway/backend/internal/statistics"
 	msgtemplate "mvp-push-gateway/backend/internal/template"
 )
 
@@ -49,6 +51,11 @@ func main() {
 		recipientService := recipient.NewService(repository)
 		routeService := route.NewService(repository)
 		templateService := msgtemplate.NewService(repository)
+		monitoringService := monitoring.NewService(
+			db.NewRepository(pools.API),
+			db.NewRepository(pools.Maintenance),
+		)
+		statisticsService := statistics.NewService(db.NewRepository(pools.API))
 		handlerOptions = append(
 			handlerOptions,
 			httpapi.WithAuthService(authService),
@@ -57,6 +64,8 @@ func main() {
 			httpapi.WithRecipientService(recipientService),
 			httpapi.WithRouteService(routeService),
 			httpapi.WithTemplateService(templateService),
+			httpapi.WithMonitoringService(monitoringService),
+			httpapi.WithStatisticsService(statisticsService),
 		)
 	}
 

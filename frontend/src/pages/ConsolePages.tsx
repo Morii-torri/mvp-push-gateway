@@ -49,7 +49,7 @@ import {
   type NodeProps,
   type OnSelectionChangeParams,
 } from '@xyflow/react';
-import { useCallback, useMemo, useState, type DragEvent, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useState, type DragEvent, type ReactNode } from 'react';
 
 import {
   ListContainer,
@@ -107,6 +107,16 @@ import {
   templateVariable,
 } from '../utils/labels';
 import { canEnableRouteGroupSource, routeRulesForGroup } from '../utils/routeFlow';
+import {
+  buildOverviewViewModel,
+  buildQueueMonitoringViewModel,
+  defaultOverviewViewModel,
+  defaultQueueMonitoringViewModel,
+  fetchOverviewData,
+  fetchQueueMonitoringData,
+  type OverviewViewModel,
+  type QueueMonitoringViewModel,
+} from '../utils/dashboardData';
 
 export type ConsolePageProps = {
   lastUpdated: Date;
@@ -1191,6 +1201,26 @@ function IdentityEditor({
 }
 
 export function OverviewPage({ lastUpdated, onRefresh }: ConsolePageProps) {
+  const [viewModel, setViewModel] = useState<OverviewViewModel>(() => defaultOverviewViewModel());
+
+  useEffect(() => {
+    let cancelled = false;
+    fetchOverviewData()
+      .then((data) => {
+        if (!cancelled) {
+          setViewModel(buildOverviewViewModel(data));
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setViewModel(defaultOverviewViewModel());
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [lastUpdated]);
+
   const rankingColumns: TableProps<(typeof platformRanking)[number]>['columns'] = [
     { title: '排名', render: (_value, _record, index) => index + 1, width: 72 },
     { title: '平台名称', dataIndex: 'name' },
@@ -1208,12 +1238,12 @@ export function OverviewPage({ lastUpdated, onRefresh }: ConsolePageProps) {
   return (
     <PageFrame
       title="总览"
-      description="按 24 小时窗口汇总消息吞吐、成功率、异常和平台排行。当前为演示数据，待 Step10 接入后端统计 API。"
+      description="按 24 小时窗口汇总消息吞吐、成功率、异常和平台排行。"
       lastUpdated={lastUpdated}
       onRefresh={onRefresh}
     >
       <div className="metric-grid metric-grid--six">
-        {overviewMetrics.map(({ key, ...metric }) => (
+        {viewModel.metrics.map(({ key, ...metric }) => (
           <MetricCard key={key} {...metric} />
         ))}
       </div>
@@ -1224,7 +1254,7 @@ export function OverviewPage({ lastUpdated, onRefresh }: ConsolePageProps) {
             <Typography.Title level={4}>消息发送趋势</Typography.Title>
             <Segmented options={['15 分钟', '1 小时', '24 小时', '7 天']} defaultValue="24 小时" />
           </div>
-          <LineChart points={trendPoints} seriesLabel="消息发送趋势" />
+          <LineChart points={viewModel.trendPoints} seriesLabel="消息发送趋势" />
           <div className="legend-row">
             <Tag color="blue">发送量</Tag>
             <Tag color="green">成功量</Tag>
@@ -1239,7 +1269,7 @@ export function OverviewPage({ lastUpdated, onRefresh }: ConsolePageProps) {
             <Button type="link">更多</Button>
           </div>
           <Space direction="vertical" size={12} className="full-width">
-            {failureReasons.map((item, index) => (
+            {viewModel.failureReasons.map((item, index) => (
               <div className="rank-row" key={item.reason}>
                 <Badge count={index + 1} color={index < 3 ? '#1677ff' : '#9ca3af'} />
                 <span>{item.reason}</span>
@@ -1253,7 +1283,7 @@ export function OverviewPage({ lastUpdated, onRefresh }: ConsolePageProps) {
             最近异常
           </Typography.Title>
           <Space direction="vertical" size={8} className="full-width">
-            {recentAnomalies.map((item, index) => (
+            {viewModel.recentAnomalies.map((item, index) => (
               <div className="rank-row" key={`${item.title}-${item.time}`}>
                 <Badge count={index + 1} color={item.level === '高' ? '#f04438' : '#f79009'} />
                 <span>{item.title}</span>
@@ -1265,13 +1295,13 @@ export function OverviewPage({ lastUpdated, onRefresh }: ConsolePageProps) {
         </section>
       </div>
 
-      <ListContainer title="平台发送量与成功率" total={platformRanking.length} pageSize={10}>
+      <ListContainer title="平台发送量与成功率" total={viewModel.platformRanking.length} pageSize={10}>
         <Table
           rowKey="name"
           size="middle"
           pagination={false}
           columns={rankingColumns}
-          dataSource={platformRanking}
+          dataSource={viewModel.platformRanking}
           scroll={{ x: 1180 }}
         />
       </ListContainer>
@@ -3194,6 +3224,28 @@ export function MessageLogsPage({ lastUpdated, onRefresh }: ConsolePageProps) {
 }
 
 export function QueueMonitorPage({ lastUpdated, onRefresh }: ConsolePageProps) {
+  const [viewModel, setViewModel] = useState<QueueMonitoringViewModel>(() =>
+    defaultQueueMonitoringViewModel(),
+  );
+
+  useEffect(() => {
+    let cancelled = false;
+    fetchQueueMonitoringData()
+      .then((data) => {
+        if (!cancelled) {
+          setViewModel(buildQueueMonitoringViewModel(data));
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setViewModel(defaultQueueMonitoringViewModel());
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [lastUpdated]);
+
   const healthColumns: TableProps<PlatformHealth>['columns'] = [
     { title: '平台名称', dataIndex: 'name' },
     {
@@ -3231,12 +3283,12 @@ export function QueueMonitorPage({ lastUpdated, onRefresh }: ConsolePageProps) {
   return (
     <PageFrame
       title="队列监控"
-      description="独立展示积压、worker 处理能力、平台限流、死信和慢规则。"
+      description="独立展示积压、worker 处理能力、平台限流、死信、慢规则和保留期清理状态。"
       lastUpdated={lastUpdated}
       onRefresh={onRefresh}
     >
       <div className="metric-grid metric-grid--six">
-        {queueMetrics.map(({ key, jobType, ...metric }) => (
+        {viewModel.metrics.map(({ key, jobType, ...metric }) => (
           <MetricCard
             key={key}
             {...metric}
@@ -3251,10 +3303,7 @@ export function QueueMonitorPage({ lastUpdated, onRefresh }: ConsolePageProps) {
             <Typography.Title level={4}>积压趋势</Typography.Title>
             <Segmented options={['15 分钟', '1 小时', '6 小时', '24 小时', '7 天']} defaultValue="24 小时" />
           </div>
-          <LineChart
-            points={trendPoints.map((point) => Math.max(18, point - 18))}
-            seriesLabel="队列积压趋势"
-          />
+          <LineChart points={viewModel.trendPoints} seriesLabel="队列积压趋势" />
           <div className="legend-row">
             <Tag color="blue">路由规划积压</Tag>
             <Tag color="green">出站发送积压</Tag>
@@ -3263,19 +3312,38 @@ export function QueueMonitorPage({ lastUpdated, onRefresh }: ConsolePageProps) {
           </div>
         </section>
 
-        <ListContainer title="平台实例健康" total={platformHealth.length} pageSize={10}>
+        <ListContainer title="平台实例健康" total={viewModel.platformHealth.length} pageSize={10}>
           <Table
             rowKey="id"
             size="middle"
             pagination={false}
             columns={healthColumns}
-            dataSource={platformHealth}
+            dataSource={viewModel.platformHealth}
           />
         </ListContainer>
       </div>
 
-      <ListContainer title="慢规则列表" total={slowRules.length} pageSize={10}>
-        <Table rowKey="id" size="middle" pagination={false} columns={slowColumns} dataSource={slowRules} />
+      <section className="analytics-panel">
+        <div className="panel-heading">
+          <Typography.Title level={4}>保留期清理状态</Typography.Title>
+          <Tag color={viewModel.cleanupRows[2]?.status.includes('已完成') ? 'success' : 'processing'}>
+            {viewModel.cleanupRows[2]?.status ?? '未知'}
+          </Tag>
+        </div>
+        <Descriptions column={2} size="small" bordered>
+          {viewModel.cleanupRows.map((item) => (
+            <Descriptions.Item key={item.key} label={item.name}>
+              <Space direction="vertical" size={2}>
+                <span>{item.value}</span>
+                <Typography.Text type="secondary">{item.status}</Typography.Text>
+              </Space>
+            </Descriptions.Item>
+          ))}
+        </Descriptions>
+      </section>
+
+      <ListContainer title="慢规则列表" total={viewModel.slowRules.length} pageSize={10}>
+        <Table rowKey="id" size="middle" pagination={false} columns={slowColumns} dataSource={viewModel.slowRules} />
       </ListContainer>
     </PageFrame>
   );

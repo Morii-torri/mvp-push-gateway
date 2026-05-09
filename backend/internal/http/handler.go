@@ -8,10 +8,12 @@ import (
 
 	"mvp-push-gateway/backend/internal/auth"
 	"mvp-push-gateway/backend/internal/config"
+	"mvp-push-gateway/backend/internal/monitoring"
 	"mvp-push-gateway/backend/internal/provider"
 	"mvp-push-gateway/backend/internal/recipient"
 	"mvp-push-gateway/backend/internal/route"
 	"mvp-push-gateway/backend/internal/source"
+	"mvp-push-gateway/backend/internal/statistics"
 	msgtemplate "mvp-push-gateway/backend/internal/template"
 )
 
@@ -32,6 +34,8 @@ type Handler struct {
 	recipients recipientService
 	routes     routeService
 	templates  templateService
+	monitoring monitoringService
+	stats      statisticsService
 }
 
 type Option func(*Handler)
@@ -109,6 +113,15 @@ type routeService interface {
 	Simulate(context.Context, string, route.SimulateInput) (route.SimulationResult, error)
 }
 
+type monitoringService interface {
+	GetQueueMonitoringSnapshot(context.Context) (monitoring.QueueSnapshot, error)
+	RunRetentionCleanup(context.Context, monitoring.RetentionCleanupParams) (monitoring.CleanupStatus, error)
+}
+
+type statisticsService interface {
+	GetOverview(context.Context) (statistics.Overview, error)
+}
+
 func WithAuthService(service authService) Option {
 	return func(h *Handler) {
 		h.auth = service
@@ -142,6 +155,18 @@ func WithTemplateService(service templateService) Option {
 func WithRouteService(service routeService) Option {
 	return func(h *Handler) {
 		h.routes = service
+	}
+}
+
+func WithMonitoringService(service monitoringService) Option {
+	return func(h *Handler) {
+		h.monitoring = service
+	}
+}
+
+func WithStatisticsService(service statisticsService) Option {
+	return func(h *Handler) {
+		h.stats = service
 	}
 }
 
@@ -182,6 +207,11 @@ func NewHandler(cfg config.Config, options ...Option) http.Handler {
 	mux.HandleFunc(cfg.Server.APIPrefix+"/recipient-groups/", handler.recipientGroupDetailHandler)
 	mux.HandleFunc(cfg.Server.APIPrefix+"/route-flows", handler.routeFlowsHandler)
 	mux.HandleFunc(cfg.Server.APIPrefix+"/route-flows/", handler.routeFlowDetailHandler)
+	mux.HandleFunc(cfg.Server.APIPrefix+"/monitoring/queue", handler.queueMonitoringHandler)
+	mux.HandleFunc(cfg.Server.APIPrefix+"/monitor/queues", handler.queueMonitoringHandler)
+	mux.HandleFunc(cfg.Server.APIPrefix+"/statistics/overview", handler.statisticsOverviewHandler)
+	mux.HandleFunc(cfg.Server.APIPrefix+"/stats/overview", handler.statisticsOverviewHandler)
+	mux.HandleFunc(cfg.Server.APIPrefix+"/maintenance/retention/cleanup", handler.retentionCleanupHandler)
 	mux.HandleFunc(cfg.Server.APIPrefix+"/templates/parse", handler.templateParseHandler)
 	mux.HandleFunc(cfg.Server.APIPrefix+"/templates/preview", handler.templatePreviewHandler)
 	mux.HandleFunc(cfg.Server.APIPrefix+"/templates/validate", handler.templateValidateHandler)
@@ -256,6 +286,22 @@ func (h *Handler) requireProviderService(w http.ResponseWriter) bool {
 		return true
 	}
 	writeAPIError(w, http.StatusServiceUnavailable, "MGP-CHN-001", "平台服务未启用，请先配置数据库")
+	return false
+}
+
+func (h *Handler) requireMonitoringService(w http.ResponseWriter) bool {
+	if h.monitoring != nil {
+		return true
+	}
+	writeAPIError(w, http.StatusServiceUnavailable, "MGP-MON-001", "监控服务未启用，请先配置数据库")
+	return false
+}
+
+func (h *Handler) requireStatisticsService(w http.ResponseWriter) bool {
+	if h.stats != nil {
+		return true
+	}
+	writeAPIError(w, http.StatusServiceUnavailable, "MGP-STAT-001", "统计服务未启用，请先配置数据库")
 	return false
 }
 

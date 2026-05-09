@@ -209,7 +209,7 @@ function ConsoleChrome() {
           />
           <div className="sider-footer">
             <span>部署环境：生产</span>
-            <span>版本：v0.9.0-step9</span>
+            <span>版本：v0.10.0-step10</span>
           </div>
         </Sider>
         <Content className="app-content">
