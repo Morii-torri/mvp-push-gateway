@@ -525,6 +525,10 @@ export const templates: TemplateRecord[] = [
 ];
 
 export const payloadFields = [
+  { path: 'payload.bizType', type: '文本', value: '民生诉求' },
+  { path: 'payload.scope', type: '文本', value: '市级' },
+  { path: 'payload.level', type: '文本', value: '紧急' },
+  { path: 'payload.source', type: '文本', value: '省直单位上报' },
   { path: 'payload.title', type: '文本', value: '业务办理提醒' },
   { path: 'payload.content', type: '文本', value: '请尽快完成材料补充提交。' },
   { path: 'payload.sender.name', type: '文本', value: '张伟' },
@@ -550,7 +554,6 @@ export type UserIdentity = {
   platform: string;
   fieldName: string;
   value: string;
-  primary: boolean;
 };
 
 export const userContacts: UserContact[] = [
@@ -562,8 +565,10 @@ export const userContacts: UserContact[] = [
     email: 'zhangwei@example.gov.cn',
     status: true,
     identities: [
-      { platform: '企业微信', fieldName: 'userid', value: 'zhangwei', primary: true },
-      { platform: '飞书', fieldName: 'open_id', value: 'ou_12a8', primary: false },
+      { platform: '企业微信', fieldName: 'userid', value: 'zhangwei' },
+      { platform: '飞书', fieldName: 'open_id', value: 'ou_12a8' },
+      { platform: '短信', fieldName: 'mobile', value: '13800005678' },
+      { platform: '邮箱', fieldName: 'email', value: 'zhangwei@example.gov.cn' },
     ],
     updatedAt: '2026-05-08 14:20:31',
   },
@@ -575,8 +580,9 @@ export const userContacts: UserContact[] = [
     email: 'lina@example.gov.cn',
     status: true,
     identities: [
-      { platform: '短信', fieldName: 'mobile', value: '13900001234', primary: true },
-      { platform: '随申办政务云', fieldName: 'user_id', value: 'gov_1024', primary: false },
+      { platform: '短信', fieldName: 'mobile', value: '13900001234' },
+      { platform: '邮箱', fieldName: 'email', value: 'lina@example.gov.cn' },
+      { platform: '随申办政务云', fieldName: 'user_id', value: 'gov_1024' },
     ],
     updatedAt: '2026-05-08 11:42:02',
   },
@@ -587,7 +593,11 @@ export const userContacts: UserContact[] = [
     mobile: '13700004321',
     email: 'wangqiang@example.gov.cn',
     status: false,
-    identities: [{ platform: '企业微信', fieldName: 'userid', value: 'wangqiang', primary: true }],
+    identities: [
+      { platform: '企业微信', fieldName: 'userid', value: 'wangqiang' },
+      { platform: '短信', fieldName: 'mobile', value: '13700004321' },
+      { platform: '邮箱', fieldName: 'email', value: 'wangqiang@example.gov.cn' },
+    ],
     updatedAt: '2026-05-07 18:12:45',
   },
 ];

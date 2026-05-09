@@ -180,6 +180,311 @@ function randomSecret(prefix: string) {
   return `${prefix}${randomBase62(18)}`;
 }
 
+type ProviderKind = ProviderRecord['providerType'];
+
+const providerTypeOptions: Array<{ label: string; value: ProviderKind }> = [
+  { label: '随申办政务云', value: 'gov_cloud' },
+  { label: '企业微信', value: 'wecom' },
+  { label: '飞书', value: 'feishu' },
+  { label: '钉钉', value: 'dingtalk' },
+  { label: '邮箱', value: 'email' },
+  { label: '短信', value: 'sms' },
+  { label: '本平台', value: 'self' },
+  { label: '通用 Webhook', value: 'webhook' },
+  { label: '自定义 Token 平台', value: 'custom_token' },
+];
+
+type ProviderPreset = {
+  tokenEndpoint: string;
+  tokenRequest: string;
+  tokenResponsePath: string;
+  tokenPlacement: string;
+  sendEndpoint: string;
+  recipientMapping: string;
+  bodyMapping: string;
+  qps: number;
+  minuteLimit: number;
+  burst: number;
+  concurrency: number;
+  timeoutMs: number;
+  retryPolicy: string;
+  retryInterval: string;
+  deadLetterPolicy: string;
+  testRecipient: string;
+  testBody: string;
+};
+
+type ProviderRuntimeConfig = ProviderPreset & {
+  rateLimitEnabled: boolean;
+  workerClaimLimit: number;
+  slowPlatformIsolation: boolean;
+  cacheKey: string;
+  refreshStrategy: string;
+  requestHeaders: string;
+  requestQuery: string;
+  idempotencyKey: string;
+  deadLetterRetentionDays: number;
+  deadLetterReplay: boolean;
+  deadLetterAlert: string;
+};
+
+type ProviderRow = ProviderRecord & ProviderRuntimeConfig;
+
+const providerPresets: Record<ProviderKind, ProviderPreset> = {
+  gov_cloud: {
+    tokenEndpoint: 'POST /oauth/token',
+    tokenRequest: '{"grant_type":"client_credentials","client_id":"${client_id}","client_secret":"${client_secret}"}',
+    tokenResponsePath: 'data.access_token',
+    tokenPlacement: 'Header.Authorization = Bearer ${token}',
+    sendEndpoint: 'POST /message/send',
+    recipientMapping: 'body.receivers[].mobile / body.receivers[].open_id',
+    bodyMapping: '{"title":"{{ message.title }}","content":"{{ message.content }}","receivers":"{{ receivers }}"}',
+    qps: 80,
+    minuteLimit: 4800,
+    burst: 160,
+    concurrency: 32,
+    timeoutMs: 3000,
+    retryPolicy: '3 次指数退避',
+    retryInterval: '1s / 3s / 9s',
+    deadLetterPolicy: '重试耗尽进入死信',
+    testRecipient: '13800005678',
+    testBody: '政务云测试消息',
+  },
+  wecom: {
+    tokenEndpoint: 'GET /cgi-bin/gettoken',
+    tokenRequest: 'query.corpid + query.corpsecret',
+    tokenResponsePath: 'access_token',
+    tokenPlacement: 'Query.access_token = ${token}',
+    sendEndpoint: 'POST /cgi-bin/message/send',
+    recipientMapping: 'body.touser / body.toparty',
+    bodyMapping: '{"touser":"{{ receivers.userid }}","msgtype":"text","text":{"content":"{{ message.content }}"}}',
+    qps: 120,
+    minuteLimit: 7200,
+    burst: 240,
+    concurrency: 48,
+    timeoutMs: 2000,
+    retryPolicy: '2 次固定间隔',
+    retryInterval: '2s / 2s',
+    deadLetterPolicy: '平台错误进入死信',
+    testRecipient: 'zhangwei',
+    testBody: '企业微信测试消息',
+  },
+  feishu: {
+    tokenEndpoint: 'POST /open-apis/auth/v3/tenant_access_token/internal',
+    tokenRequest: '{"app_id":"${app_id}","app_secret":"${app_secret}"}',
+    tokenResponsePath: 'tenant_access_token',
+    tokenPlacement: 'Header.Authorization = Bearer ${token}',
+    sendEndpoint: 'POST /open-apis/im/v1/messages',
+    recipientMapping: 'query.receive_id_type + body.receive_id',
+    bodyMapping: '{"receive_id":"{{ receivers.open_id }}","msg_type":"text","content":"{\\"text\\":\\"{{ message.content }}\\"}"}',
+    qps: 60,
+    minuteLimit: 3600,
+    burst: 120,
+    concurrency: 24,
+    timeoutMs: 3000,
+    retryPolicy: '3 次指数退避',
+    retryInterval: '1s / 2s / 4s',
+    deadLetterPolicy: '超时进入死信',
+    testRecipient: 'ou_12a8',
+    testBody: '飞书测试消息',
+  },
+  dingtalk: {
+    tokenEndpoint: 'GET /gettoken',
+    tokenRequest: 'query.appkey + query.appsecret',
+    tokenResponsePath: 'access_token',
+    tokenPlacement: 'Query.access_token = ${token}',
+    sendEndpoint: 'POST /topapi/message/corpconversation/asyncsend_v2',
+    recipientMapping: 'body.userid_list',
+    bodyMapping: '{"userid_list":"{{ receivers.userid }}","msg":{"msgtype":"text","text":{"content":"{{ message.content }}"}}}',
+    qps: 80,
+    minuteLimit: 4800,
+    burst: 160,
+    concurrency: 32,
+    timeoutMs: 3000,
+    retryPolicy: '3 次指数退避',
+    retryInterval: '1s / 3s / 9s',
+    deadLetterPolicy: '平台错误进入死信',
+    testRecipient: 'manager001',
+    testBody: '钉钉测试消息',
+  },
+  email: {
+    tokenEndpoint: 'SMTP 登录或固定凭证',
+    tokenRequest: 'username + password / app password',
+    tokenResponsePath: '-',
+    tokenPlacement: 'SMTP AUTH',
+    sendEndpoint: 'SMTP sendmail',
+    recipientMapping: 'mail.to = receivers.email',
+    bodyMapping: '{"to":"{{ receivers.email }}","subject":"{{ message.title }}","html":"{{ message.content }}"}',
+    qps: 20,
+    minuteLimit: 600,
+    burst: 40,
+    concurrency: 8,
+    timeoutMs: 5000,
+    retryPolicy: '2 次固定间隔',
+    retryInterval: '5s / 15s',
+    deadLetterPolicy: '人工复核',
+    testRecipient: 'zhangwei@example.gov.cn',
+    testBody: '邮件测试消息',
+  },
+  sms: {
+    tokenEndpoint: '固定 AccessKey / Secret',
+    tokenRequest: 'access_key + sign',
+    tokenResponsePath: '-',
+    tokenPlacement: 'Header.Authorization / Query.Signature',
+    sendEndpoint: 'POST /sms/send',
+    recipientMapping: 'body.phoneNumbers = receivers.mobile',
+    bodyMapping: '{"phoneNumbers":"{{ receivers.mobile }}","templateParam":{"content":"{{ message.content }}"}}',
+    qps: 20,
+    minuteLimit: 1200,
+    burst: 40,
+    concurrency: 8,
+    timeoutMs: 5000,
+    retryPolicy: '1 次重试',
+    retryInterval: '10s',
+    deadLetterPolicy: '人工复核',
+    testRecipient: '13800005678',
+    testBody: '短信测试消息',
+  },
+  self: {
+    tokenEndpoint: '本平台内部令牌',
+    tokenRequest: 'system channel token',
+    tokenResponsePath: 'token',
+    tokenPlacement: 'Header.Authorization = Bearer ${token}',
+    sendEndpoint: 'POST /internal/messages',
+    recipientMapping: 'body.user_ids',
+    bodyMapping: '{"user_ids":"{{ receivers.system_user_id }}","title":"{{ message.title }}","content":"{{ message.content }}"}',
+    qps: 200,
+    minuteLimit: 12000,
+    burst: 400,
+    concurrency: 64,
+    timeoutMs: 1500,
+    retryPolicy: '2 次固定间隔',
+    retryInterval: '1s / 2s',
+    deadLetterPolicy: '重试耗尽进入死信',
+    testRecipient: 'u-1',
+    testBody: '本平台测试消息',
+  },
+  webhook: {
+    tokenEndpoint: '无令牌或固定 Header',
+    tokenRequest: '{}',
+    tokenResponsePath: '-',
+    tokenPlacement: 'Header.X-Webhook-Token',
+    sendEndpoint: 'POST https://example.com/webhook',
+    recipientMapping: '无接收人字段',
+    bodyMapping: '{"event":"message.push","payload":"{{ message }}"}',
+    qps: 50,
+    minuteLimit: 3000,
+    burst: 100,
+    concurrency: 16,
+    timeoutMs: 3000,
+    retryPolicy: '3 次指数退避',
+    retryInterval: '1s / 3s / 9s',
+    deadLetterPolicy: '重试耗尽进入死信',
+    testRecipient: '-',
+    testBody: 'Webhook 测试消息',
+  },
+  custom_token: {
+    tokenEndpoint: 'POST https://example.com/oauth/token',
+    tokenRequest: '{"secret":"${secret}"}',
+    tokenResponsePath: 'data.token',
+    tokenPlacement: 'Header.Authorization = Bearer ${token}',
+    sendEndpoint: 'POST https://example.com/message/send',
+    recipientMapping: 'body.receivers',
+    bodyMapping: '{"receivers":"{{ receivers }}","message":"{{ message.content }}"}',
+    qps: 30,
+    minuteLimit: 1800,
+    burst: 60,
+    concurrency: 12,
+    timeoutMs: 3000,
+    retryPolicy: '3 次指数退避',
+    retryInterval: '1s / 3s / 9s',
+    deadLetterPolicy: '重试耗尽进入死信',
+    testRecipient: 'test_user',
+    testBody: '自定义平台测试消息',
+  },
+};
+
+function parseSendEndpoint(endpoint: string): Pick<ProviderRecord, 'requestMethod' | 'requestUrl'> {
+  const matched = endpoint.match(/^([A-Z]+)\s+(.+)$/);
+  return {
+    requestMethod: matched?.[1] ?? 'POST',
+    requestUrl: matched?.[2] ?? endpoint,
+  };
+}
+
+function providerWithPreset(
+  record: ProviderRecord,
+  providerType: ProviderKind = record.providerType,
+): ProviderRow {
+  const preset = providerPresets[providerType];
+  const endpoint = parseSendEndpoint(preset.sendEndpoint);
+  return {
+    ...record,
+    ...preset,
+    providerType,
+    recipientFields: preset.recipientMapping,
+    tokenStrategy: preset.tokenEndpoint,
+    requestMethod: endpoint.requestMethod,
+    requestUrl: endpoint.requestUrl,
+    tokenPlacement: preset.tokenPlacement,
+    rateLimit: `每秒 ${preset.qps} 条 / 每分钟 ${preset.minuteLimit} 条`,
+    concurrency: preset.concurrency,
+    timeout: `${preset.timeoutMs} ms`,
+    retryPolicy: preset.retryPolicy,
+    deadLetterPolicy: preset.deadLetterPolicy,
+    capability: `${getProviderTypeLabel(providerType)}默认能力；接收人映射 ${preset.recipientMapping}`,
+    rateLimitEnabled: true,
+    workerClaimLimit: Math.max(1, Math.floor(preset.concurrency / 4)),
+    slowPlatformIsolation: true,
+    cacheKey: '${provider_instance_id}:${credential_hash}',
+    refreshStrategy: '过期前 5 分钟刷新，失败后按重试策略处理',
+    requestHeaders: '{"Content-Type":"application/json"}',
+    requestQuery: '{}',
+    idempotencyKey: '${message_id}:${provider_instance_id}',
+    deadLetterRetentionDays: 30,
+    deadLetterReplay: true,
+    deadLetterAlert: '5 分钟内死信 >= 10 条',
+  };
+}
+
+function createProviderDraft(providerType: ProviderKind, index: number): ProviderRow {
+  return providerWithPreset(
+    {
+      id: `provider-local-${Date.now()}`,
+      name: `本地新增平台 ${index}`,
+      providerType,
+      enabled: true,
+      description: '用于政务消息统一发送。',
+      messageTypes: ['文本'],
+      recipientFields: '',
+      tokenStrategy: '',
+      requestMethod: 'POST',
+      requestUrl: '',
+      tokenPlacement: '',
+      rateLimit: '',
+      concurrency: 1,
+      timeout: '',
+      retryPolicy: '',
+      deadLetterPolicy: '',
+      lastTestResult: '本地未联调',
+      capability: '',
+    },
+    providerType,
+  );
+}
+
+function switchProviderType(value: ProviderRow, providerType: ProviderKind): ProviderRow {
+  const next = providerWithPreset(value, providerType);
+  return {
+    ...next,
+    id: value.id,
+    name: value.name,
+    description: value.description,
+    enabled: value.enabled,
+    lastTestResult: value.lastTestResult,
+  };
+}
+
 function SourceConfigForm({ initialAuth = 'token' }: { initialAuth?: SourceRecord['authMode'] }) {
   const [authMode, setAuthMode] = useState<SourceRecord['authMode']>(initialAuth);
   const [sourceCode, setSourceCode] = useState('newsource');
@@ -246,7 +551,17 @@ function SourceConfigForm({ initialAuth = 'token' }: { initialAuth?: SourceRecor
   );
 }
 
-function ProviderConfigForm() {
+function ProviderConfigForm({
+  value,
+  onChange,
+}: {
+  value: ProviderRow;
+  onChange: (value: ProviderRow) => void;
+}) {
+  const { message } = App.useApp();
+  const customMapping = value.providerType === 'custom_token' || value.providerType === 'webhook';
+  const update = (patch: Partial<ProviderRow>) => onChange({ ...value, ...patch });
+
   return (
     <Tabs
       className="dense-tabs"
@@ -257,154 +572,307 @@ function ProviderConfigForm() {
           children: (
             <Form layout="vertical">
               <Form.Item label="平台名称" required>
-                <Input defaultValue="新上级平台" />
+                <Input value={value.name} onChange={(event) => update({ name: event.target.value })} />
               </Form.Item>
               <Form.Item label="平台类型">
                 <Select
-                  defaultValue="gov_cloud"
-                  options={[
-                    { label: '随申办政务云', value: 'gov_cloud' },
-                    { label: '企业微信', value: 'wecom' },
-                    { label: '飞书', value: 'feishu' },
-                    { label: '钉钉', value: 'dingtalk' },
-                    { label: '通用 Webhook', value: 'webhook' },
-                    { label: '自定义 Token 平台', value: 'custom_token' },
-                  ]}
+                  value={value.providerType}
+                  onChange={(providerType) => onChange(switchProviderType(value, providerType))}
+                  options={providerTypeOptions}
                 />
               </Form.Item>
               <Form.Item label="描述">
-                <Input.TextArea rows={3} defaultValue="用于政务消息统一发送。" />
+                <Input.TextArea
+                  rows={3}
+                  value={value.description}
+                  onChange={(event) => update({ description: event.target.value })}
+                />
               </Form.Item>
               <Form.Item label="启停">
-                <Switch defaultChecked checkedChildren="启用" unCheckedChildren="停用" />
-              </Form.Item>
-            </Form>
-          ),
-        },
-        {
-          key: 'capability',
-          label: '消息能力',
-          children: (
-            <Form layout="vertical">
-              <Form.Item label="消息类型">
-                <Select mode="multiple" defaultValue={['文本', '卡片']} options={['文本', '卡片', 'Markdown', '富文本', '短信'].map((value) => ({ label: value, value }))} />
-              </Form.Item>
-              <Form.Item label="接收人字段说明">
-                <Input.TextArea rows={3} defaultValue="mobile/open_id，写入 body.receivers" />
+                <Switch
+                  checked={value.enabled}
+                  onChange={(enabled) => update({ enabled })}
+                  checkedChildren="启用"
+                  unCheckedChildren="停用"
+                />
               </Form.Item>
             </Form>
           ),
         },
         {
           key: 'token',
-          label: 'Token 获取',
+          label: '令牌获取',
           children: (
             <Form layout="vertical" className="two-column-form">
-              <Form.Item label="请求方法">
-                <Select defaultValue="POST" options={['GET', 'POST'].map((value) => ({ label: value, value }))} />
-              </Form.Item>
-              <Form.Item label="URL">
-                <Input defaultValue="https://example.gov.cn/oauth/token" />
-              </Form.Item>
-              <Form.Item label="Header">
-                <Input.TextArea rows={3} defaultValue={'{"Content-Type":"application/json"}'} />
-              </Form.Item>
-              <Form.Item label="Body">
-                <Input.TextArea rows={3} defaultValue={'{"grant_type":"client_credentials"}'} />
-              </Form.Item>
-              <Form.Item label="返回 token 字段路径">
-                <Input defaultValue="data.access_token" />
-              </Form.Item>
-              <Form.Item label="token 放置位置">
-                <Select
-                  defaultValue="header"
-                  options={[
-                    { label: 'Header 请求头', value: 'header' },
-                    { label: 'Query 参数', value: 'query' },
-                    { label: 'Body 请求体', value: 'body' },
-                  ]}
+              {!customMapping ? (
+                <Alert
+                  type="info"
+                  showIcon
+                  className="semantic-alert"
+                  message="该平台为内置适配器，令牌获取结构使用预置默认值；只需要维护实际凭证和运行参数。"
+                />
+              ) : null}
+              <Form.Item label="令牌获取方式">
+                <Input
+                  value={value.tokenEndpoint}
+                  disabled={!customMapping}
+                  onChange={(event) => update({ tokenEndpoint: event.target.value, tokenStrategy: event.target.value })}
                 />
               </Form.Item>
-              <Form.Item label="字段名">
-                <Input defaultValue="Authorization" />
+              <Form.Item label="请求参数 / 凭证">
+                <Input.TextArea
+                  rows={3}
+                  value={value.tokenRequest}
+                  disabled={!customMapping}
+                  onChange={(event) => update({ tokenRequest: event.target.value })}
+                />
               </Form.Item>
-              <Form.Item label="前缀">
-                <Input defaultValue="Bearer" />
+              <Form.Item label="返回 token 字段路径">
+                <Input
+                  value={value.tokenResponsePath}
+                  disabled={!customMapping}
+                  onChange={(event) => update({ tokenResponsePath: event.target.value })}
+                />
+              </Form.Item>
+              <Form.Item label="Token 放置">
+                <Input
+                  value={value.tokenPlacement}
+                  disabled={!customMapping}
+                  onChange={(event) => update({ tokenPlacement: event.target.value })}
+                />
+              </Form.Item>
+              <Form.Item label="刷新策略">
+                <Input
+                  value={value.refreshStrategy}
+                  onChange={(event) => update({ refreshStrategy: event.target.value })}
+                />
+              </Form.Item>
+              <Form.Item label="缓存键">
+                <Input value={value.cacheKey} onChange={(event) => update({ cacheKey: event.target.value })} />
               </Form.Item>
             </Form>
           ),
         },
         {
-          key: 'send',
-          label: '发送请求',
+          key: 'mapping',
+          label: '请求映射',
           children: (
-            <Form layout="vertical" className="two-column-form">
-              <Form.Item label="方法">
-                <Select defaultValue="POST" options={['GET', 'POST', 'PUT'].map((value) => ({ label: value, value }))} />
-              </Form.Item>
-              <Form.Item label="URL">
-                <Input defaultValue="https://example.gov.cn/message/send" />
-              </Form.Item>
-              <Form.Item label="Header">
-                <Input.TextArea rows={3} defaultValue={'{"Content-Type":"application/json"}'} />
-              </Form.Item>
-              <Form.Item label="Query">
-                <Input.TextArea rows={3} defaultValue="{}" />
-              </Form.Item>
-              <Form.Item label="Body 模板">
-                <Input.TextArea rows={5} defaultValue={'{"content":"{{ message.content }}","receivers":"{{ receivers }}"}'} />
-              </Form.Item>
-              <Form.Item label="接收人字段位置和路径">
-                <Input defaultValue="body.receivers" />
+            <Form layout="vertical">
+              {!customMapping ? (
+                <Alert
+                  type="info"
+                  showIcon
+                  className="semantic-alert"
+                  message="该平台为内置适配器，已预置常用请求结构；只需要填写凭证、限流、超时重试等运行参数。"
+                />
+              ) : null}
+              <div className="two-column-form">
+                <Form.Item label="发送接口">
+                  <Input
+                    value={value.sendEndpoint}
+                    disabled={!customMapping}
+                    onChange={(event) => {
+                      const endpoint = parseSendEndpoint(event.target.value);
+                      update({ sendEndpoint: event.target.value, ...endpoint });
+                    }}
+                  />
+                </Form.Item>
+                <Form.Item label="接收人映射">
+                  <Input
+                    value={value.recipientMapping}
+                    disabled={!customMapping}
+                    onChange={(event) => update({ recipientMapping: event.target.value, recipientFields: event.target.value })}
+                  />
+                </Form.Item>
+                <Form.Item label="请求 Header">
+                  <Input.TextArea
+                    rows={3}
+                    value={value.requestHeaders}
+                    disabled={!customMapping}
+                    onChange={(event) => update({ requestHeaders: event.target.value })}
+                  />
+                </Form.Item>
+                <Form.Item label="请求 Query">
+                  <Input.TextArea
+                    rows={3}
+                    value={value.requestQuery}
+                    disabled={!customMapping}
+                    onChange={(event) => update({ requestQuery: event.target.value })}
+                  />
+                </Form.Item>
+              </div>
+              <Form.Item label="Body 映射模板">
+                <Input.TextArea
+                  rows={6}
+                  value={value.bodyMapping}
+                  disabled={!customMapping}
+                  onChange={(event) => update({ bodyMapping: event.target.value })}
+                />
               </Form.Item>
             </Form>
           ),
         },
         {
-          key: 'limits',
-          label: '限流重试',
+          key: 'rate',
+          label: '限流配置',
           children: (
             <Form layout="vertical" className="two-column-form">
               <Form.Item label="主动限流">
-                <Switch defaultChecked checkedChildren="开启" unCheckedChildren="关闭" />
+                <Switch
+                  checked={value.rateLimitEnabled}
+                  onChange={(rateLimitEnabled) => update({ rateLimitEnabled })}
+                  checkedChildren="开启"
+                  unCheckedChildren="关闭"
+                />
               </Form.Item>
-              <Form.Item label="QPS">
-                <InputNumber min={1} defaultValue={80} className="full-width" />
+              <Form.Item label="每秒请求数">
+                <InputNumber
+                  min={1}
+                  value={value.qps}
+                  className="full-width"
+                  onChange={(qps) => update({ qps: qps ?? 1, rateLimit: `每秒 ${qps ?? 1} 条 / 每分钟 ${value.minuteLimit} 条` })}
+                />
               </Form.Item>
-              <Form.Item label="每分钟">
-                <InputNumber min={1} defaultValue={4800} className="full-width" />
+              <Form.Item label="每分钟请求数">
+                <InputNumber
+                  min={1}
+                  value={value.minuteLimit}
+                  className="full-width"
+                  onChange={(minuteLimit) =>
+                    update({ minuteLimit: minuteLimit ?? 1, rateLimit: `每秒 ${value.qps} 条 / 每分钟 ${minuteLimit ?? 1} 条` })
+                  }
+                />
               </Form.Item>
-              <Form.Item label="burst">
-                <InputNumber min={1} defaultValue={160} className="full-width" />
+              <Form.Item label="突发容量">
+                <InputNumber
+                  min={1}
+                  value={value.burst}
+                  className="full-width"
+                  onChange={(burst) => update({ burst: burst ?? 1 })}
+                />
               </Form.Item>
-              <Form.Item label="并发上限">
-                <InputNumber min={1} defaultValue={32} className="full-width" />
+            </Form>
+          ),
+        },
+        {
+          key: 'concurrency',
+          label: '并发上限',
+          children: (
+            <Form layout="vertical" className="two-column-form">
+              <Form.Item label="平台实例并发上限">
+                <InputNumber
+                  min={1}
+                  value={value.concurrency}
+                  className="full-width"
+                  onChange={(concurrency) => update({ concurrency: concurrency ?? 1 })}
+                />
               </Form.Item>
-              <Form.Item label="超时毫秒">
-                <InputNumber min={100} defaultValue={3000} className="full-width" />
+              <Form.Item label="单 worker 抢占上限">
+                <InputNumber
+                  min={1}
+                  value={value.workerClaimLimit}
+                  className="full-width"
+                  onChange={(workerClaimLimit) => update({ workerClaimLimit: workerClaimLimit ?? 1 })}
+                />
               </Form.Item>
-              <Form.Item label="最大重试次数">
-                <InputNumber min={0} defaultValue={3} className="full-width" />
+              <Form.Item label="慢平台隔离">
+                <Switch
+                  checked={value.slowPlatformIsolation}
+                  onChange={(slowPlatformIsolation) => update({ slowPlatformIsolation })}
+                  checkedChildren="开启"
+                  unCheckedChildren="关闭"
+                />
+              </Form.Item>
+              <Form.Item label="队列键">
+                <Input defaultValue="${provider_instance_id}" disabled />
+              </Form.Item>
+            </Form>
+          ),
+        },
+        {
+          key: 'retry',
+          label: '超时与重试',
+          children: (
+            <Form layout="vertical" className="two-column-form">
+              <Form.Item label="请求超时毫秒">
+                <InputNumber
+                  min={100}
+                  value={value.timeoutMs}
+                  className="full-width"
+                  onChange={(timeoutMs) => update({ timeoutMs: timeoutMs ?? 100, timeout: `${timeoutMs ?? 100} ms` })}
+                />
+              </Form.Item>
+              <Form.Item label="重试策略">
+                <Input value={value.retryPolicy} onChange={(event) => update({ retryPolicy: event.target.value })} />
               </Form.Item>
               <Form.Item label="重试间隔">
-                <Input defaultValue="指数退避，1s 起" />
+                <Input value={value.retryInterval} onChange={(event) => update({ retryInterval: event.target.value })} />
               </Form.Item>
-              <Form.Item label="死信策略">
-                <Select defaultValue="重试耗尽进入死信" options={['重试耗尽进入死信', '平台错误进入死信', '人工复核'].map((value) => ({ label: value, value }))} />
+              <Form.Item label="幂等键">
+                <Input value={value.idempotencyKey} onChange={(event) => update({ idempotencyKey: event.target.value })} />
+              </Form.Item>
+            </Form>
+          ),
+        },
+        {
+          key: 'dead-letter',
+          label: '死信策略',
+          children: (
+            <Form layout="vertical" className="two-column-form">
+              <Form.Item label="进入死信条件">
+                <Select
+                  value={value.deadLetterPolicy}
+                  onChange={(deadLetterPolicy) => update({ deadLetterPolicy })}
+                  options={['重试耗尽进入死信', '平台错误进入死信', '超时进入死信', '人工复核'].map((value) => ({
+                    label: value,
+                    value,
+                  }))}
+                />
+              </Form.Item>
+              <Form.Item label="死信保留天数">
+                <InputNumber
+                  min={1}
+                  value={value.deadLetterRetentionDays}
+                  className="full-width"
+                  onChange={(deadLetterRetentionDays) => update({ deadLetterRetentionDays: deadLetterRetentionDays ?? 1 })}
+                />
+              </Form.Item>
+              <Form.Item label="允许重放">
+                <Switch
+                  checked={value.deadLetterReplay}
+                  onChange={(deadLetterReplay) => update({ deadLetterReplay })}
+                  checkedChildren="开启"
+                  unCheckedChildren="关闭"
+                />
+              </Form.Item>
+              <Form.Item label="告警阈值">
+                <Input value={value.deadLetterAlert} onChange={(event) => update({ deadLetterAlert: event.target.value })} />
               </Form.Item>
             </Form>
           ),
         },
         {
           key: 'test',
-          label: '联调测试',
+          label: '测试发送',
           children: (
             <Form layout="vertical">
               <Form.Item label="测试接收人">
-                <Input defaultValue="13800005678" />
+                <Input value={value.testRecipient} onChange={(event) => update({ testRecipient: event.target.value })} />
               </Form.Item>
               <Form.Item label="测试消息体">
-                <Input.TextArea rows={5} defaultValue="这是一条上级平台联调消息。" />
+                <Input.TextArea
+                  rows={5}
+                  value={value.testBody}
+                  onChange={(event) => update({ testBody: event.target.value })}
+                />
+              </Form.Item>
+              <Form.Item label="测试动作">
+                <Space>
+                  <Button onClick={() => message.success('测试请求已生成到本地演示状态')}>
+                    生成请求
+                  </Button>
+                  <Button type="primary">发送测试</Button>
+                </Space>
               </Form.Item>
             </Form>
           ),
@@ -414,7 +882,150 @@ function ProviderConfigForm() {
   );
 }
 
+function ProviderCapabilityTabs({ provider }: { provider: ProviderRow }) {
+  return (
+    <Tabs
+      size="small"
+      items={[
+        {
+          key: 'token',
+          label: '令牌获取',
+          children: (
+            <Descriptions column={1} size="small" bordered>
+              <Descriptions.Item label="获取方式">{provider.tokenEndpoint}</Descriptions.Item>
+              <Descriptions.Item label="返回字段">{provider.tokenResponsePath}</Descriptions.Item>
+              <Descriptions.Item label="放置方式">{provider.tokenPlacement}</Descriptions.Item>
+              <Descriptions.Item label="刷新策略">{provider.refreshStrategy}</Descriptions.Item>
+            </Descriptions>
+          ),
+        },
+        {
+          key: 'mapping',
+          label: '请求映射',
+          children: (
+            <Descriptions column={1} size="small" bordered>
+              <Descriptions.Item label="发送接口">{provider.sendEndpoint}</Descriptions.Item>
+              <Descriptions.Item label="接收人映射">{provider.recipientMapping}</Descriptions.Item>
+              <Descriptions.Item label="Body 模板">{provider.bodyMapping}</Descriptions.Item>
+            </Descriptions>
+          ),
+        },
+        {
+          key: 'rate',
+          label: '限流配置',
+          children: (
+            <Descriptions column={1} size="small" bordered>
+              <Descriptions.Item label="主动限流">{provider.rateLimitEnabled ? '开启' : '关闭'}</Descriptions.Item>
+              <Descriptions.Item label="QPS">{provider.qps}</Descriptions.Item>
+              <Descriptions.Item label="每分钟">{provider.minuteLimit}</Descriptions.Item>
+              <Descriptions.Item label="突发容量">{provider.burst}</Descriptions.Item>
+            </Descriptions>
+          ),
+        },
+        {
+          key: 'concurrency',
+          label: '并发上限',
+          children: (
+            <Descriptions column={1} size="small" bordered>
+              <Descriptions.Item label="实例并发">{provider.concurrency}</Descriptions.Item>
+              <Descriptions.Item label="单 worker 抢占">{provider.workerClaimLimit}</Descriptions.Item>
+              <Descriptions.Item label="慢平台隔离">{provider.slowPlatformIsolation ? '开启' : '关闭'}</Descriptions.Item>
+            </Descriptions>
+          ),
+        },
+        {
+          key: 'retry',
+          label: '超时与重试',
+          children: (
+            <Descriptions column={1} size="small" bordered>
+              <Descriptions.Item label="超时">{provider.timeoutMs} ms</Descriptions.Item>
+              <Descriptions.Item label="重试">{provider.retryPolicy}</Descriptions.Item>
+              <Descriptions.Item label="间隔">{provider.retryInterval}</Descriptions.Item>
+            </Descriptions>
+          ),
+        },
+        {
+          key: 'dead-letter',
+          label: '死信策略',
+          children: (
+            <Descriptions column={1} size="small" bordered>
+              <Descriptions.Item label="进入条件">{provider.deadLetterPolicy}</Descriptions.Item>
+              <Descriptions.Item label="保留天数">{provider.deadLetterRetentionDays}</Descriptions.Item>
+              <Descriptions.Item label="允许重放">{provider.deadLetterReplay ? '开启' : '关闭'}</Descriptions.Item>
+            </Descriptions>
+          ),
+        },
+        {
+          key: 'test',
+          label: '测试发送',
+          children: <Typography.Text>默认测试接收人：{provider.testRecipient}</Typography.Text>,
+        },
+      ]}
+    />
+  );
+}
+
+type ConditionValueMode = 'manual' | 'match_group';
+
+type ConditionDraft = {
+  fieldPath: string;
+  operator: string;
+  valueMode: ConditionValueMode;
+  manualValue: string;
+  matchGroupValues: string[];
+};
+
 function RouteRuleForm() {
+  const [conditions, setConditions] = useState<ConditionDraft[]>([
+    {
+      fieldPath: 'payload.bizType',
+      operator: '=',
+      valueMode: 'manual',
+      manualValue: '民生诉求',
+      matchGroupValues: [],
+    },
+    {
+      fieldPath: 'payload.level',
+      operator: '属于',
+      valueMode: 'match_group',
+      manualValue: '',
+      matchGroupValues: ['紧急消息级别'],
+    },
+  ]);
+  const updateCondition = (index: number, patch: Partial<ConditionDraft>) => {
+    setConditions((current) => current.map((item, itemIndex) => (itemIndex === index ? { ...item, ...patch } : item)));
+  };
+  const fieldOptions = payloadFields.map((field) => ({
+    label: `${field.path} (${field.type})`,
+    value: field.path,
+  }));
+  const matchGroupOptionsForField = (fieldPath: string) => {
+    const fieldLooksLikeIp = fieldPath.toLowerCase().includes('ip');
+    return matchGroups
+      .filter((group) => group.enabled)
+      .filter((group) => (fieldLooksLikeIp ? group.type.includes('IP') : !group.type.includes('IP')))
+      .map((group) => ({
+        label: `${group.name} (${group.values.length})`,
+        value: group.name,
+      }));
+  };
+  const manualOperators = ['=', '!=', '>=', '<=', '包含', '不包含'];
+  const matchGroupOperators = ['属于', '不属于'];
+  const operatorOptions = (valueMode: ConditionValueMode) =>
+    (valueMode === 'match_group' ? matchGroupOperators : manualOperators).map((value) => ({
+      label: value,
+      value,
+    }));
+  const conditionPreview = conditions
+    .map((condition) => {
+      const value =
+        condition.valueMode === 'match_group'
+          ? `匹配组[${condition.matchGroupValues.join('、') || '-'}]`
+          : condition.manualValue || '-';
+      return `${condition.fieldPath} ${condition.operator} ${value}`;
+    })
+    .join(' 且 ');
+
   return (
     <Form layout="vertical">
       <Form.Item label="规则名称" required>
@@ -422,24 +1033,63 @@ function RouteRuleForm() {
       </Form.Item>
       <div className="condition-editor">
         <Typography.Title level={5}>结构化匹配条件</Typography.Title>
-        {[0, 1].map((index) => (
+        {conditions.map((condition, index) => (
           <div className="condition-row" key={index}>
             <Select
-              defaultValue={index === 0 ? '业务类型' : '影响范围'}
-              options={['业务类型', '影响范围', '消息级别', '来源平台'].map((value) => ({ label: value, value }))}
+              showSearch
+              optionFilterProp="label"
+              value={condition.fieldPath}
+              options={fieldOptions}
+              onChange={(fieldPath) => {
+                const validValues = new Set(matchGroupOptionsForField(fieldPath).map((item) => item.value));
+                updateCondition(index, {
+                  fieldPath,
+                  matchGroupValues: condition.matchGroupValues.filter((item) => validValues.has(item)),
+                });
+              }}
             />
             <Select
-              defaultValue={index === 0 ? '=' : '>='}
-              options={['=', '!=', '>=', '<=', '包含', '属于'].map((value) => ({ label: value, value }))}
+              value={condition.operator}
+              options={operatorOptions(condition.valueMode)}
+              onChange={(operator) => updateCondition(index, { operator })}
             />
             <Select
-              defaultValue={index === 0 ? '手动输入' : '匹配组'}
-              options={['手动输入', '匹配组'].map((value) => ({ label: value, value }))}
+              value={condition.valueMode}
+              options={[
+                { label: '手动输入', value: 'manual' },
+                { label: '匹配组', value: 'match_group' },
+              ]}
+              onChange={(valueMode) =>
+                updateCondition(index, {
+                  valueMode,
+                  operator:
+                    valueMode === 'match_group'
+                      ? matchGroupOperators.includes(condition.operator)
+                        ? condition.operator
+                        : '属于'
+                      : manualOperators.includes(condition.operator)
+                        ? condition.operator
+                        : '=',
+                })
+              }
             />
-            <Input defaultValue={index === 0 ? '民生诉求' : '市级'} />
+            {condition.valueMode === 'match_group' ? (
+              <Select
+                mode="multiple"
+                value={condition.matchGroupValues}
+                options={matchGroupOptionsForField(condition.fieldPath)}
+                placeholder="选择一个或多个匹配组"
+                onChange={(matchGroupValues) => updateCondition(index, { matchGroupValues })}
+              />
+            ) : (
+              <Input
+                value={condition.manualValue}
+                onChange={(event) => updateCondition(index, { manualValue: event.target.value })}
+              />
+            )}
           </div>
         ))}
-        <Alert type="info" showIcon message="预览：业务类型 = 民生诉求 且 影响范围 >= 市级" />
+        <Alert type="info" showIcon message={`预览：${conditionPreview}`} />
       </div>
       <Form.Item label="模板" className="drawer-form-gap">
         <Select defaultValue="民生诉求模板" options={['应急告警模板', '民生诉求模板', '协同工单模板'].map((value) => ({ label: value, value }))} />
@@ -454,30 +1104,89 @@ function RouteRuleForm() {
   );
 }
 
-function IdentityEditor({ identities }: { identities?: UserIdentity[] }) {
-  const rows =
-    identities ??
-    [
-      { platform: '企业微信', fieldName: 'userid', value: 'new_user', primary: true },
-      { platform: '飞书', fieldName: 'open_id', value: 'ou_demo', primary: false },
-    ];
+function IdentityEditor({
+  identities,
+  onChange,
+  readOnly = false,
+}: {
+  identities: UserIdentity[];
+  onChange?: (identities: UserIdentity[]) => void;
+  readOnly?: boolean;
+}) {
+  const rows = identities.map((item, index) => ({ ...item, id: `identity-${index}` }));
+  const updateIdentity = (index: number, patch: Partial<UserIdentity>) => {
+    onChange?.(identities.map((item, itemIndex) => (itemIndex === index ? { ...item, ...patch } : item)));
+  };
+  const addIdentity = () => {
+    onChange?.([
+      ...identities,
+      {
+        platform: '短信',
+        fieldName: 'mobile',
+        value: '',
+      },
+    ]);
+  };
+  const deleteIdentity = (index: number) => {
+    onChange?.(identities.filter((_item, itemIndex) => itemIndex !== index));
+  };
+  const identityColumns: TableProps<(UserIdentity & { id: string })>['columns'] = [
+    {
+      title: '平台类型',
+      dataIndex: 'platform',
+      render: (value, _record, index) =>
+        readOnly ? (
+          value
+        ) : (
+          <Select
+            value={value}
+            options={['企业微信', '飞书', '钉钉', '随申办政务云', '短信', '邮箱', '本平台'].map((item) => ({
+              label: item,
+              value: item,
+            }))}
+            onChange={(platform) => updateIdentity(index, { platform })}
+          />
+        ),
+    },
+    {
+      title: '身份字段名',
+      dataIndex: 'fieldName',
+      render: (value, _record, index) =>
+        readOnly ? value : <Input value={value} onChange={(event) => updateIdentity(index, { fieldName: event.target.value })} />,
+    },
+    {
+      title: '身份值',
+      dataIndex: 'value',
+      render: (value, _record, index) =>
+        readOnly ? value : <Input value={value} onChange={(event) => updateIdentity(index, { value: event.target.value })} />,
+    },
+  ];
+  if (!readOnly) {
+    identityColumns.push({
+      title: '操作',
+      width: 86,
+      render: (_value, _record, index) => (
+        <Button danger type="link" icon={<DeleteOutlined />} onClick={() => deleteIdentity(index)}>
+          删除
+        </Button>
+      ),
+    });
+  }
   return (
-    <Table
-      rowKey={(record) => `${record.platform}-${record.fieldName}`}
-      size="small"
-      pagination={false}
-      dataSource={rows}
-      columns={[
-        {
-          title: '平台类型',
-          dataIndex: 'platform',
-          render: (value) => <Select defaultValue={value} options={['企业微信', '飞书', '短信', '随申办政务云'].map((item) => ({ label: item, value: item }))} />,
-        },
-        { title: '身份字段名', dataIndex: 'fieldName', render: (value) => <Input defaultValue={value} /> },
-        { title: '身份值', dataIndex: 'value', render: (value) => <Input defaultValue={value} /> },
-        { title: '主身份', dataIndex: 'primary', render: (value) => <Switch defaultChecked={value} /> },
-      ]}
-    />
+    <Space direction="vertical" className="full-width">
+      {!readOnly ? (
+        <Button size="small" onClick={addIdentity}>
+          新增身份字段
+        </Button>
+      ) : null}
+      <Table
+        rowKey="id"
+        size="small"
+        pagination={false}
+        dataSource={rows}
+        columns={identityColumns}
+      />
+    </Space>
   );
 }
 
@@ -764,8 +1473,10 @@ export function SourcesPage({ lastUpdated, onRefresh }: ConsolePageProps) {
 export function ProvidersPage({ lastUpdated, onRefresh }: ConsolePageProps) {
   const { message } = App.useApp();
   const { drawer, openDrawer, closeDrawer } = useCreateDrawer('新增上级平台');
-  const [providerRows, setProviderRows] = useState<ProviderRecord[]>(providers);
-  const [selected, setSelected] = useState<ProviderRecord>(providers[0]);
+  const [providerRows, setProviderRows] = useState<ProviderRow[]>(() => providers.map((provider) => providerWithPreset(provider)));
+  const [selected, setSelected] = useState<ProviderRow>(() => providerWithPreset(providers[0]));
+  const [providerDraft, setProviderDraft] = useState<ProviderRow>(() => createProviderDraft('gov_cloud', providers.length + 1));
+  const [editingProviderId, setEditingProviderId] = useState<string | null>(null);
   const [typeFilter, setTypeFilter] = useState('全部平台');
   const [nameFilter, setNameFilter] = useState('');
   const filteredRows = providerRows.filter((row) => {
@@ -773,26 +1484,34 @@ export function ProvidersPage({ lastUpdated, onRefresh }: ConsolePageProps) {
     const nameMatched = !nameFilter || row.name.includes(nameFilter);
     return typeMatched && nameMatched;
   });
+  const openCreateProvider = () => {
+    setEditingProviderId(null);
+    setProviderDraft(createProviderDraft('gov_cloud', providerRows.length + 1));
+    openDrawer();
+  };
+  const openEditProvider = (record: ProviderRow) => {
+    setEditingProviderId(record.id);
+    setProviderDraft(record);
+    openDrawer(`编辑平台：${record.name}`);
+  };
   const saveProvider = () => {
-    if (!drawer.title.startsWith('编辑')) {
-      setProviderRows((current) => [
-        {
-          ...providers[0],
-          id: `provider-local-${Date.now()}`,
-          name: `本地新增平台 ${current.length + 1}`,
-          lastTestResult: '本地未联调',
-        },
-        ...current,
-      ]);
+    if (editingProviderId) {
+      setProviderRows((current) => current.map((row) => (row.id === editingProviderId ? providerDraft : row)));
+      if (selected.id === editingProviderId) {
+        setSelected(providerDraft);
+      }
+    } else {
+      setProviderRows((current) => [providerDraft, ...current]);
+      setSelected(providerDraft);
     }
     closeDrawer();
     message.success('平台配置已保存到本地演示数据');
   };
-  const columns: TableProps<ProviderRecord>['columns'] = [
+  const columns: TableProps<ProviderRow>['columns'] = [
     {
       title: '平台类型',
       dataIndex: 'providerType',
-      render: (value: ProviderRecord['providerType']) => <Tag color="blue">{getProviderTypeLabel(value)}</Tag>,
+      render: (value: ProviderRow['providerType']) => <Tag color="blue">{getProviderTypeLabel(value)}</Tag>,
     },
     { title: '平台名称', dataIndex: 'name' },
     {
@@ -818,7 +1537,7 @@ export function ProvidersPage({ lastUpdated, onRefresh }: ConsolePageProps) {
           >
             查看
           </Button>
-          <Button type="link" onClick={() => openDrawer(`编辑平台：${record.name}`)}>
+          <Button type="link" onClick={() => openEditProvider(record)}>
             编辑
           </Button>
         </Space>
@@ -837,7 +1556,7 @@ export function ProvidersPage({ lastUpdated, onRefresh }: ConsolePageProps) {
         <section className="side-filter">
           <Typography.Title level={4}>平台类型</Typography.Title>
           <Space direction="vertical" className="full-width">
-            {['全部平台', '随申办政务云', '企业微信', '飞书', '钉钉', '通用 Webhook', '自定义 Token 平台'].map(
+            {['全部平台', ...providerTypeOptions.map((item) => item.label)].map(
               (item) => (
                 <Button
                   key={item}
@@ -856,7 +1575,7 @@ export function ProvidersPage({ lastUpdated, onRefresh }: ConsolePageProps) {
         </section>
         <div className="list-stack">
           <QueryBar
-            onCreate={() => openDrawer()}
+            onCreate={openCreateProvider}
             onSearch={() => message.success(`已筛选出 ${filteredRows.length} 个平台实例`)}
             onReset={() => {
               setNameFilter('');
@@ -888,7 +1607,7 @@ export function ProvidersPage({ lastUpdated, onRefresh }: ConsolePageProps) {
             <Descriptions.Item label="描述">{selected.description}</Descriptions.Item>
             <Descriptions.Item label="消息能力">{selected.capability}</Descriptions.Item>
             <Descriptions.Item label="接收人字段">{selected.recipientFields}</Descriptions.Item>
-            <Descriptions.Item label="Token 策略">{selected.tokenStrategy}</Descriptions.Item>
+            <Descriptions.Item label="Token 策略">{selected.tokenEndpoint}</Descriptions.Item>
             <Descriptions.Item label="Token 放置">{selected.tokenPlacement}</Descriptions.Item>
             <Descriptions.Item label="发送请求">
               {selected.requestMethod} {selected.requestUrl}
@@ -901,20 +1620,11 @@ export function ProvidersPage({ lastUpdated, onRefresh }: ConsolePageProps) {
             <Descriptions.Item label="最近联调结果">{selected.lastTestResult}</Descriptions.Item>
           </Descriptions>
           <Divider />
-          <Tabs
-            size="small"
-            items={['Token 获取', '发送请求', '接收人映射', '主动限流', '超时重试', '死信策略', '测试'].map(
-              (label) => ({
-                key: label,
-                label,
-                children: <Typography.Text type="secondary">{label} 配置已按平台实例保存。</Typography.Text>,
-              }),
-            )}
-          />
+          <ProviderCapabilityTabs provider={selected} />
         </section>
       </div>
       <CreateDrawer title={drawer.title} open={drawer.open} onClose={closeDrawer} onSave={saveProvider} width={760}>
-        <ProviderConfigForm />
+        <ProviderConfigForm value={providerDraft} onChange={setProviderDraft} />
       </CreateDrawer>
     </PageFrame>
   );
@@ -2040,27 +2750,67 @@ export function TemplatesPage({ lastUpdated, onRefresh }: ConsolePageProps) {
   );
 }
 
+type UserDraft = Omit<UserContact, 'id' | 'updatedAt'>;
+
+function currentTimestampText() {
+  const now = new Date();
+  const pad = (value: number) => String(value).padStart(2, '0');
+  return `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())} ${pad(now.getHours())}:${pad(
+    now.getMinutes(),
+  )}:${pad(now.getSeconds())}`;
+}
+
+function createUserDraft(index: number): UserDraft {
+  return {
+    name: `本地人员 ${index}`,
+    department: '城运中心 / 值班组',
+    mobile: '13600000000',
+    email: 'local@example.gov.cn',
+    status: true,
+    identities: [
+      { platform: '企业微信', fieldName: 'userid', value: 'local_user' },
+      { platform: '短信', fieldName: 'mobile', value: '13600000000' },
+      { platform: '邮箱', fieldName: 'email', value: 'local@example.gov.cn' },
+    ],
+  };
+}
+
+function draftFromUser(user: UserContact): UserDraft {
+  return {
+    name: user.name,
+    department: user.department,
+    mobile: user.mobile,
+    email: user.email,
+    status: user.status,
+    identities: user.identities,
+  };
+}
+
 export function OrganizationPage({ lastUpdated, onRefresh }: ConsolePageProps) {
   const { message } = App.useApp();
   const { drawer, openDrawer, closeDrawer } = useCreateDrawer('新增人员');
   const [rows, setRows] = useState<UserContact[]>(userContacts);
   const [selected, setSelected] = useState<UserContact | null>(null);
+  const [userDraft, setUserDraft] = useState<UserDraft>(() => createUserDraft(userContacts.length + 1));
   const [detailOpen, setDetailOpen] = useState(false);
   const [keyword, setKeyword] = useState('');
   const filteredRows = rows.filter((row) => !keyword || row.name.includes(keyword) || row.mobile.includes(keyword));
   const saveUser = () => {
-    if (!drawer.title.startsWith('编辑')) {
+    if (selected) {
+      const updated: UserContact = {
+        ...selected,
+        ...userDraft,
+        updatedAt: currentTimestampText(),
+      };
+      setRows((current) => current.map((row) => (row.id === selected.id ? updated : row)));
+      setSelected(updated);
+    } else {
       setRows((current) => [
         ...current,
         {
           id: `u-local-${Date.now()}`,
-          name: `本地人员 ${current.length + 1}`,
-          department: '城运中心 / 值班组',
-          mobile: '13600000000',
-          email: 'local@example.gov.cn',
-          status: true,
-          identities: [{ platform: '企业微信', fieldName: 'userid', value: 'local_user', primary: true }],
-          updatedAt: '2026-05-08 15:30:00',
+          ...userDraft,
+          updatedAt: currentTimestampText(),
         },
       ]);
     }
@@ -2084,7 +2834,6 @@ export function OrganizationPage({ lastUpdated, onRefresh }: ConsolePageProps) {
         items.map((item) => (
           <Tag key={`${item.platform}-${item.fieldName}`}>
             {item.platform} {item.fieldName}
-            {item.primary ? ' 主' : ''}
           </Tag>
         )),
     },
@@ -2105,6 +2854,7 @@ export function OrganizationPage({ lastUpdated, onRefresh }: ConsolePageProps) {
             type="link"
             onClick={() => {
               setSelected(record);
+              setUserDraft(draftFromUser(record));
               openDrawer(`编辑人员：${record.name}`);
             }}
           >
@@ -2134,6 +2884,7 @@ export function OrganizationPage({ lastUpdated, onRefresh }: ConsolePageProps) {
           <QueryBar
             onCreate={() => {
               setSelected(null);
+              setUserDraft(createUserDraft(rows.length + 1));
               openDrawer('新增人员');
             }}
             onSearch={() => message.success(`已筛选出 ${filteredRows.length} 名人员`)}
@@ -2160,13 +2911,25 @@ export function OrganizationPage({ lastUpdated, onRefresh }: ConsolePageProps) {
       <CreateDrawer title={drawer.title} open={drawer.open} onClose={closeDrawer} onSave={saveUser} width={760}>
         <Form layout="vertical">
           <Form.Item label="姓名">
-            <Input defaultValue={selected?.name ?? '本地人员'} />
+            <Input value={userDraft.name} onChange={(event) => setUserDraft({ ...userDraft, name: event.target.value })} />
           </Form.Item>
           <Form.Item label="所属组织">
-            <Input defaultValue={selected?.department ?? '城运中心 / 值班组'} />
+            <Input
+              value={userDraft.department}
+              onChange={(event) => setUserDraft({ ...userDraft, department: event.target.value })}
+            />
+          </Form.Item>
+          <Form.Item label="手机号">
+            <Input value={userDraft.mobile} onChange={(event) => setUserDraft({ ...userDraft, mobile: event.target.value })} />
+          </Form.Item>
+          <Form.Item label="邮箱">
+            <Input value={userDraft.email} onChange={(event) => setUserDraft({ ...userDraft, email: event.target.value })} />
           </Form.Item>
           <Typography.Title level={5}>平台身份字段</Typography.Title>
-          <IdentityEditor identities={selected?.identities} />
+          <IdentityEditor
+            identities={userDraft.identities}
+            onChange={(identities) => setUserDraft({ ...userDraft, identities })}
+          />
         </Form>
       </CreateDrawer>
       <Drawer title="人员详情" width={620} open={detailOpen} onClose={() => setDetailOpen(false)} destroyOnClose>
@@ -2179,7 +2942,7 @@ export function OrganizationPage({ lastUpdated, onRefresh }: ConsolePageProps) {
               <Descriptions.Item label="邮箱">{selected.email}</Descriptions.Item>
             </Descriptions>
             <Typography.Title level={5}>平台身份字段</Typography.Title>
-            <IdentityEditor identities={selected.identities} />
+            <IdentityEditor identities={selected.identities} readOnly />
           </Space>
         ) : null}
       </Drawer>
