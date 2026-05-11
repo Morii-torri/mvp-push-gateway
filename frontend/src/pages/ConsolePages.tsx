@@ -1,28 +1,26 @@
-import {
-  Alert,
-  App,
-  Badge,
-  Button,
-  Descriptions,
-  Divider,
-  Drawer,
-  Form,
-  Input,
-  InputNumber,
-  Modal,
-  Progress,
-  Segmented,
-  Select,
-  Space,
-  Switch,
-  Table,
-  Tabs,
-  Tag,
-  Timeline,
-  Tree,
-  Typography,
-} from 'antd';
-import type { TableProps } from 'antd';
+import Alert from 'antd/es/alert';
+import App from 'antd/es/app';
+import Badge from 'antd/es/badge';
+import Button from 'antd/es/button';
+import Descriptions from 'antd/es/descriptions';
+import Divider from 'antd/es/divider';
+import Drawer from 'antd/es/drawer';
+import Form from 'antd/es/form';
+import Input from 'antd/es/input';
+import InputNumber from 'antd/es/input-number';
+import Modal from 'antd/es/modal';
+import Progress from 'antd/es/progress';
+import Segmented from 'antd/es/segmented';
+import Select from 'antd/es/select';
+import Space from 'antd/es/space';
+import Switch from 'antd/es/switch';
+import Table from 'antd/es/table';
+import type { TableProps } from 'antd/es/table';
+import Tabs from 'antd/es/tabs';
+import Tag from 'antd/es/tag';
+import Timeline from 'antd/es/timeline';
+import Tree from 'antd/es/tree';
+import Typography from 'antd/es/typography';
 import {
   ArrowLeftOutlined,
   CopyOutlined,
@@ -81,10 +79,14 @@ import {
   type ChannelInput,
   type JSONValue,
   type MatchGroupApiRecord,
+  type MatchGroupItemApiRecord,
+  type MatchGroupItemInput,
   type MessageDetailApiRecord,
   type MessageLogApiRecord,
   type OrgUnitApiRecord,
+  type OrgUnitInput,
   type RecipientGroupApiRecord,
+  type RecipientGroupInput,
   type RouteFlowApiRecord,
   type RouteFlowInput,
   type RouteRuleApiRecord,
@@ -114,7 +116,14 @@ import {
   getValidationStatusMeta,
   templateVariable,
 } from '../utils/labels';
-import { canEnableRouteGroupSource, routeRulesForGroup } from '../utils/routeFlow';
+import {
+  buildRouteConditionTree,
+  canEnableRouteGroupSource,
+  routeRulesForGroup,
+  summarizeRouteConditionTree,
+  type RouteConditionDraft,
+  type RouteConditionOperator,
+} from '../utils/routeFlow';
 import {
   buildOverviewViewModel,
   buildQueueMonitoringViewModel,
@@ -1362,35 +1371,77 @@ function ProviderCapabilityTabs({ provider }: { provider: ProviderRow }) {
   );
 }
 
-type ConditionValueMode = 'manual' | 'match_group';
-
-type ConditionDraft = {
-  fieldPath: string;
-  operator: string;
-  valueMode: ConditionValueMode;
-  manualValue: string;
-  matchGroupValues: string[];
+type RouteRuleDraft = {
+  name: string;
+  conditions: RouteConditionDraft[];
+  templateVersionId: string;
+  channelIds: string[];
+  recipientMode: RouteRecipientMode;
+  recipientGroupIds: string[];
+  payloadRecipientPath: string;
+  enabled: boolean;
 };
 
-function RouteRuleForm({ matchGroupRows }: { matchGroupRows: MatchGroup[] }) {
-  const [conditions, setConditions] = useState<ConditionDraft[]>([
-    {
-      fieldPath: 'payload.bizType',
-      operator: '=',
-      valueMode: 'manual',
-      manualValue: '民生诉求',
-      matchGroupValues: [],
-    },
-    {
-      fieldPath: 'payload.level',
-      operator: '属于',
-      valueMode: 'match_group',
-      manualValue: '',
-      matchGroupValues: ['紧急消息级别'],
-    },
-  ]);
-  const updateCondition = (index: number, patch: Partial<ConditionDraft>) => {
-    setConditions((current) => current.map((item, itemIndex) => (itemIndex === index ? { ...item, ...patch } : item)));
+type RouteRecipientMode = 'none' | 'system' | 'payload';
+
+const routeConditionOperatorOptions: Array<{ label: string; value: RouteConditionOperator }> = [
+  { label: '等于', value: 'equals' },
+  { label: '包含', value: 'contains' },
+  { label: '不包含', value: 'not_contains' },
+  { label: '存在', value: 'exists' },
+  { label: '属于匹配组', value: 'in_match_group' },
+  { label: '不属于匹配组', value: 'not_in_match_group' },
+];
+
+function createDefaultConditionDraft(): RouteConditionDraft {
+  return {
+    fieldPath: 'payload.bizType',
+    operator: 'equals',
+    value: '民生诉求',
+    matchGroupIds: [],
+  };
+}
+
+function createRouteRuleDraft(templateRows: Array<TemplateRecord & { raw?: TemplateApiRecord }>, channelRows: ProviderRow[]): RouteRuleDraft {
+  return {
+    name: '新路由规则',
+    conditions: [createDefaultConditionDraft()],
+    templateVersionId: firstTemplateVersionId(templateRows),
+    channelIds: channelRows[0] ? [channelRows[0].id] : [],
+    recipientMode: 'system',
+    recipientGroupIds: [],
+    payloadRecipientPath: 'payload.receivers',
+    enabled: true,
+  };
+}
+
+function RouteRuleForm({
+  value,
+  onChange,
+  matchGroupRows,
+  recipientGroupRows,
+  templateRows,
+  channelRows,
+}: {
+  value: RouteRuleDraft;
+  onChange: (value: RouteRuleDraft) => void;
+  matchGroupRows: MatchGroup[];
+  recipientGroupRows: RecipientGroupApiRecord[];
+  templateRows: Array<TemplateRecord & { raw?: TemplateApiRecord }>;
+  channelRows: ProviderRow[];
+}) {
+  const updateCondition = (index: number, patch: Partial<RouteConditionDraft>) => {
+    onChange({
+      ...value,
+      conditions: value.conditions.map((item, itemIndex) => (itemIndex === index ? { ...item, ...patch } : item)),
+    });
+  };
+  const addCondition = () => {
+    onChange({ ...value, conditions: [...value.conditions, createDefaultConditionDraft()] });
+  };
+  const removeCondition = (index: number) => {
+    const nextConditions = value.conditions.filter((_item, itemIndex) => itemIndex !== index);
+    onChange({ ...value, conditions: nextConditions.length ? nextConditions : [createDefaultConditionDraft()] });
   };
   const fieldOptions = payloadFields.map((field) => ({
     label: `${field.path} (${field.type})`,
@@ -1403,102 +1454,334 @@ function RouteRuleForm({ matchGroupRows }: { matchGroupRows: MatchGroup[] }) {
       .filter((group) => (fieldLooksLikeIp ? group.type.includes('IP') : !group.type.includes('IP')))
       .map((group) => ({
         label: `${group.name} (${group.values.length})`,
-        value: group.name,
+        value: group.id,
       }));
   };
-  const manualOperators = ['=', '!=', '>=', '<=', '包含', '不包含'];
-  const matchGroupOperators = ['属于', '不属于'];
-  const operatorOptions = (valueMode: ConditionValueMode) =>
-    (valueMode === 'match_group' ? matchGroupOperators : manualOperators).map((value) => ({
-      label: value,
-      value,
-    }));
-  const conditionPreview = conditions
-    .map((condition) => {
-      const value =
-        condition.valueMode === 'match_group'
-          ? `匹配组[${condition.matchGroupValues.join('、') || '-'}]`
-          : condition.manualValue || '-';
-      return `${condition.fieldPath} ${condition.operator} ${value}`;
-    })
-    .join(' 且 ');
+  const matchGroupNames = Object.fromEntries(matchGroupRows.map((group) => [group.id, group.name]));
+  const conditionPreview = summarizeRouteConditionTree(buildRouteConditionTree(value.conditions), { matchGroupNames });
+  const templateOptions = templateRows.map((template) => {
+    const versionId = templateVersionId(template);
+    return {
+      label: `${template.name} / ${versionId || '未发布'}`,
+      value: versionId || `unpublished:${template.id}`,
+      disabled: !versionId,
+    };
+  });
+  const channelOptions = channelRows.map((channel) => ({
+    label: `${channel.name} / ${getProviderTypeLabel(channel.providerType)}`,
+    value: channel.id,
+  }));
+  const recipientGroupOptions = recipientGroupRows
+    .filter((group) => group.enabled)
+    .map((group) => ({ label: group.name, value: group.id }));
 
   return (
     <Form layout="vertical">
       <Form.Item label="规则名称" required>
-        <Input defaultValue="新路由规则" />
+        <Input
+          value={value.name}
+          onChange={(event) => onChange({ ...value, name: event.target.value })}
+        />
       </Form.Item>
       <div className="condition-editor">
-        <Typography.Title level={5}>结构化匹配条件</Typography.Title>
-        {conditions.map((condition, index) => (
+        <Space className="full-width" align="center" style={{ justifyContent: 'space-between' }}>
+          <Typography.Title level={5}>结构化匹配条件</Typography.Title>
+          <Button size="small" onClick={addCondition}>新增条件</Button>
+        </Space>
+        {value.conditions.map((condition, index) => {
+          const isMatchGroupOperator =
+            condition.operator === 'in_match_group' || condition.operator === 'not_in_match_group';
+          const isExistsOperator = condition.operator === 'exists';
+          return (
           <div className="condition-row" key={index}>
             <Select
               showSearch
               optionFilterProp="label"
               value={condition.fieldPath}
               options={fieldOptions}
+              placeholder="选择 Payload 字段"
               onChange={(fieldPath) => {
                 const validValues = new Set(matchGroupOptionsForField(fieldPath).map((item) => item.value));
                 updateCondition(index, {
                   fieldPath,
-                  matchGroupValues: condition.matchGroupValues.filter((item) => validValues.has(item)),
+                  matchGroupIds: condition.matchGroupIds.filter((item) => validValues.has(item)),
                 });
               }}
             />
+            <Input
+              value={condition.fieldPath}
+              placeholder="或输入 payload.xxx"
+              onChange={(event) => updateCondition(index, { fieldPath: event.target.value })}
+            />
             <Select
               value={condition.operator}
-              options={operatorOptions(condition.valueMode)}
+              options={routeConditionOperatorOptions}
               onChange={(operator) => updateCondition(index, { operator })}
             />
-            <Select
-              value={condition.valueMode}
-              options={[
-                { label: '手动输入', value: 'manual' },
-                { label: '匹配组', value: 'match_group' },
-              ]}
-              onChange={(valueMode) =>
-                updateCondition(index, {
-                  valueMode,
-                  operator:
-                    valueMode === 'match_group'
-                      ? matchGroupOperators.includes(condition.operator)
-                        ? condition.operator
-                        : '属于'
-                      : manualOperators.includes(condition.operator)
-                        ? condition.operator
-                        : '=',
-                })
-              }
-            />
-            {condition.valueMode === 'match_group' ? (
+            {isMatchGroupOperator ? (
               <Select
                 mode="multiple"
-                value={condition.matchGroupValues}
+                value={condition.matchGroupIds}
                 options={matchGroupOptionsForField(condition.fieldPath)}
                 placeholder="选择一个或多个匹配组"
-                onChange={(matchGroupValues) => updateCondition(index, { matchGroupValues })}
+                onChange={(matchGroupIds) => updateCondition(index, { matchGroupIds })}
               />
+            ) : isExistsOperator ? (
+              <Input value="字段存在即可命中" disabled />
             ) : (
               <Input
-                value={condition.manualValue}
-                onChange={(event) => updateCondition(index, { manualValue: event.target.value })}
+                value={condition.value}
+                placeholder="匹配值"
+                onChange={(event) => updateCondition(index, { value: event.target.value })}
               />
             )}
+            <Button
+              danger
+              type="link"
+              onClick={() => removeCondition(index)}
+            >
+              删除
+            </Button>
           </div>
-        ))}
+          );
+        })}
         <Alert type="info" showIcon message={`预览：${conditionPreview}`} />
       </div>
-      <Form.Item label="模板" className="drawer-form-gap">
-        <Select defaultValue="民生诉求模板" options={['应急告警模板', '民生诉求模板', '协同工单模板'].map((value) => ({ label: value, value }))} />
+      <Form.Item label="模板版本" className="drawer-form-gap" required>
+        <Select
+          value={value.templateVersionId}
+          options={templateOptions}
+          placeholder="选择已发布模板版本"
+          onChange={(templateVersionId) => onChange({ ...value, templateVersionId })}
+        />
       </Form.Item>
-      <Form.Item label="目标平台">
-        <Select mode="multiple" defaultValue={['福州市政务平台']} options={['省一体化政务服务平台', '福州市政务平台', '协同办公飞书'].map((value) => ({ label: value, value }))} />
+      <Form.Item label="目标平台" required>
+        <Select
+          mode="multiple"
+          value={value.channelIds}
+          options={channelOptions}
+          placeholder="选择一个或多个平台实例"
+          onChange={(channelIds) => onChange({ ...value, channelIds })}
+        />
       </Form.Item>
+      <div className="two-column-form">
+        <Form.Item label="接收策略">
+          <Select
+            value={value.recipientMode}
+            options={[
+              { label: '无接收人', value: 'none' },
+              { label: '系统接收人', value: 'system' },
+              { label: 'Payload 接收人', value: 'payload' },
+            ]}
+            onChange={(recipientMode) => onChange({ ...value, recipientMode })}
+          />
+        </Form.Item>
+        <Form.Item label="Payload 接收人路径">
+          <Input
+            value={value.payloadRecipientPath}
+            disabled={value.recipientMode !== 'payload'}
+            placeholder="payload.receivers"
+            onChange={(event) => onChange({ ...value, payloadRecipientPath: event.target.value })}
+          />
+        </Form.Item>
+      </div>
+      {value.recipientMode === 'system' ? (
+        <Form.Item label="接收人组">
+          <Select
+            mode="multiple"
+            value={value.recipientGroupIds}
+            options={recipientGroupOptions}
+            placeholder="选择系统维护的接收人组；为空时由后端按平台要求校验"
+            onChange={(recipientGroupIds) => onChange({ ...value, recipientGroupIds })}
+          />
+        </Form.Item>
+      ) : null}
       <Form.Item label="启停">
-        <Switch defaultChecked checkedChildren="启用" unCheckedChildren="停用" />
+        <Switch
+          checked={value.enabled}
+          checkedChildren="启用"
+          unCheckedChildren="停用"
+          onChange={(enabled) => onChange({ ...value, enabled })}
+        />
       </Form.Item>
     </Form>
   );
+}
+
+function templateVersionId(template: TemplateRecord & { raw?: TemplateApiRecord }) {
+  return template.raw?.current_version_id || (template.targetField === '未发布' ? '' : template.targetField);
+}
+
+function firstTemplateVersionId(templateRows: Array<TemplateRecord & { raw?: TemplateApiRecord }>) {
+  return templateRows.map(templateVersionId).find(Boolean) ?? '';
+}
+
+function routeConditionDraftsFromTree(value: JSONValue): RouteConditionDraft[] {
+  const tree = conditionTreeRecord(value);
+  if (!tree) {
+    return [createDefaultConditionDraft()];
+  }
+  const operator = String(tree.operator ?? '').toLowerCase();
+  if (operator === 'and') {
+    const conditions = Array.isArray(tree.conditions)
+      ? tree.conditions.flatMap((condition) => routeConditionDraftsFromTree(condition))
+      : [];
+    return conditions.length ? conditions : [createDefaultConditionDraft()];
+  }
+  if (operator === 'or') {
+    const children = Array.isArray(tree.conditions)
+      ? tree.conditions.map(conditionTreeRecord).filter((condition): condition is Record<string, JSONValue> => Boolean(condition))
+      : [];
+    const first = children[0];
+    const sameMatchGroupOperator = first
+      ? children.every(
+          (child) =>
+            child.operator === first.operator &&
+            child.path === first.path &&
+            (child.operator === 'in_match_group' || child.operator === 'not_in_match_group'),
+        )
+      : false;
+    if (sameMatchGroupOperator) {
+      return [
+        {
+          fieldPath: String(first.path ?? ''),
+          operator: first.operator as RouteConditionOperator,
+          value: '',
+          matchGroupIds: children.map((child) => String(child.match_group_id ?? '')).filter(Boolean),
+        },
+      ];
+    }
+  }
+  if (operator === 'in_match_group' || operator === 'not_in_match_group') {
+    return [
+      {
+        fieldPath: String(tree.path ?? ''),
+        operator: operator as RouteConditionOperator,
+        value: '',
+        matchGroupIds: String(tree.match_group_id ?? '') ? [String(tree.match_group_id)] : [],
+      },
+    ];
+  }
+  if (operator === 'contains' || operator === 'not_contains' || operator === 'exists' || operator === 'equals') {
+    return [
+      {
+        fieldPath: String(tree.path ?? 'payload.bizType'),
+        operator: operator as RouteConditionOperator,
+        value: typeof tree.value === 'string' ? tree.value : tree.value == null ? '' : stringifyJSON(tree.value, String(tree.value)),
+        matchGroupIds: [],
+      },
+    ];
+  }
+  return [createDefaultConditionDraft()];
+}
+
+function conditionTreeRecord(value: JSONValue): Record<string, JSONValue> | null {
+  return value && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, JSONValue>) : null;
+}
+
+function routeRuleDraftFromRow(row: RouteRuleRow): RouteRuleDraft {
+  const recipient = conditionTreeRecord(row.recipientStrategyConfig);
+  const rawMode = recipient?.mode;
+  const mode: RouteRecipientMode =
+    rawMode === 'payload' ? 'payload' : rawMode === 'none' ? 'none' : 'system';
+  const recipientGroupIds = Array.isArray(recipient?.recipient_group_ids)
+    ? recipient.recipient_group_ids.map(String)
+    : Array.isArray(recipient?.group_ids)
+      ? recipient.group_ids.map(String)
+      : [];
+  return {
+    name: row.name,
+    conditions: routeConditionDraftsFromTree(row.conditionTree ?? {}),
+    templateVersionId: row.templateVersionId,
+    channelIds: row.channelIds,
+    recipientMode: mode,
+    recipientGroupIds,
+    payloadRecipientPath: typeof recipient?.payload_recipient_path === 'string' ? recipient.payload_recipient_path : 'payload.receivers',
+    enabled: row.enabled,
+  };
+}
+
+function routeRuleDraftToRow(
+  draft: RouteRuleDraft,
+  selectedGroup: RouteGroup,
+  existingRule: RouteRuleRow | null,
+  sortOrder: number,
+  matchGroupRows: MatchGroup[],
+  templateRows: Array<TemplateRecord & { raw?: TemplateApiRecord }>,
+) {
+  const conditionTree = buildRouteConditionTree(draft.conditions);
+  const matchGroupNames = Object.fromEntries(matchGroupRows.map((group) => [group.id, group.name]));
+  const templateLabel = templateRows.find((template) => templateVersionId(template) === draft.templateVersionId)?.name ?? draft.templateVersionId;
+  const recipientStrategyConfig = routeRecipientStrategyFromDraft(draft);
+  const row: RouteRuleRow = {
+    ...(existingRule ?? {
+      id: randomUUIDValue(),
+      hitCount: 0,
+      lastHitAt: '-',
+    }),
+    flowId: selectedGroup.id,
+    sortOrder,
+    name: draft.name.trim(),
+    source: selectedGroup.sourceName,
+    condition: summarizeRouteConditionTree(conditionTree, { matchGroupNames }),
+    template: templateLabel || '-',
+    templateVersionId: draft.templateVersionId,
+    recipientStrategy: routeRecipientModeLabel(draft.recipientMode),
+    recipientStrategyConfig,
+    targetProviders: draft.channelIds,
+    channelIds: draft.channelIds,
+    dedupe: '按 Trace ID',
+    sendDedupeConfig: { strategy: 'trace_id' },
+    failurePolicy: existingRule?.failurePolicy ?? { policy: 'continue' },
+    conditionTree,
+    enabled: draft.enabled,
+  };
+  return row;
+}
+
+function routeRecipientStrategyFromDraft(draft: RouteRuleDraft): JSONValue {
+  if (draft.recipientMode === 'none') {
+    return { mode: 'none' };
+  }
+  if (draft.recipientMode === 'payload') {
+    return { mode: 'payload', payload_recipient_path: draft.payloadRecipientPath.trim() };
+  }
+  return { mode: 'system', recipient_group_ids: cleanStringList(draft.recipientGroupIds) };
+}
+
+function routeRecipientModeLabel(mode: RouteRecipientMode) {
+  if (mode === 'none') {
+    return '无接收人';
+  }
+  return mode === 'payload' ? 'Payload 接收人' : '系统接收人';
+}
+
+function validateRouteRuleDraft(draft: RouteRuleDraft): string {
+  if (!draft.name.trim()) {
+    return '请填写规则名称';
+  }
+  if (!draft.templateVersionId.trim()) {
+    return '请选择模板版本';
+  }
+  if (draft.channelIds.length === 0) {
+    return '请选择目标平台';
+  }
+  if (draft.recipientMode === 'payload' && !draft.payloadRecipientPath.trim()) {
+    return 'Payload 接收人模式需要填写接收人路径';
+  }
+  const invalidCondition = draft.conditions.find((condition) => {
+    if (!condition.fieldPath.trim()) {
+      return true;
+    }
+    if (condition.operator === 'exists') {
+      return false;
+    }
+    if (condition.operator === 'in_match_group' || condition.operator === 'not_in_match_group') {
+      return condition.matchGroupIds.length === 0;
+    }
+    return !condition.value.trim();
+  });
+  return invalidCondition ? '请补齐条件字段、操作符和值或匹配组' : '';
 }
 
 function IdentityEditor({
@@ -1506,12 +1789,12 @@ function IdentityEditor({
   onChange,
   readOnly = false,
 }: {
-  identities: UserIdentity[];
-  onChange?: (identities: UserIdentity[]) => void;
+  identities: UserIdentityDraft[];
+  onChange?: (identities: UserIdentityDraft[]) => void;
   readOnly?: boolean;
 }) {
   const rows = identities.map((item, index) => ({ ...item, id: `identity-${index}` }));
-  const updateIdentity = (index: number, patch: Partial<UserIdentity>) => {
+  const updateIdentity = (index: number, patch: Partial<UserIdentityDraft>) => {
     onChange?.(identities.map((item, itemIndex) => (itemIndex === index ? { ...item, ...patch } : item)));
   };
   const addIdentity = () => {
@@ -1521,13 +1804,14 @@ function IdentityEditor({
         platform: '短信',
         fieldName: 'mobile',
         value: '',
+        verified: false,
       },
     ]);
   };
   const deleteIdentity = (index: number) => {
     onChange?.(identities.filter((_item, itemIndex) => itemIndex !== index));
   };
-  const identityColumns: TableProps<(UserIdentity & { id: string })>['columns'] = [
+  const identityColumns: TableProps<(UserIdentityDraft & { id: string })>['columns'] = [
     {
       title: '平台类型',
       dataIndex: 'platform',
@@ -1537,16 +1821,13 @@ function IdentityEditor({
         ) : (
           <Select
             value={value}
-            options={['企业微信', '飞书', '钉钉', '随申办政务云', '短信', '邮箱', '本平台'].map((item) => ({
-              label: item,
-              value: item,
-            }))}
+            options={providerTypeOptions.map((item) => ({ label: item.label, value: item.label }))}
             onChange={(platform) => updateIdentity(index, { platform })}
           />
         ),
     },
     {
-      title: '身份字段名',
+      title: '身份类型',
       dataIndex: 'fieldName',
       render: (value, _record, index) =>
         readOnly ? value : <Input value={value} onChange={(event) => updateIdentity(index, { fieldName: event.target.value })} />,
@@ -1556,6 +1837,21 @@ function IdentityEditor({
       dataIndex: 'value',
       render: (value, _record, index) =>
         readOnly ? value : <Input value={value} onChange={(event) => updateIdentity(index, { value: event.target.value })} />,
+    },
+    {
+      title: '验证状态',
+      dataIndex: 'verified',
+      render: (verified: boolean, _record, index) =>
+        readOnly ? (
+          <Tag color={verified ? 'success' : 'default'}>{verified ? '已验证' : '未验证'}</Tag>
+        ) : (
+          <Switch
+            checked={verified}
+            checkedChildren="已验证"
+            unCheckedChildren="未验证"
+            onChange={(nextVerified) => updateIdentity(index, { verified: nextVerified })}
+          />
+        ),
     },
   ];
   if (!readOnly) {
@@ -2193,6 +2489,17 @@ type RouteCanvasSnapshot = {
   edges: RouteFlowEdge[];
 };
 
+type RouteRuleRow = RouteRule & {
+  flowId: string;
+  conditionTree: JSONValue;
+  templateVersionId: string;
+  channelIds: string[];
+  recipientStrategyConfig: JSONValue;
+  sendDedupeConfig: JSONValue;
+  failurePolicy: JSONValue;
+  raw?: RouteRuleApiRecord;
+};
+
 type SelectedFlowElement =
   | { type: 'node'; id: string }
   | { type: 'edge'; id: string }
@@ -2334,54 +2641,57 @@ function mapRouteGroup(flow: RouteFlowApiRecord, sourceRows: SourceRow[], rules:
   };
 }
 
-function mapRouteRule(rule: RouteRuleApiRecord, group: RouteGroup, channelRows: ProviderRow[], templateRows: TemplateRecord[]): RouteRule {
-  const condition = summarizeCondition(rule.condition_tree);
-  const targetProviders = rule.action.channel_ids.filter(Boolean);
-  const template = rule.action.template_version_id || '-';
+function mapRouteRule(
+  rule: RouteRuleApiRecord,
+  group: RouteGroup,
+  channelRows: ProviderRow[],
+  templateRows: Array<TemplateRecord & { raw?: TemplateApiRecord }>,
+  matchGroupRows: MatchGroup[],
+): RouteRuleRow {
+  const matchGroupNames = Object.fromEntries(matchGroupRows.map((item) => [item.id, item.name]));
+  const condition = summarizeRouteConditionTree(rule.condition_tree, { matchGroupNames });
+  const channelIds = rule.action.channel_ids.filter(Boolean);
+  const templateVersion = rule.action.template_version_id || '';
+  const template = templateRows.find((item) => templateVersionId(item) === templateVersion)?.name ?? (templateVersion || '-');
   return {
     id: rule.rule_key || rule.id,
+    flowId: group.id,
     sortOrder: rule.sort_order,
     name: rule.name,
     source: group.sourceName,
     condition,
     template,
     recipientStrategy: summarizeJSON(rule.action.recipient_strategy, '接收人策略'),
-    targetProviders,
+    targetProviders: channelIds,
     dedupe: summarizeJSON(rule.action.send_dedupe_config, '发送前去重'),
     hitCount: rule.hit_count,
     enabled: rule.enabled,
     lastHitAt: formatApiTime(rule.last_hit_at),
+    conditionTree: rule.condition_tree,
+    templateVersionId: templateVersion,
+    channelIds,
+    recipientStrategyConfig: rule.action.recipient_strategy,
+    sendDedupeConfig: rule.action.send_dedupe_config,
+    failurePolicy: rule.action.failure_policy,
+    raw: rule,
   };
 }
 
-function routeRuleToInput(rule: RouteRule, index: number): RouteRuleInput {
+function routeRuleToInput(rule: RouteRuleRow, index: number): RouteRuleInput {
   return {
     rule_key: rule.id,
     sort_order: index + 1,
     name: rule.name,
-    condition_tree: {
-      expression: rule.condition,
-    },
+    condition_tree: rule.conditionTree,
     enabled: rule.enabled,
     action: {
-      template_version_id: rule.template === '-' ? '' : rule.template,
-      channel_ids: rule.targetProviders,
-      recipient_strategy: { label: rule.recipientStrategy },
-      send_dedupe_config: { label: rule.dedupe },
-      failure_policy: { policy: 'continue' },
+      template_version_id: rule.templateVersionId,
+      channel_ids: rule.channelIds,
+      recipient_strategy: rule.recipientStrategyConfig,
+      send_dedupe_config: rule.sendDedupeConfig,
+      failure_policy: rule.failurePolicy,
     },
   };
-}
-
-function summarizeCondition(value: JSONValue): string {
-  if (!value || typeof value !== 'object') {
-    return '无条件';
-  }
-  const record = value as Record<string, JSONValue>;
-  if (typeof record.expression === 'string') {
-    return record.expression;
-  }
-  return stringifyJSON(value, '无条件');
 }
 
 function summarizeJSON(value: JSONValue, fallback: string): string {
@@ -2393,6 +2703,9 @@ function summarizeJSON(value: JSONValue, fallback: string): string {
     return record.label;
   }
   if (typeof record.mode === 'string') {
+    if (record.mode === 'none') {
+      return '无接收人';
+    }
     return record.mode === 'payload' ? 'Payload 接收人' : '系统接收人';
   }
   return stringifyJSON(value, fallback);
@@ -2406,8 +2719,9 @@ export function RoutesPage({ lastUpdated, onRefresh }: ConsolePageProps) {
   const [loadState, setLoadState] = useState<ApiLoadState>(emptyLoadState);
   const [sourceRows, setSourceRows] = useState<SourceRow[]>([]);
   const [channelRows, setChannelRows] = useState<ProviderRow[]>([]);
-  const [templateRows, setTemplateRows] = useState<TemplateRecord[]>([]);
+  const [templateRows, setTemplateRows] = useState<Array<TemplateRecord & { raw?: TemplateApiRecord }>>([]);
   const [matchGroupRows, setMatchGroupRows] = useState<MatchGroup[]>([]);
+  const [recipientGroupRows, setRecipientGroupRows] = useState<RecipientGroupApiRecord[]>([]);
   const [groupRows, setGroupRows] = useState<RouteGroup[]>([]);
   const [rawFlows, setRawFlows] = useState<RouteFlowApiRecord[]>([]);
   const [selectedGroup, setSelectedGroup] = useState<RouteGroup | null>(null);
@@ -2418,7 +2732,9 @@ export function RoutesPage({ lastUpdated, onRefresh }: ConsolePageProps) {
     enabled: true,
     currentVersion: '未发布',
   });
-  const [ruleRows, setRuleRows] = useState<RouteRule[]>([]);
+  const [ruleRows, setRuleRows] = useState<RouteRuleRow[]>([]);
+  const [editingRuleId, setEditingRuleId] = useState<string | null>(null);
+  const [ruleDraft, setRuleDraft] = useState<RouteRuleDraft>(() => createRouteRuleDraft([], []));
   const [groupKeyword, setGroupKeyword] = useState('');
   const [groupSource, setGroupSource] = useState<string>('all');
   const [ruleKeyword, setRuleKeyword] = useState('');
@@ -2430,13 +2746,15 @@ export function RoutesPage({ lastUpdated, onRefresh }: ConsolePageProps) {
   const loadRouteData = useCallback(async () => {
     setLoadState({ loading: true, error: '' });
     try {
-      const [sourceResult, channelResult, templateResult, flowResult, matchGroupResult] = await Promise.allSettled([
-        consoleApi.listSources(),
-        consoleApi.listChannels(),
-        consoleApi.listTemplates(),
-        consoleApi.listRouteFlows(),
-        consoleApi.listMatchGroups(),
-      ]);
+      const [sourceResult, channelResult, templateResult, flowResult, matchGroupResult, recipientGroupResult] =
+        await Promise.allSettled([
+          consoleApi.listSources(),
+          consoleApi.listChannels(),
+          consoleApi.listTemplates(),
+          consoleApi.listRouteFlows(),
+          consoleApi.listMatchGroups(),
+          consoleApi.listRecipientGroups(),
+        ]);
       const nextSources =
         sourceResult.status === 'fulfilled' ? sourceResult.value.sources.map(mapSourceRow) : [];
       const nextChannels =
@@ -2451,14 +2769,19 @@ export function RoutesPage({ lastUpdated, onRefresh }: ConsolePageProps) {
         matchGroupResult.status === 'fulfilled'
           ? matchGroupResult.value.match_groups.map(mapMatchGroup)
           : [];
+      const nextRecipientGroups =
+        recipientGroupResult.status === 'fulfilled' ? recipientGroupResult.value.groups : [];
       setSourceRows(nextSources);
       setChannelRows(nextChannels);
       setTemplateRows(nextTemplates);
       setRawFlows(nextFlows);
       setGroupRows(nextFlows.map((flow) => mapRouteGroup(flow, nextSources)));
       setMatchGroupRows(nextMatchGroups);
+      setRecipientGroupRows(nextRecipientGroups);
       setGroupDraft((current) => ({ ...current, sourceCode: current.sourceCode || nextSources[0]?.code || '' }));
-      const rejected = [sourceResult, channelResult, templateResult, flowResult].find((item) => item.status === 'rejected');
+      const rejected = [sourceResult, channelResult, templateResult, flowResult, recipientGroupResult].find(
+        (item) => item.status === 'rejected',
+      );
       setLoadState({
         loading: false,
         error: rejected && rejected.status === 'rejected' ? userFacingError(rejected.reason) : '',
@@ -2496,9 +2819,9 @@ export function RoutesPage({ lastUpdated, onRefresh }: ConsolePageProps) {
   };
   const reloadRulesForGroup = async (group: RouteGroup) => {
     const result = await consoleApi.getRouteRules(group.id);
-    const rows = result.rules.map((rule) => mapRouteRule(rule, group, channelRows, templateRows));
+    const rows = result.rules.map((rule) => mapRouteRule(rule, group, channelRows, templateRows, matchGroupRows));
     setRuleRows((current) => {
-      const other = current.filter((item) => !group.ruleIds.includes(item.id));
+      const other = current.filter((item) => item.flowId !== group.id);
       return [...other, ...rows];
     });
     const nextGroup = { ...group, ruleIds: rows.map((rule) => rule.id), totalHitCount: rows.reduce((sum, rule) => sum + rule.hitCount, 0) };
@@ -2559,6 +2882,20 @@ export function RoutesPage({ lastUpdated, onRefresh }: ConsolePageProps) {
   const closeGroupEditor = () => {
     closeGroupDrawer();
     setEditingGroupId(null);
+  };
+  const openCreateRule = () => {
+    setEditingRuleId(null);
+    setRuleDraft(createRouteRuleDraft(templateRows, channelRows));
+    openRuleDrawer('新增路由规则');
+  };
+  const openEditRule = (rule: RouteRuleRow) => {
+    setEditingRuleId(rule.id);
+    setRuleDraft(routeRuleDraftFromRow(rule));
+    openRuleDrawer(`编辑规则：${rule.name}`);
+  };
+  const closeRuleEditor = () => {
+    closeRuleDrawer();
+    setEditingRuleId(null);
   };
   const clearGroupCanvasSnapshot = (groupId: string) => {
     setCanvasSnapshots((current) => {
@@ -2726,28 +3063,27 @@ export function RoutesPage({ lastUpdated, onRefresh }: ConsolePageProps) {
     if (!selectedGroup) {
       return;
     }
+    const draftError = validateRouteRuleDraft(ruleDraft);
+    if (draftError) {
+      message.error(draftError);
+      return;
+    }
     try {
-      let nextRules = groupRules;
-      if (!ruleDrawer.title.startsWith('编辑')) {
-      const newRule: RouteRule = {
-        id: randomUUIDValue(),
-        sortOrder: groupRules.length + 1,
-        name: `新增规则 ${groupRules.length + 1}`,
-        source: selectedGroup.sourceName,
-        condition: '业务类型 = 民生诉求 且 影响范围 >= 市级',
-        template: templateRows[0]?.id ?? '',
-        recipientStrategy: '接收人组',
-        targetProviders: channelRows[0] ? [channelRows[0].id] : [],
-        dedupe: '按 Trace ID',
-        hitCount: 0,
-        enabled: true,
-        lastHitAt: '-',
-      };
-        nextRules = [...groupRules, newRule];
-      }
+      const existingRule = editingRuleId ? groupRules.find((rule) => rule.id === editingRuleId) ?? null : null;
+      const nextRule = routeRuleDraftToRow(
+        ruleDraft,
+        selectedGroup,
+        existingRule,
+        existingRule?.sortOrder ?? groupRules.length + 1,
+        matchGroupRows,
+        templateRows,
+      );
+      const nextRules = existingRule
+        ? groupRules.map((rule) => (rule.id === existingRule.id ? nextRule : rule))
+        : [...groupRules, nextRule];
       await consoleApi.saveRouteRules(selectedGroup.id, nextRules.map(routeRuleToInput));
       clearGroupCanvasSnapshot(selectedGroup.id);
-      closeRuleDrawer();
+      closeRuleEditor();
       message.success('路由规则已保存');
       await reloadRulesForGroup(selectedGroup);
     } catch (error) {
@@ -2863,7 +3199,7 @@ export function RoutesPage({ lastUpdated, onRefresh }: ConsolePageProps) {
       ),
     },
   ];
-  const columns: TableProps<RouteRule>['columns'] = [
+  const columns: TableProps<RouteRuleRow>['columns'] = [
     {
       title: '顺序',
       dataIndex: 'sortOrder',
@@ -2934,7 +3270,7 @@ export function RoutesPage({ lastUpdated, onRefresh }: ConsolePageProps) {
           <Button type="link" onClick={() => moveRule(record.id, 1)}>
             下移
           </Button>
-          <Button type="link" onClick={() => openRuleDrawer(`编辑规则：${record.name}`)}>
+          <Button type="link" onClick={() => openEditRule(record)}>
             编辑
           </Button>
         </Space>
@@ -3181,7 +3517,7 @@ export function RoutesPage({ lastUpdated, onRefresh }: ConsolePageProps) {
       ) : (
         <>
           <QueryBar
-            onCreate={() => openRuleDrawer()}
+            onCreate={openCreateRule}
             onSearch={() => message.success(`已筛选出 ${filteredRules.length} 条规则`)}
             onReset={() => {
               setRuleKeyword('');
@@ -3227,8 +3563,15 @@ export function RoutesPage({ lastUpdated, onRefresh }: ConsolePageProps) {
         </>
       )}
 
-      <CreateDrawer title={ruleDrawer.title} open={ruleDrawer.open} onClose={closeRuleDrawer} onSave={saveRule} width={720}>
-        <RouteRuleForm matchGroupRows={matchGroupRows} />
+      <CreateDrawer title={ruleDrawer.title} open={ruleDrawer.open} onClose={closeRuleEditor} onSave={saveRule} width={860}>
+        <RouteRuleForm
+          value={ruleDraft}
+          onChange={setRuleDraft}
+          matchGroupRows={matchGroupRows}
+          recipientGroupRows={recipientGroupRows}
+          templateRows={templateRows}
+          channelRows={channelRows}
+        />
       </CreateDrawer>
     </PageFrame>
   );
@@ -3246,6 +3589,22 @@ type TemplateDraft = {
   messageBodySchemaText: string;
   samplePayloadText: string;
 };
+
+type TemplateFeedback = {
+  status: 'idle' | 'valid' | 'invalid';
+  preview: string;
+  variables: string[];
+  errors: string[];
+};
+
+function createTemplateFeedback(): TemplateFeedback {
+  return {
+    status: 'idle',
+    preview: '',
+    variables: [],
+    errors: [],
+  };
+}
 
 function createTemplateDraft(sourceRows: SourceRow[]): TemplateDraft {
   return {
@@ -3295,6 +3654,31 @@ function templateVersionInputFromDraft(draft: TemplateDraft): TemplateVersionInp
   };
 }
 
+function templateFeedbackFromResult(result: JSONValue): TemplateFeedback {
+  const record = isRecord(result) ? result : {};
+  const variables = Array.isArray(record.variables)
+    ? record.variables
+        .map((item) => (isRecord(item) && typeof item.path === 'string' ? item.path : ''))
+        .filter(Boolean)
+    : [];
+  const errors = Array.isArray(record.errors)
+    ? record.errors
+        .map((item) => {
+          if (!isRecord(item)) return '';
+          const message = typeof item.message === 'string' ? item.message : '';
+          const path = typeof item.path === 'string' ? `（${item.path}）` : '';
+          return `${message}${path}`;
+        })
+        .filter(Boolean)
+    : [];
+  return {
+    status: record.status === 'invalid' ? 'invalid' : record.status === 'valid' ? 'valid' : 'idle',
+    preview: typeof record.preview === 'string' ? record.preview : '',
+    variables,
+    errors,
+  };
+}
+
 function mapTemplateRow(template: TemplateApiRecord, sourceRows: SourceRow[]): TemplateRecord & { raw: TemplateApiRecord } {
   const source = sourceRows.find((item) => item.id === template.source_id);
   return {
@@ -3319,7 +3703,8 @@ export function TemplatesPage({ lastUpdated, onRefresh }: ConsolePageProps) {
   const [sourceRows, setSourceRows] = useState<SourceRow[]>([]);
   const [templateRows, setTemplateRows] = useState<Array<TemplateRecord & { raw?: TemplateApiRecord }>>([]);
   const [selected, setSelected] = useState<TemplateRecord & { raw?: TemplateApiRecord } | null>(null);
-  const [templateText, setTemplateText] = useState('您好，{{ payload.title }}');
+  const [templateDraft, setTemplateDraft] = useState<TemplateDraft>(() => createTemplateDraft([]));
+  const [templateFeedback, setTemplateFeedback] = useState<TemplateFeedback>(() => createTemplateFeedback());
   const [loadState, setLoadState] = useState<ApiLoadState>(emptyLoadState);
   const [templateKeyword, setTemplateKeyword] = useState('');
   const filteredTemplates = templateRows.filter((row) => !templateKeyword || row.name.includes(templateKeyword));
@@ -3360,44 +3745,57 @@ export function TemplatesPage({ lastUpdated, onRefresh }: ConsolePageProps) {
 
   const openTemplateModal = (record?: TemplateRecord & { raw?: TemplateApiRecord }) => {
     const next = record ?? createBlankTemplate();
+    const draft = record ? draftFromTemplate(record, sourceRows) : createTemplateDraft(sourceRows);
     setSelected(next);
-    setTemplateText(record?.content || '您好，{{ payload.sender.department }}的{{ payload.sender.name }}：{{ payload.content }}');
+    setTemplateDraft(draft);
+    setTemplateFeedback(createTemplateFeedback());
     setModalOpen(true);
   };
-  const saveTemplate = async () => {
-    if (!selected) {
-      return;
-    }
+  const runTemplateAction = async (action: 'parse' | 'preview' | 'validate') => {
     try {
-      const sourceId = selected.raw?.source_id || sourceRows[0]?.id || '';
-      if (!selected.name.trim() || !sourceId) {
+      const input = templateVersionInputFromDraft(templateDraft);
+      const response =
+        action === 'parse'
+          ? await consoleApi.parseTemplate(input)
+          : action === 'preview'
+            ? await consoleApi.previewTemplate(input)
+            : await consoleApi.validateTemplate(input);
+      const feedback = templateFeedbackFromResult(response.result);
+      setTemplateFeedback(feedback);
+      if (feedback.status === 'invalid') {
+        message.warning('后端校验未通过，请查看错误列表');
+        return feedback;
+      }
+      const actionLabel = action === 'parse' ? '解析' : action === 'preview' ? '预览' : '校验';
+      message.success(`模板${actionLabel}已完成`);
+      return feedback;
+    } catch (error) {
+      setTemplateFeedback((current) => ({ ...current, status: 'invalid', errors: [userFacingError(error)] }));
+      message.error(userFacingError(error));
+      return null;
+    }
+  };
+  const saveTemplate = async () => {
+    try {
+      if (!templateDraft.name.trim() || !templateDraft.sourceId) {
         message.error('请填写模板名称并确保存在来源');
         return;
       }
-      const input = templateInputFromDraft({
-        id: selected.raw?.id,
-        name: selected.name,
-        description: selected.raw?.description ?? '',
-        sourceId,
-        enabled: selected.raw?.enabled ?? true,
-        messageType: selected.messageType || 'text',
-        targetProviderType: selected.targetProviderType,
-        templateBody: templateText,
-        messageBodySchemaText: '{}',
-        samplePayloadText: '{\n  "title": "测试消息"\n}',
-      });
-      const saved = selected.raw?.id
-        ? await consoleApi.updateTemplate(selected.raw.id, input)
+      const versionInput = templateVersionInputFromDraft(templateDraft);
+      const validation = await consoleApi.validateTemplate(versionInput);
+      const feedback = templateFeedbackFromResult(validation.result);
+      setTemplateFeedback(feedback);
+      if (feedback.status !== 'valid') {
+        message.error('模板校验未通过，已阻止保存');
+        return;
+      }
+      const input = templateInputFromDraft(templateDraft);
+      const saved = templateDraft.id
+        ? await consoleApi.updateTemplate(templateDraft.id, input)
         : await consoleApi.createTemplate(input);
-      await consoleApi.publishTemplate(saved.template.id, {
-        message_type: selected.messageType || 'text',
-        target_provider_type: selected.targetProviderType,
-        template_body: templateText,
-        message_body_schema: {},
-        sample_payload: { title: '测试消息' },
-      });
+      await consoleApi.publishTemplate(saved.template.id, versionInput);
       setModalOpen(false);
-      message.success('模板已保存到后端');
+      message.success('模板已校验、保存并发布到后端');
       await loadTemplates();
     } catch (error) {
       message.error(userFacingError(error));
@@ -3521,20 +3919,28 @@ export function TemplatesPage({ lastUpdated, onRefresh }: ConsolePageProps) {
       </ListContainer>
 
       <Modal
-        title={selected?.name ?? '模板'}
+        title={templateDraft.name || selected?.name || '模板'}
         width={980}
         open={modalOpen}
         onCancel={() => setModalOpen(false)}
         onOk={saveTemplate}
-        okText="保存"
+        okText="校验并发布"
         cancelText="取消"
       >
         <div className="template-modal-grid">
           <section className="template-fields">
             <div className="panel-heading">
               <Typography.Title level={4}>Payload 字段</Typography.Title>
-              <Button onClick={() => message.success('已重新解析当前 Payload')}>自动解析</Button>
+              <Button onClick={() => void runTemplateAction('parse')}>后端解析</Button>
             </div>
+            {templateFeedback.variables.length ? (
+              <Alert
+                type="success"
+                showIcon
+                className="semantic-alert"
+                message={`后端解析变量：${templateFeedback.variables.map(templateVariable).join('、')}`}
+              />
+            ) : null}
             <Table
               rowKey="path"
               size="small"
@@ -3546,14 +3952,35 @@ export function TemplatesPage({ lastUpdated, onRefresh }: ConsolePageProps) {
           </section>
           <section className="template-editor">
             <Form layout="vertical">
+              <Form.Item label="模板名称" required>
+                <Input
+                  value={templateDraft.name}
+                  onChange={(event) => setTemplateDraft((current) => ({ ...current, name: event.target.value }))}
+                />
+              </Form.Item>
               <div className="two-column-form">
+                <Form.Item label="来源" required>
+                  <Select
+                    value={templateDraft.sourceId}
+                    options={sourceRows.map((source) => ({ label: `${source.name} / ${source.code}`, value: source.id }))}
+                    onChange={(sourceId) => setTemplateDraft((current) => ({ ...current, sourceId }))}
+                  />
+                </Form.Item>
                 <Form.Item label="目标平台">
                   <Select
-                    value={selected?.targetProviderType}
+                    value={templateDraft.targetProviderType}
                     options={['gov_cloud', 'wecom', 'feishu'].map((value) => ({ label: getProviderTypeLabel(value as TemplateRecord['targetProviderType']), value }))}
                     onChange={(targetProviderType) =>
-                      setSelected((current) => (current ? { ...current, targetProviderType } : current))
+                      setTemplateDraft((current) => ({ ...current, targetProviderType }))
                     }
+                  />
+                </Form.Item>
+              </div>
+              <div className="two-column-form">
+                <Form.Item label="消息类型">
+                  <Input
+                    value={templateDraft.messageType}
+                    onChange={(event) => setTemplateDraft((current) => ({ ...current, messageType: event.target.value }))}
                   />
                 </Form.Item>
                 <Form.Item label="消息字段">
@@ -3568,28 +3995,55 @@ export function TemplatesPage({ lastUpdated, onRefresh }: ConsolePageProps) {
               </div>
               <Form.Item label="字段内容模板">
                 <Input.TextArea
-                  value={templateText}
-                  onChange={(event) => setTemplateText(event.target.value)}
+                  value={templateDraft.templateBody}
+                  onChange={(event) => setTemplateDraft((current) => ({ ...current, templateBody: event.target.value }))}
                   rows={8}
                 />
               </Form.Item>
+              <div className="two-column-form">
+                <Form.Item label="样例 Payload JSON" required>
+                  <Input.TextArea
+                    value={templateDraft.samplePayloadText}
+                    onChange={(event) => setTemplateDraft((current) => ({ ...current, samplePayloadText: event.target.value }))}
+                    rows={5}
+                  />
+                </Form.Item>
+                <Form.Item label="消息体 Schema JSON">
+                  <Input.TextArea
+                    value={templateDraft.messageBodySchemaText}
+                    onChange={(event) => setTemplateDraft((current) => ({ ...current, messageBodySchemaText: event.target.value }))}
+                    rows={5}
+                  />
+                </Form.Item>
+              </div>
             </Form>
+            <Space className="template-action-bar">
+              <Button onClick={() => void runTemplateAction('preview')}>后端预览</Button>
+              <Button onClick={() => void runTemplateAction('validate')}>后端校验</Button>
+              {templateFeedback.status === 'valid' ? <Tag color="success">校验通过</Tag> : null}
+              {templateFeedback.status === 'invalid' ? <Tag color="error">校验失败</Tag> : null}
+            </Space>
+            {templateFeedback.errors.length ? (
+              <Alert
+                type="error"
+                showIcon
+                className="semantic-alert"
+                message="模板校验错误"
+                description={templateFeedback.errors.join('；')}
+              />
+            ) : null}
             <div className="preview-grid">
               <section>
                 <Typography.Title level={5}>字段值预览</Typography.Title>
                 <div className="preview-card">
-                  {templateText
-                    .replace('{{ payload.sender.department }}', '市行政审批局')
-                    .replace('{{ payload.sender.name }}', '李明')
-                    .replace('{{ payload.content }}', '请尽快完成材料补充提交。')
-                    .replace('{{ payload.title }}', '业务办理提醒')}
+                  {templateFeedback.preview || '点击后端预览后展示渲染结果'}
                 </div>
               </section>
               <section>
                 <Typography.Title level={5}>最终出站 Body 预览</Typography.Title>
                 <pre className="code-block">{`{
   "receiver": "...",
-  "${selected?.targetField ?? 'message.content'}": "${templateText.split('"').join('\\"')}"
+  "${selected?.targetField ?? 'message.content'}": "${(templateFeedback.preview || templateDraft.templateBody).split('"').join('\\"')}"
 }`}</pre>
               </section>
             </div>
@@ -3602,7 +4056,7 @@ export function TemplatesPage({ lastUpdated, onRefresh }: ConsolePageProps) {
 
 type UserIdentityDraft = UserIdentity & {
   apiId?: string;
-  verified?: boolean;
+  verified: boolean;
 };
 
 type UserContactRow = Omit<UserContact, 'identities'> & {
@@ -3611,7 +4065,53 @@ type UserContactRow = Omit<UserContact, 'identities'> & {
   apiIdentities: UserIdentityApiRecord[];
 };
 
-type UserDraft = Omit<UserContactRow, 'id' | 'updatedAt' | 'apiUser' | 'apiIdentities'>;
+type OrgUnitDraft = {
+  parentId: string;
+  code: string;
+  name: string;
+  sortOrder: number;
+};
+
+type UserDraft = {
+  name: string;
+  primaryOrgId: string;
+  mobile: string;
+  email: string;
+  status: boolean;
+  identities: UserIdentityDraft[];
+  attributesJson: string;
+};
+
+type RecipientGroupDraft = {
+  name: string;
+  userIds: string[];
+  orgIds: string[];
+  excludedUserIds: string[];
+  excludedOrgIds: string[];
+  enabled: boolean;
+};
+
+type MatchGroupRow = MatchGroup & {
+  groupType: string;
+  description: string;
+  itemCount: number;
+  items: MatchGroupItemApiRecord[];
+  raw: MatchGroupApiRecord;
+};
+
+type MatchGroupDraft = {
+  name: string;
+  groupType: string;
+  description: string;
+  enabled: boolean;
+};
+
+type MatchGroupItemDraft = {
+  apiId?: string;
+  value: string;
+  valueType: string;
+  metadataJson: string;
+};
 
 function currentTimestampText() {
   const now = new Date();
@@ -3621,25 +4121,87 @@ function currentTimestampText() {
   )}:${pad(now.getSeconds())}`;
 }
 
+function createOrgUnitDraft(parentId = ''): OrgUnitDraft {
+  return {
+    parentId,
+    code: '',
+    name: '',
+    sortOrder: 0,
+  };
+}
+
+function orgUnitDraftFromRecord(record: OrgUnitApiRecord): OrgUnitDraft {
+  return {
+    parentId: record.parent_id,
+    code: record.code,
+    name: record.name,
+    sortOrder: record.sort_order,
+  };
+}
+
+function orgUnitInputFromDraft(draft: OrgUnitDraft): OrgUnitInput {
+  return {
+    parent_id: draft.parentId,
+    code: draft.code.trim(),
+    name: draft.name.trim(),
+    sort_order: draft.sortOrder,
+  };
+}
+
 function createUserDraft(index: number, orgRows: OrgUnitApiRecord[] = []): UserDraft {
   return {
     name: `新增人员 ${index}`,
-    department: orgRows[0]?.name ?? '',
+    primaryOrgId: orgRows[0]?.id ?? '',
     mobile: '',
     email: '',
     status: true,
     identities: [],
+    attributesJson: '{}',
   };
 }
 
 function draftFromUser(user: UserContactRow): UserDraft {
   return {
     name: user.name,
-    department: user.department,
+    primaryOrgId: user.apiUser.primary_org_id,
     mobile: user.mobile,
     email: user.email,
     status: user.status,
     identities: user.identities,
+    attributesJson: stringifyJSON(user.apiUser.attributes, '{}'),
+  };
+}
+
+function createRecipientGroupDraft(): RecipientGroupDraft {
+  return {
+    name: '',
+    userIds: [],
+    orgIds: [],
+    excludedUserIds: [],
+    excludedOrgIds: [],
+    enabled: true,
+  };
+}
+
+function recipientGroupDraftFromRecord(record: RecipientGroupApiRecord): RecipientGroupDraft {
+  return {
+    name: record.name,
+    userIds: record.user_ids,
+    orgIds: record.org_ids,
+    excludedUserIds: record.excluded_user_ids,
+    excludedOrgIds: record.excluded_org_ids,
+    enabled: record.enabled,
+  };
+}
+
+function recipientGroupInputFromDraft(draft: RecipientGroupDraft): RecipientGroupInput {
+  return {
+    name: draft.name.trim(),
+    user_ids: cleanStringList(draft.userIds),
+    org_ids: cleanStringList(draft.orgIds),
+    excluded_user_ids: cleanStringList(draft.excludedUserIds),
+    excluded_org_ids: cleanStringList(draft.excludedOrgIds),
+    enabled: draft.enabled,
   };
 }
 
@@ -3697,13 +4259,16 @@ function mapUserIdentityDraft(identity: UserIdentityApiRecord): UserIdentityDraf
 }
 
 function userInputFromDraft(draft: UserDraft, orgRows: OrgUnitApiRecord[]): UserInput {
-  const org = orgRows.find((item) => item.name === draft.department || item.id === draft.department);
+  const org = orgRows.find((item) => item.id === draft.primaryOrgId);
+  const parsedAttributes = parseJSONField(draft.attributesJson, '人员属性高级 JSON');
+  const attributes = isRecord(parsedAttributes) ? parsedAttributes : { raw_value: parsedAttributes };
   return {
     display_name: draft.name.trim(),
     primary_org_id: org?.id ?? '',
     enabled: draft.status,
     attributes: {
-      department: draft.department,
+      ...attributes,
+      department: org?.name ?? '',
       mobile: draft.mobile,
       email: draft.email,
     },
@@ -3718,6 +4283,10 @@ function userIdentityInputFromDraft(userId: string, identity: UserIdentityDraft)
     identity_value: identity.value,
     verified: identity.verified ?? true,
   };
+}
+
+function cleanStringList(values: string[]): string[] {
+  return values.map((item) => item.trim()).filter(Boolean);
 }
 
 function isRecord(value: JSONValue): value is Record<string, JSONValue> {
@@ -3738,16 +4307,97 @@ function providerValueFromLabel(label: string): string {
   return known?.value ?? label;
 }
 
-function mapMatchGroup(group: MatchGroupApiRecord): MatchGroup {
+function mapMatchGroup(group: MatchGroupApiRecord): MatchGroupRow {
+  const items = group.items ?? [];
   return {
     id: group.id,
     name: group.name,
-    type: group.group_type === 'ip' ? 'IP 组' : group.group_type === 'system' ? '系统组' : '业务值组',
-    values: group.items?.map((item) => item.value) ?? [],
+    type: getMatchGroupTypeLabel(group.group_type),
+    values: items.map((item) => item.value),
     references: group.reference_count ?? 0,
     updatedAt: formatApiTime(group.updated_at),
     enabled: group.enabled,
+    groupType: group.group_type,
+    description: group.description,
+    itemCount: group.item_count ?? items.length,
+    items,
+    raw: group,
   };
+}
+
+function createMatchGroupDraft(): MatchGroupDraft {
+  return {
+    name: '',
+    groupType: 'business',
+    description: '',
+    enabled: true,
+  };
+}
+
+function matchGroupDraftFromRow(row: MatchGroupRow): MatchGroupDraft {
+  return {
+    name: row.name,
+    groupType: row.groupType,
+    description: row.description,
+    enabled: row.enabled,
+  };
+}
+
+function matchGroupInputFromDraft(draft: MatchGroupDraft) {
+  return {
+    name: draft.name.trim(),
+    group_type: draft.groupType,
+    description: draft.description,
+    enabled: draft.enabled,
+  };
+}
+
+function createMatchGroupItemDraft(): MatchGroupItemDraft {
+  return {
+    value: '',
+    valueType: 'text',
+    metadataJson: '{}',
+  };
+}
+
+function matchGroupItemDraftFromRecord(record: MatchGroupItemApiRecord): MatchGroupItemDraft {
+  return {
+    apiId: record.id,
+    value: record.value,
+    valueType: record.value_type || 'text',
+    metadataJson: stringifyJSON(record.metadata, '{}'),
+  };
+}
+
+function matchGroupItemInputFromDraft(draft: MatchGroupItemDraft): MatchGroupItemInput {
+  return {
+    value: draft.value.trim(),
+    value_type: draft.valueType.trim() || 'text',
+    metadata: parseJSONField(draft.metadataJson, '条目高级 JSON'),
+  };
+}
+
+function getMatchGroupTypeLabel(value: string): string {
+  if (value === 'ip') {
+    return 'IP 组';
+  }
+  if (value === 'system') {
+    return '系统组';
+  }
+  return '业务值组';
+}
+
+function getValueTypeLabel(value: string): string {
+  if (value === 'number') {
+    return '数字';
+  }
+  if (value === 'ip') {
+    return 'IP / CIDR';
+  }
+  if (value === 'json') {
+    return 'JSON';
+  }
+  return '文本';
 }
 
 function mapMessageLog(log: MessageLogApiRecord): MessageLog {
@@ -3802,21 +4452,49 @@ function normalizeJobStatus(value: string): AuditLog['status'] {
 }
 
 export function OrganizationPage({ lastUpdated, onRefresh }: ConsolePageProps) {
-  const { message } = App.useApp();
-  const { drawer, openDrawer, closeDrawer } = useCreateDrawer('新增人员');
+  const { message, modal } = App.useApp();
+  const { drawer: userDrawer, openDrawer: openUserDrawer, closeDrawer: closeUserDrawer } = useCreateDrawer('新增人员');
+  const { drawer: orgDrawer, openDrawer: openOrgDrawer, closeDrawer: closeOrgDrawer } = useCreateDrawer('新增组织');
+  const { drawer: groupDrawer, openDrawer: openGroupDrawer, closeDrawer: closeGroupDrawer } = useCreateDrawer('新增接收人组');
   const [rows, setRows] = useState<UserContactRow[]>([]);
   const [orgRows, setOrgRows] = useState<OrgUnitApiRecord[]>([]);
+  const [recipientGroupRows, setRecipientGroupRows] = useState<RecipientGroupApiRecord[]>([]);
   const [loadState, setLoadState] = useState<ApiLoadState>(emptyLoadState);
   const [selected, setSelected] = useState<UserContactRow | null>(null);
   const [userDraft, setUserDraft] = useState<UserDraft>(() => createUserDraft(1));
+  const [editingOrg, setEditingOrg] = useState<OrgUnitApiRecord | null>(null);
+  const [orgDraft, setOrgDraft] = useState<OrgUnitDraft>(() => createOrgUnitDraft());
+  const [editingRecipientGroup, setEditingRecipientGroup] = useState<RecipientGroupApiRecord | null>(null);
+  const [recipientGroupDraft, setRecipientGroupDraft] = useState<RecipientGroupDraft>(() => createRecipientGroupDraft());
   const [detailOpen, setDetailOpen] = useState(false);
   const [keyword, setKeyword] = useState('');
+  const [groupKeyword, setGroupKeyword] = useState('');
   const filteredRows = rows.filter((row) => !keyword || row.name.includes(keyword) || row.mobile.includes(keyword));
+  const filteredRecipientGroups = recipientGroupRows.filter((row) => !groupKeyword || row.name.includes(groupKeyword));
+  const orgOptions = useMemo(
+    () => [
+      { label: '无上级组织', value: '' },
+      ...orgRows.map((item) => ({ label: `${item.name}（${item.code}）`, value: item.id })),
+    ],
+    [orgRows],
+  );
+  const userOptions = useMemo(
+    () => rows.map((item) => ({ label: `${item.name}（${item.mobile || item.id}）`, value: item.id })),
+    [rows],
+  );
+  const orgOnlyOptions = useMemo(
+    () => orgRows.map((item) => ({ label: `${item.name}（${item.code}）`, value: item.id })),
+    [orgRows],
+  );
 
   const loadOrganization = useCallback(async () => {
     setLoadState({ loading: true, error: '' });
     try {
-      const [orgResult, userResult] = await Promise.all([consoleApi.listOrgUnits(), consoleApi.listUsers()]);
+      const [orgResult, userResult, groupResult] = await Promise.all([
+        consoleApi.listOrgUnits(),
+        consoleApi.listUsers(),
+        consoleApi.listRecipientGroups(),
+      ]);
       const nextOrgRows = orgResult.org_units;
       const identitiesByUser = new Map<string, UserIdentityApiRecord[]>();
       await Promise.all(
@@ -3831,10 +4509,12 @@ export function OrganizationPage({ lastUpdated, onRefresh }: ConsolePageProps) {
       );
       setOrgRows(nextOrgRows);
       setRows(userResult.users.map((user) => mapUserRow(user, identitiesByUser.get(user.id) ?? [], nextOrgRows)));
+      setRecipientGroupRows(groupResult.groups);
       setLoadState(emptyLoadState);
     } catch (error) {
       setOrgRows([]);
       setRows([]);
+      setRecipientGroupRows([]);
       setLoadState({ loading: false, error: userFacingError(error) });
     }
   }, []);
@@ -3843,6 +4523,46 @@ export function OrganizationPage({ lastUpdated, onRefresh }: ConsolePageProps) {
     void loadOrganization();
   }, [loadOrganization, lastUpdated]);
 
+  const saveOrgUnit = async () => {
+    try {
+      const input = orgUnitInputFromDraft(orgDraft);
+      if (!input.name || !input.code) {
+        message.error('请填写组织名称和组织编码');
+        return;
+      }
+      if (editingOrg) {
+        await consoleApi.updateOrgUnit(editingOrg.id, input);
+      } else {
+        await consoleApi.createOrgUnit(input);
+      }
+      closeOrgDrawer();
+      setEditingOrg(null);
+      message.success('组织已保存到后端');
+      await loadOrganization();
+    } catch (error) {
+      message.error(userFacingError(error));
+    }
+  };
+
+  const confirmDeleteOrgUnit = (record: OrgUnitApiRecord) => {
+    modal.confirm({
+      title: `删除组织：${record.name}`,
+      content: '删除组织会影响人员所属组织和接收人组配置，请确认后继续。',
+      okText: '删除',
+      cancelText: '取消',
+      okButtonProps: { danger: true },
+      onOk: async () => {
+        try {
+          await consoleApi.deleteOrgUnit(record.id);
+          message.success('组织已删除');
+          await loadOrganization();
+        } catch (error) {
+          message.error(userFacingError(error));
+        }
+      },
+    });
+  };
+
   const saveUser = async () => {
     try {
       const input = userInputFromDraft(userDraft, orgRows);
@@ -3850,25 +4570,123 @@ export function OrganizationPage({ lastUpdated, onRefresh }: ConsolePageProps) {
         message.error('请填写人员姓名');
         return;
       }
+      if (userDraft.identities.some((identity) => !identity.fieldName.trim() || !identity.value.trim())) {
+        message.error('请补全平台身份类型和身份值');
+        return;
+      }
       const result = selected
         ? await consoleApi.updateUser(selected.id, input)
         : await consoleApi.createUser(input);
       const userId = result.user.id;
+      const removedIdentities =
+        selected?.apiIdentities.filter((identity) => !userDraft.identities.some((draft) => draft.apiId === identity.id)) ?? [];
       await Promise.all(
-        userDraft.identities.map((identity) => {
-          const identityInput = userIdentityInputFromDraft(userId, identity);
-          return identity.apiId
-            ? consoleApi.updateUserIdentity(identity.apiId, identityInput)
-            : consoleApi.createUserIdentity(userId, identityInput);
-        }),
+        [
+          ...removedIdentities.map((identity) => consoleApi.deleteUserIdentity(identity.id)),
+          ...userDraft.identities.map((identity) => {
+            const identityInput = userIdentityInputFromDraft(userId, identity);
+            return identity.apiId
+              ? consoleApi.updateUserIdentity(identity.apiId, identityInput)
+              : consoleApi.createUserIdentity(userId, identityInput);
+          }),
+        ],
       );
-      closeDrawer();
+      closeUserDrawer();
+      setSelected(null);
       message.success('人员已保存到后端');
       await loadOrganization();
     } catch (error) {
       message.error(userFacingError(error));
     }
   };
+
+  const confirmDeleteUser = (record: UserContactRow) => {
+    modal.confirm({
+      title: `删除人员：${record.name}`,
+      content: '删除人员会同步移除其平台身份，请确认后继续。',
+      okText: '删除',
+      cancelText: '取消',
+      okButtonProps: { danger: true },
+      onOk: async () => {
+        try {
+          await consoleApi.deleteUser(record.id);
+          message.success('人员已删除');
+          await loadOrganization();
+        } catch (error) {
+          message.error(userFacingError(error));
+        }
+      },
+    });
+  };
+
+  const saveRecipientGroup = async () => {
+    try {
+      const input = recipientGroupInputFromDraft(recipientGroupDraft);
+      if (!input.name) {
+        message.error('请填写接收人组名称');
+        return;
+      }
+      if (editingRecipientGroup) {
+        await consoleApi.updateRecipientGroup(editingRecipientGroup.id, input);
+      } else {
+        await consoleApi.createRecipientGroup(input);
+      }
+      closeGroupDrawer();
+      setEditingRecipientGroup(null);
+      message.success('接收人组已保存到后端');
+      await loadOrganization();
+    } catch (error) {
+      message.error(userFacingError(error));
+    }
+  };
+
+  const confirmDeleteRecipientGroup = (record: RecipientGroupApiRecord) => {
+    modal.confirm({
+      title: `删除接收人组：${record.name}`,
+      content: '删除后路由中的接收人组引用可能失效，请确认后继续。',
+      okText: '删除',
+      cancelText: '取消',
+      okButtonProps: { danger: true },
+      onOk: async () => {
+        try {
+          await consoleApi.deleteRecipientGroup(record.id);
+          message.success('接收人组已删除');
+          await loadOrganization();
+        } catch (error) {
+          message.error(userFacingError(error));
+        }
+      },
+    });
+  };
+
+  const orgColumns: TableProps<OrgUnitApiRecord>['columns'] = [
+    { title: '组织名称', dataIndex: 'name' },
+    { title: '组织编码', dataIndex: 'code', render: (value: string) => <Typography.Text code>{value}</Typography.Text> },
+    { title: '排序', dataIndex: 'sort_order', width: 72 },
+    {
+      title: '操作',
+      width: 132,
+      render: (_, record) => (
+        <Space size={4}>
+          <Button
+            type="link"
+            size="small"
+            onClick={() => {
+              setEditingOrg(record);
+              setOrgDraft(orgUnitDraftFromRecord(record));
+              openOrgDrawer(`编辑组织：${record.name}`);
+            }}
+          >
+            编辑
+          </Button>
+          <Button danger type="link" size="small" onClick={() => confirmDeleteOrgUnit(record)}>
+            删除
+          </Button>
+        </Space>
+      ),
+    },
+  ];
+
   const columns: TableProps<UserContactRow>['columns'] = [
     { title: '姓名', dataIndex: 'name' },
     { title: '所属组织', dataIndex: 'department' },
@@ -3880,12 +4698,12 @@ export function OrganizationPage({ lastUpdated, onRefresh }: ConsolePageProps) {
       render: (enabled: boolean) => <StatusTag meta={getEnabledMeta(enabled)} />,
     },
     {
-      title: '平台身份字段',
+      title: '平台身份字段（身份类型 / 验证状态）',
       dataIndex: 'identities',
-      render: (items: UserIdentity[]) =>
+      render: (items: UserIdentityDraft[]) =>
         items.map((item) => (
           <Tag key={`${item.platform}-${item.fieldName}`}>
-            {item.platform} {item.fieldName}
+            {item.platform} {item.fieldName} / {item.verified ? '已验证' : '未验证'}
           </Tag>
         )),
     },
@@ -3907,10 +4725,47 @@ export function OrganizationPage({ lastUpdated, onRefresh }: ConsolePageProps) {
             onClick={() => {
               setSelected(record);
               setUserDraft(draftFromUser(record));
-              openDrawer(`编辑人员：${record.name}`);
+              openUserDrawer(`编辑人员：${record.name}`);
             }}
           >
             编辑
+          </Button>
+          <Button danger type="link" onClick={() => confirmDeleteUser(record)}>
+            删除
+          </Button>
+        </Space>
+      ),
+    },
+  ];
+
+  const recipientGroupColumns: TableProps<RecipientGroupApiRecord>['columns'] = [
+    { title: '接收人组名称', dataIndex: 'name' },
+    { title: '包含人员', dataIndex: 'user_ids', render: (items: string[]) => <Tag>{items.length} 人</Tag> },
+    { title: '包含组织', dataIndex: 'org_ids', render: (items: string[]) => <Tag color="blue">{items.length} 个组织</Tag> },
+    { title: '排除人员', dataIndex: 'excluded_user_ids', render: (items: string[]) => items.length || '-' },
+    { title: '排除组织', dataIndex: 'excluded_org_ids', render: (items: string[]) => items.length || '-' },
+    {
+      title: '状态',
+      dataIndex: 'enabled',
+      render: (enabled: boolean) => <StatusTag meta={getEnabledMeta(enabled)} />,
+    },
+    { title: '更新时间', dataIndex: 'updated_at', render: (value: string) => formatApiTime(value) },
+    {
+      title: '操作',
+      render: (_, record) => (
+        <Space>
+          <Button
+            type="link"
+            onClick={() => {
+              setEditingRecipientGroup(record);
+              setRecipientGroupDraft(recipientGroupDraftFromRecord(record));
+              openGroupDrawer(`编辑接收人组：${record.name}`);
+            }}
+          >
+            编辑
+          </Button>
+          <Button danger type="link" onClick={() => confirmDeleteRecipientGroup(record)}>
+            删除
           </Button>
         </Space>
       ),
@@ -3928,18 +4783,34 @@ export function OrganizationPage({ lastUpdated, onRefresh }: ConsolePageProps) {
         <section className="tree-panel">
           <div className="panel-heading">
             <Typography.Title level={4}>组织树</Typography.Title>
-            <Button size="small" onClick={() => message.info('组织新增接口已预留，当前请通过后端 API 导入组织')}>
+            <Button
+              size="small"
+              onClick={() => {
+                setEditingOrg(null);
+                setOrgDraft(createOrgUnitDraft());
+                openOrgDrawer('新增组织');
+              }}
+            >
               新增组织
             </Button>
           </div>
           <Tree defaultExpandAll treeData={mapOrgTree(orgRows)} />
+          <Divider />
+          <Table
+            rowKey="id"
+            size="small"
+            pagination={false}
+            columns={orgColumns}
+            dataSource={orgRows}
+            loading={loadState.loading}
+          />
         </section>
         <div>
           <QueryBar
             onCreate={() => {
               setSelected(null);
               setUserDraft(createUserDraft(rows.length + 1, orgRows));
-              openDrawer('新增人员');
+              openUserDrawer('新增人员');
             }}
             onSearch={() => message.success(`已筛选出 ${filteredRows.length} 名人员`)}
             onReset={() => {
@@ -3947,15 +4818,20 @@ export function OrganizationPage({ lastUpdated, onRefresh }: ConsolePageProps) {
               message.info('人员查询条件已重置');
             }}
             createText="新增人员"
-            extra={<Button onClick={() => message.info('导入功能不在一期范围内')}>导入</Button>}
           >
             <Input
               placeholder="姓名 / 手机号"
               value={keyword}
               onChange={(event) => setKeyword(event.target.value)}
             />
-            <Select placeholder="所属组织" />
-            <Select placeholder="状态" />
+            <Select placeholder="所属组织" options={orgOptions} />
+            <Select
+              placeholder="状态"
+              options={[
+                { label: '启用', value: 'enabled' },
+                { label: '停用', value: 'disabled' },
+              ]}
+            />
           </QueryBar>
           <ListContainer title="人员列表" total={filteredRows.length} fill scrollY={560}>
             {loadState.error ? <Alert type="warning" showIcon message={loadState.error} /> : null}
@@ -3968,17 +4844,68 @@ export function OrganizationPage({ lastUpdated, onRefresh }: ConsolePageProps) {
               loading={loadState.loading}
             />
           </ListContainer>
+          <QueryBar
+            onCreate={() => {
+              setEditingRecipientGroup(null);
+              setRecipientGroupDraft(createRecipientGroupDraft());
+              openGroupDrawer('新增接收人组');
+            }}
+            onSearch={() => message.success(`已筛选出 ${filteredRecipientGroups.length} 个接收人组`)}
+            onReset={() => {
+              setGroupKeyword('');
+              message.info('接收人组查询条件已重置');
+            }}
+            createText="新增接收人组"
+          >
+            <Input
+              placeholder="接收人组名称"
+              value={groupKeyword}
+              onChange={(event) => setGroupKeyword(event.target.value)}
+            />
+          </QueryBar>
+          <ListContainer title="接收人组列表" total={filteredRecipientGroups.length} scrollY={320}>
+            <Table
+              rowKey="id"
+              size="middle"
+              pagination={false}
+              columns={recipientGroupColumns}
+              dataSource={filteredRecipientGroups}
+              loading={loadState.loading}
+              scroll={{ x: 920 }}
+            />
+          </ListContainer>
         </div>
       </div>
-      <CreateDrawer title={drawer.title} open={drawer.open} onClose={closeDrawer} onSave={saveUser} width={760}>
+      <CreateDrawer title={orgDrawer.title} open={orgDrawer.open} onClose={closeOrgDrawer} onSave={saveOrgUnit} width={520}>
+        <Form layout="vertical">
+          <Form.Item label="上级组织">
+            <Select
+              value={orgDraft.parentId}
+              options={orgOptions.filter((item) => item.value !== editingOrg?.id)}
+              onChange={(parentId) => setOrgDraft({ ...orgDraft, parentId })}
+            />
+          </Form.Item>
+          <Form.Item label="组织编码" required>
+            <Input value={orgDraft.code} onChange={(event) => setOrgDraft({ ...orgDraft, code: event.target.value })} />
+          </Form.Item>
+          <Form.Item label="组织名称" required>
+            <Input value={orgDraft.name} onChange={(event) => setOrgDraft({ ...orgDraft, name: event.target.value })} />
+          </Form.Item>
+          <Form.Item label="排序值">
+            <InputNumber className="full-width" value={orgDraft.sortOrder} onChange={(sortOrder) => setOrgDraft({ ...orgDraft, sortOrder: sortOrder ?? 0 })} />
+          </Form.Item>
+        </Form>
+      </CreateDrawer>
+      <CreateDrawer title={userDrawer.title} open={userDrawer.open} onClose={closeUserDrawer} onSave={saveUser} width={760}>
         <Form layout="vertical">
           <Form.Item label="姓名">
             <Input value={userDraft.name} onChange={(event) => setUserDraft({ ...userDraft, name: event.target.value })} />
           </Form.Item>
           <Form.Item label="所属组织">
-            <Input
-              value={userDraft.department}
-              onChange={(event) => setUserDraft({ ...userDraft, department: event.target.value })}
+            <Select
+              value={userDraft.primaryOrgId}
+              options={orgOptions}
+              onChange={(primaryOrgId) => setUserDraft({ ...userDraft, primaryOrgId })}
             />
           </Form.Item>
           <Form.Item label="手机号">
@@ -3986,6 +4913,21 @@ export function OrganizationPage({ lastUpdated, onRefresh }: ConsolePageProps) {
           </Form.Item>
           <Form.Item label="邮箱">
             <Input value={userDraft.email} onChange={(event) => setUserDraft({ ...userDraft, email: event.target.value })} />
+          </Form.Item>
+          <Form.Item label="状态">
+            <Switch
+              checked={userDraft.status}
+              checkedChildren="启用"
+              unCheckedChildren="停用"
+              onChange={(status) => setUserDraft({ ...userDraft, status })}
+            />
+          </Form.Item>
+          <Form.Item label="人员属性高级 JSON" extra="可补充后端 attributes 字段中的扩展属性，手机号、邮箱和所属组织会由上方中文控件覆盖。">
+            <Input.TextArea
+              rows={5}
+              value={userDraft.attributesJson}
+              onChange={(event) => setUserDraft({ ...userDraft, attributesJson: event.target.value })}
+            />
           </Form.Item>
           <Typography.Title level={5}>平台身份字段</Typography.Title>
           <IdentityEditor
@@ -4008,16 +4950,76 @@ export function OrganizationPage({ lastUpdated, onRefresh }: ConsolePageProps) {
           </Space>
         ) : null}
       </Drawer>
+      <CreateDrawer title={groupDrawer.title} open={groupDrawer.open} onClose={closeGroupDrawer} onSave={saveRecipientGroup} width={720}>
+        <Form layout="vertical">
+          <Form.Item label="接收人组名称" required>
+            <Input
+              value={recipientGroupDraft.name}
+              onChange={(event) => setRecipientGroupDraft({ ...recipientGroupDraft, name: event.target.value })}
+            />
+          </Form.Item>
+          <Form.Item label="包含人员">
+            <Select
+              mode="tags"
+              value={recipientGroupDraft.userIds}
+              options={userOptions}
+              onChange={(userIds) => setRecipientGroupDraft({ ...recipientGroupDraft, userIds })}
+              placeholder="选择人员或输入人员 ID"
+            />
+          </Form.Item>
+          <Form.Item label="包含组织">
+            <Select
+              mode="tags"
+              value={recipientGroupDraft.orgIds}
+              options={orgOnlyOptions}
+              onChange={(orgIds) => setRecipientGroupDraft({ ...recipientGroupDraft, orgIds })}
+              placeholder="选择组织或输入组织 ID"
+            />
+          </Form.Item>
+          <Form.Item label="排除人员">
+            <Select
+              mode="tags"
+              value={recipientGroupDraft.excludedUserIds}
+              options={userOptions}
+              onChange={(excludedUserIds) => setRecipientGroupDraft({ ...recipientGroupDraft, excludedUserIds })}
+              placeholder="选择人员或输入人员 ID"
+            />
+          </Form.Item>
+          <Form.Item label="排除组织">
+            <Select
+              mode="tags"
+              value={recipientGroupDraft.excludedOrgIds}
+              options={orgOnlyOptions}
+              onChange={(excludedOrgIds) => setRecipientGroupDraft({ ...recipientGroupDraft, excludedOrgIds })}
+              placeholder="选择组织或输入组织 ID"
+            />
+          </Form.Item>
+          <Form.Item label="状态">
+            <Switch
+              checked={recipientGroupDraft.enabled}
+              checkedChildren="启用"
+              unCheckedChildren="停用"
+              onChange={(enabled) => setRecipientGroupDraft({ ...recipientGroupDraft, enabled })}
+            />
+          </Form.Item>
+        </Form>
+      </CreateDrawer>
     </PageFrame>
   );
 }
 
 export function MatchGroupsPage({ lastUpdated, onRefresh }: ConsolePageProps) {
-  const { message } = App.useApp();
+  const { message, modal } = App.useApp();
   const { drawer, openDrawer, closeDrawer } = useCreateDrawer('新增匹配组');
-  const [rows, setRows] = useState<MatchGroup[]>([]);
+  const [rows, setRows] = useState<MatchGroupRow[]>([]);
   const [loadState, setLoadState] = useState<ApiLoadState>(emptyLoadState);
-  const [selected, setSelected] = useState<MatchGroup | null>(null);
+  const [selected, setSelected] = useState<MatchGroupRow | null>(null);
+  const [matchGroupDraft, setMatchGroupDraft] = useState<MatchGroupDraft>(() => createMatchGroupDraft());
+  const [itemRows, setItemRows] = useState<MatchGroupItemApiRecord[]>([]);
+  const [itemDraft, setItemDraft] = useState<MatchGroupItemDraft>(() => createMatchGroupItemDraft());
+  const [itemModalOpen, setItemModalOpen] = useState(false);
+  const [editingItem, setEditingItem] = useState<MatchGroupItemApiRecord | null>(null);
+  const [itemsLoading, setItemsLoading] = useState(false);
   const [keyword, setKeyword] = useState('');
   const filteredRows = rows.filter((row) => !keyword || row.name.includes(keyword));
 
@@ -4033,38 +5035,117 @@ export function MatchGroupsPage({ lastUpdated, onRefresh }: ConsolePageProps) {
     }
   }, []);
 
+  const loadMatchGroupItems = async (group: MatchGroupRow) => {
+    setItemsLoading(true);
+    try {
+      const result = await consoleApi.listMatchGroupItems(group.id);
+      setItemRows(result.items);
+      setSelected({ ...group, items: result.items, values: result.items.map((item) => item.value), itemCount: result.items.length });
+    } catch (error) {
+      setItemRows(group.items);
+      message.error(userFacingError(error));
+    } finally {
+      setItemsLoading(false);
+    }
+  };
+
   useEffect(() => {
     void loadMatchGroups();
   }, [loadMatchGroups, lastUpdated]);
 
   const saveMatchGroup = async () => {
     try {
-      if (selected && drawer.title.startsWith('编辑')) {
-        await consoleApi.updateMatchGroup(selected.id, {
-          name: selected.name,
-          group_type: selected.type.includes('IP') ? 'ip' : selected.type.includes('系统') ? 'system' : 'business',
-          description: '',
-          enabled: selected.enabled,
-        });
+      const input = matchGroupInputFromDraft(matchGroupDraft);
+      if (!input.name) {
+        message.error('请填写匹配组名称');
+        return;
+      }
+      if (selected) {
+        await consoleApi.updateMatchGroup(selected.id, input);
       } else {
-        await consoleApi.createMatchGroup({
-          name: `新增匹配组 ${rows.length + 1}`,
-          group_type: 'business',
-          description: '',
-          enabled: true,
-        });
+        await consoleApi.createMatchGroup(input);
       }
       closeDrawer();
+      setSelected(null);
       message.success('匹配组已保存到后端');
       await loadMatchGroups();
     } catch (error) {
       message.error(userFacingError(error));
     }
   };
-  const columns: TableProps<MatchGroup>['columns'] = [
+
+  const saveMatchGroupItem = async () => {
+    if (!selected) {
+      return;
+    }
+    try {
+      const input = matchGroupItemInputFromDraft(itemDraft);
+      if (!input.value) {
+        message.error('请填写匹配值');
+        return;
+      }
+      if (editingItem) {
+        await consoleApi.updateMatchGroupItem(selected.id, editingItem.id, input);
+      } else {
+        await consoleApi.createMatchGroupItem(selected.id, input);
+      }
+      setItemModalOpen(false);
+      setEditingItem(null);
+      setItemDraft(createMatchGroupItemDraft());
+      message.success('匹配值条目已保存到后端');
+      await loadMatchGroupItems(selected);
+      await loadMatchGroups();
+    } catch (error) {
+      message.error(userFacingError(error));
+    }
+  };
+
+  const confirmDeleteMatchGroup = (record: MatchGroupRow) => {
+    modal.confirm({
+      title: `删除匹配组：${record.name}`,
+      content: '删除匹配组会影响路由条件引用，请确认后继续。',
+      okText: '删除',
+      cancelText: '取消',
+      okButtonProps: { danger: true },
+      onOk: async () => {
+        try {
+          await consoleApi.deleteMatchGroup(record.id);
+          message.success('匹配组已删除');
+          await loadMatchGroups();
+        } catch (error) {
+          message.error(userFacingError(error));
+        }
+      },
+    });
+  };
+
+  const confirmDeleteMatchGroupItem = (record: MatchGroupItemApiRecord) => {
+    if (!selected) {
+      return;
+    }
+    modal.confirm({
+      title: `删除匹配值：${record.value}`,
+      content: '删除后使用该匹配组的条件会立即按新值集合判断。',
+      okText: '删除',
+      cancelText: '取消',
+      okButtonProps: { danger: true },
+      onOk: async () => {
+        try {
+          await consoleApi.deleteMatchGroupItem(selected.id, record.id);
+          message.success('匹配值条目已删除');
+          await loadMatchGroupItems(selected);
+          await loadMatchGroups();
+        } catch (error) {
+          message.error(userFacingError(error));
+        }
+      },
+    });
+  };
+
+  const columns: TableProps<MatchGroupRow>['columns'] = [
     { title: '名称', dataIndex: 'name' },
     { title: '类型', dataIndex: 'type' },
-    { title: '组内值数量', render: (_, record) => record.values.length },
+    { title: '组内值数量', render: (_, record) => record.itemCount },
     { title: '引用次数', dataIndex: 'references' },
     {
       title: '状态',
@@ -4080,7 +5161,9 @@ export function MatchGroupsPage({ lastUpdated, onRefresh }: ConsolePageProps) {
             type="link"
             onClick={() => {
               setSelected(record);
+              setMatchGroupDraft(matchGroupDraftFromRow(record));
               openDrawer(`查看匹配组：${record.name}`);
+              void loadMatchGroupItems(record);
             }}
           >
             查看
@@ -4089,18 +5172,50 @@ export function MatchGroupsPage({ lastUpdated, onRefresh }: ConsolePageProps) {
             type="link"
             onClick={() => {
               setSelected(record);
+              setMatchGroupDraft(matchGroupDraftFromRow(record));
               openDrawer(`编辑匹配组：${record.name}`);
+              void loadMatchGroupItems(record);
             }}
           >
             编辑
+          </Button>
+          <Button danger type="link" onClick={() => confirmDeleteMatchGroup(record)}>
+            删除
           </Button>
         </Space>
       ),
     },
   ];
 
-  const valueColumns: TableProps<string>['columns'] = [
-    { title: '匹配值', render: (value: string) => <Typography.Text code>{value}</Typography.Text> },
+  const valueColumns: TableProps<MatchGroupItemApiRecord>['columns'] = [
+    { title: '匹配值', dataIndex: 'value', render: (value: string) => <Typography.Text code>{value}</Typography.Text> },
+    { title: '值类型', dataIndex: 'value_type', render: (value: string) => getValueTypeLabel(value) },
+    {
+      title: '条目高级 JSON',
+      dataIndex: 'metadata',
+      render: (value: JSONValue) => <Typography.Text code>{stringifyJSON(value, '{}')}</Typography.Text>,
+    },
+    { title: '创建时间', dataIndex: 'created_at', render: (value: string) => formatApiTime(value) },
+    {
+      title: '操作',
+      render: (_, record) => (
+        <Space>
+          <Button
+            type="link"
+            onClick={() => {
+              setEditingItem(record);
+              setItemDraft(matchGroupItemDraftFromRecord(record));
+              setItemModalOpen(true);
+            }}
+          >
+            编辑
+          </Button>
+          <Button danger type="link" onClick={() => confirmDeleteMatchGroupItem(record)}>
+            删除
+          </Button>
+        </Space>
+      ),
+    },
   ];
 
   return (
@@ -4113,6 +5228,8 @@ export function MatchGroupsPage({ lastUpdated, onRefresh }: ConsolePageProps) {
       <QueryBar
         onCreate={() => {
           setSelected(null);
+          setMatchGroupDraft(createMatchGroupDraft());
+          setItemRows([]);
           openDrawer('新增匹配组');
         }}
         onSearch={() => message.success(`已筛选出 ${filteredRows.length} 个匹配组`)}
@@ -4127,10 +5244,29 @@ export function MatchGroupsPage({ lastUpdated, onRefresh }: ConsolePageProps) {
           value={keyword}
           onChange={(event) => setKeyword(event.target.value)}
         />
-        <Select placeholder="类型" />
-        <Select placeholder="状态" />
+        <Select
+          placeholder="类型"
+          options={[
+            { label: '业务值组', value: 'business' },
+            { label: 'IP 组', value: 'ip' },
+            { label: '系统组', value: 'system' },
+          ]}
+        />
+        <Select
+          placeholder="状态"
+          options={[
+            { label: '启用', value: 'enabled' },
+            { label: '停用', value: 'disabled' },
+          ]}
+        />
       </QueryBar>
-      <ListContainer title="匹配组列表" total={filteredRows.length} fill scrollY={560}>
+      <ListContainer
+        title="匹配组列表"
+        total={filteredRows.length}
+        fill
+        scrollY={560}
+        extra={<Alert type="info" showIcon message="匹配值条目支持 value、value_type 和条目高级 JSON。" />}
+      >
         {loadState.error ? <Alert type="warning" showIcon message={loadState.error} /> : null}
         <Table
           rowKey="id"
@@ -4143,23 +5279,100 @@ export function MatchGroupsPage({ lastUpdated, onRefresh }: ConsolePageProps) {
       </ListContainer>
       <CreateDrawer title={drawer.title} open={drawer.open} onClose={closeDrawer} onSave={saveMatchGroup} width={640}>
         <Space direction="vertical" className="full-width" size={16}>
-          <Descriptions column={1} size="small" bordered>
-            <Descriptions.Item label="匹配组">{selected?.name ?? '本地匹配组'}</Descriptions.Item>
-            <Descriptions.Item label="引用次数">{selected?.references ?? 0}</Descriptions.Item>
-            <Descriptions.Item label="测试匹配">
-              <Tag color="success">命中</Tag>
-              输入值：紧急
-            </Descriptions.Item>
-          </Descriptions>
+          <Form layout="vertical">
+            <Form.Item label="匹配组名称" required>
+              <Input
+                value={matchGroupDraft.name}
+                onChange={(event) => setMatchGroupDraft({ ...matchGroupDraft, name: event.target.value })}
+              />
+            </Form.Item>
+            <Form.Item label="匹配组类型">
+              <Select
+                value={matchGroupDraft.groupType}
+                options={[
+                  { label: '业务值组', value: 'business' },
+                  { label: 'IP 组', value: 'ip' },
+                  { label: '系统组', value: 'system' },
+                ]}
+                onChange={(groupType) => setMatchGroupDraft({ ...matchGroupDraft, groupType })}
+              />
+            </Form.Item>
+            <Form.Item label="描述">
+              <Input.TextArea
+                rows={3}
+                value={matchGroupDraft.description}
+                onChange={(event) => setMatchGroupDraft({ ...matchGroupDraft, description: event.target.value })}
+              />
+            </Form.Item>
+            <Form.Item label="状态">
+              <Switch
+                checked={matchGroupDraft.enabled}
+                checkedChildren="启用"
+                unCheckedChildren="停用"
+                onChange={(enabled) => setMatchGroupDraft({ ...matchGroupDraft, enabled })}
+              />
+            </Form.Item>
+          </Form>
+          <div className="panel-heading">
+            <Typography.Title level={5}>匹配值条目</Typography.Title>
+            <Button
+              size="small"
+              onClick={() => {
+                setEditingItem(null);
+                setItemDraft(createMatchGroupItemDraft());
+                setItemModalOpen(true);
+              }}
+              disabled={!selected}
+            >
+              新增条目
+            </Button>
+          </div>
           <Table
-            rowKey={(value) => value}
+            rowKey="id"
             size="small"
             pagination={false}
             columns={valueColumns}
-            dataSource={selected?.values ?? []}
+            dataSource={itemRows}
+            loading={itemsLoading}
           />
         </Space>
       </CreateDrawer>
+      <Modal
+        title={editingItem ? `编辑匹配值：${editingItem.value}` : '新增匹配值条目'}
+        open={itemModalOpen}
+        onCancel={() => {
+          setItemModalOpen(false);
+          setEditingItem(null);
+        }}
+        onOk={saveMatchGroupItem}
+        okText="保存"
+        cancelText="取消"
+      >
+        <Form layout="vertical">
+          <Form.Item label="匹配值" required>
+            <Input value={itemDraft.value} onChange={(event) => setItemDraft({ ...itemDraft, value: event.target.value })} />
+          </Form.Item>
+          <Form.Item label="值类型">
+            <Select
+              value={itemDraft.valueType}
+              options={[
+                { label: '文本', value: 'text' },
+                { label: '数字', value: 'number' },
+                { label: 'IP / CIDR', value: 'ip' },
+                { label: 'JSON', value: 'json' },
+              ]}
+              onChange={(valueType) => setItemDraft({ ...itemDraft, valueType })}
+            />
+          </Form.Item>
+          <Form.Item label="条目高级 JSON" extra="metadata 必须是合法 JSON。">
+            <Input.TextArea
+              rows={5}
+              value={itemDraft.metadataJson}
+              onChange={(event) => setItemDraft({ ...itemDraft, metadataJson: event.target.value })}
+            />
+          </Form.Item>
+        </Form>
+      </Modal>
     </PageFrame>
   );
 }
@@ -4629,7 +5842,13 @@ export function SettingsPage({ lastUpdated, onRefresh }: ConsolePageProps) {
         <Select placeholder="状态" />
       </QueryBar>
 
-      <ListContainer title="系统参数列表" total={filteredRows.length} fill scrollY={560}>
+      <ListContainer
+        title="系统参数列表"
+        total={filteredRows.length}
+        fill
+        scrollY={560}
+        extra={<Alert type="info" showIcon message="参数值 JSON 必须是合法 JSON，保存后写入后端系统设置。" />}
+      >
         {loadState.error ? <Alert type="warning" showIcon message={loadState.error} /> : null}
         <Table
           rowKey="key"
@@ -4649,7 +5868,7 @@ export function SettingsPage({ lastUpdated, onRefresh }: ConsolePageProps) {
         cancelText="取消"
       >
         <Form layout="vertical">
-          <Form.Item label="参数值 JSON">
+          <Form.Item label="参数值 JSON" extra="参数值必须是合法 JSON，保存后会直接写入后端系统设置。">
             <Input.TextArea rows={6} value={editingValue} onChange={(event) => setEditingValue(event.target.value)} />
           </Form.Item>
         </Form>

@@ -5,9 +5,12 @@ import { describe, expect, it } from 'vitest';
 
 import {
   OverviewPage,
+  MatchGroupsPage,
+  OrganizationPage,
   ProvidersPage,
   QueueMonitorPage,
   RoutesPage,
+  SettingsPage,
   SourcesPage,
   TemplatesPage,
 } from './ConsolePages';
@@ -74,5 +77,40 @@ describe('critical console pages', () => {
     expect(markup).toContain('模板列表');
     expect(markup).toContain('目标平台类型');
     expect(markup).toContain('校验状态');
+  });
+
+  it('renders organization CRUD controls for org units users identities and recipient groups', () => {
+    const markup = renderPage(
+      <OrganizationPage lastUpdated={lastUpdated} onRefresh={() => undefined} />,
+    );
+
+    expect(markup).toContain('组织树');
+    expect(markup).toContain('新增组织');
+    expect(markup).toContain('人员列表');
+    expect(markup).toContain('新增人员');
+    expect(markup).toContain('接收人组列表');
+    expect(markup).toContain('新增接收人组');
+    expect(markup).toContain('平台身份字段');
+    expect(markup).toContain('身份类型');
+    expect(markup).toContain('验证状态');
+    expect(markup).not.toContain('保存到本地');
+  });
+
+  it('renders match group item CRUD controls and settings JSON editor copy', () => {
+    const matchMarkup = renderPage(
+      <MatchGroupsPage lastUpdated={lastUpdated} onRefresh={() => undefined} />,
+    );
+    const settingsMarkup = renderPage(
+      <SettingsPage lastUpdated={lastUpdated} onRefresh={() => undefined} />,
+    );
+
+    expect(matchMarkup).toContain('匹配组列表');
+    expect(matchMarkup).toContain('新增匹配组');
+    expect(matchMarkup).toContain('匹配值条目');
+    expect(matchMarkup).toContain('条目高级 JSON');
+    expect(matchMarkup).not.toContain('enabled');
+    expect(settingsMarkup).toContain('系统参数列表');
+    expect(settingsMarkup).toContain('参数值 JSON');
+    expect(settingsMarkup).toContain('必须是合法 JSON');
   });
 });

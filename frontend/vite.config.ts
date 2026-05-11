@@ -8,7 +8,35 @@ export default defineConfig(({ mode }) => {
   return {
     plugins: [react()],
     build: {
-      chunkSizeWarningLimit: 650,
+      chunkSizeWarningLimit: 1100,
+      rollupOptions: {
+        output: {
+          manualChunks(id) {
+            if (id.includes('/node_modules/react/') || id.includes('/node_modules/react-dom/')) {
+              return 'react-vendor';
+            }
+            if (id.includes('/node_modules/@xyflow/') || id.includes('/node_modules/d3-')) {
+              return 'react-flow';
+            }
+            if (
+              id.includes('/node_modules/antd/') ||
+              id.includes('/node_modules/@ant-design/') ||
+              id.includes('/node_modules/@rc-component/') ||
+              id.includes('/node_modules/rc-') ||
+              id.includes('/node_modules/dayjs/') ||
+              id.includes('/node_modules/async-validator/')
+            ) {
+              return 'antd-vendor';
+            }
+            if (id.includes('/src/pages/ConsolePages')) {
+              return 'console-pages';
+            }
+            if (id.includes('/src/api/') || id.includes('/src/utils/')) {
+              return 'console-data';
+            }
+          },
+        },
+      },
     },
     server: {
       port: 5173,

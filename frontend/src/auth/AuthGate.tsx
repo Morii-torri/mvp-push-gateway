@@ -1,5 +1,13 @@
 import { LockOutlined, UserOutlined } from '@ant-design/icons';
-import { Alert, App, Button, Form, Input, Result, Space, Spin, Typography } from 'antd';
+import Alert from 'antd/es/alert';
+import App from 'antd/es/app';
+import Button from 'antd/es/button';
+import Form from 'antd/es/form';
+import Input from 'antd/es/input';
+import Result from 'antd/es/result';
+import Space from 'antd/es/space';
+import Spin from 'antd/es/spin';
+import Typography from 'antd/es/typography';
 import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
 
 import { ApiClientError, tokenStore } from '../api/client';
@@ -78,7 +86,10 @@ export function AuthGate({ children }: { children: ReactNode }) {
   if (mode === 'checking') {
     return (
       <div className="auth-screen">
-        <Spin tip="正在检查管理台登录状态" />
+        <Space direction="vertical" align="center">
+          <Spin />
+          <Typography.Text type="secondary">正在检查管理台登录状态</Typography.Text>
+        </Space>
       </div>
     );
   }

@@ -106,6 +106,51 @@ describe('console api wrappers', () => {
     ]);
   });
 
+  it('creates updates activates and saves route rules with backend shaped request bodies', async () => {
+    tokenStore.set('admin-token');
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) =>
+      json({ flow: {}, version_id: 'draft', rules: [] }),
+    );
+    const flowInput = {
+      source_id: 'source-1',
+      name: '民生诉求路由',
+      enabled: true,
+      mode: 'table' as const,
+    };
+    const rulesInput = [
+      {
+        rule_key: 'rule-1',
+        sort_order: 1,
+        name: '民生诉求',
+        condition_tree: {
+          operator: 'equals',
+          path: 'payload.bizType',
+          value: '民生诉求',
+        },
+        enabled: true,
+        action: {
+          template_version_id: 'tpl-version-1',
+          channel_ids: ['channel-1'],
+          recipient_strategy: { mode: 'system', recipient_group_ids: ['recipient-group-1'] },
+          send_dedupe_config: { strategy: 'trace_id' },
+          failure_policy: { policy: 'continue' },
+        },
+      },
+    ];
+
+    await consoleApi.createRouteFlow(flowInput, fetchMock);
+    await consoleApi.updateRouteFlow('flow-1', flowInput, fetchMock);
+    await consoleApi.saveRouteRules('flow-1', rulesInput, fetchMock);
+    await consoleApi.activateRouteVersion('flow-1', 'version-1', fetchMock);
+
+    expect(fetchMock.mock.calls.map(([input, init]) => [String(input), init?.method, init?.body])).toEqual([
+      ['/api/v1/route-flows', 'POST', JSON.stringify(flowInput)],
+      ['/api/v1/route-flows/flow-1', 'PUT', JSON.stringify(flowInput)],
+      ['/api/v1/route-flows/flow-1/rules', 'PUT', JSON.stringify({ rules: rulesInput })],
+      ['/api/v1/route-flows/flow-1/versions/version-1/activate', 'POST', undefined],
+    ]);
+  });
+
   it('saves template parse, preview, validate and publish through backend endpoints', async () => {
     tokenStore.set('admin-token');
     const fetchMock = vi.fn(async (input: RequestInfo | URL, _init?: RequestInit) => {
@@ -133,6 +178,131 @@ describe('console api wrappers', () => {
       ['/api/v1/templates/preview', 'POST'],
       ['/api/v1/templates/validate', 'POST'],
       ['/api/v1/templates/tpl-1/publish', 'POST'],
+    ]);
+  });
+
+  it('covers organization users identities recipient groups match items and settings CRUD endpoints', async () => {
+    tokenStore.set('admin-token');
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) =>
+      json({ org_unit: {}, user: {}, identity: {}, group: {}, item: {}, setting: {}, ok: true }),
+    );
+
+    await consoleApi.createOrgUnit({ parent_id: '', code: 'dept-a', name: '部门 A', sort_order: 1 }, fetchMock);
+    await consoleApi.updateOrgUnit('org-1', { parent_id: 'org-root', code: 'dept-a', name: '部门 A', sort_order: 2 }, fetchMock);
+    await consoleApi.deleteOrgUnit('org-1', fetchMock);
+    await consoleApi.createUser(
+      { display_name: '张三', primary_org_id: 'org-root', enabled: true, attributes: { mobile: '13800000000' } },
+      fetchMock,
+    );
+    await consoleApi.updateUser(
+      'user-1',
+      { display_name: '张三', primary_org_id: 'org-root', enabled: false, attributes: { email: 'zhangsan@example.com' } },
+      fetchMock,
+    );
+    await consoleApi.deleteUser('user-1', fetchMock);
+    await consoleApi.createUserIdentity(
+      'user-1',
+      { provider_type: 'wecom', identity_kind: 'userid', identity_value: 'zhangsan', verified: true },
+      fetchMock,
+    );
+    await consoleApi.updateUserIdentity(
+      'identity-1',
+      { user_id: 'user-1', provider_type: 'email', identity_kind: 'email', identity_value: 'zhangsan@example.com', verified: false },
+      fetchMock,
+    );
+    await consoleApi.deleteUserIdentity('identity-1', fetchMock);
+    await consoleApi.createRecipientGroup(
+      {
+        name: '值班组',
+        user_ids: ['user-1'],
+        org_ids: ['org-root'],
+        excluded_user_ids: [],
+        excluded_org_ids: [],
+        enabled: true,
+      },
+      fetchMock,
+    );
+    await consoleApi.updateRecipientGroup(
+      'group-1',
+      {
+        name: '值班组',
+        user_ids: [],
+        org_ids: ['org-root'],
+        excluded_user_ids: ['user-2'],
+        excluded_org_ids: [],
+        enabled: false,
+      },
+      fetchMock,
+    );
+    await consoleApi.deleteRecipientGroup('group-1', fetchMock);
+    await consoleApi.listMatchGroupItems('match-1', fetchMock);
+    await consoleApi.createMatchGroupItem('match-1', { value: 'urgent', value_type: 'text', metadata: { label: '紧急' } }, fetchMock);
+    await consoleApi.updateMatchGroupItem('match-1', 'item-1', { value: 'critical', value_type: 'text', metadata: {} }, fetchMock);
+    await consoleApi.deleteMatchGroupItem('match-1', 'item-1', fetchMock);
+    await consoleApi.updateSetting('logs.retention_days', 30, fetchMock);
+
+    expect(fetchMock.mock.calls.map(([input, init]) => [String(input), init?.method, init?.body])).toEqual([
+      ['/api/v1/org-units', 'POST', JSON.stringify({ parent_id: '', code: 'dept-a', name: '部门 A', sort_order: 1 })],
+      ['/api/v1/org-units/org-1', 'PUT', JSON.stringify({ parent_id: 'org-root', code: 'dept-a', name: '部门 A', sort_order: 2 })],
+      ['/api/v1/org-units/org-1', 'DELETE', undefined],
+      [
+        '/api/v1/users',
+        'POST',
+        JSON.stringify({ display_name: '张三', primary_org_id: 'org-root', enabled: true, attributes: { mobile: '13800000000' } }),
+      ],
+      [
+        '/api/v1/users/user-1',
+        'PUT',
+        JSON.stringify({ display_name: '张三', primary_org_id: 'org-root', enabled: false, attributes: { email: 'zhangsan@example.com' } }),
+      ],
+      ['/api/v1/users/user-1', 'DELETE', undefined],
+      [
+        '/api/v1/users/user-1/identities',
+        'POST',
+        JSON.stringify({ provider_type: 'wecom', identity_kind: 'userid', identity_value: 'zhangsan', verified: true }),
+      ],
+      [
+        '/api/v1/user-identities/identity-1',
+        'PUT',
+        JSON.stringify({
+          user_id: 'user-1',
+          provider_type: 'email',
+          identity_kind: 'email',
+          identity_value: 'zhangsan@example.com',
+          verified: false,
+        }),
+      ],
+      ['/api/v1/user-identities/identity-1', 'DELETE', undefined],
+      [
+        '/api/v1/recipient-groups',
+        'POST',
+        JSON.stringify({
+          name: '值班组',
+          user_ids: ['user-1'],
+          org_ids: ['org-root'],
+          excluded_user_ids: [],
+          excluded_org_ids: [],
+          enabled: true,
+        }),
+      ],
+      [
+        '/api/v1/recipient-groups/group-1',
+        'PUT',
+        JSON.stringify({
+          name: '值班组',
+          user_ids: [],
+          org_ids: ['org-root'],
+          excluded_user_ids: ['user-2'],
+          excluded_org_ids: [],
+          enabled: false,
+        }),
+      ],
+      ['/api/v1/recipient-groups/group-1', 'DELETE', undefined],
+      ['/api/v1/match-groups/match-1/items', 'GET', undefined],
+      ['/api/v1/match-groups/match-1/items', 'POST', JSON.stringify({ value: 'urgent', value_type: 'text', metadata: { label: '紧急' } })],
+      ['/api/v1/match-groups/match-1/items/item-1', 'PUT', JSON.stringify({ value: 'critical', value_type: 'text', metadata: {} })],
+      ['/api/v1/match-groups/match-1/items/item-1', 'DELETE', undefined],
+      ['/api/v1/settings/logs.retention_days', 'PUT', JSON.stringify({ value: 30 })],
     ]);
   });
 });

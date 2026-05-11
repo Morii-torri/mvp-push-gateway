@@ -10,7 +10,11 @@ import {
   SafetyCertificateOutlined,
   SendOutlined,
 } from '@ant-design/icons';
-import { Button, Pagination, Space, Tag, Typography } from 'antd';
+import Button from 'antd/es/button';
+import Pagination from 'antd/es/pagination';
+import Space from 'antd/es/space';
+import Tag from 'antd/es/tag';
+import Typography from 'antd/es/typography';
 import type { ReactNode } from 'react';
 
 import type { TagMeta } from '../utils/labels';
@@ -104,13 +108,15 @@ export function ListContainer({
   fill?: boolean;
   scrollY?: number;
 }) {
+  const scrollStyle = scrollY && !fill ? { maxHeight: scrollY } : undefined;
+
   return (
     <section className={`list-container${fill ? ' list-container--fill' : ''}`}>
       <div className="list-container__header">
         <Typography.Title level={4}>{title}</Typography.Title>
         {extra}
       </div>
-      <div className="table-scroll" style={scrollY ? { maxHeight: scrollY } : undefined}>
+      <div className="table-scroll" style={scrollStyle}>
         {children}
       </div>
       <div className="inline-pagination">

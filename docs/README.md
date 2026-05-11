@@ -11,8 +11,9 @@
 5. `ui-prototypes/prototype-brief.md`：管理台信息架构和原型图提示词。
 6. `ui-prototypes/list-field-status-spec.md`：统一列表、字段中文名和状态中文映射。
 7. `research/open-source-references.md`：可参考的开源项目。
-8. `plans/2026-05-07-mvp-push-gateway-implementation-plan.md`：实施计划。
-9. `plans/2026-05-07-ai-execution-roadmap.md`：下一步交给 AI 分阶段执行的路线图。
+8. `operations/end-to-end-smoke.md`：本地和 Docker Compose 端到端验收 Runbook。
+9. `plans/2026-05-07-mvp-push-gateway-implementation-plan.md`：实施计划。
+10. `plans/2026-05-07-ai-execution-roadmap.md`：下一步交给 AI 分阶段执行的路线图。
 
 ## 已确认决策
 

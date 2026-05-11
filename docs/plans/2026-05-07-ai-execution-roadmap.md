@@ -401,6 +401,69 @@
 - Worker claim transactions remain short; no HTTP send/template render under job claim locks.
 - Tests and frontend build pass.
 
+## Step 13: Console Usability Parity And End-To-End Acceptance
+
+**Ask AI to do:**
+
+1. Complete frontend CRUD parity for first-version console pages:
+   - organization unit create/update/delete and, if supported by existing backend fields, move/re-parent.
+   - user create/update/delete with platform identities create/update/delete.
+   - recipient group list/create/update/delete with user/org include and exclude fields.
+   - match group item list/create/update/delete inside the group drawer or modal.
+   - system setting update with Chinese labels and a safe advanced JSON editor for structured values.
+   - keep every status enum rendered through Chinese labels.
+   - do not restore any production "local demo save" behavior.
+2. Harden route and template console flows:
+   - route flow create/update/delete, rule save, reorder, canvas save, publish, activate and simulate must call backend APIs.
+   - condition editing should support payload field selection, operator selection and value input.
+   - match-group-backed conditions should use a selectable match group field and support multi-select values when appropriate.
+   - template parse, preview, validate and publish must call backend APIs.
+   - "copy variable" always copies `{{ payload.xxx }}` while internal paths remain `payload.xxx`.
+3. Add a real end-to-end acceptance path:
+   - create or document a local smoke path that starts from admin setup/login.
+   - create source, channel, template, route flow/rule and recipient identity.
+   - publish and activate the route flow.
+   - send a sample inbound payload through `POST /api/v1/ingest/{source_code}`.
+   - verify workers create outbound delivery work.
+   - verify message log detail shows inbound payload, outbound request snapshot, response snapshot and timeline durations.
+4. Improve frontend production quality:
+   - add page-level lazy loading or equivalent chunk splitting to reduce the current Vite large chunk warning.
+   - verify primary console pages in browser or Playwright: login/setup, overview, sources, channels, templates, routes, organization/users, match groups, logs, audit and settings.
+   - check fixed-height list containers, modal/drawer layouts, empty states, loading states, error states and Chinese copy.
+   - keep `test-send` clearly scoped so real external sending requires an explicit user action.
+5. Update deployment and acceptance documentation:
+   - document local and Docker Compose smoke tests.
+   - include sample payloads and curl commands.
+   - include expected UI observations after ingest and worker delivery.
+   - mention that scheduled send, RBAC and material upload are intentionally out of first-version scope.
+
+**Suggested parallel agents:**
+
+- Agent A, frontend CRUD parity: organization/users/identities, recipient groups, match group items and settings.
+- Agent B, route and template real flows: route flow/rules/canvas/publish/activate/simulate and template parse/preview/validate/publish.
+- Agent C, deployment and acceptance docs: Docker/local runbook, smoke commands and acceptance checklist.
+- Agent D, frontend polish and browser verification: chunk splitting, Chinese copy, layout polish and screenshot or Playwright evidence.
+
+**Controller note:**
+
+- Wait longer for Step 13 agents than earlier steps. Use a 20-30 minute `wait_agent` timeout unless the controller is blocked by a specific short-running result.
+- Do not accept a checkpoint as final if an agent leaves TODOs in production code. The controller should either finish the gap or explicitly move it out of Step 13.
+
+**Expected output:**
+
+- Console CRUD pages are backed by PostgreSQL APIs and can complete first-version configuration without editing the database manually.
+- A documented smoke path can run one message from inbound request through planning, sending and message-log inspection.
+- Frontend build is cleaner, primary pages are visually checked, and user-visible status/error text is Chinese.
+
+**Acceptance:**
+
+- Backend tests pass.
+- Frontend build and tests pass.
+- Docker Compose config validates.
+- No production page saves configuration to demo/local-only state.
+- Fresh environment acceptance path is documented and can be followed by a human operator.
+- Known first-version exclusions remain explicit: no scheduled send, no RBAC, no material upload.
+
 ## Recommended AI Prompt Order
 
 1. “请按 `docs/plans/2026-05-07-ai-execution-roadmap.md` 执行 Step 0，只做原型图和原型说明更新，不写业务代码。”
@@ -413,3 +476,4 @@
 8. “请执行 Step 9，完成前端管理台。”
 9. “请执行 Step 10 和 Step 11，完成监控、清理、测试和部署。”
 10. “请执行 Step 12，完成运行态全链路闭环和前端真实数据接入。”
+11. “请执行 Step 13，完成控制台 CRUD 可用性、真实端到端验收、前端 polish 和验收文档。”

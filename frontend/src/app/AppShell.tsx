@@ -6,29 +6,56 @@ import {
   ReloadOutlined,
   UserOutlined,
 } from '@ant-design/icons';
-import {
-  App as AntdApp,
-  Avatar,
-  Badge,
-  Button,
-  ConfigProvider,
-  Layout,
-  Menu,
-  Tabs,
-  Space,
-  Tag,
-  Typography,
-  theme,
-} from 'antd';
-import zhCN from 'antd/locale/zh_CN';
-import { useEffect, useMemo, useState } from 'react';
+import AntdApp from 'antd/es/app';
+import Avatar from 'antd/es/avatar';
+import Badge from 'antd/es/badge';
+import Button from 'antd/es/button';
+import ConfigProvider from 'antd/es/config-provider';
+import Layout from 'antd/es/layout';
+import Menu from 'antd/es/menu';
+import Space from 'antd/es/space';
+import Spin from 'antd/es/spin';
+import Tabs from 'antd/es/tabs';
+import Tag from 'antd/es/tag';
+import theme from 'antd/es/theme';
+import Typography from 'antd/es/typography';
+import zhCN from 'antd/es/locale/zh_CN';
+import { Suspense, lazy, useEffect, useMemo, useState, type ComponentType } from 'react';
 
 import { navigationItems, type PageKey } from './navigation';
-import { pages } from '../pages/ConsolePages';
+import type { ConsolePageProps } from '../pages/ConsolePages';
 import { formatRefreshTime } from '../utils/labels';
 import { AuthGate, useAuth } from '../auth/AuthGate';
 
 const { Header, Sider, Content } = Layout;
+
+const pageLoaders = {
+  overview: () => import('../pages/ConsolePages').then((module) => ({ default: module.OverviewPage })),
+  sources: () => import('../pages/ConsolePages').then((module) => ({ default: module.SourcesPage })),
+  providers: () => import('../pages/ConsolePages').then((module) => ({ default: module.ProvidersPage })),
+  routes: () => import('../pages/ConsolePages').then((module) => ({ default: module.RoutesPage })),
+  templates: () => import('../pages/ConsolePages').then((module) => ({ default: module.TemplatesPage })),
+  organization: () => import('../pages/ConsolePages').then((module) => ({ default: module.OrganizationPage })),
+  matchGroups: () => import('../pages/ConsolePages').then((module) => ({ default: module.MatchGroupsPage })),
+  logs: () => import('../pages/ConsolePages').then((module) => ({ default: module.MessageLogsPage })),
+  queue: () => import('../pages/ConsolePages').then((module) => ({ default: module.QueueMonitorPage })),
+  audit: () => import('../pages/ConsolePages').then((module) => ({ default: module.AuditPage })),
+  settings: () => import('../pages/ConsolePages').then((module) => ({ default: module.SettingsPage })),
+} satisfies Record<PageKey, () => Promise<{ default: ComponentType<ConsolePageProps> }>>;
+
+const lazyPages = {
+  overview: lazy(pageLoaders.overview),
+  sources: lazy(pageLoaders.sources),
+  providers: lazy(pageLoaders.providers),
+  routes: lazy(pageLoaders.routes),
+  templates: lazy(pageLoaders.templates),
+  organization: lazy(pageLoaders.organization),
+  matchGroups: lazy(pageLoaders.matchGroups),
+  logs: lazy(pageLoaders.logs),
+  queue: lazy(pageLoaders.queue),
+  audit: lazy(pageLoaders.audit),
+  settings: lazy(pageLoaders.settings),
+} satisfies Record<PageKey, ComponentType<ConsolePageProps>>;
 
 export function AppShell() {
   return (
@@ -128,7 +155,7 @@ function ConsoleChrome() {
     });
   };
 
-  const CurrentPage = pages[activePage];
+  const CurrentPage = lazyPages[activePage];
   const refresh = () => {
     setLastUpdated(new Date());
     message.success('已刷新当前管理台数据');
@@ -222,7 +249,18 @@ function ConsoleChrome() {
           </div>
         </Sider>
         <Content className="app-content">
-          <CurrentPage lastUpdated={lastUpdated} onRefresh={refresh} />
+          <Suspense
+            fallback={
+              <div className="page-loading-state">
+                <Space direction="vertical" align="center">
+                  <Spin />
+                  <Typography.Text type="secondary">正在加载页面模块</Typography.Text>
+                </Space>
+              </div>
+            }
+          >
+            <CurrentPage lastUpdated={lastUpdated} onRefresh={refresh} />
+          </Suspense>
         </Content>
       </Layout>
     </Layout>

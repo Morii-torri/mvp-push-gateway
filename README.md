@@ -1,12 +1,12 @@
 # MVP Push Gateway
 
-Step 11 delivery packaging for the new `mvp-push-gateway/` implementation. This repository currently provides:
+Runtime and packaging documentation for the new `mvp-push-gateway/` implementation. This repository currently provides:
 
 - PostgreSQL-backed Go API server
 - React + Vite + Ant Design frontend build output
-- migrations, integration tests, queue/monitoring endpoints, and local startup scripts
+- migrations, integration tests, queue/monitoring endpoints, runtime workers, and local startup scripts
 
-This README only documents the current repository state. It does not assume hidden defaults, built-in admin passwords, or extra worker processes that are not exposed by this tree.
+This README only documents the current repository state. It does not assume hidden defaults or built-in admin passwords.
 
 ## Image Deployment
 
@@ -28,6 +28,8 @@ This mode packages PostgreSQL, the Go backend, the frontend static site, Nginx, 
 ```bash
 docker compose --profile all-in-one up --build all-in-one
 ```
+
+Keep the trailing service name `all-in-one`; it starts only the single-image product service instead of also starting the split-image services.
 
 Service:
 
@@ -148,8 +150,6 @@ Default frontend address:
 http://127.0.0.1:5173
 ```
 
-The current frontend repository state is still a console shell/demo-oriented UI. First-run setup, admin creation, and API verification are most reliable through the backend HTTP API below.
-
 ## First-Run Admin Initialization
 
 Check setup state:
@@ -191,6 +191,8 @@ export ADMIN_TOKEN='replace-with-login-token'
 
 This path verifies that a clean environment can boot, initialize, ingest a payload, configure core objects, and read monitoring data.
 
+For a complete copy-paste runbook, including a local webhook receiver and a smoke script, see `docs/operations/end-to-end-smoke.md`.
+
 ### 1. Create a Source
 
 ```bash
@@ -201,7 +203,7 @@ curl -X POST http://127.0.0.1:18080/api/v1/sources \
     "code": "orders",
     "name": "订单中心",
     "auth_mode": "token",
-    "auth_token": "src-orders-dev-token",
+    "auth_token": "srcordersdevtoken",
     "enabled": true
   }'
 ```
@@ -215,7 +217,7 @@ Save both:
 
 ```bash
 curl -X POST http://127.0.0.1:18080/api/v1/ingest/orders \
-  -H 'Authorization: Bearer src-orders-dev-token' \
+  -H 'Authorization: Bearer srcordersdevtoken' \
   -H 'Content-Type: application/json' \
   -d '{
     "title": "订单已支付",
@@ -255,7 +257,7 @@ curl -X POST http://127.0.0.1:18080/api/v1/templates/replace-with-template-id/pu
   -d '{
     "message_type": "json",
     "target_provider_type": "webhook",
-    "template_body": "{{ payload.title }}",
+    "template_body": "{\"title\":\"{{ payload.title }}\",\"content\":\"{{ payload.content }}\",\"severity\":\"{{ payload.severity }}\"}",
     "message_body_schema": {"type": "object"},
     "sample_payload": {
       "title": "订单已支付",
@@ -279,9 +281,12 @@ curl -X POST http://127.0.0.1:18080/api/v1/channels \
     "enabled": true,
     "send_config": {
       "method": "POST",
-      "url": "https://httpbin.org/post",
+      "url": "http://127.0.0.1:18081/webhook",
       "headers": {
         "Content-Type": "application/json"
+      },
+      "body": {
+        "gateway": "mvp-push"
       },
       "recipient": {
         "location": "none"
@@ -324,7 +329,7 @@ curl -X PUT http://127.0.0.1:18080/api/v1/route-flows/replace-with-flow-id/rules
         "action": {
           "template_version_id": "replace-with-template-version-id",
           "channel_ids": ["replace-with-channel-id"],
-          "recipient_strategy": {},
+          "recipient_strategy": {"mode": "none"},
           "send_dedupe_config": {},
           "failure_policy": {}
         }
@@ -380,23 +385,30 @@ curl http://127.0.0.1:18080/api/v1/stats/overview \
   -H "Authorization: Bearer ${ADMIN_TOKEN}"
 ```
 
-### 7. Validate Outbound Request Shape
-
-The current repository exposes request-building and delivery internals, but the default runtime entrypoint in this tree starts only the HTTP API service. A practical smoke test is to validate the channel request shape directly:
+### 7. Send a Routed Payload and Check Message Logs
 
 ```bash
-curl -X POST http://127.0.0.1:18080/api/v1/channels/replace-with-channel-id/build-request \
-  -H "Authorization: Bearer ${ADMIN_TOKEN}" \
+curl -X POST http://127.0.0.1:18080/api/v1/ingest/orders \
+  -H 'Authorization: Bearer srcordersdevtoken' \
   -H 'Content-Type: application/json' \
   -d '{
-    "body": {
-      "title": "订单已支付",
-      "content": "订单 2026-0001 已完成支付"
-    }
+    "title": "订单已支付",
+    "content": "订单 2026-0002 已完成支付",
+    "severity": "info"
   }'
 ```
 
-This confirms the provider/channel configuration can build a concrete outbound HTTP request from your stored channel config.
+The response returns `202 Accepted` and a `trace_id`. Query the message log after a few seconds:
+
+```bash
+curl "http://127.0.0.1:18080/api/v1/messages?trace_id=replace-with-trace-id" \
+  -H "Authorization: Bearer ${ADMIN_TOKEN}"
+
+curl "http://127.0.0.1:18080/api/v1/messages/replace-with-message-id" \
+  -H "Authorization: Bearer ${ADMIN_TOKEN}"
+```
+
+Expected detail fields include the inbound payload, matched route flow/rule, outbound request snapshot, outbound response snapshot and timeline durations.
 
 ## Test Commands
 
@@ -472,10 +484,6 @@ curl http://127.0.0.1:18080/api/v1/setup/status
 
 If `setup_open` is `false`, log in with the existing admin instead of trying to initialize again.
 
-### Frontend opens but does not behave like a full production console
-
-That is expected for the current repository state. The frontend build is useful for packaging smoke tests and API-adjacent console work, but setup/auth/config verification should still be driven by the backend API examples above.
-
 ### Queue metrics show pending jobs after ingest
 
-That is also expected with the current public entrypoints in this repository. Ingest enqueues async jobs, but the shipped `backend/cmd/server` binary only starts the HTTP API. Queue growth, route simulation, template publish, and channel request building can still be verified end-to-end from a packaging perspective.
+Ingest enqueues asynchronous `route_plan` and `send_message` jobs. A small amount of pending work is normal immediately after ingest. If the same jobs remain pending for more than a few polling cycles, check backend logs, database connectivity, and whether the runtime worker harness is running.

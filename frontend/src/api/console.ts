@@ -165,6 +165,8 @@ export type OrgUnitApiRecord = {
   updated_at: string;
 };
 
+export type OrgUnitInput = Omit<OrgUnitApiRecord, 'id' | 'path' | 'created_at' | 'updated_at'>;
+
 export type UserApiRecord = {
   id: string;
   display_name: string;
@@ -235,6 +237,12 @@ export type MatchGroupItemApiRecord = {
   value_type: string;
   metadata: JSONValue;
   created_at: string;
+};
+
+export type MatchGroupItemInput = {
+  value: string;
+  value_type: string;
+  metadata?: JSONValue;
 };
 
 export type MatchGroupInput = {
@@ -451,8 +459,14 @@ export const consoleApi = {
   listOrgUnits(fetcher?: ApiFetcher) {
     return apiRequest<{ org_units: OrgUnitApiRecord[] }>('/org-units', { fetcher });
   },
-  createOrgUnit(input: Omit<OrgUnitApiRecord, 'id' | 'path' | 'created_at' | 'updated_at'>, fetcher?: ApiFetcher) {
+  createOrgUnit(input: OrgUnitInput, fetcher?: ApiFetcher) {
     return apiRequest<{ org_unit: OrgUnitApiRecord }>('/org-units', { method: 'POST', body: input, fetcher });
+  },
+  updateOrgUnit(id: string, input: OrgUnitInput, fetcher?: ApiFetcher) {
+    return apiRequest<{ org_unit: OrgUnitApiRecord }>(`/org-units/${id}`, { method: 'PUT', body: input, fetcher });
+  },
+  deleteOrgUnit(id: string, fetcher?: ApiFetcher) {
+    return apiRequest<{ ok: boolean }>(`/org-units/${id}`, { method: 'DELETE', fetcher });
   },
   listUsers(fetcher?: ApiFetcher) {
     return apiRequest<{ users: UserApiRecord[] }>('/users', { fetcher });
@@ -496,6 +510,16 @@ export const consoleApi = {
       fetcher,
     });
   },
+  updateRecipientGroup(id: string, input: RecipientGroupInput, fetcher?: ApiFetcher) {
+    return apiRequest<{ group: RecipientGroupApiRecord }>(`/recipient-groups/${id}`, {
+      method: 'PUT',
+      body: input,
+      fetcher,
+    });
+  },
+  deleteRecipientGroup(id: string, fetcher?: ApiFetcher) {
+    return apiRequest<{ ok: boolean }>(`/recipient-groups/${id}`, { method: 'DELETE', fetcher });
+  },
 
   listMatchGroups(fetcher?: ApiFetcher) {
     return apiRequest<{ match_groups: MatchGroupApiRecord[] }>('/match-groups', { fetcher });
@@ -513,12 +537,25 @@ export const consoleApi = {
   deleteMatchGroup(id: string, fetcher?: ApiFetcher) {
     return apiRequest<{ ok: boolean }>(`/match-groups/${id}`, { method: 'DELETE', fetcher });
   },
-  createMatchGroupItem(id: string, input: { value: string; value_type: string; metadata?: JSONValue }, fetcher?: ApiFetcher) {
+  listMatchGroupItems(id: string, fetcher?: ApiFetcher) {
+    return apiRequest<{ items: MatchGroupItemApiRecord[] }>(`/match-groups/${id}/items`, { fetcher });
+  },
+  createMatchGroupItem(id: string, input: MatchGroupItemInput, fetcher?: ApiFetcher) {
     return apiRequest<{ item: MatchGroupItemApiRecord }>(`/match-groups/${id}/items`, {
       method: 'POST',
       body: { ...input, metadata: input.metadata ?? {} },
       fetcher,
     });
+  },
+  updateMatchGroupItem(id: string, itemId: string, input: MatchGroupItemInput, fetcher?: ApiFetcher) {
+    return apiRequest<{ item: MatchGroupItemApiRecord }>(`/match-groups/${id}/items/${itemId}`, {
+      method: 'PUT',
+      body: { ...input, metadata: input.metadata ?? {} },
+      fetcher,
+    });
+  },
+  deleteMatchGroupItem(id: string, itemId: string, fetcher?: ApiFetcher) {
+    return apiRequest<{ ok: boolean }>(`/match-groups/${id}/items/${itemId}`, { method: 'DELETE', fetcher });
   },
   listMessageLogs(fetcher?: ApiFetcher) {
     return apiRequest<{ messages: MessageLogApiRecord[]; total: number; limit: number; offset: number }>('/messages', { fetcher });

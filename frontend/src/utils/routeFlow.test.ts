@@ -1,7 +1,12 @@
 import { describe, expect, it } from 'vitest';
 
 import type { RouteGroup, RouteRule } from '../data/demoData';
-import { canEnableRouteGroupSource, routeRulesForGroup } from './routeFlow';
+import {
+  buildRouteConditionTree,
+  canEnableRouteGroupSource,
+  routeRulesForGroup,
+  summarizeRouteConditionTree,
+} from './routeFlow';
 
 const groups: RouteGroup[] = [
   {
@@ -68,5 +73,65 @@ describe('route flow helpers', () => {
 
   it('returns group rules sorted by sortOrder', () => {
     expect(routeRulesForGroup(groups[0], rules).map((rule) => rule.id)).toEqual(['rule-2', 'rule-1']);
+  });
+
+  it('builds backend condition trees from manual and match group drafts', () => {
+    expect(
+      buildRouteConditionTree([
+        {
+          fieldPath: 'payload.bizType',
+          operator: 'equals',
+          value: '民生诉求',
+          matchGroupIds: [],
+        },
+        {
+          fieldPath: 'payload.level',
+          operator: 'in_match_group',
+          value: '',
+          matchGroupIds: ['group-urgent', 'group-important'],
+        },
+      ]),
+    ).toEqual({
+      operator: 'and',
+      conditions: [
+        { operator: 'equals', path: 'payload.bizType', value: '民生诉求' },
+        {
+          operator: 'or',
+          conditions: [
+            { operator: 'in_match_group', path: 'payload.level', match_group_id: 'group-urgent' },
+            { operator: 'in_match_group', path: 'payload.level', match_group_id: 'group-important' },
+          ],
+        },
+      ],
+    });
+  });
+
+  it('summarizes route condition trees with Chinese labels and match group names', () => {
+    expect(
+      summarizeRouteConditionTree(
+        {
+          operator: 'and',
+          conditions: [
+            { operator: 'equals', path: 'payload.bizType', value: '民生诉求' },
+            { operator: 'exists', path: 'payload.title' },
+            { operator: 'not_in_match_group', path: 'payload.level', match_group_id: 'group-urgent' },
+          ],
+        },
+        {
+          fieldLabels: {
+            'payload.bizType': '业务类型',
+            'payload.title': '标题',
+            'payload.level': '消息级别',
+          },
+          matchGroupNames: {
+            'group-urgent': '紧急等级',
+          },
+        },
+      ),
+    ).toBe('业务类型 = 民生诉求 且 标题 存在 且 消息级别 不属于匹配组[紧急等级]');
+  });
+
+  it('keeps legacy expression summaries readable', () => {
+    expect(summarizeRouteConditionTree({ expression: '业务类型 = 民生诉求' })).toBe('业务类型 = 民生诉求');
   });
 });

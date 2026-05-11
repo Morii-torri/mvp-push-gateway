@@ -6,11 +6,13 @@ html,
 body,
 #root {
   min-width: 320px;
+  height: 100%;
   min-height: 100vh;
   margin: 0;
 }
 
 body {
+  overflow: hidden;
   color: #12213f;
   background: #eef5ff;
 }
@@ -37,7 +39,13 @@ body {
 }
 
 .app-shell {
+  height: 100vh;
   min-height: 100vh;
+  overflow: hidden;
+}
+
+.app-shell > .ant-layout {
+  min-height: 0;
 }
 
 .app-header {
@@ -167,7 +175,9 @@ body {
 .app-content {
   min-width: 0;
   padding: 22px;
-  min-height: calc(100vh - 64px);
+  height: calc(100vh - 64px);
+  min-height: 0;
+  overflow: auto;
 }
 
 .page-frame {
@@ -175,6 +185,20 @@ body {
   gap: 18px;
   min-height: calc(100vh - 108px);
   align-content: start;
+}
+
+.page-frame:has(.list-container--fill) {
+  height: calc(100vh - 108px);
+  min-height: 0;
+  grid-template-rows: auto auto minmax(0, 1fr);
+  align-content: stretch;
+}
+
+.page-loading-state {
+  display: grid;
+  min-height: calc(100vh - 108px);
+  place-items: center;
+  color: #667085;
 }
 
 .page-heading {
@@ -238,7 +262,8 @@ body {
 .list-container--fill {
   display: grid;
   grid-template-rows: auto minmax(360px, 1fr) auto;
-  min-height: min(680px, calc(100vh - 240px));
+  height: 100%;
+  min-height: 0;
 }
 
 .list-container__header,
@@ -257,7 +282,22 @@ body {
 }
 
 .table-scroll {
+  min-height: 0;
   overflow: auto;
+}
+
+.table-scroll > .ant-alert {
+  margin: 12px 16px 0;
+}
+
+.list-container--fill .table-scroll {
+  max-height: none;
+}
+
+.list-container--fill .ant-table-wrapper,
+.list-container--fill .ant-spin-nested-loading,
+.list-container--fill .ant-spin-container {
+  min-height: 0;
 }
 
 .inline-pagination {

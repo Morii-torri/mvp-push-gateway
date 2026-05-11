@@ -23,6 +23,7 @@ frontend/dist/
 # Logs and local data
 logs/
 data/
+output/
 *.log
 
 # Editor
