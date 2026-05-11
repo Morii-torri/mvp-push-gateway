@@ -89,7 +89,8 @@ func (h *Handler) orgUnitsHandler(w http.ResponseWriter, r *http.Request) {
 	if !h.requireRecipientService(w) {
 		return
 	}
-	if _, ok := h.authenticateRequest(w, r); !ok {
+	adminUser, ok := h.authenticateRequest(w, r)
+	if !ok {
 		return
 	}
 	switch r.Method {
@@ -117,7 +118,9 @@ func (h *Handler) orgUnitsHandler(w http.ResponseWriter, r *http.Request) {
 			writeAPIError(w, status, code, message)
 			return
 		}
-		writeJSON(w, http.StatusCreated, orgUnitBody{OrgUnit: toOrgUnitResponse(item)})
+		response := orgUnitBody{OrgUnit: toOrgUnitResponse(item)}
+		h.recordAudit(r, adminUser, "create", "org_unit", item.ID, request, response)
+		writeJSON(w, http.StatusCreated, response)
 	default:
 		methodNotAllowed(w, http.MethodGet+", "+http.MethodPost)
 	}
@@ -132,7 +135,8 @@ func (h *Handler) orgUnitDetailHandler(w http.ResponseWriter, r *http.Request) {
 	if !h.requireRecipientService(w) {
 		return
 	}
-	if _, ok := h.authenticateRequest(w, r); !ok {
+	adminUser, ok := h.authenticateRequest(w, r)
+	if !ok {
 		return
 	}
 	switch r.Method {
@@ -156,14 +160,18 @@ func (h *Handler) orgUnitDetailHandler(w http.ResponseWriter, r *http.Request) {
 			writeAPIError(w, status, code, message)
 			return
 		}
-		writeJSON(w, http.StatusOK, orgUnitBody{OrgUnit: toOrgUnitResponse(item)})
+		response := orgUnitBody{OrgUnit: toOrgUnitResponse(item)}
+		h.recordAudit(r, adminUser, "update", "org_unit", id, request, response)
+		writeJSON(w, http.StatusOK, response)
 	case http.MethodDelete:
 		if err := h.recipients.DeleteOrgUnit(r.Context(), id); err != nil {
 			status, code, message := recipientErrorStatus(err)
 			writeAPIError(w, status, code, message)
 			return
 		}
-		writeJSON(w, http.StatusOK, okResponse{OK: true})
+		response := okResponse{OK: true}
+		h.recordAudit(r, adminUser, "delete", "org_unit", id, nil, response)
+		writeJSON(w, http.StatusOK, response)
 	default:
 		methodNotAllowed(w, http.MethodGet+", "+http.MethodPut+", "+http.MethodDelete)
 	}
@@ -173,7 +181,8 @@ func (h *Handler) usersHandler(w http.ResponseWriter, r *http.Request) {
 	if !h.requireRecipientService(w) {
 		return
 	}
-	if _, ok := h.authenticateRequest(w, r); !ok {
+	adminUser, ok := h.authenticateRequest(w, r)
+	if !ok {
 		return
 	}
 	switch r.Method {
@@ -201,7 +210,9 @@ func (h *Handler) usersHandler(w http.ResponseWriter, r *http.Request) {
 			writeAPIError(w, status, code, message)
 			return
 		}
-		writeJSON(w, http.StatusCreated, userBody{User: toUserResponse(user)})
+		response := userBody{User: toUserResponse(user)}
+		h.recordAudit(r, adminUser, "create", "user", user.ID, request, response)
+		writeJSON(w, http.StatusCreated, response)
 	default:
 		methodNotAllowed(w, http.MethodGet+", "+http.MethodPost)
 	}
@@ -222,7 +233,8 @@ func (h *Handler) userDetailHandler(w http.ResponseWriter, r *http.Request) {
 	if !h.requireRecipientService(w) {
 		return
 	}
-	if _, ok := h.authenticateRequest(w, r); !ok {
+	adminUser, ok := h.authenticateRequest(w, r)
+	if !ok {
 		return
 	}
 	switch r.Method {
@@ -246,14 +258,18 @@ func (h *Handler) userDetailHandler(w http.ResponseWriter, r *http.Request) {
 			writeAPIError(w, status, code, message)
 			return
 		}
-		writeJSON(w, http.StatusOK, userBody{User: toUserResponse(user)})
+		response := userBody{User: toUserResponse(user)}
+		h.recordAudit(r, adminUser, "update", "user", id, request, response)
+		writeJSON(w, http.StatusOK, response)
 	case http.MethodDelete:
 		if err := h.recipients.DeleteUser(r.Context(), id); err != nil {
 			status, code, message := recipientErrorStatus(err)
 			writeAPIError(w, status, code, message)
 			return
 		}
-		writeJSON(w, http.StatusOK, okResponse{OK: true})
+		response := okResponse{OK: true}
+		h.recordAudit(r, adminUser, "delete", "user", id, nil, response)
+		writeJSON(w, http.StatusOK, response)
 	default:
 		methodNotAllowed(w, http.MethodGet+", "+http.MethodPut+", "+http.MethodDelete)
 	}
@@ -263,7 +279,8 @@ func (h *Handler) userIdentitiesHandler(w http.ResponseWriter, r *http.Request, 
 	if !h.requireRecipientService(w) {
 		return
 	}
-	if _, ok := h.authenticateRequest(w, r); !ok {
+	adminUser, ok := h.authenticateRequest(w, r)
+	if !ok {
 		return
 	}
 	switch r.Method {
@@ -292,7 +309,9 @@ func (h *Handler) userIdentitiesHandler(w http.ResponseWriter, r *http.Request, 
 			writeAPIError(w, status, code, message)
 			return
 		}
-		writeJSON(w, http.StatusCreated, userIdentityBody{Identity: toUserIdentityResponse(item)})
+		response := userIdentityBody{Identity: toUserIdentityResponse(item)}
+		h.recordAudit(r, adminUser, "create", "user_identity", item.ID, request, response)
+		writeJSON(w, http.StatusCreated, response)
 	default:
 		methodNotAllowed(w, http.MethodGet+", "+http.MethodPost)
 	}
@@ -332,7 +351,8 @@ func (h *Handler) userIdentityDetailHandler(w http.ResponseWriter, r *http.Reque
 	if !h.requireRecipientService(w) {
 		return
 	}
-	if _, ok := h.authenticateRequest(w, r); !ok {
+	adminUser, ok := h.authenticateRequest(w, r)
+	if !ok {
 		return
 	}
 	switch r.Method {
@@ -348,14 +368,18 @@ func (h *Handler) userIdentityDetailHandler(w http.ResponseWriter, r *http.Reque
 			writeAPIError(w, status, code, message)
 			return
 		}
-		writeJSON(w, http.StatusOK, userIdentityBody{Identity: toUserIdentityResponse(item)})
+		response := userIdentityBody{Identity: toUserIdentityResponse(item)}
+		h.recordAudit(r, adminUser, "update", "user_identity", id, request, response)
+		writeJSON(w, http.StatusOK, response)
 	case http.MethodDelete:
 		if err := h.recipients.DeleteUserIdentity(r.Context(), id); err != nil {
 			status, code, message := recipientErrorStatus(err)
 			writeAPIError(w, status, code, message)
 			return
 		}
-		writeJSON(w, http.StatusOK, okResponse{OK: true})
+		response := okResponse{OK: true}
+		h.recordAudit(r, adminUser, "delete", "user_identity", id, nil, response)
+		writeJSON(w, http.StatusOK, response)
 	default:
 		methodNotAllowed(w, http.MethodPut+", "+http.MethodDelete)
 	}
@@ -365,7 +389,8 @@ func (h *Handler) recipientGroupsHandler(w http.ResponseWriter, r *http.Request)
 	if !h.requireRecipientService(w) {
 		return
 	}
-	if _, ok := h.authenticateRequest(w, r); !ok {
+	adminUser, ok := h.authenticateRequest(w, r)
+	if !ok {
 		return
 	}
 	switch r.Method {
@@ -393,7 +418,9 @@ func (h *Handler) recipientGroupsHandler(w http.ResponseWriter, r *http.Request)
 			writeAPIError(w, status, code, message)
 			return
 		}
-		writeJSON(w, http.StatusCreated, recipientGroupBody{Group: toRecipientGroupResponse(item)})
+		response := recipientGroupBody{Group: toRecipientGroupResponse(item)}
+		h.recordAudit(r, adminUser, "create", "recipient_group", item.ID, request, response)
+		writeJSON(w, http.StatusCreated, response)
 	default:
 		methodNotAllowed(w, http.MethodGet+", "+http.MethodPost)
 	}
@@ -408,7 +435,8 @@ func (h *Handler) recipientGroupDetailHandler(w http.ResponseWriter, r *http.Req
 	if !h.requireRecipientService(w) {
 		return
 	}
-	if _, ok := h.authenticateRequest(w, r); !ok {
+	adminUser, ok := h.authenticateRequest(w, r)
+	if !ok {
 		return
 	}
 	switch r.Method {
@@ -432,14 +460,18 @@ func (h *Handler) recipientGroupDetailHandler(w http.ResponseWriter, r *http.Req
 			writeAPIError(w, status, code, message)
 			return
 		}
-		writeJSON(w, http.StatusOK, recipientGroupBody{Group: toRecipientGroupResponse(item)})
+		response := recipientGroupBody{Group: toRecipientGroupResponse(item)}
+		h.recordAudit(r, adminUser, "update", "recipient_group", id, request, response)
+		writeJSON(w, http.StatusOK, response)
 	case http.MethodDelete:
 		if err := h.recipients.DeleteRecipientGroup(r.Context(), id); err != nil {
 			status, code, message := recipientErrorStatus(err)
 			writeAPIError(w, status, code, message)
 			return
 		}
-		writeJSON(w, http.StatusOK, okResponse{OK: true})
+		response := okResponse{OK: true}
+		h.recordAudit(r, adminUser, "delete", "recipient_group", id, nil, response)
+		writeJSON(w, http.StatusOK, response)
 	default:
 		methodNotAllowed(w, http.MethodGet+", "+http.MethodPut+", "+http.MethodDelete)
 	}

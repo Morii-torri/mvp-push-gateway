@@ -1,4 +1,5 @@
 import type { Metric, PlatformHealth, QueueMetric, SlowRule } from '../data/demoData';
+import { apiRequest } from '../api/client';
 import { getProviderTypeLabel, type ProviderType } from './labels';
 
 export type OverviewApiResponse = {
@@ -282,27 +283,11 @@ export function buildQueueMonitoringViewModel(data: QueueMonitoringApiResponse):
 }
 
 export async function fetchOverviewData(): Promise<OverviewApiResponse> {
-  return fetchJSON<OverviewApiResponse>('/api/v1/stats/overview');
+  return apiRequest<OverviewApiResponse>('/stats/overview');
 }
 
 export async function fetchQueueMonitoringData(): Promise<QueueMonitoringApiResponse> {
-  return fetchJSON<QueueMonitoringApiResponse>('/api/v1/monitor/queues');
-}
-
-async function fetchJSON<T>(path: string): Promise<T> {
-  const headers: HeadersInit = {
-    Accept: 'application/json',
-  };
-  const token = window.localStorage.getItem('mgp_admin_token');
-  if (token) {
-    headers.Authorization = `Bearer ${token}`;
-  }
-
-  const response = await window.fetch(path, { headers });
-  if (!response.ok) {
-    throw new Error(`request failed: ${response.status}`);
-  }
-  return (await response.json()) as T;
+  return apiRequest<QueueMonitoringApiResponse>('/monitor/queues');
 }
 
 function metricCard(

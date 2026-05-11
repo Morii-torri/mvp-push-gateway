@@ -75,6 +75,10 @@ type buildRequestResponse struct {
 	Request provider.BuiltRequest `json:"request"`
 }
 
+type testSendResponse struct {
+	Result provider.TestSendResult `json:"result"`
+}
+
 func (h *Handler) providerCapabilitiesHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		methodNotAllowed(w, http.MethodGet)
@@ -104,7 +108,8 @@ func (h *Handler) channelsHandler(w http.ResponseWriter, r *http.Request) {
 	if !h.requireProviderService(w) {
 		return
 	}
-	if _, ok := h.authenticateRequest(w, r); !ok {
+	adminUser, ok := h.authenticateRequest(w, r)
+	if !ok {
 		return
 	}
 
@@ -133,7 +138,9 @@ func (h *Handler) channelsHandler(w http.ResponseWriter, r *http.Request) {
 			writeAPIError(w, status, code, message)
 			return
 		}
-		writeJSON(w, http.StatusCreated, channelResponseBody{Channel: toChannelResponse(created)})
+		response := channelResponseBody{Channel: toChannelResponse(created)}
+		h.recordAudit(r, adminUser, "create", "channel", created.ID, request, response)
+		writeJSON(w, http.StatusCreated, response)
 	default:
 		methodNotAllowed(w, http.MethodGet+", "+http.MethodPost)
 	}
@@ -143,7 +150,8 @@ func (h *Handler) channelDetailHandler(w http.ResponseWriter, r *http.Request) {
 	if !h.requireProviderService(w) {
 		return
 	}
-	if _, ok := h.authenticateRequest(w, r); !ok {
+	adminUser, ok := h.authenticateRequest(w, r)
+	if !ok {
 		return
 	}
 
@@ -156,6 +164,10 @@ func (h *Handler) channelDetailHandler(w http.ResponseWriter, r *http.Request) {
 	channelID := parts[0]
 	if len(parts) == 2 && parts[1] == "build-request" {
 		h.channelBuildRequestHandler(w, r, channelID)
+		return
+	}
+	if len(parts) == 2 && parts[1] == "test-send" {
+		h.channelTestSendHandler(w, r, channelID)
 		return
 	}
 	if len(parts) != 1 {
@@ -184,14 +196,18 @@ func (h *Handler) channelDetailHandler(w http.ResponseWriter, r *http.Request) {
 			writeAPIError(w, status, code, message)
 			return
 		}
-		writeJSON(w, http.StatusOK, channelResponseBody{Channel: toChannelResponse(updated)})
+		response := channelResponseBody{Channel: toChannelResponse(updated)}
+		h.recordAudit(r, adminUser, "update", "channel", channelID, request, response)
+		writeJSON(w, http.StatusOK, response)
 	case http.MethodDelete:
 		if err := h.providers.DeleteChannel(r.Context(), channelID); err != nil {
 			status, code, message := providerErrorStatus(err)
 			writeAPIError(w, status, code, message)
 			return
 		}
-		writeJSON(w, http.StatusOK, okResponse{OK: true})
+		response := okResponse{OK: true}
+		h.recordAudit(r, adminUser, "delete", "channel", channelID, nil, response)
+		writeJSON(w, http.StatusOK, response)
 	default:
 		methodNotAllowed(w, http.MethodGet+", "+http.MethodPut+", "+http.MethodDelete)
 	}
@@ -214,6 +230,25 @@ func (h *Handler) channelBuildRequestHandler(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	writeJSON(w, http.StatusOK, buildRequestResponse{Request: built})
+}
+
+func (h *Handler) channelTestSendHandler(w http.ResponseWriter, r *http.Request, channelID string) {
+	if r.Method != http.MethodPost {
+		methodNotAllowed(w, http.MethodPost)
+		return
+	}
+	var request provider.TestSendInput
+	if err := decodeJSON(r, &request); err != nil {
+		writeAPIError(w, http.StatusBadRequest, "MGP-REQ-001", "请求 JSON 不合法")
+		return
+	}
+	result, err := h.providers.TestSend(r.Context(), channelID, request)
+	if err != nil {
+		status, code, message := providerErrorStatus(err)
+		writeAPIError(w, status, code, message)
+		return
+	}
+	writeJSON(w, http.StatusOK, testSendResponse{Result: result})
 }
 
 func (r channelRequest) toInput() provider.CreateChannelInput {

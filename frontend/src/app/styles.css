@@ -15,6 +15,27 @@ body {
   background: #eef5ff;
 }
 
+.auth-screen {
+  display: grid;
+  min-height: 100vh;
+  padding: 24px;
+  place-items: center;
+  background: #eef5ff;
+}
+
+.auth-panel {
+  width: min(420px, 100%);
+  padding: 30px;
+  background: #ffffff;
+  border: 1px solid #d7e3f4;
+  border-radius: 8px;
+  box-shadow: 0 16px 42px rgb(15 60 120 / 10%);
+}
+
+.auth-panel .ant-typography {
+  margin-top: 0;
+}
+
 .app-shell {
   min-height: 100vh;
 }

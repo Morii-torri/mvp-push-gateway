@@ -69,7 +69,8 @@ func (h *Handler) sourcesHandler(w http.ResponseWriter, r *http.Request) {
 	if !h.requireSourceService(w) {
 		return
 	}
-	if _, ok := h.authenticateRequest(w, r); !ok {
+	adminUser, ok := h.authenticateRequest(w, r)
+	if !ok {
 		return
 	}
 
@@ -103,7 +104,9 @@ func (h *Handler) sourcesHandler(w http.ResponseWriter, r *http.Request) {
 			writeAPIError(w, status, code, message)
 			return
 		}
-		writeJSON(w, http.StatusCreated, sourceCreateResponse{Source: toSourceResponse(created)})
+		response := sourceCreateResponse{Source: toSourceResponse(created)}
+		h.recordAudit(r, adminUser, "create", "source", created.ID, input, response)
+		writeJSON(w, http.StatusCreated, response)
 	default:
 		methodNotAllowed(w, http.MethodGet+", "+http.MethodPost)
 	}
@@ -113,7 +116,8 @@ func (h *Handler) sourceDetailHandler(w http.ResponseWriter, r *http.Request) {
 	if !h.requireSourceService(w) {
 		return
 	}
-	if _, ok := h.authenticateRequest(w, r); !ok {
+	adminUser, ok := h.authenticateRequest(w, r)
+	if !ok {
 		return
 	}
 
@@ -150,14 +154,18 @@ func (h *Handler) sourceDetailHandler(w http.ResponseWriter, r *http.Request) {
 			writeAPIError(w, status, code, message)
 			return
 		}
-		writeJSON(w, http.StatusOK, sourceGetResponse{Source: toSourceResponse(updated)})
+		response := sourceGetResponse{Source: toSourceResponse(updated)}
+		h.recordAudit(r, adminUser, "update", "source", id, input, response)
+		writeJSON(w, http.StatusOK, response)
 	case http.MethodDelete:
 		if err := h.sources.DeleteSource(r.Context(), id); err != nil {
 			status, code, message := sourceErrorStatus(err)
 			writeAPIError(w, status, code, message)
 			return
 		}
-		writeJSON(w, http.StatusOK, okResponse{OK: true})
+		response := okResponse{OK: true}
+		h.recordAudit(r, adminUser, "delete", "source", id, nil, response)
+		writeJSON(w, http.StatusOK, response)
 	default:
 		methodNotAllowed(w, http.MethodGet+", "+http.MethodPut+", "+http.MethodDelete)
 	}

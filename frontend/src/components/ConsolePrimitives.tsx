@@ -276,7 +276,7 @@ export function MiniTrend({ points }: { points: number[] }) {
     <div className="mini-trend" aria-label="趋势图">
       {points.map((point, index) => (
         <span
-          // Index is stable because demo trend order is immutable and not user-edited.
+          // Index is stable because trend points are rendered in backend time-bucket order.
           key={`${point}-${index}`}
           style={{ height: `${point}%` }}
         />

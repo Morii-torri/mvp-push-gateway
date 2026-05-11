@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"strings"
 
+	"mvp-push-gateway/backend/internal/auth"
 	"mvp-push-gateway/backend/internal/route"
 )
 
@@ -124,7 +125,8 @@ func (h *Handler) routeFlowsHandler(w http.ResponseWriter, r *http.Request) {
 	if !h.requireRouteService(w) {
 		return
 	}
-	if _, ok := h.authenticateRequest(w, r); !ok {
+	adminUser, ok := h.authenticateRequest(w, r)
+	if !ok {
 		return
 	}
 
@@ -159,7 +161,9 @@ func (h *Handler) routeFlowsHandler(w http.ResponseWriter, r *http.Request) {
 			writeAPIError(w, status, code, message)
 			return
 		}
-		writeJSON(w, http.StatusCreated, routeFlowDetailResponse{Flow: toRouteFlowResponse(created)})
+		response := routeFlowDetailResponse{Flow: toRouteFlowResponse(created)}
+		h.recordAudit(r, adminUser, "create", "route_flow", created.ID, request, response)
+		writeJSON(w, http.StatusCreated, response)
 	default:
 		methodNotAllowed(w, http.MethodGet+", "+http.MethodPost)
 	}
@@ -169,7 +173,8 @@ func (h *Handler) routeFlowDetailHandler(w http.ResponseWriter, r *http.Request)
 	if !h.requireRouteService(w) {
 		return
 	}
-	if _, ok := h.authenticateRequest(w, r); !ok {
+	adminUser, ok := h.authenticateRequest(w, r)
+	if !ok {
 		return
 	}
 
@@ -187,7 +192,7 @@ func (h *Handler) routeFlowDetailHandler(w http.ResponseWriter, r *http.Request)
 	}
 
 	if len(parts) == 1 {
-		h.routeFlowResourceHandler(w, r, flowID)
+		h.routeFlowResourceHandler(w, r, flowID, adminUser)
 		return
 	}
 
@@ -198,19 +203,19 @@ func (h *Handler) routeFlowDetailHandler(w http.ResponseWriter, r *http.Request)
 			return
 		}
 		if len(parts) == 4 && parts[3] == "activate" && r.Method == http.MethodPost {
-			h.routeActivateVersionHandler(w, r, flowID, parts[2])
+			h.routeActivateVersionHandler(w, r, flowID, parts[2], adminUser)
 			return
 		}
 	case "canvas":
-		h.routeCanvasHandler(w, r, flowID)
+		h.routeCanvasHandler(w, r, flowID, adminUser)
 		return
 	case "rules":
 		if len(parts) == 2 {
-			h.routeRulesHandler(w, r, flowID)
+			h.routeRulesHandler(w, r, flowID, adminUser)
 			return
 		}
 		if len(parts) == 3 && parts[2] == "reorder" && r.Method == http.MethodPut {
-			h.routeReorderHandler(w, r, flowID)
+			h.routeReorderHandler(w, r, flowID, adminUser)
 			return
 		}
 	case "validate":
@@ -220,7 +225,7 @@ func (h *Handler) routeFlowDetailHandler(w http.ResponseWriter, r *http.Request)
 		}
 	case "publish":
 		if len(parts) == 2 && r.Method == http.MethodPost {
-			h.routePublishHandler(w, r, flowID)
+			h.routePublishHandler(w, r, flowID, adminUser)
 			return
 		}
 	case "simulate":
@@ -233,7 +238,7 @@ func (h *Handler) routeFlowDetailHandler(w http.ResponseWriter, r *http.Request)
 	writeAPIError(w, http.StatusNotFound, "MGP-ROUTE-001", "路由组不存在")
 }
 
-func (h *Handler) routeFlowResourceHandler(w http.ResponseWriter, r *http.Request, flowID string) {
+func (h *Handler) routeFlowResourceHandler(w http.ResponseWriter, r *http.Request, flowID string, adminUser auth.Admin) {
 	switch r.Method {
 	case http.MethodGet:
 		flow, err := h.routes.GetFlow(r.Context(), flowID)
@@ -261,14 +266,18 @@ func (h *Handler) routeFlowResourceHandler(w http.ResponseWriter, r *http.Reques
 			writeAPIError(w, status, code, message)
 			return
 		}
-		writeJSON(w, http.StatusOK, routeFlowDetailResponse{Flow: toRouteFlowResponse(updated)})
+		response := routeFlowDetailResponse{Flow: toRouteFlowResponse(updated)}
+		h.recordAudit(r, adminUser, "update", "route_flow", flowID, request, response)
+		writeJSON(w, http.StatusOK, response)
 	case http.MethodDelete:
 		if err := h.routes.DeleteFlow(r.Context(), flowID); err != nil {
 			status, code, message := routeErrorStatus(err)
 			writeAPIError(w, status, code, message)
 			return
 		}
-		writeJSON(w, http.StatusOK, okResponse{OK: true})
+		response := okResponse{OK: true}
+		h.recordAudit(r, adminUser, "delete", "route_flow", flowID, nil, response)
+		writeJSON(w, http.StatusOK, response)
 	default:
 		methodNotAllowed(w, http.MethodGet+", "+http.MethodPut+", "+http.MethodDelete)
 	}
@@ -288,17 +297,19 @@ func (h *Handler) routeVersionsHandler(w http.ResponseWriter, r *http.Request, f
 	writeJSON(w, http.StatusOK, routeVersionsResponse{Versions: items})
 }
 
-func (h *Handler) routeActivateVersionHandler(w http.ResponseWriter, r *http.Request, flowID string, versionID string) {
+func (h *Handler) routeActivateVersionHandler(w http.ResponseWriter, r *http.Request, flowID string, versionID string, adminUser auth.Admin) {
 	updated, err := h.routes.ActivateVersion(r.Context(), flowID, versionID)
 	if err != nil {
 		status, code, message := routeErrorStatus(err)
 		writeAPIError(w, status, code, message)
 		return
 	}
-	writeJSON(w, http.StatusOK, routeFlowDetailResponse{Flow: toRouteFlowResponse(updated)})
+	response := routeFlowDetailResponse{Flow: toRouteFlowResponse(updated)}
+	h.recordAudit(r, adminUser, "activate", "route_version", versionID, map[string]string{"flow_id": flowID}, response)
+	writeJSON(w, http.StatusOK, response)
 }
 
-func (h *Handler) routeCanvasHandler(w http.ResponseWriter, r *http.Request, flowID string) {
+func (h *Handler) routeCanvasHandler(w http.ResponseWriter, r *http.Request, flowID string, adminUser auth.Admin) {
 	switch r.Method {
 	case http.MethodGet:
 		state, err := h.routes.GetCanvas(r.Context(), flowID)
@@ -320,13 +331,14 @@ func (h *Handler) routeCanvasHandler(w http.ResponseWriter, r *http.Request, flo
 			writeAPIError(w, status, code, message)
 			return
 		}
+		h.recordAudit(r, adminUser, "save_canvas", "route_flow", flowID, request, state)
 		writeJSON(w, http.StatusOK, state)
 	default:
 		methodNotAllowed(w, http.MethodGet+", "+http.MethodPut)
 	}
 }
 
-func (h *Handler) routeRulesHandler(w http.ResponseWriter, r *http.Request, flowID string) {
+func (h *Handler) routeRulesHandler(w http.ResponseWriter, r *http.Request, flowID string, adminUser auth.Admin) {
 	switch r.Method {
 	case http.MethodGet:
 		ruleSet, err := h.routes.GetRules(r.Context(), flowID)
@@ -365,13 +377,15 @@ func (h *Handler) routeRulesHandler(w http.ResponseWriter, r *http.Request, flow
 			writeAPIError(w, status, code, message)
 			return
 		}
-		writeJSON(w, http.StatusOK, toRouteRulesResponse(ruleSet))
+		response := toRouteRulesResponse(ruleSet)
+		h.recordAudit(r, adminUser, "save_rules", "route_flow", flowID, request, response)
+		writeJSON(w, http.StatusOK, response)
 	default:
 		methodNotAllowed(w, http.MethodGet+", "+http.MethodPut)
 	}
 }
 
-func (h *Handler) routeReorderHandler(w http.ResponseWriter, r *http.Request, flowID string) {
+func (h *Handler) routeReorderHandler(w http.ResponseWriter, r *http.Request, flowID string, adminUser auth.Admin) {
 	var request routeReorderRequest
 	if err := decodeJSON(r, &request); err != nil {
 		writeAPIError(w, http.StatusBadRequest, "MGP-REQ-001", "请求 JSON 不合法")
@@ -383,7 +397,9 @@ func (h *Handler) routeReorderHandler(w http.ResponseWriter, r *http.Request, fl
 		writeAPIError(w, status, code, message)
 		return
 	}
-	writeJSON(w, http.StatusOK, toRouteRulesResponse(ruleSet))
+	response := toRouteRulesResponse(ruleSet)
+	h.recordAudit(r, adminUser, "reorder_rules", "route_flow", flowID, request, response)
+	writeJSON(w, http.StatusOK, response)
 }
 
 func (h *Handler) routeValidateHandler(w http.ResponseWriter, r *http.Request, flowID string) {
@@ -400,14 +416,16 @@ func (h *Handler) routeValidateHandler(w http.ResponseWriter, r *http.Request, f
 	})
 }
 
-func (h *Handler) routePublishHandler(w http.ResponseWriter, r *http.Request, flowID string) {
+func (h *Handler) routePublishHandler(w http.ResponseWriter, r *http.Request, flowID string, adminUser auth.Admin) {
 	version, err := h.routes.Publish(r.Context(), flowID)
 	if err != nil {
 		status, code, message := routeErrorStatus(err)
 		writeAPIError(w, status, code, message)
 		return
 	}
-	writeJSON(w, http.StatusOK, routeVersionResponseWrapper{Version: toRouteVersionResponse(version)})
+	response := routeVersionResponseWrapper{Version: toRouteVersionResponse(version)}
+	h.recordAudit(r, adminUser, "publish", "route_flow", flowID, nil, response)
+	writeJSON(w, http.StatusOK, response)
 }
 
 type routeVersionResponseWrapper struct {

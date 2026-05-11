@@ -6,12 +6,16 @@ import (
 	"errors"
 	"net/http"
 
+	"mvp-push-gateway/backend/internal/audit"
 	"mvp-push-gateway/backend/internal/auth"
 	"mvp-push-gateway/backend/internal/config"
+	"mvp-push-gateway/backend/internal/matchgroup"
+	"mvp-push-gateway/backend/internal/messagelog"
 	"mvp-push-gateway/backend/internal/monitoring"
 	"mvp-push-gateway/backend/internal/provider"
 	"mvp-push-gateway/backend/internal/recipient"
 	"mvp-push-gateway/backend/internal/route"
+	"mvp-push-gateway/backend/internal/settings"
 	"mvp-push-gateway/backend/internal/source"
 	"mvp-push-gateway/backend/internal/statistics"
 	msgtemplate "mvp-push-gateway/backend/internal/template"
@@ -27,15 +31,19 @@ type authService interface {
 }
 
 type Handler struct {
-	cfg        config.Config
-	auth       authService
-	sources    sourceService
-	providers  providerService
-	recipients recipientService
-	routes     routeService
-	templates  templateService
-	monitoring monitoringService
-	stats      statisticsService
+	cfg         config.Config
+	auth        authService
+	sources     sourceService
+	providers   providerService
+	recipients  recipientService
+	routes      routeService
+	templates   templateService
+	monitoring  monitoringService
+	stats       statisticsService
+	matchGroups matchGroupService
+	messageLogs messageLogService
+	audit       auditService
+	settings    settingsService
 }
 
 type Option func(*Handler)
@@ -58,6 +66,7 @@ type providerService interface {
 	UpdateChannel(context.Context, string, provider.UpdateChannelInput) (provider.Channel, error)
 	DeleteChannel(context.Context, string) error
 	BuildRequest(context.Context, string, provider.BuildRequestInput) (provider.BuiltRequest, error)
+	TestSend(context.Context, string, provider.TestSendInput) (provider.TestSendResult, error)
 }
 
 type recipientService interface {
@@ -122,6 +131,35 @@ type statisticsService interface {
 	GetOverview(context.Context) (statistics.Overview, error)
 }
 
+type matchGroupService interface {
+	ListGroups(context.Context) ([]matchgroup.Group, error)
+	CreateGroup(context.Context, matchgroup.GroupInput) (matchgroup.Group, error)
+	GetGroup(context.Context, string) (matchgroup.Group, error)
+	UpdateGroup(context.Context, string, matchgroup.GroupInput) (matchgroup.Group, error)
+	DeleteGroup(context.Context, string) error
+	ListItems(context.Context, string) ([]matchgroup.Item, error)
+	CreateItem(context.Context, string, matchgroup.ItemInput) (matchgroup.Item, error)
+	GetItem(context.Context, string, string) (matchgroup.Item, error)
+	UpdateItem(context.Context, string, string, matchgroup.ItemInput) (matchgroup.Item, error)
+	DeleteItem(context.Context, string, string) error
+}
+
+type messageLogService interface {
+	ListMessages(context.Context, messagelog.ListFilter) (messagelog.ListResult, error)
+	GetMessage(context.Context, string) (messagelog.MessageDetail, error)
+}
+
+type auditService interface {
+	ListLogs(context.Context, audit.ListFilter) (audit.ListResult, error)
+	GetLog(context.Context, string) (audit.Log, error)
+	Record(context.Context, audit.RecordInput) (audit.Log, error)
+}
+
+type settingsService interface {
+	ListSettings(context.Context) ([]settings.Setting, error)
+	UpdateSetting(context.Context, string, settings.UpdateInput) (settings.Setting, error)
+}
+
 func WithAuthService(service authService) Option {
 	return func(h *Handler) {
 		h.auth = service
@@ -170,6 +208,30 @@ func WithStatisticsService(service statisticsService) Option {
 	}
 }
 
+func WithMatchGroupService(service matchGroupService) Option {
+	return func(h *Handler) {
+		h.matchGroups = service
+	}
+}
+
+func WithMessageLogService(service messageLogService) Option {
+	return func(h *Handler) {
+		h.messageLogs = service
+	}
+}
+
+func WithAuditService(service auditService) Option {
+	return func(h *Handler) {
+		h.audit = service
+	}
+}
+
+func WithSettingsService(service settingsService) Option {
+	return func(h *Handler) {
+		h.settings = service
+	}
+}
+
 type healthResponse struct {
 	Status      string `json:"status"`
 	AppName     string `json:"app_name"`
@@ -205,8 +267,16 @@ func NewHandler(cfg config.Config, options ...Option) http.Handler {
 	mux.HandleFunc(cfg.Server.APIPrefix+"/user-identities/", handler.userIdentityDetailHandler)
 	mux.HandleFunc(cfg.Server.APIPrefix+"/recipient-groups", handler.recipientGroupsHandler)
 	mux.HandleFunc(cfg.Server.APIPrefix+"/recipient-groups/", handler.recipientGroupDetailHandler)
+	mux.HandleFunc(cfg.Server.APIPrefix+"/match-groups", handler.matchGroupsHandler)
+	mux.HandleFunc(cfg.Server.APIPrefix+"/match-groups/", handler.matchGroupDetailHandler)
 	mux.HandleFunc(cfg.Server.APIPrefix+"/route-flows", handler.routeFlowsHandler)
 	mux.HandleFunc(cfg.Server.APIPrefix+"/route-flows/", handler.routeFlowDetailHandler)
+	mux.HandleFunc(cfg.Server.APIPrefix+"/messages", handler.messagesHandler)
+	mux.HandleFunc(cfg.Server.APIPrefix+"/messages/", handler.messageDetailHandler)
+	mux.HandleFunc(cfg.Server.APIPrefix+"/audit-logs", handler.auditLogsHandler)
+	mux.HandleFunc(cfg.Server.APIPrefix+"/audit-logs/", handler.auditLogDetailHandler)
+	mux.HandleFunc(cfg.Server.APIPrefix+"/settings", handler.settingsHandler)
+	mux.HandleFunc(cfg.Server.APIPrefix+"/settings/", handler.settingDetailHandler)
 	mux.HandleFunc(cfg.Server.APIPrefix+"/monitoring/queue", handler.queueMonitoringHandler)
 	mux.HandleFunc(cfg.Server.APIPrefix+"/monitor/queues", handler.queueMonitoringHandler)
 	mux.HandleFunc(cfg.Server.APIPrefix+"/statistics/overview", handler.statisticsOverviewHandler)
@@ -326,6 +396,38 @@ func (h *Handler) requireRouteService(w http.ResponseWriter) bool {
 		return true
 	}
 	writeAPIError(w, http.StatusServiceUnavailable, "MGP-ROUTE-002", "路由服务未启用，请先配置数据库")
+	return false
+}
+
+func (h *Handler) requireMatchGroupService(w http.ResponseWriter) bool {
+	if h.matchGroups != nil {
+		return true
+	}
+	writeAPIError(w, http.StatusServiceUnavailable, "MGP-MATCH-001", "匹配组服务未启用，请先配置数据库")
+	return false
+}
+
+func (h *Handler) requireMessageLogService(w http.ResponseWriter) bool {
+	if h.messageLogs != nil {
+		return true
+	}
+	writeAPIError(w, http.StatusServiceUnavailable, "MGP-MSG-001", "消息日志服务未启用，请先配置数据库")
+	return false
+}
+
+func (h *Handler) requireAuditService(w http.ResponseWriter) bool {
+	if h.audit != nil {
+		return true
+	}
+	writeAPIError(w, http.StatusServiceUnavailable, "MGP-AUDIT-001", "审计服务未启用，请先配置数据库")
+	return false
+}
+
+func (h *Handler) requireSettingsService(w http.ResponseWriter) bool {
+	if h.settings != nil {
+		return true
+	}
+	writeAPIError(w, http.StatusServiceUnavailable, "MGP-SETTINGS-001", "系统设置服务未启用，请先配置数据库")
 	return false
 }
 

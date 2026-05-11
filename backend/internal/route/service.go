@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"reflect"
 	"sort"
 	"strings"
@@ -425,7 +426,7 @@ func (s *Service) Simulate(ctx context.Context, flowID string, input SimulateInp
 		}
 
 		startedAt := time.Now()
-		matched, evalErr := evaluateConditionTree(rule.ConditionTree, scope)
+		matched, evalErr := EvaluateConditionTree(rule.ConditionTree, scope)
 		trace.DurationMS = time.Since(startedAt).Milliseconds()
 		trace.Evaluated = true
 		if evalErr != nil {
@@ -597,6 +598,7 @@ func compileRules(draft Draft, compiledAt time.Time) (json.RawMessage, error) {
 			return nil, err
 		}
 		dependencies := sortedUniqueStrings(node.dependencies())
+		matchGroupIDs := sortedUniqueStrings(node.matchGroupIDs())
 		rules = append(rules, compiledRule{
 			RuleKey:           rule.RuleKey,
 			SortOrder:         rule.SortOrder,
@@ -604,7 +606,7 @@ func compileRules(draft Draft, compiledAt time.Time) (json.RawMessage, error) {
 			Enabled:           rule.Enabled,
 			ConditionTree:     defaultObjectJSON(rule.ConditionTree),
 			FieldDependencies: dependencies,
-			MatchGroupIDs:     []string{},
+			MatchGroupIDs:     matchGroupIDs,
 			CoarseFilter: map[string]any{
 				"skipped":            false,
 				"field_dependencies": dependencies,
@@ -629,11 +631,12 @@ func compileRules(draft Draft, compiledAt time.Time) (json.RawMessage, error) {
 }
 
 type conditionNode struct {
-	Operator   string            `json:"operator"`
-	Path       string            `json:"path"`
-	Value      json.RawMessage   `json:"value"`
-	Values     []json.RawMessage `json:"values"`
-	Conditions []conditionNode   `json:"conditions"`
+	Operator     string            `json:"operator"`
+	Path         string            `json:"path"`
+	MatchGroupID string            `json:"match_group_id"`
+	Value        json.RawMessage   `json:"value"`
+	Values       []json.RawMessage `json:"values"`
+	Conditions   []conditionNode   `json:"conditions"`
 }
 
 func parseConditionNode(raw json.RawMessage) (conditionNode, error) {
@@ -658,7 +661,7 @@ func parseConditionNode(raw json.RawMessage) (conditionNode, error) {
 			}
 		}
 		return node, nil
-	case "equals", "contains", "not_contains", "in", "exists":
+	case "equals", "contains", "not_contains", "in", "exists", "in_match_group", "not_in_match_group", "match_group", "not_match_group":
 		return node, node.validate()
 	default:
 		return conditionNode{}, ErrInvalidConfig
@@ -683,10 +686,15 @@ func (n conditionNode) validate() error {
 		if strings.TrimSpace(n.Path) == "" {
 			return ErrInvalidConfig
 		}
-		if n.Operator == "in" && len(n.Values) == 0 {
+		if n.Operator == "in" && len(n.Values) == 0 && strings.TrimSpace(n.MatchGroupID) == "" {
 			return ErrInvalidConfig
 		}
 		if n.Operator != "exists" && n.Operator != "in" && len(n.Value) == 0 {
+			return ErrInvalidConfig
+		}
+		return nil
+	case "in_match_group", "not_in_match_group", "match_group", "not_match_group":
+		if strings.TrimSpace(n.Path) == "" || strings.TrimSpace(n.MatchGroupID) == "" {
 			return ErrInvalidConfig
 		}
 		return nil
@@ -706,21 +714,48 @@ func (n conditionNode) dependencies() []string {
 	return dependencies
 }
 
-func evaluateConditionTree(raw json.RawMessage, payload map[string]any) (bool, error) {
+func (n conditionNode) matchGroupIDs() []string {
+	ids := make([]string, 0)
+	if strings.TrimSpace(n.MatchGroupID) != "" {
+		ids = append(ids, strings.TrimSpace(n.MatchGroupID))
+	}
+	for _, child := range n.Conditions {
+		ids = append(ids, child.matchGroupIDs()...)
+	}
+	return ids
+}
+
+func ExtractMatchGroupIDs(raw json.RawMessage) ([]string, error) {
+	node, err := parseConditionNode(raw)
+	if err != nil {
+		return nil, err
+	}
+	return sortedUniqueStrings(node.matchGroupIDs()), nil
+}
+
+func EvaluateConditionTree(raw json.RawMessage, payload map[string]any) (bool, error) {
+	return EvaluateConditionTreeWithMatchGroups(raw, payload, nil)
+}
+
+func EvaluateConditionTreeWithMatchGroups(raw json.RawMessage, payload map[string]any, matchGroups map[string][]string) (bool, error) {
 	node, err := parseConditionNode(raw)
 	if err != nil {
 		return false, err
 	}
-	return node.evaluate(payload)
+	return node.evaluate(payload, matchGroups)
 }
 
-func (n conditionNode) evaluate(scope map[string]any) (bool, error) {
+func evaluateConditionTree(raw json.RawMessage, payload map[string]any) (bool, error) {
+	return EvaluateConditionTree(raw, payload)
+}
+
+func (n conditionNode) evaluate(scope map[string]any, matchGroups map[string][]string) (bool, error) {
 	switch n.Operator {
 	case "always":
 		return true, nil
 	case "and":
 		for _, child := range n.Conditions {
-			matched, err := child.evaluate(scope)
+			matched, err := child.evaluate(scope, matchGroups)
 			if err != nil {
 				return false, err
 			}
@@ -731,7 +766,7 @@ func (n conditionNode) evaluate(scope map[string]any) (bool, error) {
 		return true, nil
 	case "or":
 		for _, child := range n.Conditions {
-			matched, err := child.evaluate(scope)
+			matched, err := child.evaluate(scope, matchGroups)
 			if err != nil {
 				return false, err
 			}
@@ -777,6 +812,9 @@ func (n conditionNode) evaluate(scope map[string]any) (bool, error) {
 		if !exists {
 			return false, nil
 		}
+		if strings.TrimSpace(n.MatchGroupID) != "" {
+			return valueInMatchGroup(value, matchGroups[strings.TrimSpace(n.MatchGroupID)]), nil
+		}
 		for _, candidateRaw := range n.Values {
 			candidate, err := decodeAny(candidateRaw)
 			if err != nil {
@@ -787,6 +825,16 @@ func (n conditionNode) evaluate(scope map[string]any) (bool, error) {
 			}
 		}
 		return false, nil
+	case "in_match_group", "match_group":
+		if !exists {
+			return false, nil
+		}
+		return valueInMatchGroup(value, matchGroups[strings.TrimSpace(n.MatchGroupID)]), nil
+	case "not_in_match_group", "not_match_group":
+		if !exists {
+			return true, nil
+		}
+		return !valueInMatchGroup(value, matchGroups[strings.TrimSpace(n.MatchGroupID)]), nil
 	default:
 		return false, ErrInvalidConfig
 	}
@@ -824,6 +872,45 @@ func containsValue(value any, needle any) bool {
 		}
 	}
 	return false
+}
+
+func valueInMatchGroup(value any, groupValues []string) bool {
+	if len(groupValues) == 0 {
+		return false
+	}
+	valueSet := make(map[string]bool, len(groupValues))
+	for _, groupValue := range groupValues {
+		valueSet[strings.TrimSpace(groupValue)] = true
+	}
+	switch typed := value.(type) {
+	case []any:
+		for _, item := range typed {
+			if valueSet[strings.TrimSpace(stringifyConditionValue(item))] {
+				return true
+			}
+		}
+		return false
+	case []string:
+		for _, item := range typed {
+			if valueSet[strings.TrimSpace(item)] {
+				return true
+			}
+		}
+		return false
+	default:
+		return valueSet[strings.TrimSpace(stringifyConditionValue(value))]
+	}
+}
+
+func stringifyConditionValue(value any) string {
+	switch typed := value.(type) {
+	case string:
+		return typed
+	case json.Number:
+		return typed.String()
+	default:
+		return strings.TrimSpace(strings.Trim(fmt.Sprint(typed), "\""))
+	}
 }
 
 func decodeJSONObject(raw json.RawMessage) (map[string]any, error) {

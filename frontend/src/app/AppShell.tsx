@@ -1,6 +1,7 @@
 import {
   BellOutlined,
   CloseOutlined,
+  LogoutOutlined,
   QuestionCircleOutlined,
   ReloadOutlined,
   UserOutlined,
@@ -25,6 +26,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { navigationItems, type PageKey } from './navigation';
 import { pages } from '../pages/ConsolePages';
 import { formatRefreshTime } from '../utils/labels';
+import { AuthGate, useAuth } from '../auth/AuthGate';
 
 const { Header, Sider, Content } = Layout;
 
@@ -72,7 +74,9 @@ export function AppShell() {
       }}
     >
       <AntdApp>
-        <ConsoleChrome />
+        <AuthGate>
+          <ConsoleChrome />
+        </AuthGate>
       </AntdApp>
     </ConfigProvider>
   );
@@ -80,6 +84,7 @@ export function AppShell() {
 
 function ConsoleChrome() {
   const { message } = AntdApp.useApp();
+  const { admin, logout } = useAuth();
   const [activePage, setActivePage] = useState<PageKey>('overview');
   const [openPages, setOpenPages] = useState<PageKey[]>(['overview']);
   const [lastUpdated, setLastUpdated] = useState(() => new Date());
@@ -192,8 +197,12 @@ function ConsoleChrome() {
           <Space size={8}>
             <Avatar icon={<UserOutlined />} />
             <div className="user-block">
-              <strong>admin</strong>
+              <strong>{admin.display_name || admin.username}</strong>
+              <span>{admin.username}</span>
             </div>
+            <Button icon={<LogoutOutlined />} onClick={() => void logout()}>
+              退出
+            </Button>
           </Space>
         </Space>
       </Header>

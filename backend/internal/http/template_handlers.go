@@ -126,7 +126,8 @@ func (h *Handler) templatesHandler(w http.ResponseWriter, r *http.Request) {
 	if !h.requireTemplateService(w) {
 		return
 	}
-	if _, ok := h.authenticateRequest(w, r); !ok {
+	adminUser, ok := h.authenticateRequest(w, r)
+	if !ok {
 		return
 	}
 	switch r.Method {
@@ -154,7 +155,9 @@ func (h *Handler) templatesHandler(w http.ResponseWriter, r *http.Request) {
 			writeAPIError(w, status, code, message)
 			return
 		}
-		writeJSON(w, http.StatusCreated, templateBody{Template: toTemplateResponse(item)})
+		response := templateBody{Template: toTemplateResponse(item)}
+		h.recordAudit(r, adminUser, "create", "template", item.ID, request, response)
+		writeJSON(w, http.StatusCreated, response)
 	default:
 		methodNotAllowed(w, http.MethodGet+", "+http.MethodPost)
 	}
@@ -175,7 +178,8 @@ func (h *Handler) templateDetailHandler(w http.ResponseWriter, r *http.Request) 
 	if !h.requireTemplateService(w) {
 		return
 	}
-	if _, ok := h.authenticateRequest(w, r); !ok {
+	adminUser, ok := h.authenticateRequest(w, r)
+	if !ok {
 		return
 	}
 	switch r.Method {
@@ -199,14 +203,18 @@ func (h *Handler) templateDetailHandler(w http.ResponseWriter, r *http.Request) 
 			writeAPIError(w, status, code, message)
 			return
 		}
-		writeJSON(w, http.StatusOK, templateBody{Template: toTemplateResponse(item)})
+		response := templateBody{Template: toTemplateResponse(item)}
+		h.recordAudit(r, adminUser, "update", "template", id, request, response)
+		writeJSON(w, http.StatusOK, response)
 	case http.MethodDelete:
 		if err := h.templates.DeleteTemplate(r.Context(), id); err != nil {
 			status, code, message := templateErrorStatus(err)
 			writeAPIError(w, status, code, message)
 			return
 		}
-		writeJSON(w, http.StatusOK, okResponse{OK: true})
+		response := okResponse{OK: true}
+		h.recordAudit(r, adminUser, "delete", "template", id, nil, response)
+		writeJSON(w, http.StatusOK, response)
 	default:
 		methodNotAllowed(w, http.MethodGet+", "+http.MethodPut+", "+http.MethodDelete)
 	}
@@ -220,7 +228,8 @@ func (h *Handler) templatePublishHandler(w http.ResponseWriter, r *http.Request,
 	if !h.requireTemplateService(w) {
 		return
 	}
-	if _, ok := h.authenticateRequest(w, r); !ok {
+	adminUser, ok := h.authenticateRequest(w, r)
+	if !ok {
 		return
 	}
 	var request msgtemplate.VersionInput
@@ -234,7 +243,9 @@ func (h *Handler) templatePublishHandler(w http.ResponseWriter, r *http.Request,
 		writeAPIError(w, status, code, message)
 		return
 	}
-	writeJSON(w, http.StatusCreated, templateVersionBody{Version: toTemplateVersionResponse(version)})
+	response := templateVersionBody{Version: toTemplateVersionResponse(version)}
+	h.recordAudit(r, adminUser, "publish", "template", templateID, request, response)
+	writeJSON(w, http.StatusCreated, response)
 }
 
 func toTemplateResponse(item msgtemplate.Template) templateResponse {

@@ -11,14 +11,21 @@ import (
 	"syscall"
 	"time"
 
+	"mvp-push-gateway/backend/internal/audit"
 	"mvp-push-gateway/backend/internal/auth"
 	"mvp-push-gateway/backend/internal/config"
 	"mvp-push-gateway/backend/internal/db"
+	"mvp-push-gateway/backend/internal/delivery"
 	httpapi "mvp-push-gateway/backend/internal/http"
+	"mvp-push-gateway/backend/internal/matchgroup"
+	"mvp-push-gateway/backend/internal/messagelog"
 	"mvp-push-gateway/backend/internal/monitoring"
+	"mvp-push-gateway/backend/internal/planning"
 	"mvp-push-gateway/backend/internal/provider"
 	"mvp-push-gateway/backend/internal/recipient"
 	"mvp-push-gateway/backend/internal/route"
+	appruntime "mvp-push-gateway/backend/internal/runtime"
+	"mvp-push-gateway/backend/internal/settings"
 	"mvp-push-gateway/backend/internal/source"
 	"mvp-push-gateway/backend/internal/statistics"
 	msgtemplate "mvp-push-gateway/backend/internal/template"
@@ -30,6 +37,7 @@ func main() {
 
 	var handlerOptions []httpapi.Option
 	var pools *db.PoolSet
+	var workerHarness *appruntime.Harness
 	if cfg.Postgres.DSN != "" {
 		var err error
 		pools, err = db.OpenPools(ctx, cfg.Postgres)
@@ -51,11 +59,24 @@ func main() {
 		recipientService := recipient.NewService(repository)
 		routeService := route.NewService(repository)
 		templateService := msgtemplate.NewService(repository)
+		matchGroupService := matchgroup.NewService(repository)
+		messageLogService := messagelog.NewService(repository)
+		auditService := audit.NewService(repository)
+		settingsService := settings.NewService(repository)
+		if err := settingsService.EnsureDefaults(ctx); err != nil {
+			log.Fatalf("seed system settings failed: %v", err)
+		}
 		monitoringService := monitoring.NewService(
 			db.NewRepository(pools.API),
 			db.NewRepository(pools.Maintenance),
 		)
 		statisticsService := statistics.NewService(db.NewRepository(pools.API))
+		workerHarness = appruntime.NewHarness(appruntime.Config{
+			PlanningWorker:   planning.NewWorker(db.NewRepository(pools.Planning)),
+			DeliveryWorker:   delivery.NewWorker(db.NewRepository(pools.Sending)),
+			Recovery:         db.NewRepository(pools.Maintenance),
+			RetentionCleaner: monitoringService,
+		})
 		handlerOptions = append(
 			handlerOptions,
 			httpapi.WithAuthService(authService),
@@ -66,6 +87,10 @@ func main() {
 			httpapi.WithTemplateService(templateService),
 			httpapi.WithMonitoringService(monitoringService),
 			httpapi.WithStatisticsService(statisticsService),
+			httpapi.WithMatchGroupService(matchGroupService),
+			httpapi.WithMessageLogService(messageLogService),
+			httpapi.WithAuditService(auditService),
+			httpapi.WithSettingsService(settingsService),
 		)
 	}
 
@@ -73,6 +98,11 @@ func main() {
 		Addr:              net.JoinHostPort(cfg.Server.Host, cfg.Server.Port),
 		Handler:           httpapi.NewHandler(cfg, handlerOptions...),
 		ReadHeaderTimeout: 5 * time.Second,
+	}
+
+	runtimeCtx, stopRuntime := context.WithCancel(context.Background())
+	if workerHarness != nil {
+		workerHarness.Start(runtimeCtx)
 	}
 
 	go func() {
@@ -86,9 +116,15 @@ func main() {
 	signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
 	<-stop
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	if err := server.Shutdown(ctx); err != nil {
+	if err := server.Shutdown(shutdownCtx); err != nil {
 		log.Fatalf("server shutdown failed: %v", err)
+	}
+	stopRuntime()
+	if workerHarness != nil {
+		if err := workerHarness.Shutdown(shutdownCtx); err != nil {
+			log.Fatalf("worker shutdown failed: %v", err)
+		}
 	}
 }

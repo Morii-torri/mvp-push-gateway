@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"net/http"
 	"net/url"
 	"sort"
 	"strings"
@@ -178,6 +180,68 @@ func (s *Service) BuildRequest(ctx context.Context, channelID string, input Buil
 	return BuildRequest(channel, input)
 }
 
+func (s *Service) TestSend(ctx context.Context, channelID string, input TestSendInput) (TestSendResult, error) {
+	channel, err := s.GetChannel(ctx, channelID)
+	if err != nil {
+		return TestSendResult{}, err
+	}
+	built, err := BuildRequest(channel, input.BuildRequestInput)
+	if err != nil {
+		return TestSendResult{}, err
+	}
+	result := TestSendResult{
+		Status:  "built",
+		Request: built,
+	}
+	requestSnapshot, err := marshalJSON(map[string]any{
+		"method":    built.Method,
+		"url":       built.URL,
+		"headers":   built.Headers,
+		"query":     built.Query,
+		"recipient": input.Recipient,
+		"body":      jsonValue(built.Body),
+	})
+	if err != nil {
+		return TestSendResult{}, err
+	}
+	result.RequestSnapshot = requestSnapshot
+	if !input.Send {
+		return result, nil
+	}
+	if strings.TrimSpace(built.URL) == "" {
+		return TestSendResult{}, ErrInvalidInput
+	}
+
+	started := time.Now().UTC()
+	statusCode, headers, responseBody, sendErr := sendBuiltRequest(ctx, channel, built)
+	result.StatusCode = statusCode
+	result.DurationMS = int(time.Since(started).Milliseconds())
+	if sendErr != nil {
+		result.Status = "failed"
+		result.ErrorMessage = sendErr.Error()
+	} else {
+		result.Status = "sent"
+	}
+	responseSnapshot, err := marshalJSON(map[string]any{
+		"status_code": statusCode,
+		"headers":     headers,
+		"body":        jsonValue(responseBody),
+		"error":       result.ErrorMessage,
+	})
+	if err != nil {
+		return TestSendResult{}, err
+	}
+	result.ResponseSnapshot = responseSnapshot
+	if sendErr != nil {
+		return result, nil
+	}
+	if statusCode < http.StatusOK || statusCode >= http.StatusMultipleChoices {
+		result.Status = "failed"
+		result.ErrorMessage = fmt.Sprintf("upstream returned status %d", statusCode)
+	}
+	return result, nil
+}
+
 func DefaultCapabilities() []Capability {
 	return []Capability{
 		capability(ProviderWeCom, "text", true, false, "touser", PlacementBody, "touser", "pipe_string", "wecom_userid", PlacementQuery, "access_token", `{"text":{"content":"{{ payload.title }}"}}`),
@@ -276,12 +340,27 @@ type BuildRequestInput struct {
 	Body      json.RawMessage `json:"body"`
 }
 
+type TestSendInput struct {
+	BuildRequestInput
+	Send bool `json:"send"`
+}
+
 type BuiltRequest struct {
 	Method  string            `json:"method"`
 	URL     string            `json:"url"`
 	Headers map[string]string `json:"headers"`
 	Query   map[string]string `json:"query"`
 	Body    json.RawMessage   `json:"body"`
+}
+
+type TestSendResult struct {
+	Status           string          `json:"status"`
+	Request          BuiltRequest    `json:"request"`
+	RequestSnapshot  json.RawMessage `json:"request_snapshot"`
+	ResponseSnapshot json.RawMessage `json:"response_snapshot"`
+	StatusCode       int             `json:"status_code"`
+	DurationMS       int             `json:"duration_ms"`
+	ErrorMessage     string          `json:"error_message"`
 }
 
 type requestConfig struct {
@@ -366,6 +445,57 @@ func BuildRequest(channel Channel, input BuildRequestInput) (BuiltRequest, error
 		Query:   query,
 		Body:    body,
 	}, nil
+}
+
+func sendBuiltRequest(ctx context.Context, channel Channel, built BuiltRequest) (int, map[string][]string, []byte, error) {
+	body := built.Body
+	if len(bytes.TrimSpace(body)) == 0 {
+		body = json.RawMessage(`{}`)
+	}
+	req, err := http.NewRequestWithContext(ctx, built.Method, built.URL, bytes.NewReader(body))
+	if err != nil {
+		return 0, nil, nil, err
+	}
+	for key, value := range built.Headers {
+		req.Header.Set(key, value)
+	}
+	if req.Header.Get("Content-Type") == "" {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	timeout := time.Duration(channel.TimeoutMS) * time.Millisecond
+	if timeout <= 0 {
+		timeout = 5 * time.Second
+	}
+	client := &http.Client{Timeout: timeout}
+	resp, err := client.Do(req)
+	if err != nil {
+		return 0, nil, nil, err
+	}
+	defer resp.Body.Close()
+	responseBody, readErr := io.ReadAll(resp.Body)
+	if readErr != nil {
+		return resp.StatusCode, resp.Header, responseBody, readErr
+	}
+	return resp.StatusCode, resp.Header, responseBody, nil
+}
+
+func marshalJSON(value any) (json.RawMessage, error) {
+	raw, err := json.Marshal(value)
+	if err != nil {
+		return nil, err
+	}
+	return raw, nil
+}
+
+func jsonValue(raw []byte) any {
+	if len(bytes.TrimSpace(raw)) == 0 {
+		return nil
+	}
+	var value any
+	if err := json.Unmarshal(raw, &value); err != nil {
+		return string(raw)
+	}
+	return value
 }
 
 func requestConfigFrom(channel Channel, input BuildRequestInput) (requestConfig, error) {
