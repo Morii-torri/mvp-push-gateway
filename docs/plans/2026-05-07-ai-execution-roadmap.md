@@ -324,6 +324,83 @@
 - Frontend build passes.
 - Fresh environment can start, create admin, create source, receive sample payload, configure route, and send test message.
 
+**Controller review note:**
+
+- Step 11 proves segmented backend APIs, queue primitives, delivery worker internals, frontend shell tests and image packaging. It does **not** yet prove the runtime full chain from inbound message to route planning, template rendering, send job creation, automatic delivery and UI-visible logs.
+
+## Step 12: Runtime Chain Closure And Real Data Console
+
+**Ask AI to do:**
+
+1. Implement the `route_plan` worker:
+   - claim only `route_plan` jobs with a short transaction.
+   - load `message_records.payload` and the enabled current route flow for the message source.
+   - load and cache the current published route version by `source_id + route_version_id`.
+   - execute compiled rules in `sort_order` with `first_match_stop`.
+   - evaluate conditions, including match-group-backed conditions.
+   - render the selected template with the sealed Jinja-like `TemplateEngine`.
+   - resolve recipients from `payload` or system recipients/recipient groups.
+   - create `delivery_attempts` and enqueue one `send_message` job per target channel.
+   - update `message_records.status`, `matched_flow_id`, `matched_rule_ids`, `error_code`, and `error_message`.
+   - increment route hit counters and write slow-rule/route metrics.
+2. Start runtime workers from the product entrypoint:
+   - planning worker.
+   - delivery worker.
+   - stale job recovery loop.
+   - retention cleanup loop.
+   - optional statistics/metrics aggregation if needed by the dashboard.
+   - use the existing API/planning/sending/maintenance pool split.
+   - support graceful shutdown.
+   - do not add scheduled-send behavior.
+3. Add missing backend APIs needed by the console:
+   - match group CRUD and item CRUD.
+   - message log list/detail, joining inbound `message_records` and outbound `delivery_attempts`.
+   - audit log list/detail and audit writes for config mutations.
+   - system settings list/update for the small first-version setting set.
+   - provider test-send API or clearly scoped build-and-send test endpoint.
+4. Replace frontend demo state with real API calls:
+   - add setup/login/change-password flow and store/remove `mgp_admin_token`.
+   - add a shared API client with error handling and Chinese error copy.
+   - wire sources, providers/channels, templates, route flows/rules/canvas, organization/users/identities, recipient groups, match groups, message logs, audit logs and settings to backend APIs.
+   - remove “保存到本地演示数据” behavior from production pages.
+   - keep local fallback only for empty-state display, not as saved data.
+5. Ensure frontend field parity:
+   - every backend create/update field has a visible Chinese-labeled control or an explicit advanced JSON editor.
+   - status enums are always displayed through Chinese mappings.
+   - source tokens/HMAC secrets/IP allowlist/rate limit/dedupe fields are editable.
+   - channel auth/token/send/rate-limit/concurrency/timeout/retry/dead-letter fields are editable.
+   - route publish/activate/reorder/simulate/canvas save all call backend.
+   - template parse/preview/validate/publish all call backend.
+   - user identities support create/update/delete against real backend records.
+6. Add end-to-end tests:
+   - backend integration test for inbound -> planning worker -> delivery attempt/send job.
+   - backend integration test for planning no-route/template error/recipient error.
+   - backend integration test for server-started worker loops or a worker runtime harness.
+   - frontend tests with mocked API responses proving key pages no longer depend on `demoData`.
+   - smoke test documentation for a fresh image deployment.
+
+**Expected output:**
+
+- Runtime can process an inbound payload through route planning and delivery automatically.
+- Frontend CRUD pages read/write PostgreSQL-backed data through backend APIs.
+- Message logs show one inbound main record with outbound attempts and snapshots.
+- Audit logs record administrator configuration changes.
+
+**Acceptance:**
+
+- A fresh environment can:
+  - create first admin through UI or documented API.
+  - log in through UI.
+  - create source, channel, template and route flow.
+  - publish and activate a route version.
+  - ingest a sample payload.
+  - have workers automatically create and process outbound delivery work.
+  - show the inbound/outbound record in the message log page.
+- Frontend production pages no longer save to local demo state.
+- Queue monitoring shows real pending/completed/error numbers from PostgreSQL.
+- Worker claim transactions remain short; no HTTP send/template render under job claim locks.
+- Tests and frontend build pass.
+
 ## Recommended AI Prompt Order
 
 1. “请按 `docs/plans/2026-05-07-ai-execution-roadmap.md` 执行 Step 0，只做原型图和原型说明更新，不写业务代码。”
@@ -335,3 +412,4 @@
 7. “请执行 Step 8，完成发送 worker。”
 8. “请执行 Step 9，完成前端管理台。”
 9. “请执行 Step 10 和 Step 11，完成监控、清理、测试和部署。”
+10. “请执行 Step 12，完成运行态全链路闭环和前端真实数据接入。”
