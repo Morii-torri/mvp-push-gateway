@@ -1,7 +1,9 @@
 .git
 .agent
 .worktrees
+.env
 logs
+deploy/data
 frontend/node_modules
 frontend/dist
 backend/.cache

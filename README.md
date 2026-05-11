@@ -8,7 +8,7 @@ Step 11 delivery packaging for the new `mvp-push-gateway/` implementation. This 
 
 This README only documents the current repository state. It does not assume hidden defaults, built-in admin passwords, or extra worker processes that are not exposed by this tree.
 
-## Quick Start With Docker Compose
+## Image Deployment
 
 1. Copy environment variables:
 
@@ -21,7 +21,39 @@ cp .env.example .env
 - `MGP_POSTGRES_PASSWORD`
 - optional host ports if `5432`, `18080`, or `5173` are already occupied
 
-3. Start the stack:
+### Single-Image Product Mode
+
+This mode packages PostgreSQL, the Go backend, the frontend static site, Nginx, migrations, and healthcheck into one product image. It does not require the user to install or deploy PostgreSQL separately.
+
+```bash
+docker compose --profile all-in-one up --build all-in-one
+```
+
+Service:
+
+- console and API proxy: `http://127.0.0.1:18080`
+- backend health through proxy: `http://127.0.0.1:18080/api/v1/health`
+
+Mapped paths:
+
+- config: `.env`
+- PostgreSQL data: `./deploy/data/all-in-one/postgres`
+
+Direct image run:
+
+```bash
+docker build -f docker/all-in-one/Dockerfile -t mvp-push-gateway:all-in-one .
+docker run --rm -p 18080:80 \
+  -e POSTGRES_DB=mvp_push_gateway_dev \
+  -e POSTGRES_USER=mvp_push_gateway \
+  -e POSTGRES_PASSWORD=change-me-dev-password \
+  -v "$PWD/deploy/data/all-in-one/postgres:/var/lib/postgresql/data" \
+  mvp-push-gateway:all-in-one
+```
+
+### Split-Image Compose Mode
+
+This mode starts three containers from three images: backend, frontend, and PostgreSQL. It is still one-command deployment, but keeps database lifecycle separate from application image upgrades.
 
 ```bash
 docker compose up --build
@@ -36,8 +68,21 @@ Services:
 Compose behavior:
 
 - PostgreSQL creates the main dev database and a separate test database on first boot.
-- backend waits for PostgreSQL, applies `backend/migrations/*.sql`, then starts `./cmd/server`.
+- `migrate` runs `backend/migrations/*.sql` through the bundled `mgp-migrate` binary before backend starts.
+- backend runs from a slim Alpine runtime image and uses the bundled `mgp-healthcheck` binary.
 - frontend is built once and served by Nginx with `/api/v1/*` proxied to the backend container.
+
+Mapped paths:
+
+- config: `.env`, `./deploy/env/backend.env`
+- PostgreSQL data: `./deploy/data/postgres`
+
+Image size notes:
+
+- backend runtime image uses Alpine with static Go binaries and SQL migrations; it does not include bash, curl, or psql.
+- frontend runtime image contains only Nginx and the built static assets.
+- PostgreSQL uses the official `postgres:16-alpine` image and persists data outside the container.
+- base images are configurable through `.env` (`MGP_GO_BUILDER_IMAGE`, `MGP_NODE_BUILDER_IMAGE`, `MGP_BACKEND_RUNTIME_IMAGE`, `MGP_FRONTEND_RUNTIME_IMAGE`, `MGP_ALL_IN_ONE_RUNTIME_IMAGE`) so an internal registry or mirror can be used without editing Dockerfiles.
 
 Stop and clean up:
 
@@ -383,6 +428,7 @@ Compose file expansion:
 
 ```bash
 docker compose config
+docker compose --profile all-in-one config
 ```
 
 `./scripts/test-migrations.sh` and backend integration tests require a writable PostgreSQL database referenced by `MGP_TEST_DATABASE_URL`.
@@ -402,6 +448,18 @@ Check:
 ```bash
 psql "$MGP_POSTGRES_DSN" -c 'SELECT 1'
 ./scripts/apply-migrations.sh
+```
+
+### Docker build cannot pull base image metadata
+
+If Docker reports `failed to resolve source metadata` or `EOF` while pulling `golang`, `node`, `nginx`, `postgres`, or `alpine`, the local Docker engine cannot reach Docker Hub reliably. Configure Docker Desktop registry mirrors, or point the `.env` base image variables at your internal registry:
+
+```bash
+MGP_GO_BUILDER_IMAGE=registry.example.com/library/golang:1.22-alpine
+MGP_NODE_BUILDER_IMAGE=registry.example.com/library/node:20-alpine
+MGP_BACKEND_RUNTIME_IMAGE=registry.example.com/library/alpine:3.20
+MGP_FRONTEND_RUNTIME_IMAGE=registry.example.com/library/nginx:1.27-alpine
+MGP_ALL_IN_ONE_RUNTIME_IMAGE=registry.example.com/library/postgres:16-alpine
 ```
 
 ### `setup/admin` returns conflict
