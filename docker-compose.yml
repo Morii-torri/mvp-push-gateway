@@ -1,0 +1,62 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${MGP_POSTGRES_DB:-mvp_push_gateway_dev}
+      POSTGRES_USER: ${MGP_POSTGRES_USER:-mvp_push_gateway}
+      POSTGRES_PASSWORD: ${MGP_POSTGRES_PASSWORD:-change-me-dev-password}
+      MGP_TEST_POSTGRES_DB: ${MGP_TEST_POSTGRES_DB:-mvp_push_gateway_test}
+    ports:
+      - "${MGP_POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./docker/postgres/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 5s
+
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      MGP_HOST: 0.0.0.0
+      MGP_PORT: 8080
+      MGP_API_PREFIX: ${MGP_API_PREFIX:-/api/v1}
+      MGP_POSTGRES_DSN: postgres://${MGP_POSTGRES_USER:-mvp_push_gateway}:${MGP_POSTGRES_PASSWORD:-change-me-dev-password}@postgres:5432/${MGP_POSTGRES_DB:-mvp_push_gateway_dev}?sslmode=disable
+    ports:
+      - "${MGP_PORT:-18080}:8080"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8080${MGP_API_PREFIX:-/api/v1}/health >/dev/null"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+
+  frontend:
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+    restart: unless-stopped
+    depends_on:
+      backend:
+        condition: service_healthy
+    ports:
+      - "${MGP_FRONTEND_PORT:-5173}:80"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1/"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 5s
+
+volumes:
+  postgres_data:
