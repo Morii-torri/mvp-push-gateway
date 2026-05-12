@@ -342,6 +342,9 @@ func toChannelResponse(channel provider.Channel) channelResponse {
 func providerErrorStatus(err error) (int, string, string) {
 	switch {
 	case errors.Is(err, provider.ErrInvalidInput):
+		if message := providerInvalidInputMessage(err); message != "" {
+			return http.StatusBadRequest, "MGP-REQ-001", message
+		}
 		return http.StatusBadRequest, "MGP-REQ-001", "请求参数不合法"
 	case errors.Is(err, provider.ErrNotFound):
 		return http.StatusNotFound, "MGP-CHN-001", "平台实例不存在"
@@ -350,4 +353,14 @@ func providerErrorStatus(err error) (int, string, string) {
 	default:
 		return http.StatusInternalServerError, "MGP-CHN-999", "平台服务内部错误"
 	}
+}
+
+func providerInvalidInputMessage(err error) string {
+	message := strings.TrimSpace(err.Error())
+	if message == "" || message == provider.ErrInvalidInput.Error() {
+		return ""
+	}
+	message = strings.TrimPrefix(message, provider.ErrInvalidInput.Error())
+	message = strings.TrimPrefix(message, ":")
+	return strings.TrimSpace(message)
 }

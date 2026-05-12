@@ -1100,7 +1100,7 @@ export function createProviderDraft(
   return providerWithPreset(
     {
       id: `provider-local-${Date.now()}`,
-      name: `新增平台 ${index}`,
+      name: `新增推送渠道 ${index}`,
       providerType,
       enabled: true,
       description: '用于政务消息统一发送。',
@@ -1146,7 +1146,7 @@ export function mapChannelRow(channel: ChannelApiRecord, capabilities: ProviderC
       name: channel.name,
       providerType: channel.provider_type,
       enabled: channel.enabled,
-      description: '来自后端平台实例配置',
+      description: '来自后端推送渠道实例配置',
       messageTypes: ['文本'],
       recipientFields: '',
       tokenStrategy: '',
@@ -1159,7 +1159,7 @@ export function mapChannelRow(channel: ChannelApiRecord, capabilities: ProviderC
       retryPolicy: '见高级 JSON',
       deadLetterPolicy: '见高级 JSON',
       lastTestResult: '后端未提供真实测试发送结果',
-      capability: `${getProviderTypeLabel(channel.provider_type)} 平台实例`,
+      capability: `${getProviderTypeLabel(channel.provider_type)} 推送渠道实例`,
     },
     channel.provider_type,
     capabilities,
@@ -1250,8 +1250,9 @@ export function ProviderConfigForm({
   onChange: (value: ProviderRow) => void;
   capabilities?: ProviderCapabilityApiRecord[];
 }) {
-  const { message } = App.useApp();
+  const { message, modal } = App.useApp();
   const [advancedOpen, setAdvancedOpen] = useState(false);
+  const [testResult, setTestResult] = useState<JSONValue | null>(null);
   const customMapping = value.customBodyAllowed || value.providerType === 'custom_token' || value.providerType === 'webhook';
   const update = (patch: Partial<ProviderRow>) => onChange({ ...value, ...patch });
   const updateFieldValue = (field: ProviderConfigField, nextValue: ProviderFieldValue) => {
@@ -1262,27 +1263,72 @@ export function ProviderConfigForm({
       },
     });
   };
-  const testPayload = (send: boolean): JSONValue => ({
-    send,
-    token: '',
-    recipient: value.testRecipient,
-    body: value.testBody,
-  });
-  const buildRequest = async () => {
+  const testBodyValue = (): JSONValue => {
+    const trimmed = value.testBody.trim();
+    if (!trimmed) {
+      return {};
+    }
     try {
-      const result = await consoleApi.buildChannelRequest(value.id, testPayload(false));
-      message.success(`测试请求已生成：${stringifyJSON(result.request, '{}').slice(0, 80)}`);
+      return JSON.parse(trimmed) as JSONValue;
+    } catch {
+      return { content: value.testBody };
+    }
+  };
+  const normalizedTestRecipient = () => {
+    const recipient = value.testRecipient.trim();
+    return recipient && recipient !== '-' ? recipient : '';
+  };
+  const testPayload = (send: boolean, liveSendConfirmed = false): JSONValue => {
+    const body = testBodyValue();
+    const recipient = normalizedTestRecipient();
+    const messageType = value.messageTypes[0] ?? 'text';
+    return {
+    send,
+    live_send_confirmed: liveSendConfirmed,
+    token: '',
+    recipient,
+    body,
+    rendered_message: {
+      provider_type: value.providerType,
+      message_type: messageType,
+      content: body,
+    },
+    resolved_recipients: recipient ? [{ value: recipient }] : [],
+    target_context: {
+      channel_id: value.id,
+      channel_name: value.name,
+      provider_type: value.providerType,
+      message_type: messageType,
+    },
+  };
+  };
+  const dryRunRequest = async () => {
+    try {
+      const result = await consoleApi.testSendChannel(value.id, testPayload(false));
+      setTestResult(result.result);
+      message.success(`dry-run 请求已生成：${stringifyJSON(result.result, '{}').slice(0, 80)}`);
     } catch (error) {
       message.error(userFacingError(error));
     }
   };
-  const testSend = async () => {
+  const liveSend = async () => {
     try {
-      const result = await consoleApi.testSendChannel(value.id, testPayload(true));
-      message.success(`测试发送完成：${stringifyJSON(result.result, '{}').slice(0, 80)}`);
+      const result = await consoleApi.testSendChannel(value.id, testPayload(true, true));
+      setTestResult(result.result);
+      message.success(`真实发送请求已完成：${stringifyJSON(result.result, '{}').slice(0, 80)}`);
     } catch (error) {
       message.error(userFacingError(error));
     }
+  };
+  const confirmLiveSend = () => {
+    modal.confirm({
+      title: '确认调用真实推送渠道',
+      content: '真实发送会调用当前推送渠道配置的上游地址，可能产生真实消息、费用、限流或审计记录。请确认凭证、接收人、网络白名单和必要配置都已准备完成。',
+      okText: '确认真实发送',
+      cancelText: '取消',
+      okButtonProps: { danger: true },
+      onOk: liveSend,
+    });
   };
 
   return (
@@ -1294,10 +1340,10 @@ export function ProviderConfigForm({
           label: '基础信息',
           children: (
             <Form layout="vertical">
-              <Form.Item label="平台名称" required>
+              <Form.Item label="推送渠道名称" required>
                 <Input value={value.name} onChange={(event) => update({ name: event.target.value })} />
               </Form.Item>
-              <Form.Item label="平台类型">
+              <Form.Item label="推送渠道类型">
                 <Select
                   value={value.providerType}
                   onChange={(providerType) => onChange(switchProviderType(value, providerType, capabilities))}
@@ -1509,7 +1555,7 @@ export function ProviderConfigForm({
           label: '并发上限',
           children: (
             <Form layout="vertical" className="two-column-form">
-              <Form.Item label="平台实例并发上限">
+              <Form.Item label="推送渠道实例并发上限">
                 <InputNumber
                   min={1}
                   value={value.concurrency}
@@ -1604,8 +1650,16 @@ export function ProviderConfigForm({
         {
           key: 'test',
           label: '测试发送',
+          forceRender: true,
           children: (
             <Form layout="vertical">
+              <Alert
+                type="info"
+                showIcon
+                className="semantic-alert"
+                message="dry-run 只生成请求快照，不调用真实推送渠道。"
+                description="默认操作会展示 URL、method、header、query、body、target_context、rendered_message 和 resolved_recipients。"
+              />
               <Form.Item label="测试接收人">
                 <Input value={value.testRecipient} onChange={(event) => update({ testRecipient: event.target.value })} />
               </Form.Item>
@@ -1618,14 +1672,26 @@ export function ProviderConfigForm({
               </Form.Item>
               <Form.Item label="测试动作">
                 <Space>
-                  <Button onClick={() => void buildRequest()}>
-                    生成请求
+                  <Button type="primary" onClick={() => void dryRunRequest()}>
+                    生成 dry-run 请求
                   </Button>
-                  <Button type="primary" onClick={() => void testSend()}>
-                    发送测试
+                  <Button danger onClick={confirmLiveSend}>
+                    真实发送
                   </Button>
                 </Space>
               </Form.Item>
+              <Alert
+                type="warning"
+                showIcon
+                className="semantic-alert"
+                message="真实发送会调用真实推送渠道"
+                description="仅在账号、凭证、测试接收人、网络白名单和必要配置确认完成后使用；系统会再次弹窗确认。"
+              />
+              {testResult ? (
+                <Form.Item label="dry-run / 真实发送结果">
+                  <pre className="code-block">{stringifyJSON(testResult, '{}')}</pre>
+                </Form.Item>
+              ) : null}
             </Form>
           ),
         },

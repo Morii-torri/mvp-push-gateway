@@ -36,7 +36,7 @@ export function MessageLogAttemptBlocks({ attempts }: { attempts: DeliveryAttemp
               <StatusTag meta={getOutboundStatusMeta(status)} />
             </div>
             <Descriptions column={1} size="small" bordered>
-              <Descriptions.Item label="平台实例">{channelLabel}</Descriptions.Item>
+              <Descriptions.Item label="推送渠道实例">{channelLabel}</Descriptions.Item>
               <Descriptions.Item label="Provider Type">{providerType}</Descriptions.Item>
               <Descriptions.Item label="Template Version">{templateVersionID}</Descriptions.Item>
               <Descriptions.Item label="Message Type">{messageType || '-'}</Descriptions.Item>

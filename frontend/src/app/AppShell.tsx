@@ -33,14 +33,15 @@ const pageLoaders = {
   overview: () => import('../pages/ConsolePages').then((module) => ({ default: module.OverviewPage })),
   sources: () => import('../pages/ConsolePages').then((module) => ({ default: module.SourcesPage })),
   providers: () => import('../pages/ConsolePages').then((module) => ({ default: module.ProvidersPage })),
-  routes: () => import('../pages/ConsolePages').then((module) => ({ default: module.RoutesPage })),
+  routes: () => import('../pages/ConsolePages').then((module) => ({ default: module.RouteStrategyPage })),
   templates: () => import('../pages/ConsolePages').then((module) => ({ default: module.TemplatesPage })),
+  monitoring: () => import('../pages/ConsolePages').then((module) => ({ default: module.MonitoringPage })),
   organization: () => import('../pages/ConsolePages').then((module) => ({ default: module.OrganizationPage })),
   matchGroups: () => import('../pages/ConsolePages').then((module) => ({ default: module.MatchGroupsPage })),
   logs: () => import('../pages/ConsolePages').then((module) => ({ default: module.MessageLogsPage })),
   queue: () => import('../pages/ConsolePages').then((module) => ({ default: module.QueueMonitorPage })),
   audit: () => import('../pages/ConsolePages').then((module) => ({ default: module.AuditPage })),
-  settings: () => import('../pages/ConsolePages').then((module) => ({ default: module.SettingsPage })),
+  settings: () => import('../pages/ConsolePages').then((module) => ({ default: module.SystemSettingsPage })),
 } satisfies Record<PageKey, () => Promise<{ default: ComponentType<ConsolePageProps> }>>;
 
 const lazyPages = {
@@ -49,6 +50,7 @@ const lazyPages = {
   providers: lazy(pageLoaders.providers),
   routes: lazy(pageLoaders.routes),
   templates: lazy(pageLoaders.templates),
+  monitoring: lazy(pageLoaders.monitoring),
   organization: lazy(pageLoaders.organization),
   matchGroups: lazy(pageLoaders.matchGroups),
   logs: lazy(pageLoaders.logs),

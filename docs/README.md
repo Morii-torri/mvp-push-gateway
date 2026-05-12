@@ -15,10 +15,14 @@
 9. `research/provider-adapter-reference.md`：推送渠道 Provider Adapter 参照和联调状态。
 10. `research/provider-adapter-status.md`：上级平台 adapter 已完成/未完成状态表。
 11. `operations/end-to-end-smoke.md`：本地和 Docker Compose 端到端验收 Runbook。
-12. `plans/2026-05-07-mvp-push-gateway-implementation-plan.md`：实施计划。
-13. `plans/2026-05-07-ai-execution-roadmap.md`：下一步交给 AI 分阶段执行的路线图。
-14. `plans/2026-05-11-product-simplification-and-template-adapter-plan.md`：产品收敛、模板内容模型和平台适配器重构计划。
-15. `plans/2026-05-12-route-send-action-group-plan.md`：路由发送动作组改造计划。
+12. `operations/2026-05-12-route-send-action-group-ui-smoke.md`：route send action group 真实本地 UI smoke 记录。
+13. `operations/operator-guide.md`：按新产品模型编写的操作员指南。
+14. `plans/2026-05-07-mvp-push-gateway-implementation-plan.md`：实施计划。
+15. `plans/2026-05-07-ai-execution-roadmap.md`：下一步交给 AI 分阶段执行的路线图。
+16. `plans/2026-05-11-product-simplification-and-template-adapter-plan.md`：产品收敛、模板内容模型和平台适配器重构计划。
+17. `plans/2026-05-12-route-send-action-group-plan.md`：路由发送动作组改造计划。
+18. `plans/2026-05-12-console-menu-convergence-design.md`：管理台菜单/页面合并设计。
+19. `plans/2026-05-12-legacy-route-action-fields-cleanup-assessment.md`：legacy route action 字段清理评估。
 
 ## 已确认决策
 

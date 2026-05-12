@@ -14,14 +14,24 @@ type templatesResponse struct {
 }
 
 type templateResponse struct {
-	ID               string `json:"id"`
-	Name             string `json:"name"`
-	Description      string `json:"description"`
-	SourceID         string `json:"source_id"`
-	Enabled          bool   `json:"enabled"`
-	CurrentVersionID string `json:"current_version_id"`
-	CreatedAt        string `json:"created_at"`
-	UpdatedAt        string `json:"updated_at"`
+	ID                 string                   `json:"id"`
+	Name               string                   `json:"name"`
+	Description        string                   `json:"description"`
+	SourceID           string                   `json:"source_id"`
+	Enabled            bool                     `json:"enabled"`
+	CurrentVersionID   string                   `json:"current_version_id"`
+	MessageType        string                   `json:"message_type,omitempty"`
+	TargetProviderType string                   `json:"target_provider_type,omitempty"`
+	TemplateBody       string                   `json:"template_body,omitempty"`
+	MessageBodySchema  json.RawMessage          `json:"message_body_schema,omitempty"`
+	SamplePayload      json.RawMessage          `json:"sample_payload,omitempty"`
+	CompiledPreview    json.RawMessage          `json:"compiled_preview,omitempty"`
+	UsedVariables      []string                 `json:"used_variables,omitempty"`
+	ValidationStatus   string                   `json:"validation_status,omitempty"`
+	ValidationErrors   json.RawMessage          `json:"validation_errors,omitempty"`
+	CurrentVersion     *templateVersionResponse `json:"current_version,omitempty"`
+	CreatedAt          string                   `json:"created_at"`
+	UpdatedAt          string                   `json:"updated_at"`
 }
 
 type templateBody struct {
@@ -249,7 +259,21 @@ func (h *Handler) templatePublishHandler(w http.ResponseWriter, r *http.Request,
 }
 
 func toTemplateResponse(item msgtemplate.Template) templateResponse {
-	return templateResponse{ID: item.ID, Name: item.Name, Description: item.Description, SourceID: item.SourceID, Enabled: item.Enabled, CurrentVersionID: item.CurrentVersionID, CreatedAt: formatTime(item.CreatedAt), UpdatedAt: formatTime(item.UpdatedAt)}
+	response := templateResponse{ID: item.ID, Name: item.Name, Description: item.Description, SourceID: item.SourceID, Enabled: item.Enabled, CurrentVersionID: item.CurrentVersionID, CreatedAt: formatTime(item.CreatedAt), UpdatedAt: formatTime(item.UpdatedAt)}
+	if item.CurrentVersion != nil {
+		version := toTemplateVersionResponse(*item.CurrentVersion)
+		response.MessageType = version.MessageType
+		response.TargetProviderType = version.TargetProviderType
+		response.TemplateBody = version.TemplateBody
+		response.MessageBodySchema = version.MessageBodySchema
+		response.SamplePayload = version.SamplePayload
+		response.CompiledPreview = version.CompiledPreview
+		response.UsedVariables = version.UsedVariables
+		response.ValidationStatus = version.ValidationStatus
+		response.ValidationErrors = version.ValidationErrors
+		response.CurrentVersion = &version
+	}
+	return response
 }
 
 func toTemplateVersionResponse(item msgtemplate.TemplateVersion) templateVersionResponse {

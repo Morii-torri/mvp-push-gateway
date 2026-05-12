@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	httpapi "mvp-push-gateway/backend/internal/http"
 	msgtemplate "mvp-push-gateway/backend/internal/template"
@@ -92,6 +93,75 @@ func TestTemplatePublishHandlerPublishesProviderAwareTemplate(t *testing.T) {
 	}
 }
 
+func TestTemplatesHandlerIncludesCurrentVersionMetadata(t *testing.T) {
+	now := time.Date(2026, 5, 12, 9, 0, 0, 0, time.UTC)
+	version := msgtemplate.TemplateVersion{
+		ID:                    "version-1",
+		TemplateID:            "template-1",
+		VersionNo:             1,
+		MessageType:           "json",
+		TargetProviderType:    "webhook",
+		TemplateEngine:        "pongo2",
+		TemplateSyntaxVersion: "jinja-like-v1",
+		TemplateBody:          `{"title":"{{ payload.title }}"}`,
+		MessageBodySchema:     json.RawMessage(`{"type":"object"}`),
+		SamplePayload:         json.RawMessage(`{"title":"Smoke"}`),
+		CompiledPreview:       json.RawMessage(`{"rendered":"{}"}`),
+		UsedVariables:         []string{"payload.title"},
+		ValidationStatus:      "valid",
+		ValidationErrors:      json.RawMessage(`[]`),
+		CreatedAt:             now,
+		UpdatedAt:             now,
+	}
+	store := &httpTemplateStore{
+		templates: []msgtemplate.Template{{
+			ID:               "template-1",
+			Name:             "Smoke 模板",
+			SourceID:         "source-1",
+			Enabled:          true,
+			CurrentVersionID: version.ID,
+			CurrentVersion:   &version,
+			CreatedAt:        now,
+			UpdatedAt:        now,
+		}},
+	}
+	handler := httpapi.NewHandler(
+		testConfig(),
+		httpapi.WithAuthService(fakeAuthService{authenticatedToken: "admin-session"}),
+		httpapi.WithTemplateService(msgtemplate.NewService(store)),
+	)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/templates", nil)
+	req.Header.Set("Authorization", "Bearer admin-session")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	var body struct {
+		Templates []struct {
+			CurrentVersionID   string `json:"current_version_id"`
+			MessageType        string `json:"message_type"`
+			TargetProviderType string `json:"target_provider_type"`
+			CurrentVersion     struct {
+				ID                 string `json:"id"`
+				TargetProviderType string `json:"target_provider_type"`
+			} `json:"current_version"`
+		} `json:"templates"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
+		t.Fatalf("decode templates response: %v", err)
+	}
+	if len(body.Templates) != 1 {
+		t.Fatalf("expected one template, got %d", len(body.Templates))
+	}
+	got := body.Templates[0]
+	if got.CurrentVersionID != "version-1" || got.MessageType != "json" || got.TargetProviderType != "webhook" || got.CurrentVersion.ID != "version-1" || got.CurrentVersion.TargetProviderType != "webhook" {
+		t.Fatalf("current version metadata missing from response: %+v", got)
+	}
+}
+
 func hasTemplateError(errors []msgtemplate.ValidationError, code string, path string) bool {
 	for _, err := range errors {
 		if err.Code == code && err.Path == path {
@@ -102,12 +172,13 @@ func hasTemplateError(errors []msgtemplate.ValidationError, code string, path st
 }
 
 type httpTemplateStore struct {
+	templates     []msgtemplate.Template
 	publishCalls  int
 	publishParams msgtemplate.PublishTemplateVersionParams
 }
 
 func (s *httpTemplateStore) ListTemplates(context.Context) ([]msgtemplate.Template, error) {
-	return nil, nil
+	return s.templates, nil
 }
 
 func (s *httpTemplateStore) CreateTemplate(context.Context, msgtemplate.CreateTemplateParams) (msgtemplate.Template, error) {

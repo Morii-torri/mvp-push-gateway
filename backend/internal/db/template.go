@@ -25,6 +25,13 @@ func (r Repository) ListTemplates(ctx context.Context) ([]msgtemplate.Template, 
 		if err != nil {
 			return nil, err
 		}
+		if item.CurrentVersionID != "" {
+			version, err := r.getTemplateVersion(ctx, item.CurrentVersionID)
+			if err != nil {
+				return nil, err
+			}
+			item.CurrentVersion = &version
+		}
 		items = append(items, item)
 	}
 	return items, rows.Err()
@@ -202,6 +209,15 @@ func scanTemplateVersion(row sourceScanner) (msgtemplate.TemplateVersion, error)
 	}
 	if publishedAt.Valid {
 		item.PublishedAt = &publishedAt.Time
+	}
+	return item, nil
+}
+
+func (r Repository) getTemplateVersion(ctx context.Context, id string) (msgtemplate.TemplateVersion, error) {
+	row := r.pool.QueryRow(ctx, `SELECT `+templateVersionSelectColumns()+` FROM template_versions WHERE id = $1`, id)
+	item, err := scanTemplateVersion(row)
+	if err != nil {
+		return msgtemplate.TemplateVersion{}, mapTemplateQueryError("get template version", err)
 	}
 	return item, nil
 }

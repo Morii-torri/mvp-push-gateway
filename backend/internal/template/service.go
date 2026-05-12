@@ -29,6 +29,7 @@ type Template struct {
 	SourceID         string
 	Enabled          bool
 	CurrentVersionID string
+	CurrentVersion   *TemplateVersion
 	CreatedAt        time.Time
 	UpdatedAt        time.Time
 }

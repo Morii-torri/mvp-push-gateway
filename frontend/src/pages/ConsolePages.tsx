@@ -400,8 +400,8 @@ function createSourceDraft(): SourceDraft {
     ipAllowlistText: '10.0.0.0/24',
     compatMode: 'standard_json',
     inboundDedupeEnabled: true,
-    inboundDedupeStrategy: 'trace_id',
-    inboundDedupeConfigText: '{\n  "path": "trace_id",\n  "ttl_seconds": 86400\n}',
+    inboundDedupeStrategy: 'payload_hash',
+    inboundDedupeConfigText: '{\n  "ttl_seconds": 86400\n}',
     rateLimitConfigText: '{\n  "minute_limit": 1000,\n  "burst": 100\n}',
   };
 }
@@ -435,7 +435,7 @@ function sourceInputFromDraft(draft: SourceDraft): SourceInput {
     ip_allowlist: textareaToList(draft.ipAllowlistText),
     compat_mode: draft.compatMode.trim() || 'standard_json',
     inbound_dedupe_enabled: draft.inboundDedupeEnabled,
-    inbound_dedupe_strategy: draft.inboundDedupeStrategy.trim() || 'trace_id',
+    inbound_dedupe_strategy: draft.inboundDedupeStrategy.trim() || 'payload_hash',
     inbound_dedupe_config: parseJSONField(draft.inboundDedupeConfigText, '入站去重高级 JSON'),
     rate_limit_config: parseJSONField(draft.rateLimitConfigText, '入站限流高级 JSON'),
   };
@@ -455,6 +455,19 @@ function mapSourceRow(source: SourceApiRecord): SourceRow {
     latestPayload: source.latest_payload_sample ? stringifyJSON(source.latest_payload_sample, '暂无') : '暂无',
     lastInboundAt: formatApiTime(source.latest_payload_sample_updated_at),
     raw: source,
+  };
+}
+
+function defaultInboundTestPayload(source: SourceRow): JSONValue {
+  if (source.raw.latest_payload_sample !== undefined && source.raw.latest_payload_sample !== null) {
+    return source.raw.latest_payload_sample;
+  }
+  return {
+    trace_id: `ui-smoke-${source.code}`,
+    title: 'UI 入站测试消息',
+    content: '这是一条通过来源接入页发送的本地入站测试 Payload。',
+    severity: 'info',
+    bizId: source.code,
   };
 }
 
@@ -602,7 +615,7 @@ function IdentityEditor({
   };
   const identityColumns: TableProps<(UserIdentityDraft & { id: string })>['columns'] = [
     {
-      title: '平台类型',
+      title: '推送渠道类型',
       dataIndex: 'platform',
       render: (value, _record, index) =>
         readOnly ? (
@@ -695,8 +708,8 @@ export function OverviewPage({ lastUpdated, onRefresh }: ConsolePageProps) {
 
   const rankingColumns: TableProps<OverviewViewModel['platformRanking'][number]>['columns'] = [
     { title: '排名', render: (_value, _record, index) => index + 1, width: 72 },
-    { title: '平台名称', dataIndex: 'name' },
-    { title: '平台类型', dataIndex: 'providerType' },
+    { title: '推送渠道名称', dataIndex: 'name' },
+    { title: '推送渠道类型', dataIndex: 'providerType' },
     { title: '发送量', dataIndex: 'sent', align: 'right' },
     { title: '成功率', dataIndex: 'success', align: 'right' },
     { title: 'QPS', dataIndex: 'qps', align: 'right' },
@@ -793,6 +806,10 @@ export function SourcesPage({ lastUpdated, onRefresh }: ConsolePageProps) {
   const [status, setStatus] = useState<string>('all');
   const [authMode, setAuthMode] = useState<string>('all');
   const [editingSourceId, setEditingSourceId] = useState<string | null>(null);
+  const [inboundTestSource, setInboundTestSource] = useState<SourceRow | null>(null);
+  const [inboundPayloadText, setInboundPayloadText] = useState('');
+  const [inboundTestResult, setInboundTestResult] = useState<JSONValue | null>(null);
+  const [inboundSending, setInboundSending] = useState(false);
 
   const loadSources = useCallback(async () => {
     setLoadState({ loading: true, error: '' });
@@ -837,6 +854,43 @@ export function SourcesPage({ lastUpdated, onRefresh }: ConsolePageProps) {
       await loadSources();
     } catch (error) {
       message.error(userFacingError(error));
+    }
+  };
+  const openInboundTest = (record: SourceRow) => {
+    setInboundTestSource(record);
+    setInboundPayloadText(stringifyJSON(defaultInboundTestPayload(record)));
+    setInboundTestResult(null);
+  };
+  const sendInboundTestPayload = async () => {
+    if (!inboundTestSource) {
+      return;
+    }
+    if (
+      (inboundTestSource.raw.auth_mode === 'token' || inboundTestSource.raw.auth_mode === 'token_and_hmac') &&
+      !inboundTestSource.raw.auth_token
+    ) {
+      message.error('来源 Token 为空，无法发起入站测试');
+      return;
+    }
+    if (inboundTestSource.raw.auth_mode === 'hmac' || inboundTestSource.raw.auth_mode === 'token_and_hmac') {
+      message.error('UI 入站测试暂不自动生成 HMAC 签名，请使用 curl 或改用 Token 鉴权来源');
+      return;
+    }
+    try {
+      setInboundSending(true);
+      const payload = parseJSONField(inboundPayloadText, '入站测试 Payload');
+      const result = await consoleApi.ingestSourcePayload(
+        inboundTestSource.code,
+        inboundTestSource.raw.auth_token,
+        payload,
+      );
+      setInboundTestResult(result as unknown as JSONValue);
+      message.success(`入站 Payload 已提交，trace_id：${result.trace_id || '-'}`);
+      await loadSources();
+    } catch (error) {
+      message.error(userFacingError(error));
+    } finally {
+      setInboundSending(false);
     }
   };
   const columns: TableProps<SourceRow>['columns'] = [
@@ -886,8 +940,8 @@ export function SourcesPage({ lastUpdated, onRefresh }: ConsolePageProps) {
           >
             编辑
           </Button>
-          <Button type="link" onClick={() => message.success(`${record.name} 联调测试已完成`)}>
-            测试
+          <Button type="link" onClick={() => openInboundTest(record)}>
+            入站测试
           </Button>
         </Space>
       ),
@@ -950,7 +1004,7 @@ export function SourcesPage({ lastUpdated, onRefresh }: ConsolePageProps) {
         total={filteredRows.length}
         fill
         scrollY={520}
-        extra={<Alert type="info" showIcon message="最近 Payload 位于来源详情抽屉的描述预处理区。" />}
+        extra={<Alert type="info" showIcon message="最近 Payload 位于来源详情抽屉的描述预处理区；操作列可发起入站测试。" />}
       >
         <Table
           rowKey="id"
@@ -991,20 +1045,63 @@ export function SourcesPage({ lastUpdated, onRefresh }: ConsolePageProps) {
           ]}
         />
       </CreateDrawer>
+      <Modal
+        title={inboundTestSource ? `入站测试：${inboundTestSource.name}` : '入站测试'}
+        open={Boolean(inboundTestSource)}
+        onCancel={() => {
+          setInboundTestSource(null);
+          setInboundTestResult(null);
+        }}
+        onOk={sendInboundTestPayload}
+        okText="发送入站 Payload"
+        cancelText="关闭"
+        confirmLoading={inboundSending}
+        width={760}
+      >
+        <Space direction="vertical" size={12} className="full-width">
+          <Alert
+            type="info"
+            showIcon
+            message="该操作只调用本平台入站接口，用于触发本地路由规划和发送动作组；是否调用推送渠道取决于已激活路由。"
+          />
+          <Descriptions column={1} bordered size="small">
+            <Descriptions.Item label="入站接口">
+              <Typography.Text code>
+                POST /api/v1/ingest/{inboundTestSource?.code || '{source_code}'}
+              </Typography.Text>
+            </Descriptions.Item>
+            <Descriptions.Item label="鉴权方式">
+              {inboundTestSource ? getAuthModeMeta(inboundTestSource.raw.auth_mode).label : '-'}
+            </Descriptions.Item>
+          </Descriptions>
+          <Form layout="vertical">
+            <Form.Item label="Payload JSON" required>
+              <Input.TextArea
+                rows={10}
+                value={inboundPayloadText}
+                onChange={(event) => setInboundPayloadText(event.target.value)}
+              />
+            </Form.Item>
+          </Form>
+          {inboundTestResult ? (
+            <pre className="code-block">{stringifyJSON(inboundTestResult)}</pre>
+          ) : null}
+        </Space>
+      </Modal>
     </PageFrame>
   );
 }
 
 export function ProvidersPage({ lastUpdated, onRefresh }: ConsolePageProps) {
   const { message } = App.useApp();
-  const { drawer, openDrawer, closeDrawer } = useCreateDrawer('新增上级平台');
+  const { drawer, openDrawer, closeDrawer } = useCreateDrawer('新增推送渠道');
   const [providerRows, setProviderRows] = useState<ProviderRow[]>([]);
   const [providerCapabilities, setProviderCapabilities] = useState<ProviderCapabilityApiRecord[]>([]);
   const [loadState, setLoadState] = useState<ApiLoadState>(emptyLoadState);
   const [selected, setSelected] = useState<ProviderRow | null>(null);
   const [providerDraft, setProviderDraft] = useState<ProviderRow>(() => createProviderDraft('gov_cloud', 1));
   const [editingProviderId, setEditingProviderId] = useState<string | null>(null);
-  const [typeFilter, setTypeFilter] = useState('全部平台');
+  const [typeFilter, setTypeFilter] = useState('全部渠道');
   const [nameFilter, setNameFilter] = useState('');
 
   const loadProviders = useCallback(async () => {
@@ -1036,25 +1133,27 @@ export function ProvidersPage({ lastUpdated, onRefresh }: ConsolePageProps) {
   }, [loadProviders, lastUpdated]);
 
   const filteredRows = providerRows.filter((row) => {
-    const typeMatched = typeFilter === '全部平台' || getProviderTypeLabel(row.providerType) === typeFilter;
+    const typeMatched = typeFilter === '全部渠道' || getProviderTypeLabel(row.providerType) === typeFilter;
     const nameMatched = !nameFilter || row.name.includes(nameFilter);
     return typeMatched && nameMatched;
   });
   const openCreateProvider = () => {
+    const selectedProviderType =
+      providerTypeOptions.find((item) => item.label === typeFilter)?.value ?? 'webhook';
     setEditingProviderId(null);
-    setProviderDraft(createProviderDraft('gov_cloud', providerRows.length + 1, providerCapabilities));
+    setProviderDraft(createProviderDraft(selectedProviderType, providerRows.length + 1, providerCapabilities));
     openDrawer();
   };
   const openEditProvider = (record: ProviderRow) => {
     setEditingProviderId(record.id);
     setProviderDraft(providerWithCapability(record, providerCapabilityView(record.providerType, providerCapabilities)));
-    openDrawer(`编辑平台：${record.name}`);
+    openDrawer(`编辑推送渠道：${record.name}`);
   };
   const saveProvider = async () => {
     try {
       const input = channelInputFromProvider(providerDraft);
       if (!input.name) {
-        message.error('请填写平台名称');
+        message.error('请填写推送渠道名称');
         return;
       }
       if (editingProviderId) {
@@ -1064,7 +1163,7 @@ export function ProvidersPage({ lastUpdated, onRefresh }: ConsolePageProps) {
       }
       closeDrawer();
       setEditingProviderId(null);
-      message.success('平台配置已保存');
+      message.success('推送渠道配置已保存');
       await loadProviders();
     } catch (error) {
       message.error(userFacingError(error));
@@ -1079,16 +1178,16 @@ export function ProvidersPage({ lastUpdated, onRefresh }: ConsolePageProps) {
       });
       message.success(`测试请求已由后端生成：${stringifyJSON(result.request, '{}').slice(0, 80)}`);
     } catch (error) {
-      message.warning(`${userFacingError(error)}；如需真实发送，后端还需提供 provider test-send API。`);
+      message.warning(`${userFacingError(error)}；请在编辑页“测试发送”中使用 dry-run 检查配置。`);
     }
   };
   const columns: TableProps<ProviderRow>['columns'] = [
     {
-      title: '平台类型',
+      title: '推送渠道类型',
       dataIndex: 'providerType',
       render: (value: ProviderRow['providerType']) => <Tag color="blue">{getProviderTypeLabel(value)}</Tag>,
     },
-    { title: '平台名称', dataIndex: 'name' },
+    { title: '推送渠道名称', dataIndex: 'name' },
     {
       title: '状态',
       dataIndex: 'enabled',
@@ -1125,16 +1224,16 @@ export function ProvidersPage({ lastUpdated, onRefresh }: ConsolePageProps) {
 
   return (
     <PageFrame
-      title="上级平台"
-      description="配置企业微信、飞书、钉钉、邮箱、短信、政务云、Webhook 和自定义 Token 平台。"
+      title="推送渠道"
+      description="配置企业微信、飞书、钉钉、邮箱、短信、政务云、Webhook 和自定义 Token 推送渠道。"
       lastUpdated={lastUpdated}
       onRefresh={onRefresh}
     >
       <div className="split-layout split-layout--provider split-layout--fill">
         <section className="side-filter">
-          <Typography.Title level={4}>平台类型</Typography.Title>
+          <Typography.Title level={4}>推送渠道类型</Typography.Title>
           <Space direction="vertical" className="full-width">
-            {['全部平台', ...providerTypeOptions.map((item) => item.label)].map(
+            {['全部渠道', ...providerTypeOptions.map((item) => item.label)].map(
               (item) => (
                 <Button
                   key={item}
@@ -1142,7 +1241,7 @@ export function ProvidersPage({ lastUpdated, onRefresh }: ConsolePageProps) {
                   block
                   onClick={() => {
                     setTypeFilter(item);
-                    message.info(`平台类型已切换为：${item}`);
+                    message.info(`推送渠道类型已切换为：${item}`);
                   }}
                 >
                   {item}
@@ -1154,19 +1253,19 @@ export function ProvidersPage({ lastUpdated, onRefresh }: ConsolePageProps) {
         <div className="list-stack">
           <QueryBar
             onCreate={openCreateProvider}
-            onSearch={() => message.success(`已筛选出 ${filteredRows.length} 个平台实例`)}
+            onSearch={() => message.success(`已筛选出 ${filteredRows.length} 个推送渠道实例`)}
             onReset={() => {
               setNameFilter('');
-              setTypeFilter('全部平台');
-              message.info('平台查询条件已重置');
+              setTypeFilter('全部渠道');
+              message.info('推送渠道查询条件已重置');
             }}
-            createText="新增平台"
+            createText="新增推送渠道"
           >
-            <Input placeholder="平台名称" value={nameFilter} onChange={(event) => setNameFilter(event.target.value)} />
-            <Select placeholder="平台类型" />
+            <Input placeholder="推送渠道名称" value={nameFilter} onChange={(event) => setNameFilter(event.target.value)} />
+            <Select placeholder="推送渠道类型" />
             <Select placeholder="状态" />
           </QueryBar>
-          <ListContainer title="平台实例列表" total={filteredRows.length} fill scrollY={520}>
+          <ListContainer title="推送渠道实例列表" total={filteredRows.length} fill scrollY={520}>
             {loadState.error ? <Alert type="warning" showIcon message={loadState.error} /> : null}
             <Table
               rowKey="id"
@@ -1184,8 +1283,8 @@ export function ProvidersPage({ lastUpdated, onRefresh }: ConsolePageProps) {
           {selected ? (
             <>
               <Descriptions column={1} size="small" bordered>
-                <Descriptions.Item label="平台名称">{selected.name}</Descriptions.Item>
-                <Descriptions.Item label="平台类型">{getProviderTypeLabel(selected.providerType)}</Descriptions.Item>
+                <Descriptions.Item label="推送渠道名称">{selected.name}</Descriptions.Item>
+                <Descriptions.Item label="推送渠道类型">{getProviderTypeLabel(selected.providerType)}</Descriptions.Item>
                 <Descriptions.Item label="描述">{selected.description}</Descriptions.Item>
                 <Descriptions.Item label="消息能力">{selected.capability}</Descriptions.Item>
                 <Descriptions.Item label="接收人字段">{selected.recipientFields}</Descriptions.Item>
@@ -1205,7 +1304,7 @@ export function ProvidersPage({ lastUpdated, onRefresh }: ConsolePageProps) {
               <ProviderCapabilityTabs provider={selected} />
             </>
           ) : (
-            <Alert type="info" showIcon message="暂无真实平台实例，请通过新增平台创建。" />
+            <Alert type="info" showIcon message="暂无真实推送渠道实例，请通过新增推送渠道创建。" />
           )}
         </section>
       </div>
@@ -1378,11 +1477,19 @@ export function RoutesPage({ lastUpdated, onRefresh }: ConsolePageProps) {
           : [];
       const nextRecipientGroups =
         recipientGroupResult.status === 'fulfilled' ? recipientGroupResult.value.groups : [];
+      const nextGroupRows = nextFlows.map((flow) => mapRouteGroup(flow, nextSources));
       setSourceRows(nextSources);
       setChannelRows(nextChannels);
       setTemplateRows(nextTemplates);
       setRawFlows(nextFlows);
-      setGroupRows(nextFlows.map((flow) => mapRouteGroup(flow, nextSources)));
+      setGroupRows(nextGroupRows);
+      setSelectedGroup((current) => {
+        if (!current) {
+          return current;
+        }
+        const updated = nextGroupRows.find((item) => item.id === current.id);
+        return updated ? { ...updated, ruleIds: current.ruleIds, totalHitCount: current.totalHitCount } : null;
+      });
       setMatchGroupRows(nextMatchGroups);
       setRecipientGroupRows(nextRecipientGroups);
       setGroupDraft((current) => ({ ...current, sourceCode: current.sourceCode || nextSources[0]?.code || '' }));
@@ -1883,7 +1990,7 @@ export function RoutesPage({ lastUpdated, onRefresh }: ConsolePageProps) {
   if (!selectedGroup) {
     return (
       <PageFrame
-        title="路由编排"
+        title="路由策略"
         description="先选择路由大组并固定来源，再进入组内维护顺序规则和画布。"
         lastUpdated={lastUpdated}
         onRefresh={onRefresh}
@@ -2389,7 +2496,7 @@ export function TemplatesPage({ lastUpdated, onRefresh }: ConsolePageProps) {
 
   return (
     <PageFrame
-      title="模板中心"
+      title="消息模板"
       description="提供模板编辑、字段复制、实时预览和保存前校验。"
       lastUpdated={lastUpdated}
       onRefresh={onRefresh}
@@ -3219,7 +3326,7 @@ export function OrganizationPage({ lastUpdated, onRefresh }: ConsolePageProps) {
   return (
     <PageFrame
       title="组织人员"
-      description="维护组织树、人员目录和不同上级平台的身份字段。"
+      description="维护组织树、人员目录和不同推送渠道的身份字段。"
       lastUpdated={lastUpdated}
       onRefresh={onRefresh}
     >
@@ -3444,6 +3551,215 @@ export function OrganizationPage({ lastUpdated, onRefresh }: ConsolePageProps) {
               checkedChildren="启用"
               unCheckedChildren="停用"
               onChange={(enabled) => setRecipientGroupDraft({ ...recipientGroupDraft, enabled })}
+            />
+          </Form.Item>
+        </Form>
+      </CreateDrawer>
+    </PageFrame>
+  );
+}
+
+export function RecipientGroupsPage({ lastUpdated, onRefresh }: ConsolePageProps) {
+  const { message, modal } = App.useApp();
+  const { drawer, openDrawer, closeDrawer } = useCreateDrawer('新增接收人组');
+  const [userRows, setUserRows] = useState<UserApiRecord[]>([]);
+  const [orgRows, setOrgRows] = useState<OrgUnitApiRecord[]>([]);
+  const [rows, setRows] = useState<RecipientGroupApiRecord[]>([]);
+  const [loadState, setLoadState] = useState<ApiLoadState>(emptyLoadState);
+  const [editing, setEditing] = useState<RecipientGroupApiRecord | null>(null);
+  const [draft, setDraft] = useState<RecipientGroupDraft>(() => createRecipientGroupDraft());
+  const [keyword, setKeyword] = useState('');
+  const filteredRows = rows.filter((row) => !keyword || row.name.includes(keyword));
+  const userOptions = useMemo(
+    () => userRows.map((item) => ({ label: `${item.display_name}（${stringField(isRecord(item.attributes) ? item.attributes.mobile : undefined) || item.id}）`, value: item.id })),
+    [userRows],
+  );
+  const orgOptions = useMemo(
+    () => orgRows.map((item) => ({ label: `${item.name}（${item.code}）`, value: item.id })),
+    [orgRows],
+  );
+
+  const loadRecipientGroups = useCallback(async () => {
+    setLoadState({ loading: true, error: '' });
+    try {
+      const [userResult, orgResult, groupResult] = await Promise.all([
+        consoleApi.listUsers(),
+        consoleApi.listOrgUnits(),
+        consoleApi.listRecipientGroups(),
+      ]);
+      setUserRows(userResult.users);
+      setOrgRows(orgResult.org_units);
+      setRows(groupResult.groups);
+      setLoadState(emptyLoadState);
+    } catch (error) {
+      setUserRows([]);
+      setOrgRows([]);
+      setRows([]);
+      setLoadState({ loading: false, error: userFacingError(error) });
+    }
+  }, []);
+
+  useEffect(() => {
+    void loadRecipientGroups();
+  }, [loadRecipientGroups, lastUpdated]);
+
+  const openCreateRecipientGroup = () => {
+    setEditing(null);
+    setDraft(createRecipientGroupDraft());
+    openDrawer('新增接收人组');
+  };
+  const openEditRecipientGroup = (record: RecipientGroupApiRecord) => {
+    setEditing(record);
+    setDraft(recipientGroupDraftFromRecord(record));
+    openDrawer(`编辑接收人组：${record.name}`);
+  };
+  const saveRecipientGroup = async () => {
+    try {
+      const input = recipientGroupInputFromDraft(draft);
+      if (!input.name) {
+        message.error('请填写接收人组名称');
+        return;
+      }
+      if (editing) {
+        await consoleApi.updateRecipientGroup(editing.id, input);
+      } else {
+        await consoleApi.createRecipientGroup(input);
+      }
+      closeDrawer();
+      setEditing(null);
+      message.success('接收人组已保存到后端');
+      await loadRecipientGroups();
+    } catch (error) {
+      message.error(userFacingError(error));
+    }
+  };
+  const confirmDeleteRecipientGroup = (record: RecipientGroupApiRecord) => {
+    modal.confirm({
+      title: `删除接收人组：${record.name}`,
+      content: '删除后路由策略中的接收人组引用可能失效，请确认后继续。',
+      okText: '删除',
+      cancelText: '取消',
+      okButtonProps: { danger: true },
+      onOk: async () => {
+        try {
+          await consoleApi.deleteRecipientGroup(record.id);
+          message.success('接收人组已删除');
+          await loadRecipientGroups();
+        } catch (error) {
+          message.error(userFacingError(error));
+        }
+      },
+    });
+  };
+
+  const columns: TableProps<RecipientGroupApiRecord>['columns'] = [
+    { title: '接收人组名称', dataIndex: 'name' },
+    { title: '包含人员', dataIndex: 'user_ids', render: (items: string[]) => <Tag>{items.length} 人</Tag> },
+    { title: '包含组织', dataIndex: 'org_ids', render: (items: string[]) => <Tag color="blue">{items.length} 个组织</Tag> },
+    { title: '排除人员', dataIndex: 'excluded_user_ids', render: (items: string[]) => items.length || '-' },
+    { title: '排除组织', dataIndex: 'excluded_org_ids', render: (items: string[]) => items.length || '-' },
+    {
+      title: '状态',
+      dataIndex: 'enabled',
+      render: (enabled: boolean) => <StatusTag meta={getEnabledMeta(enabled)} />,
+    },
+    { title: '更新时间', dataIndex: 'updated_at', render: (value: string) => formatApiTime(value) },
+    {
+      title: '操作',
+      render: (_, record) => (
+        <Space>
+          <Button type="link" onClick={() => openEditRecipientGroup(record)}>
+            编辑
+          </Button>
+          <Button danger type="link" onClick={() => confirmDeleteRecipientGroup(record)}>
+            删除
+          </Button>
+        </Space>
+      ),
+    },
+  ];
+
+  return (
+    <PageFrame
+      title="接收人组"
+      description="维护路由策略可引用的人员和组织集合；模板只写消息内容，不保存接收人。"
+      lastUpdated={lastUpdated}
+      onRefresh={onRefresh}
+    >
+      <QueryBar
+        onCreate={openCreateRecipientGroup}
+        onSearch={() => message.success(`已筛选出 ${filteredRows.length} 个接收人组`)}
+        onReset={() => {
+          setKeyword('');
+          message.info('接收人组查询条件已重置');
+        }}
+        createText="新增接收人组"
+      >
+        <Input
+          placeholder="接收人组名称"
+          value={keyword}
+          onChange={(event) => setKeyword(event.target.value)}
+        />
+      </QueryBar>
+      <ListContainer title="接收人组列表" total={filteredRows.length} fill scrollY={560}>
+        {loadState.error ? <Alert type="warning" showIcon message={loadState.error} /> : null}
+        <Table
+          rowKey="id"
+          size="middle"
+          pagination={false}
+          columns={columns}
+          dataSource={filteredRows}
+          loading={loadState.loading}
+          scroll={{ x: 920 }}
+        />
+      </ListContainer>
+      <CreateDrawer title={drawer.title} open={drawer.open} onClose={closeDrawer} onSave={saveRecipientGroup} width={720}>
+        <Form layout="vertical">
+          <Form.Item label="接收人组名称" required>
+            <Input value={draft.name} onChange={(event) => setDraft({ ...draft, name: event.target.value })} />
+          </Form.Item>
+          <Form.Item label="包含人员">
+            <Select
+              mode="tags"
+              value={draft.userIds}
+              options={userOptions}
+              onChange={(userIds) => setDraft({ ...draft, userIds })}
+              placeholder="选择人员或输入人员 ID"
+            />
+          </Form.Item>
+          <Form.Item label="包含组织">
+            <Select
+              mode="tags"
+              value={draft.orgIds}
+              options={orgOptions}
+              onChange={(orgIds) => setDraft({ ...draft, orgIds })}
+              placeholder="选择组织或输入组织 ID"
+            />
+          </Form.Item>
+          <Form.Item label="排除人员">
+            <Select
+              mode="tags"
+              value={draft.excludedUserIds}
+              options={userOptions}
+              onChange={(excludedUserIds) => setDraft({ ...draft, excludedUserIds })}
+              placeholder="选择人员或输入人员 ID"
+            />
+          </Form.Item>
+          <Form.Item label="排除组织">
+            <Select
+              mode="tags"
+              value={draft.excludedOrgIds}
+              options={orgOptions}
+              onChange={(excludedOrgIds) => setDraft({ ...draft, excludedOrgIds })}
+              placeholder="选择组织或输入组织 ID"
+            />
+          </Form.Item>
+          <Form.Item label="状态">
+            <Switch
+              checked={draft.enabled}
+              checkedChildren="启用"
+              unCheckedChildren="停用"
+              onChange={(enabled) => setDraft({ ...draft, enabled })}
             />
           </Form.Item>
         </Form>
@@ -3994,7 +4310,7 @@ export function QueueMonitorPage({ lastUpdated, onRefresh }: ConsolePageProps) {
   }, [lastUpdated]);
 
   const healthColumns: TableProps<PlatformHealth>['columns'] = [
-    { title: '平台名称', dataIndex: 'name' },
+    { title: '推送渠道名称', dataIndex: 'name' },
     {
       title: '健康状态',
       dataIndex: 'health',
@@ -4059,7 +4375,7 @@ export function QueueMonitorPage({ lastUpdated, onRefresh }: ConsolePageProps) {
           </div>
         </section>
 
-        <ListContainer title="平台实例健康" total={viewModel.platformHealth.length} pageSize={10}>
+        <ListContainer title="推送渠道健康" total={viewModel.platformHealth.length} pageSize={10}>
           <Table
             rowKey="id"
             size="middle"
@@ -4320,16 +4636,90 @@ export function SettingsPage({ lastUpdated, onRefresh }: ConsolePageProps) {
   );
 }
 
+export function RouteStrategyPage(props: ConsolePageProps) {
+  return (
+    <Tabs
+      className="workspace-page-tabs"
+      defaultActiveKey="route-groups"
+      items={[
+        {
+          key: 'route-groups',
+          label: '路由大组',
+          children: <RoutesPage {...props} />,
+        },
+        {
+          key: 'match-groups',
+          label: '匹配组',
+          children: <MatchGroupsPage {...props} />,
+        },
+        {
+          key: 'recipient-groups',
+          label: '接收人组',
+          children: <RecipientGroupsPage {...props} />,
+        },
+      ]}
+    />
+  );
+}
+
+export function MonitoringPage(props: ConsolePageProps) {
+  return (
+    <Tabs
+      className="workspace-page-tabs"
+      defaultActiveKey="messages"
+      items={[
+        {
+          key: 'messages',
+          label: '消息日志',
+          children: <MessageLogsPage {...props} />,
+        },
+        {
+          key: 'queues',
+          label: '队列监控',
+          children: <QueueMonitorPage {...props} />,
+        },
+        {
+          key: 'audit',
+          label: '操作审计',
+          children: <AuditPage {...props} />,
+        },
+      ]}
+    />
+  );
+}
+
+export function SystemSettingsPage(props: ConsolePageProps) {
+  return (
+    <Tabs
+      className="workspace-page-tabs"
+      defaultActiveKey="settings"
+      items={[
+        {
+          key: 'settings',
+          label: '系统参数',
+          children: <SettingsPage {...props} />,
+        },
+        {
+          key: 'organization',
+          label: '组织人员',
+          children: <OrganizationPage {...props} />,
+        },
+      ]}
+    />
+  );
+}
+
 export const pages = {
   overview: OverviewPage,
   sources: SourcesPage,
   providers: ProvidersPage,
-  routes: RoutesPage,
+  routes: RouteStrategyPage,
   templates: TemplatesPage,
+  monitoring: MonitoringPage,
   organization: OrganizationPage,
   matchGroups: MatchGroupsPage,
   logs: MessageLogsPage,
   queue: QueueMonitorPage,
   audit: AuditPage,
-  settings: SettingsPage,
+  settings: SystemSettingsPage,
 };

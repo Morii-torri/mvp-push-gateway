@@ -1,36 +1,35 @@
 import { describe, expect, it } from 'vitest';
 
-import { navigationItems, systemNavigationItems, topNavigationItems } from './navigation';
+import { legacyPageKeyMap, navigationItems, systemNavigationItems, topNavigationItems } from './navigation';
 
 describe('console navigation mapping', () => {
-  it('keeps step 9 critical pages in the main navigation with chinese labels', () => {
+  it('converges the main navigation to the product model labels', () => {
     expect(navigationItems.map((item) => item.label)).toEqual([
       '总览',
       '来源接入',
-      '上级平台',
-      '路由编排',
-      '模板中心',
-      '组织人员',
-      '匹配组',
-      '消息日志',
-      '队列监控',
-      '操作审计',
+      '推送渠道',
+      '消息模板',
+      '路由策略',
+      '日志与监控',
       '系统设置',
     ]);
   });
 
-  it('preserves the top tool mapping for core workflow pages', () => {
+  it('keeps old page keys resolvable through the compatibility map', () => {
     expect(topNavigationItems.map((item) => item.key)).toEqual([
       'overview',
       'sources',
       'providers',
-      'routes',
       'templates',
-      'organization',
-      'matchGroups',
-      'logs',
-      'queue',
+      'routes',
+      'monitoring',
+      'settings',
     ]);
-    expect(systemNavigationItems.map((item) => item.label)).toEqual(['系统设置', '操作审计']);
+    expect(systemNavigationItems.map((item) => item.label)).toEqual(['系统设置']);
+    expect(legacyPageKeyMap.organization).toBe('settings');
+    expect(legacyPageKeyMap.matchGroups).toBe('routes');
+    expect(legacyPageKeyMap.logs).toBe('monitoring');
+    expect(legacyPageKeyMap.queue).toBe('monitoring');
+    expect(legacyPageKeyMap.audit).toBe('monitoring');
   });
 });

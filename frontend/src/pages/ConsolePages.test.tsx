@@ -123,8 +123,9 @@ describe('critical console pages', () => {
     expect(sourcesMarkup).toContain('来源接入');
     expect(sourcesMarkup).toContain('鉴权方式');
     expect(sourcesMarkup).toContain('来源列表');
+    expect(sourcesMarkup).toContain('入站测试');
     expect(sourcesMarkup).not.toContain('token_and_hmac');
-    expect(providersMarkup).toContain('上级平台');
+    expect(providersMarkup).toContain('推送渠道');
     expect(providersMarkup).toContain('通用 Webhook');
     expect(providersMarkup).toContain('自定义 Token 平台');
     expect(providersMarkup).not.toContain('custom_token');
@@ -345,7 +346,7 @@ describe('critical console pages', () => {
   it('renders route page guardrails and hit counts without exposing raw english enums', () => {
     const markup = renderPage(<RoutesPage lastUpdated={lastUpdated} onRefresh={() => undefined} />);
 
-    expect(markup).toContain('路由编排');
+    expect(markup).toContain('路由策略');
     expect(markup).toContain('同一来源只允许一个启用大组');
     expect(markup).toContain('总命中次数');
     expect(markup).toContain('按顺序匹配，第一条命中即发送并停止');
@@ -443,11 +444,11 @@ describe('critical console pages', () => {
 
     expect(wecomOptions.map((option) => option.label)).toEqual([
       '企微模板 / version-wecom',
-      '未声明平台模板 / version-unknown（未声明平台类型）',
+      '未声明平台模板 / version-unknown（未声明推送渠道类型）',
     ]);
     expect(emailOptions.map((option) => option.label)).toEqual([
       '邮件模板 / version-email',
-      '未声明平台模板 / version-unknown（未声明平台类型）',
+      '未声明平台模板 / version-unknown（未声明推送渠道类型）',
     ]);
   });
 
@@ -543,12 +544,24 @@ describe('critical console pages', () => {
       <TemplatesPage lastUpdated={lastUpdated} onRefresh={() => undefined} />,
     );
 
-    expect(markup).toContain('模板中心');
+    expect(markup).toContain('消息模板');
     expect(markup).toContain('提供模板编辑、字段复制、实时预览和保存前校验。');
     expect(markup).toContain('模板列表');
     expect(markup).toContain('推送渠道类型');
     expect(markup).toContain('消息类型');
     expect(markup).toContain('校验状态');
+  });
+
+  it('renders dry-run as the default channel test action and separates live send risk', () => {
+    const draft = createProviderDraft('webhook', 1);
+    const markup = renderPage(
+      <ProviderConfigForm value={draft} onChange={() => undefined} capabilities={[]} />,
+    );
+
+    expect(markup).toContain('生成 dry-run 请求');
+    expect(markup).toContain('dry-run 只生成请求快照，不调用真实推送渠道。');
+    expect(markup).toContain('真实发送');
+    expect(markup).toContain('会调用真实推送渠道');
   });
 
   it('renders provider and message type selectors in the template editor', () => {

@@ -69,6 +69,8 @@ echo "logged in as $ADMIN_USERNAME"
 suffix="$(date +%s)"
 source_code="smoke${suffix}"
 source_token="smoketoken${suffix}"
+cascade_source_code="cascade${suffix}"
+cascade_source_token="cascadetoken${suffix}"
 
 source_response="$(json_request POST /sources "$(jq -n \
   --arg code "$source_code" \
@@ -89,7 +91,26 @@ source_response="$(json_request POST /sources "$(jq -n \
 source_id="$(jq -r '.source.id' <<<"$source_response")"
 echo "created source: $source_code"
 
-channel_response="$(json_request POST /channels "$(jq -n \
+cascade_source_response="$(json_request POST /sources "$(jq -n \
+  --arg code "$cascade_source_code" \
+  --arg token "$cascade_source_token" \
+  '{
+    code:$code,
+    name:"Smoke 级联来源",
+    enabled:true,
+    auth_mode:"token",
+    auth_token:$token,
+    compat_mode:"standard",
+    inbound_dedupe_enabled:false,
+    inbound_dedupe_strategy:"payload_hash",
+    inbound_dedupe_config:{},
+    rate_limit_config:{},
+    ip_allowlist:[]
+  }')" "$admin_token")"
+cascade_source_id="$(jq -r '.source.id' <<<"$cascade_source_response")"
+echo "created cascade source: $cascade_source_code ($cascade_source_id)"
+
+webhook_channel_response="$(json_request POST /channels "$(jq -n \
   --arg url "$WEBHOOK_URL" \
   '{
     provider_type:"webhook",
@@ -110,21 +131,48 @@ channel_response="$(json_request POST /channels "$(jq -n \
     retry_policy:{max_attempts:2},
     dead_letter_policy:{enabled:true}
   }')" "$admin_token")"
-channel_id="$(jq -r '.channel.id' <<<"$channel_response")"
-echo "created webhook channel: $channel_id"
+webhook_channel_id="$(jq -r '.channel.id' <<<"$webhook_channel_response")"
+echo "created webhook channel: $webhook_channel_id"
 
-template_response="$(json_request POST /templates "$(jq -n \
+self_channel_response="$(json_request POST /channels "$(jq -n \
+  --arg base_url "${API_BASE%/api/v1}" \
+  --arg source_code "$cascade_source_code" \
+  --arg source_token "$cascade_source_token" \
+  '{
+    provider_type:"self",
+    name:"Smoke 本平台级联",
+    enabled:true,
+    auth_config:{
+      base_url:$base_url,
+      source_code:$source_code,
+      source_token:$source_token
+    },
+    token_config:{},
+    send_config:{
+      api_prefix:"/api/v1",
+      payload_mode:"wrapped"
+    },
+    rate_limit_config:{},
+    concurrency_limit:2,
+    timeout_ms:5000,
+    retry_policy:{max_attempts:2},
+    dead_letter_policy:{enabled:true}
+  }')" "$admin_token")"
+self_channel_id="$(jq -r '.channel.id' <<<"$self_channel_response")"
+echo "created self cascade channel: $self_channel_id"
+
+webhook_template_response="$(json_request POST /templates "$(jq -n \
   --arg source_id "$source_id" \
   '{
-    name:"Smoke 模板",
-    description:"端到端验收模板",
+    name:"Smoke Webhook 模板",
+    description:"端到端验收 Webhook 模板",
     source_id:$source_id,
     enabled:true
   }')" "$admin_token")"
-template_id="$(jq -r '.template.id' <<<"$template_response")"
+webhook_template_id="$(jq -r '.template.id' <<<"$webhook_template_response")"
 
 smoke_template_body='{"title":"{{ payload.title }}","content":"{{ payload.content }}","severity":"{{ payload.severity }}","bizId":"{{ payload.bizId }}"}'
-template_publish_body="$(jq -n \
+webhook_template_publish_body="$(jq -n \
   --arg template_body "$smoke_template_body" \
   '{
     message_type:"json",
@@ -133,9 +181,31 @@ template_publish_body="$(jq -n \
     message_body_schema:{type:"object"},
     sample_payload:{title:"Smoke 消息",content:"端到端验收",severity:"info",bizId:"SMOKE-001"}
   }')"
-template_version_response="$(json_request POST "/templates/$template_id/publish" "$template_publish_body" "$admin_token")"
-template_version_id="$(jq -r '.version.id' <<<"$template_version_response")"
-echo "published template version: $template_version_id"
+webhook_template_version_response="$(json_request POST "/templates/$webhook_template_id/publish" "$webhook_template_publish_body" "$admin_token")"
+webhook_template_version_id="$(jq -r '.version.id' <<<"$webhook_template_version_response")"
+echo "published webhook template version: $webhook_template_version_id"
+
+self_template_response="$(json_request POST /templates "$(jq -n \
+  --arg source_id "$source_id" \
+  '{
+    name:"Smoke 级联模板",
+    description:"端到端验收本平台级联模板",
+    source_id:$source_id,
+    enabled:true
+  }')" "$admin_token")"
+self_template_id="$(jq -r '.template.id' <<<"$self_template_response")"
+self_template_publish_body="$(jq -n \
+  --arg template_body "$smoke_template_body" \
+  '{
+    message_type:"json",
+    target_provider_type:"self",
+    template_body:$template_body,
+    message_body_schema:{type:"object"},
+    sample_payload:{title:"Smoke 消息",content:"端到端验收",severity:"info",bizId:"SMOKE-001"}
+  }')"
+self_template_version_response="$(json_request POST "/templates/$self_template_id/publish" "$self_template_publish_body" "$admin_token")"
+self_template_version_id="$(jq -r '.version.id' <<<"$self_template_version_response")"
+echo "published self template version: $self_template_version_id"
 
 flow_response="$(json_request POST /route-flows "$(jq -n \
   --arg source_id "$source_id" \
@@ -148,8 +218,10 @@ flow_response="$(json_request POST /route-flows "$(jq -n \
 flow_id="$(jq -r '.flow.id' <<<"$flow_response")"
 
 rules_response="$(json_request PUT "/route-flows/$flow_id/rules" "$(jq -n \
-  --arg template_version_id "$template_version_id" \
-  --arg channel_id "$channel_id" \
+  --arg webhook_template_version_id "$webhook_template_version_id" \
+  --arg webhook_channel_id "$webhook_channel_id" \
+  --arg self_template_version_id "$self_template_version_id" \
+  --arg self_channel_id "$self_channel_id" \
   '{
     rules:[{
       sort_order:10,
@@ -157,8 +229,15 @@ rules_response="$(json_request PUT "/route-flows/$flow_id/rules" "$(jq -n \
       enabled:true,
       condition_tree:{operator:"always"},
       action:{
-        template_version_id:$template_version_id,
-        channel_ids:[$channel_id],
+        targets:[{
+          channel_id:$webhook_channel_id,
+          template_version_id:$webhook_template_version_id,
+          enabled:true
+        },{
+          channel_id:$self_channel_id,
+          template_version_id:$self_template_version_id,
+          enabled:true
+        }],
         recipient_strategy:{mode:"none"},
         send_dedupe_config:{},
         failure_policy:{}
@@ -192,7 +271,14 @@ for _ in $(seq 1 20); do
     [[ "$outbound_status" == "sent" || "$outbound_status" == "failed" || "$outbound_status" == "dead_letter" ]]
   }; then
     echo "message status: $status, outbound: ${outbound_status:-unknown}"
-    json_request GET "/messages/$message_id" "" "$admin_token" | jq '{trace_id:.message.trace_id,status:.message.status,outbound_status:.message.outbound_status,attempt_count:.message.attempt_count,timeline:.message.timeline}'
+    detail="$(json_request GET "/messages/$message_id" "" "$admin_token")"
+    attempt_count="$(jq -r '.message.attempt_count // 0' <<<"$detail")"
+    if [[ "$attempt_count" -lt 2 ]]; then
+      echo "expected at least 2 delivery attempts, got $attempt_count" >&2
+      jq '{trace_id:.message.trace_id,status:.message.status,outbound_status:.message.outbound_status,attempt_count:.message.attempt_count,timeline:.message.timeline,attempts:.message.attempts}' <<<"$detail" >&2
+      exit 1
+    fi
+    jq '{trace_id:.message.trace_id,status:.message.status,outbound_status:.message.outbound_status,attempt_count:.message.attempt_count,timeline:.message.timeline,attempts:[.message.attempts[] | {channel_id,template_version_id,status}]}' <<<"$detail"
     exit 0
   fi
   sleep 1

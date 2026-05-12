@@ -292,6 +292,7 @@ func TestChannelTestSendBuildsOrSendsScopedRequest(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/channels/channel-1/test-send", strings.NewReader(`{
 		"send": true,
+		"live_send_confirmed": true,
 		"token": "token",
 		"recipient": "user-1",
 		"body": {"title":"paid"}
@@ -302,8 +303,8 @@ func TestChannelTestSendBuildsOrSendsScopedRequest(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected status 200, got %d body=%s", rec.Code, rec.Body.String())
 	}
-	if providerService.testSendCalls != 1 || !providerService.testSendInput.Send {
-		t.Fatalf("expected scoped test-send to be called once with send=true, calls=%d input=%+v", providerService.testSendCalls, providerService.testSendInput)
+	if providerService.testSendCalls != 1 || !providerService.testSendInput.Send || !providerService.testSendInput.LiveSendConfirmed {
+		t.Fatalf("expected scoped test-send to be called once with confirmed send=true, calls=%d input=%+v", providerService.testSendCalls, providerService.testSendInput)
 	}
 }
 

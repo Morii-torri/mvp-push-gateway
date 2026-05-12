@@ -1,6 +1,7 @@
 package provider
 
 import (
+	"context"
 	"encoding/json"
 	"strings"
 	"testing"
@@ -727,6 +728,79 @@ func TestBuildDeliveryRequestKeepsWebhookAdvancedMapping(t *testing.T) {
 	}
 }
 
+func TestTestSendDryRunSnapshotIncludesAdapterContext(t *testing.T) {
+	service := NewService(singleChannelStore{
+		channel: Channel{
+			ID:           "channel-webhook",
+			ProviderType: ProviderWebhook,
+			Name:         "Local Webhook",
+			SendConfig: json.RawMessage(`{
+				"method":"POST",
+				"url":"http://127.0.0.1:18081/webhook",
+				"headers":{"X-Test":"dry-run"},
+				"body":{"gateway":"mvp-push"},
+				"recipient":{"location":"none"}
+			}`),
+			TimeoutMS: 1000,
+		},
+	})
+
+	result, err := service.TestSend(context.Background(), "channel-webhook", TestSendInput{
+		BuildRequestInput: BuildRequestInput{
+			Recipient: map[string]any{"system_user_id": "ops-1"},
+			Body:      json.RawMessage(`{"title":"dry run","content":"只生成请求"}`),
+		},
+	})
+	if err != nil {
+		t.Fatalf("dry-run test send: %v", err)
+	}
+	if result.Status != "dry_run" {
+		t.Fatalf("expected dry_run status, got %q", result.Status)
+	}
+	if result.ResponseSnapshot != nil {
+		t.Fatalf("dry-run must not include upstream response snapshot: %s", result.ResponseSnapshot)
+	}
+
+	var snapshot map[string]any
+	if err := json.Unmarshal(result.RequestSnapshot, &snapshot); err != nil {
+		t.Fatalf("decode dry-run snapshot: %v", err)
+	}
+	for _, key := range []string{"final_request", "target_context", "rendered_message", "resolved_recipients"} {
+		if _, ok := snapshot[key]; !ok {
+			t.Fatalf("dry-run snapshot missing %s: %+v", key, snapshot)
+		}
+	}
+	finalRequest, ok := snapshot["final_request"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected final_request object, got %+v", snapshot["final_request"])
+	}
+	if finalRequest["url"] != "http://127.0.0.1:18081/webhook" || finalRequest["method"] != "POST" {
+		t.Fatalf("unexpected final request summary: %+v", finalRequest)
+	}
+}
+
+func TestTestSendRequiresExplicitLiveSendConfirmation(t *testing.T) {
+	service := NewService(singleChannelStore{
+		channel: Channel{
+			ID:           "channel-webhook",
+			ProviderType: ProviderWebhook,
+			Name:         "Local Webhook",
+			SendConfig:   json.RawMessage(`{"method":"POST","url":"http://127.0.0.1:18081/webhook"}`),
+			TimeoutMS:    1000,
+		},
+	})
+
+	_, err := service.TestSend(context.Background(), "channel-webhook", TestSendInput{
+		Send: true,
+		BuildRequestInput: BuildRequestInput{
+			Body: json.RawMessage(`{"title":"live send"}`),
+		},
+	})
+	if err == nil || !strings.Contains(err.Error(), "真实发送需要二次确认") {
+		t.Fatalf("expected explicit live send confirmation error, got %v", err)
+	}
+}
+
 func findCapability(t *testing.T, providerType ProviderType, messageType string) Capability {
 	t.Helper()
 
@@ -737,6 +811,41 @@ func findCapability(t *testing.T, providerType ProviderType, messageType string)
 	}
 	t.Fatalf("capability %s/%s not found", providerType, messageType)
 	return Capability{}
+}
+
+type singleChannelStore struct {
+	channel Channel
+}
+
+func (s singleChannelStore) SeedProviderCapabilities(context.Context, []Capability) error {
+	return nil
+}
+
+func (s singleChannelStore) ListProviderCapabilities(context.Context) ([]Capability, error) {
+	return nil, nil
+}
+
+func (s singleChannelStore) ListChannels(context.Context) ([]Channel, error) {
+	return []Channel{s.channel}, nil
+}
+
+func (s singleChannelStore) CreateChannel(context.Context, CreateChannelParams) (Channel, error) {
+	return Channel{}, ErrInvalidInput
+}
+
+func (s singleChannelStore) GetChannel(_ context.Context, id string) (Channel, error) {
+	if id != s.channel.ID {
+		return Channel{}, ErrNotFound
+	}
+	return s.channel, nil
+}
+
+func (s singleChannelStore) UpdateChannel(context.Context, string, UpdateChannelParams) (Channel, error) {
+	return Channel{}, ErrInvalidInput
+}
+
+func (s singleChannelStore) DeleteChannel(context.Context, string) error {
+	return ErrInvalidInput
 }
 
 func assertCapabilityHasLiveTestMetadata(t *testing.T, capability Capability) {

@@ -222,21 +222,32 @@ func (s *Service) TestSend(ctx context.Context, channelID string, input TestSend
 	if err != nil {
 		return TestSendResult{}, err
 	}
-	built, err := BuildRequest(channel, input.BuildRequestInput)
+	deliveryInput := testSendDeliveryInput(channel, input)
+	built, err := BuildDeliveryRequest(channel, deliveryInput)
 	if err != nil {
 		return TestSendResult{}, err
 	}
+	if err := validateTestSendPrerequisites(channel, deliveryInput, built); err != nil {
+		return TestSendResult{}, err
+	}
 	result := TestSendResult{
-		Status:  "built",
-		Request: built,
+		Status:             "dry_run",
+		Request:            built,
+		TargetContext:      deliveryInput.TargetContext,
+		RenderedMessage:    deliveryInput.RenderedMessage,
+		ResolvedRecipients: deliveryInput.ResolvedRecipients,
 	}
 	requestSnapshot, err := marshalJSON(map[string]any{
-		"method":    built.Method,
-		"url":       built.URL,
-		"headers":   built.Headers,
-		"query":     built.Query,
-		"recipient": input.Recipient,
-		"body":      jsonValue(built.Body),
+		"final_request": map[string]any{
+			"method":  built.Method,
+			"url":     built.URL,
+			"headers": built.Headers,
+			"query":   built.Query,
+			"body":    jsonValue(built.Body),
+		},
+		"target_context":      deliveryInput.TargetContext,
+		"rendered_message":    deliveryInput.RenderedMessage,
+		"resolved_recipients": deliveryInput.ResolvedRecipients,
 	})
 	if err != nil {
 		return TestSendResult{}, err
@@ -245,8 +256,8 @@ func (s *Service) TestSend(ctx context.Context, channelID string, input TestSend
 	if !input.Send {
 		return result, nil
 	}
-	if strings.TrimSpace(built.URL) == "" {
-		return TestSendResult{}, ErrInvalidInput
+	if !input.LiveSendConfirmed {
+		return TestSendResult{}, fmt.Errorf("%w: 真实发送需要二次确认，并确认会调用真实推送渠道", ErrInvalidInput)
 	}
 
 	started := time.Now().UTC()
@@ -277,6 +288,175 @@ func (s *Service) TestSend(ctx context.Context, channelID string, input TestSend
 		result.ErrorMessage = fmt.Sprintf("upstream returned status %d", statusCode)
 	}
 	return result, nil
+}
+
+func testSendDeliveryInput(channel Channel, input TestSendInput) BuildDeliveryRequestInput {
+	rendered := input.RenderedMessage
+	if len(bytes.TrimSpace(rendered.Content)) == 0 {
+		rendered = RenderedMessage{
+			ProviderType: channel.ProviderType,
+			Content:      input.Body,
+		}
+	}
+	if rendered.ProviderType == "" {
+		rendered.ProviderType = channel.ProviderType
+	}
+	resolvedRecipients := input.ResolvedRecipients
+	if resolvedRecipients == nil {
+		resolvedRecipients = ResolvedRecipientsFromValue(input.Recipient)
+	}
+	targetContext := input.TargetContext
+	if targetContext.ChannelID == "" {
+		targetContext.ChannelID = channel.ID
+	}
+	if targetContext.ChannelName == "" {
+		targetContext.ChannelName = channel.Name
+	}
+	if targetContext.ProviderType == "" {
+		targetContext.ProviderType = string(channel.ProviderType)
+	}
+	if targetContext.MessageType == "" {
+		targetContext.MessageType = rendered.MessageType
+	}
+	return BuildDeliveryRequestInput{
+		Token:                input.Token,
+		RenderedMessage:      rendered,
+		ResolvedRecipients:   resolvedRecipients,
+		TargetContext:        targetContext,
+		LegacyRecipientValue: input.Recipient,
+	}
+}
+
+func validateTestSendPrerequisites(channel Channel, input BuildDeliveryRequestInput, built BuiltRequest) error {
+	if strings.TrimSpace(built.URL) == "" {
+		return fmt.Errorf("%w: 缺少发送 URL，请检查推送渠道发送配置", ErrInvalidInput)
+	}
+	if testSendRequiresRecipient(channel.ProviderType) && !hasUsableRecipient(channel.ProviderType, input.ResolvedRecipients) {
+		return fmt.Errorf("%w: 缺少测试接收人，请在路由策略接收人配置或测试接收人中提供必要身份", ErrInvalidInput)
+	}
+	if missing := missingCredentialFields(channel, input.Token); len(missing) > 0 {
+		return fmt.Errorf("%w: 缺少推送渠道凭证或必要配置：%s", ErrInvalidInput, strings.Join(missing, "、"))
+	}
+	return nil
+}
+
+func testSendRequiresRecipient(providerType ProviderType) bool {
+	switch providerType {
+	case ProviderEmail,
+		ProviderSMS,
+		ProviderAliyunSMS,
+		ProviderTencentSMS,
+		ProviderBaiduSMS,
+		ProviderWeCom,
+		ProviderWeComApp,
+		ProviderDingTalk,
+		ProviderDingTalkWork,
+		ProviderGovCloud,
+		ProviderWxPusher,
+		ProviderBark:
+		return true
+	default:
+		return false
+	}
+}
+
+func hasUsableRecipient(providerType ProviderType, recipients []ResolvedRecipient) bool {
+	for _, recipient := range recipients {
+		if !isEmptyValue(recipientIdentityValue(providerType, recipient)) {
+			return true
+		}
+	}
+	return false
+}
+
+func missingCredentialFields(channel Channel, token string) []string {
+	auth := rawObject(channel.AuthConfig)
+	send := rawObject(channel.SendConfig)
+	missing := []string{}
+	requireAny := func(label string, values ...any) {
+		for _, value := range values {
+			if !isEmptyValue(value) {
+				return
+			}
+		}
+		missing = append(missing, label)
+	}
+
+	switch channel.ProviderType {
+	case ProviderSelf:
+		requireAny("级联 base_url", auth["base_url"], send["base_url"])
+		requireAny("级联 source_code", auth["source_code"], send["source_code"])
+		requireAny("级联 source_token/HMAC", auth["source_token"], auth["hmac_secret"], token)
+	case ProviderPushPlus:
+		requireAny("PushPlus token", auth["token"], send["token"], token)
+	case ProviderWxPusher:
+		requireAny("WxPusher app_token/SPT", auth["app_token"], auth["spt"], send["app_token"], token)
+	case ProviderServerChan:
+		requireAny("Server酱 send_key", auth["send_key"], send["send_key"])
+	case ProviderEmail:
+		requireAny("SMTP host", auth["host"], send["host"])
+		requireAny("SMTP from", auth["from"], send["from"])
+	case ProviderAliyunSMS:
+		requireAny("阿里云 access_key_id", auth["access_key_id"])
+		requireAny("阿里云 access_key_secret", auth["access_key_secret"])
+		requireAny("短信模板 ID", send["template_id"], send["template_code"])
+	case ProviderTencentSMS:
+		requireAny("腾讯云 secret_id", auth["secret_id"])
+		requireAny("腾讯云 secret_key", auth["secret_key"])
+		requireAny("SmsSdkAppId", send["sms_sdk_app_id"])
+		requireAny("短信模板 ID", send["template_id"])
+	case ProviderBaiduSMS:
+		requireAny("百度云 access_key_id", auth["access_key_id"])
+		requireAny("百度云 secret_access_key", auth["secret_access_key"])
+		requireAny("短信模板 ID", send["template_id"], send["template"])
+	case ProviderSMS:
+		requireAny("短信供应商凭证", auth["access_key_id"], auth["secret_id"], auth["username"])
+		requireAny("短信模板 ID", send["template_id"], send["template_code"], send["template"])
+	case ProviderWeCom, ProviderWeComApp:
+		requireAny("企业微信 access_token 或 corpid/corpsecret", token, auth["access_token"], auth["corpid"])
+		if isEmptyValue(token) && isEmptyValue(auth["access_token"]) {
+			requireAny("企业微信 corpsecret", auth["corpsecret"])
+		}
+		requireAny("企业微信 agentid", auth["agentid"], auth["agent_id"], send["agentid"], send["agent_id"])
+	case ProviderWeComRobot:
+		requireAny("企业微信机器人 webhook/key", auth["webhook_url"], auth["key"], send["webhook_url"], send["key"])
+	case ProviderDingTalk, ProviderDingTalkWork:
+		requireAny("钉钉 access_token 或 app_key/app_secret", token, auth["access_token"], auth["app_key"])
+		if isEmptyValue(token) && isEmptyValue(auth["access_token"]) {
+			requireAny("钉钉 app_secret", auth["app_secret"])
+		}
+		requireAny("钉钉 agent_id", auth["agent_id"], auth["agentid"], send["agent_id"], send["agentid"])
+	case ProviderDingTalkRobot:
+		requireAny("钉钉机器人 webhook", auth["webhook_url"], send["webhook_url"])
+	case ProviderFeishu, ProviderFeishuRobot:
+		requireAny("飞书机器人 webhook", auth["webhook_url"], send["webhook_url"])
+	case ProviderGovCloud:
+		requireAny("政务云 access_token 或 corpsecret", token, auth["access_token"], auth["corpsecret"])
+	case ProviderNtfy:
+		requireAny("ntfy server_url", auth["server_url"], send["server_url"])
+		requireAny("ntfy topic", auth["topic"], send["topic"])
+	case ProviderGotify:
+		requireAny("Gotify server_url", auth["server_url"], send["server_url"])
+		requireAny("Gotify app_token", auth["app_token"], send["app_token"], token)
+	case ProviderBark:
+		requireAny("Bark server_url", auth["server_url"], send["server_url"])
+		requireAny("Bark device_key", auth["device_key"], send["device_key"])
+	case ProviderPushMe:
+		requireAny("PushMe server_url", auth["server_url"], send["server_url"])
+		requireAny("PushMe push_key", auth["push_key"], send["push_key"], token)
+	}
+	return missing
+}
+
+func rawObject(raw json.RawMessage) map[string]any {
+	if len(bytes.TrimSpace(raw)) == 0 {
+		return map[string]any{}
+	}
+	var object map[string]any
+	if err := json.Unmarshal(raw, &object); err != nil || object == nil {
+		return map[string]any{}
+	}
+	return object
 }
 
 func DefaultCapabilities() []Capability {
@@ -509,7 +689,11 @@ type BuildDeliveryRequestInput struct {
 
 type TestSendInput struct {
 	BuildRequestInput
-	Send bool `json:"send"`
+	RenderedMessage    RenderedMessage       `json:"rendered_message"`
+	ResolvedRecipients []ResolvedRecipient   `json:"resolved_recipients"`
+	TargetContext      DeliveryTargetContext `json:"target_context"`
+	Send               bool                  `json:"send"`
+	LiveSendConfirmed  bool                  `json:"live_send_confirmed"`
 }
 
 type BuiltRequest struct {
@@ -521,13 +705,16 @@ type BuiltRequest struct {
 }
 
 type TestSendResult struct {
-	Status           string          `json:"status"`
-	Request          BuiltRequest    `json:"request"`
-	RequestSnapshot  json.RawMessage `json:"request_snapshot"`
-	ResponseSnapshot json.RawMessage `json:"response_snapshot"`
-	StatusCode       int             `json:"status_code"`
-	DurationMS       int             `json:"duration_ms"`
-	ErrorMessage     string          `json:"error_message"`
+	Status             string                `json:"status"`
+	Request            BuiltRequest          `json:"request"`
+	TargetContext      DeliveryTargetContext `json:"target_context"`
+	RenderedMessage    RenderedMessage       `json:"rendered_message"`
+	ResolvedRecipients []ResolvedRecipient   `json:"resolved_recipients"`
+	RequestSnapshot    json.RawMessage       `json:"request_snapshot"`
+	ResponseSnapshot   json.RawMessage       `json:"response_snapshot"`
+	StatusCode         int                   `json:"status_code"`
+	DurationMS         int                   `json:"duration_ms"`
+	ErrorMessage       string                `json:"error_message"`
 }
 
 type requestConfig struct {

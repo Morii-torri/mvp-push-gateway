@@ -61,7 +61,7 @@ export const routeNodeCatalog: RouteNodeCatalogItem[] = [
   { kind: 'source', title: '来源开始', description: '固定接收当前路由大组绑定来源' },
   { kind: 'condition', title: '条件判断', description: '按 payload 字段、匹配组或系统值判断' },
   { kind: 'recipient', title: '接收人', description: '系统接收人组或 payload 接收人' },
-  { kind: 'send_group', title: '发送动作组', description: '按目标列表分别渲染模板并投递到平台实例' },
+  { kind: 'send_group', title: '发送动作组', description: '按目标列表分别渲染模板并投递到推送渠道实例' },
 ];
 
 export const routeNodeDefaults: Record<RouteNodeKind, RouteNodeCatalogItem> = {

@@ -1,6 +1,6 @@
 # 端到端验收 Runbook
 
-本文档用于从零验证 MVP Push Gateway 的第一版主链路：管理员初始化、来源接入、平台实例、模板、路由、入站请求、worker 异步规划与发送、消息日志详情。
+本文档用于从零验证 MVP Push Gateway 的第一版主链路：管理员初始化、来源接入、推送渠道实例、模板、路由、入站请求、worker 异步规划与发送、消息日志详情。
 
 第一版明确不覆盖：定时发送、RBAC、素材上传。
 
@@ -71,13 +71,13 @@ HTTPServer(("127.0.0.1", 18081), Handler).serve_forever()
 PY
 ```
 
-如果后端运行在 Docker 容器内，平台实例 URL 请使用：
+如果后端运行在 Docker 容器内，推送渠道实例 URL 请使用：
 
 ```text
 http://host.docker.internal:18081/webhook
 ```
 
-如果后端直接运行在本机，平台实例 URL 请使用：
+如果后端直接运行在本机，推送渠道实例 URL 请使用：
 
 ```text
 http://127.0.0.1:18081/webhook
@@ -135,9 +135,11 @@ MGP_SMOKE_WEBHOOK_URL='http://host.docker.internal:18081/webhook' \
 脚本会自动创建：
 
 - token 鉴权来源
-- webhook 平台实例
-- JSON 模板并发布版本
+- webhook 推送渠道实例
+- 本平台级联来源和 self 推送渠道实例
+- webhook JSON 模板和 self JSON 模板，并发布两个模板版本
 - 路由大组和默认路由规则
+- 同一条规则下的两个发送动作组 target
 - 发布并激活路由版本
 - 入站 sample payload
 - 查询消息日志详情
@@ -169,7 +171,7 @@ curl -X POST http://127.0.0.1:18080/api/v1/sources \
 
 注意：`code`、`auth_token`、`hmac_secret` 当前要求只使用字母和数字。
 
-### 创建 Webhook 平台实例
+### 创建 Webhook 推送渠道实例
 
 ```bash
 curl -X POST http://127.0.0.1:18080/api/v1/channels \
@@ -195,6 +197,8 @@ curl -X POST http://127.0.0.1:18080/api/v1/channels \
     "dead_letter_policy": {"enabled": true}
   }'
 ```
+
+如果需要手工验证多 target fan-out，可再创建一个 `self` 推送渠道实例，指向当前网关的另一个来源，然后在同一条路由规则的 `action.targets[]` 中同时放入 webhook target 和 self target。
 
 ### 创建并发布模板
 

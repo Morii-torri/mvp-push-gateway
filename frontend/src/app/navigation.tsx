@@ -1,16 +1,11 @@
 import {
   ApartmentOutlined,
   ApiOutlined,
-  AuditOutlined,
-  ClusterOutlined,
   DashboardOutlined,
   DeploymentUnitOutlined,
   FileTextOutlined,
-  GroupOutlined,
   HistoryOutlined,
-  MonitorOutlined,
   SettingOutlined,
-  TeamOutlined,
 } from '@ant-design/icons';
 
 import type { ReactNode } from 'react';
@@ -21,6 +16,7 @@ export type PageKey =
   | 'providers'
   | 'routes'
   | 'templates'
+  | 'monitoring'
   | 'organization'
   | 'matchGroups'
   | 'logs'
@@ -43,18 +39,14 @@ const decorativeIcon = (icon: ReactNode) => (
 export const navigationItems: NavigationItem[] = [
   { key: 'overview', icon: decorativeIcon(<DashboardOutlined />), label: '总览' },
   { key: 'sources', icon: decorativeIcon(<ApiOutlined />), label: '来源接入' },
-  { key: 'providers', icon: decorativeIcon(<ApartmentOutlined />), label: '上级平台' },
-  { key: 'routes', icon: decorativeIcon(<DeploymentUnitOutlined />), label: '路由编排' },
-  { key: 'templates', icon: decorativeIcon(<FileTextOutlined />), label: '模板中心' },
-  { key: 'organization', icon: decorativeIcon(<TeamOutlined />), label: '组织人员' },
-  { key: 'matchGroups', icon: decorativeIcon(<GroupOutlined />), label: '匹配组' },
-  { key: 'logs', icon: decorativeIcon(<HistoryOutlined />), label: '消息日志' },
-  { key: 'queue', icon: decorativeIcon(<MonitorOutlined />), label: '队列监控' },
-  { key: 'audit', icon: decorativeIcon(<AuditOutlined />), label: '操作审计' },
+  { key: 'providers', icon: decorativeIcon(<ApartmentOutlined />), label: '推送渠道' },
+  { key: 'templates', icon: decorativeIcon(<FileTextOutlined />), label: '消息模板' },
+  { key: 'routes', icon: decorativeIcon(<DeploymentUnitOutlined />), label: '路由策略' },
+  { key: 'monitoring', icon: decorativeIcon(<HistoryOutlined />), label: '日志与监控' },
   { key: 'settings', icon: decorativeIcon(<SettingOutlined />), label: '系统设置' },
 ];
 
-export const topNavigationItems = navigationItems.slice(0, 9);
+export const topNavigationItems = navigationItems;
 
 export const systemNavigationItems: NavigationItem[] = [
   {
@@ -62,9 +54,12 @@ export const systemNavigationItems: NavigationItem[] = [
     icon: decorativeIcon(<SettingOutlined />),
     label: '系统设置',
   },
-  {
-    key: 'audit',
-    icon: decorativeIcon(<ClusterOutlined />),
-    label: '操作审计',
-  },
 ];
+
+export const legacyPageKeyMap: Partial<Record<PageKey, PageKey>> = {
+  organization: 'settings',
+  matchGroups: 'routes',
+  logs: 'monitoring',
+  queue: 'monitoring',
+  audit: 'monitoring',
+};

@@ -391,6 +391,9 @@ function providerKindFromString(value: string | undefined): ProviderKind | null 
 }
 
 function firstTemplateProvider(capabilities: ProviderCapabilityApiRecord[]): ProviderKind {
+  if (capabilities.some((capability) => capability.provider_type === 'webhook')) {
+    return 'webhook';
+  }
   for (const capability of capabilities) {
     const providerType = providerKindFromString(String(capability.provider_type));
     if (providerType) {

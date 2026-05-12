@@ -43,6 +43,12 @@ export type SourceInput = {
   rate_limit_config: JSONValue;
 };
 
+export type IngestSourcePayloadResponse = {
+  trace_id: string;
+  status: string;
+  message: string;
+};
+
 export type ProviderType =
   | 'webhook'
   | 'self'
@@ -428,6 +434,16 @@ export const consoleApi = {
   },
   deleteSource(id: string, fetcher?: ApiFetcher) {
     return apiRequest<{ ok: boolean }>(`/sources/${id}`, { method: 'DELETE', fetcher });
+  },
+  ingestSourcePayload(sourceCode: string, sourceToken: string, payload: JSONValue, fetcher?: ApiFetcher) {
+    const headers = sourceToken ? { Authorization: `Bearer ${sourceToken}` } : undefined;
+    return apiRequest<IngestSourcePayloadResponse>(`/ingest/${encodeURIComponent(sourceCode)}`, {
+      method: 'POST',
+      auth: false,
+      body: payload,
+      headers,
+      fetcher,
+    });
   },
 
   listProviderCapabilities(fetcher?: ApiFetcher) {

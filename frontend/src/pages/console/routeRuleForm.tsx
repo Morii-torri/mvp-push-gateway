@@ -222,7 +222,7 @@ export function RouteRuleForm({
               <Select
                 value={target.channelId || undefined}
                 options={channelOptions}
-                placeholder="选择平台实例"
+                placeholder="选择推送渠道实例"
                 onChange={(channelId) => {
                   const nextChannel = channelRows.find((item) => item.id === channelId);
                   updateTarget(index, {
@@ -250,7 +250,7 @@ export function RouteRuleForm({
               </Button>
               {providerTypeUnknown ? (
                 <Typography.Text type="secondary" className="send-action-row__hint">
-                  模板未声明平台类型，已按兼容处理
+                  模板未声明推送渠道类型，已按兼容处理
                 </Typography.Text>
               ) : null}
             </div>
@@ -259,7 +259,7 @@ export function RouteRuleForm({
         {value.targets.length === 0 ? (
           <Alert type="warning" showIcon message="请新增至少一个发送目标。" />
         ) : null}
-        <Alert type="info" showIcon message="每个发送目标需要选择一个平台实例和一个兼容模板；跨平台发送请新增多行。" />
+        <Alert type="info" showIcon message="每个发送目标需要选择一个推送渠道实例和一个兼容模板；跨渠道发送请新增多行。" />
       </div>
       <div className="two-column-form">
         <Form.Item label="接收策略">
@@ -355,7 +355,7 @@ export function routeTargetTemplateOptions(
       const versionId = templateVersionId(template);
       const providerType = templateProviderType(template);
       return {
-        label: `${template.name} / ${versionId || '未发布'}${providerType ? '' : '（未声明平台类型）'}`,
+        label: `${template.name} / ${versionId || '未发布'}${providerType ? '' : '（未声明推送渠道类型）'}`,
         value: versionId || `unpublished:${template.id}`,
         disabled: !versionId,
       };
@@ -528,7 +528,7 @@ export function validateRouteRuleDraft(
     return '请至少配置一个发送目标';
   }
   if (enabledTargets.some((target) => !target.channelId.trim())) {
-    return '发送目标需要选择平台实例';
+    return '发送目标需要选择推送渠道实例';
   }
   if (enabledTargets.some((target) => !target.templateVersionId.trim())) {
     return '发送目标需要选择兼容模板';
@@ -539,7 +539,7 @@ export function validateRouteRuleDraft(
         !isTemplateCompatibleWithChannel(target.templateVersionId, target.channelId, templateRows, channelRows),
     )
   ) {
-    return '发送目标的模板与平台类型不兼容';
+    return '发送目标的模板与推送渠道类型不兼容';
   }
   if (draft.recipientMode === 'payload' && !draft.payloadRecipientPath.trim()) {
     return 'Payload 接收人模式需要填写接收人路径';
