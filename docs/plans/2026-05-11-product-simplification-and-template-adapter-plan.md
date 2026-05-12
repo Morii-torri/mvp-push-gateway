@@ -8,9 +8,9 @@
 
 - 内置渠道尽量少配置，用户主要填写凭证、限流和测试参数。
 - 模板只负责“消息内容”，不负责“发给谁”。
-- 路由只负责“什么时候发、用哪个模板、发给谁、发到哪些平台”。
-- 平台适配器负责把“消息内容 + 接收人 + 平台实例配置”转换成最终 HTTP 请求。
-- 自定义 Webhook / 自定义平台保留高级映射能力，但默认折叠，不作为普通用户主路径。
+- 路由只负责“什么时候发、发给谁、执行哪个发送动作组”。
+- Provider adapter 负责把“消息内容 + 接收人 + 渠道实例配置”转换成最终请求。
+- Webhook / custom_token 高级模式保留映射能力，但默认折叠，不作为普通用户主路径。
 
 ## Current Progress
 
@@ -20,12 +20,18 @@
 - React + Vite + Ant Design 管理台已接真实 API。
 - 真实 PostgreSQL + 真实后端 + 前端 + webhook 已验证从入站到出站闭环。
 - Docker Compose 和 All-In-One 部署路径已有基础文档。
+- Provider capability registry 已数据化，包含 credential schema、channel config schema、message schema、recipient identity、token strategy、send API、success/retry rule、默认限流、超时、并发和重试。
+- 模板已按 provider type + message type 建模，只保存消息内容，不绑定具体渠道实例，不保存接收人字段或最终 HTTP body。
+- 路由规则已改为发送动作组 `action.targets[]`；每个 target 绑定一个渠道实例和一个兼容模板版本，legacy `template_version_id + channel_ids` 仍兼容。
+- Planning worker 已按 action targets fan-out，每个 target 单独加载渠道/模板、校验 provider type、渲染模板、解析接收人并生成 delivery attempt。
+- Delivery adapter boundary 已明确：输入 channel config、rendered message、resolved recipients、target context 和 token，输出 final request；日志快照包含 `target_context`、`rendered_message`、`resolved_recipients`、`final_request`、`upstream_response`。
+- 第一批 provider defaults 已实现 build-request/mock 级别支持：`webhook`、`self`、`pushplus`、`wxpusher`、`serverchan`、`email`、`aliyun_sms`、`tencent_sms`、`baidu_sms`、`wecom_robot`、`wecom_app`、legacy `wecom`、`dingtalk_robot`、`dingtalk_work`、legacy `dingtalk`、`feishu_robot`、legacy `feishu`、`gov_cloud`、legacy `sms` 和高级 `custom_token`。
 
-仍需收敛：
+仍需收敛或联调：
 
-- 平台配置暴露了过多底层 HTTP 概念。
-- 模板中心还没有形成稳定的“平台类型 + 消息类型 + 内容字段结构”体验。
-- 路由、模板、平台三者边界需要进一步产品化。
+- PushPlus、WxPusher、Server酱、短信、企微、钉钉、飞书、SMTP/self/gov_cloud 当前均为 implemented but not live-tested 或 configuration-dependent；不要写成已真实发送成功。
+- 随申办当前开发环境不可访问，先实现不测试；短信没有测试账号，先按文档/SDK方向建配置模型和 mock build request。
+- `ntfy`、`gotify`、`bark`、`pushme` 仅保留第二批规划，不做当前代码。
 - 菜单和页面层级偏多，第一版需要降低认知负担。
 
 ## Product Decisions
@@ -63,9 +69,9 @@
 路由规则负责选择：
 
 - 来源条件。
-- 模板版本。
-- 目标平台实例。
 - 接收人策略。
+- 发送动作组。
+- 发送动作组内的 target 行：每个 target 绑定一个渠道实例和一个兼容模板版本。
 
 接收人策略只产生内部接收人集合：
 
@@ -105,7 +111,7 @@ Rendered message content
 - 短信：手机号进入平台要求字段，内容进入模板参数。
 - 随申办政务云：按 token 换取和 touser 字段规则内置。
 
-只有自定义平台开放：
+只有 Webhook/custom_token 高级模式开放：
 
 - token 获取方式。
 - token 返回字段路径。
@@ -180,7 +186,7 @@ Steps 1-13 are already treated as executed. Steps 14-20 below replace the origin
    - 模板只负责消息内容。
    - 模板绑定平台类型和消息类型。
    - 路由负责命中条件、接收人策略和发送动作组。
-   - 发送动作组内每个目标绑定平台实例和兼容模板。
+   - 发送动作组内每个目标绑定渠道实例和兼容模板。
    - 平台适配器负责把消息内容、接收人和平台实例配置转换为最终请求。
 3. Keep the simplified menu direction, but do not implement menu merge yet:
    - 总览
@@ -207,6 +213,8 @@ Steps 1-13 are already treated as executed. Steps 14-20 below replace the origin
 - The first-version admin console can still be explained in seven or fewer main menu items.
 
 ## Step 15: Provider Capability Registry
+
+Status as of 2026-05-12: implemented. Registry is dataized with credential schema, channel config schema, message schema, recipient identity, token strategy, send API, success/retry rule, default rate limit, timeout, concurrency and retry policy.
 
 **Ask AI to do:**
 
@@ -244,6 +252,8 @@ Steps 1-13 are already treated as executed. Steps 14-20 below replace the origin
 - Built-in providers do not require users to manually write request mapping JSON.
 
 ## Step 16: Template Content Model Refactor
+
+Status as of 2026-05-12: implemented. Template versions bind provider type + message type, are reusable across compatible channel instances, store message content only, and support Jinja-like fields such as `{{ payload.summary | default('通知') }}`.
 
 **Ask AI to do:**
 
@@ -283,6 +293,8 @@ Steps 1-13 are already treated as executed. Steps 14-20 below replace the origin
 - Route can later reject or hide templates incompatible with the selected channel instance.
 
 ## Step 17: Route Send Action Group Refactor
+
+Status as of 2026-05-12: implemented. Route actions now use `action.targets[]`; legacy `template_version_id + channel_ids` remains accepted for compatibility.
 
 **Ask AI to do:**
 
@@ -341,6 +353,8 @@ Core target model:
 
 ## Step 18: Delivery Adapter Boundary
 
+Status as of 2026-05-12: implemented. Delivery adapters receive channel config, rendered message, resolved recipients, target context and token, then build final request snapshots.
+
 **Ask AI to do:**
 
 1. Define an internal delivery model that follows the new target model:
@@ -396,6 +410,8 @@ type DeliveryTargetContext struct {
 
 ## Step 19: Built-In Provider Defaults And Priority
 
+Status as of 2026-05-12: first batch implemented at build-request/mock level, not live-tested unless otherwise stated. Second batch remains planning only.
+
 **Ask AI to do:**
 
 Implement default adapters and UI presets by priority.
@@ -403,7 +419,7 @@ Implement default adapters and UI presets by priority.
 First batch:
 
 1. Generic Webhook.
-2. Current platform `mvp-push-gateway` as an upstream target, so two gateway instances can be chained.
+2. Current platform `self` provider as an upstream MVP Push Gateway target, so two gateway instances can be chained.
 3. PushPlus.
 4. WxPusher.
 5. ServerChan / Server酱.
@@ -473,6 +489,8 @@ For each provider:
 
 ## Step 20: Console Simplification And Operator Guide Refresh
 
+Status as of 2026-05-12: documentation refresh is in progress; menu/page merge remains a later product step and should not be represented as already switched.
+
 **Ask AI to do:**
 
 1. Implement menu and page simplification after Steps 15-19 stabilize:
@@ -520,9 +538,9 @@ For each provider:
 - Docs explain the separation: source routing vs message template vs recipient strategy vs send action group vs provider adapter.
 - Smoke path still works.
 
-## First Implementation Priority
+## Implementation Status And Remaining Priority
 
-Recommended next execution order:
+Steps 15-19 are now implemented at the model/build-request level. Remaining priority is live testing, provider-specific configuration hardening and the later console simplification work. Historical execution order was:
 
 1. Step 14: documentation-only decision sync.
 2. Step 15: provider capability registry.
@@ -532,7 +550,7 @@ Recommended next execution order:
 6. Step 19: built-in provider defaults and priority implementation.
 7. Step 20: console simplification and docs refresh.
 
-Do not start with menu merge before Steps 15-17 define the capability, template and route action models. Otherwise the interface will only rename complexity instead of reducing it.
+Menu merge should still wait until the implemented capability, template and route action models are stable in the UI and operator guide. Otherwise the interface will only rename complexity instead of reducing it.
 
 ## Out Of Scope
 

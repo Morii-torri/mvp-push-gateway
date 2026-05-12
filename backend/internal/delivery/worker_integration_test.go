@@ -133,6 +133,21 @@ func TestWorkerProcessBatchSendsWebhookAndPersistsSnapshots(t *testing.T) {
 	if !ok || sendSnapshot["url"] != server.URL+"/send" {
 		t.Fatalf("expected request snapshot to record fake webhook url, got %+v", requestSnapshot)
 	}
+	targetContext, ok := requestSnapshot["target_context"].(map[string]any)
+	if !ok || targetContext["delivery_attempt_id"] != attemptID || targetContext["message_id"] != messageID || targetContext["job_id"] != jobID {
+		t.Fatalf("expected request snapshot target_context, got %+v", requestSnapshot)
+	}
+	renderedMessage, ok := requestSnapshot["rendered_message"].(map[string]any)
+	if !ok || renderedMessage["title"] != "critical" || renderedMessage["content"] != "paid" {
+		t.Fatalf("expected request snapshot rendered_message, got %+v", requestSnapshot)
+	}
+	if _, ok := requestSnapshot["resolved_recipients"]; !ok {
+		t.Fatalf("expected request snapshot resolved_recipients key, got %+v", requestSnapshot)
+	}
+	finalRequest, ok := requestSnapshot["final_request"].(map[string]any)
+	if !ok || finalRequest["url"] != server.URL+"/send" {
+		t.Fatalf("expected request snapshot final_request, got %+v", requestSnapshot)
+	}
 	var responseSnapshot map[string]any
 	if err := json.Unmarshal(attempt.ResponseSnapshot, &responseSnapshot); err != nil {
 		t.Fatalf("decode response snapshot: %v", err)
@@ -140,6 +155,10 @@ func TestWorkerProcessBatchSendsWebhookAndPersistsSnapshots(t *testing.T) {
 	responseSendSnapshot, ok := responseSnapshot["send"].(map[string]any)
 	if !ok || responseSendSnapshot["status_code"] != float64(http.StatusAccepted) {
 		t.Fatalf("expected response snapshot to record 202 result, got %+v", responseSnapshot)
+	}
+	upstreamResponse, ok := responseSnapshot["upstream_response"].(map[string]any)
+	if !ok || upstreamResponse["status_code"] != float64(http.StatusAccepted) {
+		t.Fatalf("expected response snapshot upstream_response, got %+v", responseSnapshot)
 	}
 
 	var jobStatus string

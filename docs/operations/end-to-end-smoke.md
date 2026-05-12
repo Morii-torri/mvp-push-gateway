@@ -251,8 +251,11 @@ curl -X PUT http://127.0.0.1:18080/api/v1/route-flows/replace-with-flow-id/rules
       "enabled": true,
       "condition_tree": {"operator": "always"},
       "action": {
-        "template_version_id": "replace-with-template-version-id",
-        "channel_ids": ["replace-with-channel-id"],
+        "targets": [{
+          "channel_id": "replace-with-channel-id",
+          "template_version_id": "replace-with-template-version-id",
+          "enabled": true
+        }],
         "recipient_strategy": {"mode": "none"},
         "send_dedupe_config": {},
         "failure_policy": {}
@@ -298,8 +301,11 @@ curl "http://127.0.0.1:18080/api/v1/messages/replace-with-message-id" \
 - 入站 payload。
 - `matched_flow_id` 和 `matched_rule_ids`。
 - 出站 attempt。
-- `request_snapshot.send.body`。
-- `response_snapshot.send.status_code`。
+- `request_snapshot.target_context`。
+- `request_snapshot.rendered_message`。
+- `request_snapshot.resolved_recipients`。
+- `request_snapshot.final_request.body`。
+- `response_snapshot.upstream_response.status_code`。
 - timeline 中 planning 和 sending 阶段的耗时。
 
 ## 6. 常见验收问题

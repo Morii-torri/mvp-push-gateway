@@ -44,14 +44,25 @@ export type SourceInput = {
 };
 
 export type ProviderType =
-  | 'wecom'
-  | 'feishu'
-  | 'dingtalk'
-  | 'email'
-  | 'sms'
-  | 'gov_cloud'
-  | 'self'
   | 'webhook'
+  | 'self'
+  | 'pushplus'
+  | 'wxpusher'
+  | 'serverchan'
+  | 'email'
+  | 'aliyun_sms'
+  | 'tencent_sms'
+  | 'baidu_sms'
+  | 'wecom_robot'
+  | 'wecom_app'
+  | 'wecom'
+  | 'dingtalk_robot'
+  | 'dingtalk_work'
+  | 'dingtalk'
+  | 'feishu_robot'
+  | 'feishu'
+  | 'gov_cloud'
+  | 'sms'
   | 'custom_token';
 
 export type ChannelApiRecord = {
@@ -73,6 +84,43 @@ export type ChannelApiRecord = {
 
 export type ChannelInput = Omit<ChannelApiRecord, 'id' | 'created_at' | 'updated_at'>;
 
+export type ProviderCapabilityApiRecord = {
+  id?: string;
+  provider_type: ProviderType | string;
+  message_type?: string;
+  message_schema?: JSONValue;
+  recipient_required?: boolean;
+  allow_no_recipient?: boolean;
+  recipient_field_name?: string;
+  recipient_location?: string;
+  recipient_path?: string;
+  recipient_format?: string;
+  identity_kind?: string;
+  token_location?: string;
+  token_field_name?: string;
+  request_examples?: JSONValue;
+  display_name?: string;
+  category?: string;
+  supported_message_types?: string[];
+  content_schema?: JSONValue;
+  credential_schema?: JSONValue;
+  channel_config_schema?: JSONValue;
+  custom_body_allowed?: boolean;
+  recipient?: JSONValue;
+  token_strategy?: JSONValue;
+  send_api?: JSONValue;
+  success_rule?: JSONValue;
+  retry_rule?: JSONValue;
+  default_rate_limit?: JSONValue;
+  default_timeout_ms?: number;
+  default_concurrency_limit?: number;
+  default_retry_policy?: JSONValue;
+  default_dead_letter_policy?: JSONValue;
+  defaults?: JSONValue;
+  created_at?: string;
+  updated_at?: string;
+};
+
 export type TemplateApiRecord = {
   id: string;
   name: string;
@@ -80,6 +128,28 @@ export type TemplateApiRecord = {
   source_id: string;
   enabled: boolean;
   current_version_id: string;
+  message_type?: string;
+  target_provider_type?: string;
+  template_body?: string;
+  message_body_schema?: JSONValue;
+  sample_payload?: JSONValue;
+  compiled_preview?: JSONValue;
+  used_variables?: string[];
+  validation_status?: string;
+  validation_errors?: JSONValue;
+  current_version?: {
+    id: string;
+    version_no?: number;
+    message_type: string;
+    target_provider_type: string;
+    template_body: string;
+    message_body_schema: JSONValue;
+    sample_payload: JSONValue;
+    compiled_preview?: JSONValue;
+    used_variables?: string[];
+    validation_status?: string;
+    validation_errors?: JSONValue;
+  };
   created_at: string;
   updated_at: string;
 };
@@ -118,6 +188,20 @@ export type RouteFlowInput = {
   mode: 'canvas' | 'table';
 };
 
+export type RouteActionTargetApiRecord = {
+  id: string;
+  channel_id: string;
+  template_version_id: string;
+  enabled: boolean;
+  sort_order: number;
+};
+
+export type RouteActionTargetInput = {
+  channel_id: string;
+  template_version_id: string;
+  enabled: boolean;
+};
+
 export type RouteRuleApiRecord = {
   id: string;
   rule_key: string;
@@ -127,8 +211,9 @@ export type RouteRuleApiRecord = {
   enabled: boolean;
   action: {
     id?: string;
-    template_version_id: string;
-    channel_ids: string[];
+    targets?: RouteActionTargetApiRecord[];
+    template_version_id?: string;
+    channel_ids?: string[];
     recipient_strategy: JSONValue;
     send_dedupe_config: JSONValue;
     failure_policy: JSONValue;
@@ -146,8 +231,7 @@ export type RouteRuleInput = {
   condition_tree: JSONValue;
   enabled: boolean;
   action: {
-    template_version_id: string;
-    channel_ids: string[];
+    targets: RouteActionTargetInput[];
     recipient_strategy: JSONValue;
     send_dedupe_config: JSONValue;
     failure_policy: JSONValue;
@@ -292,6 +376,11 @@ export type DeliveryAttemptApiRecord = {
   recipient_snapshot: JSONValue;
   request_snapshot: JSONValue;
   response_snapshot: JSONValue;
+  target_context?: JSONValue;
+  rendered_message?: JSONValue;
+  resolved_recipients?: JSONValue;
+  final_request?: JSONValue;
+  upstream_response?: JSONValue;
   status: string;
   error_code?: string;
   error_message?: string;
@@ -342,7 +431,7 @@ export const consoleApi = {
   },
 
   listProviderCapabilities(fetcher?: ApiFetcher) {
-    return apiRequest<{ capabilities: JSONValue[] }>('/provider-capabilities', { fetcher });
+    return apiRequest<{ capabilities: ProviderCapabilityApiRecord[] }>('/provider-capabilities', { fetcher });
   },
   listChannels(fetcher?: ApiFetcher) {
     return apiRequest<{ channels: ChannelApiRecord[] }>('/channels', { fetcher });

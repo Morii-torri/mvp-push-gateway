@@ -2,8 +2,11 @@ import { describe, expect, it } from 'vitest';
 
 import type { RouteGroup, RouteRule } from '../data/demoData';
 import {
+  buildInitialRouteFlow,
   buildRouteConditionTree,
   canEnableRouteGroupSource,
+  routeNodeCatalog,
+  routeNodeDefaults,
   routeRulesForGroup,
   summarizeRouteConditionTree,
 } from './routeFlow';
@@ -133,5 +136,28 @@ describe('route flow helpers', () => {
 
   it('keeps legacy expression summaries readable', () => {
     expect(summarizeRouteConditionTree({ expression: '业务类型 = 民生诉求' })).toBe('业务类型 = 民生诉求');
+  });
+
+  it('builds a send action group canvas without new template nodes', () => {
+    const snapshot = buildInitialRouteFlow(groups[0], [
+      {
+        ...rules[1],
+        sendGroupSummary: '平台 A -> 模板 A',
+      },
+    ]);
+
+    expect(routeNodeCatalog.map((item) => item.kind)).toEqual(['source', 'condition', 'recipient', 'send_group']);
+    expect(snapshot.nodes.map((node) => node.data.kind)).toEqual(['source', 'condition', 'recipient', 'send_group']);
+    expect(snapshot.nodes.some((node) => node.data.kind === 'template')).toBe(false);
+    expect(snapshot.edges.map((edge) => [edge.source, edge.target])).toEqual([
+      ['source-start', 'rule-2-condition'],
+      ['rule-2-condition', 'rule-2-recipient'],
+      ['rule-2-recipient', 'rule-2-send-group'],
+    ]);
+  });
+
+  it('keeps legacy template and platform node defaults for saved snapshots', () => {
+    expect(routeNodeDefaults.template.title).toBe('模板渲染');
+    expect(routeNodeDefaults.platform.title).toBe('发送平台');
   });
 });

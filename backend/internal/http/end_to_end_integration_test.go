@@ -191,17 +191,28 @@ func TestFreshEnvironmentHTTPFlowCoversSetupAuthSourceTemplateRouteAndIngest(t *
 				"condition_tree": map[string]any{"operator": "equals", "path": "payload.title", "value": "critical"},
 				"enabled":        true,
 				"action": map[string]any{
-					"template_version_id": templateVersion.Version.ID,
-					"channel_ids":         []string{channelCreated.Channel.ID},
-					"recipient_strategy":  map[string]any{},
-					"send_dedupe_config":  map[string]any{},
-					"failure_policy":      map[string]any{},
+					"targets": []map[string]any{
+						{
+							"channel_id":          channelCreated.Channel.ID,
+							"template_version_id": templateVersion.Version.ID,
+							"enabled":             true,
+						},
+					},
+					"recipient_strategy": map[string]any{},
+					"send_dedupe_config": map[string]any{},
+					"failure_policy":     map[string]any{},
 				},
 			},
 		},
 	}, http.StatusOK)
-	if len(savedRules.Rules) != 1 || savedRules.Rules[0].Action.TemplateVersionID != templateVersion.Version.ID {
+	if len(savedRules.Rules) != 1 || len(savedRules.Rules[0].Action.Targets) != 1 {
 		t.Fatalf("unexpected saved rules: %+v", savedRules.Rules)
+	}
+	if savedRules.Rules[0].Action.Targets[0].TemplateVersionID != templateVersion.Version.ID || savedRules.Rules[0].Action.Targets[0].ChannelID != channelCreated.Channel.ID {
+		t.Fatalf("unexpected saved rule target: %+v", savedRules.Rules[0].Action.Targets[0])
+	}
+	if savedRules.Rules[0].Action.TemplateVersionID != templateVersion.Version.ID || len(savedRules.Rules[0].Action.ChannelIDs) != 1 || savedRules.Rules[0].Action.ChannelIDs[0] != channelCreated.Channel.ID {
+		t.Fatalf("unexpected saved rule compatibility fields: %+v", savedRules.Rules[0].Action)
 	}
 	if savedRules.Rules[0].RuleKey != ruleKey {
 		t.Fatalf("expected saved rule key %s, got %+v", ruleKey, savedRules.Rules[0])
@@ -340,7 +351,14 @@ type routeRulesBody struct {
 	Rules     []struct {
 		RuleKey string `json:"rule_key"`
 		Action  struct {
-			TemplateVersionID string `json:"template_version_id"`
+			TemplateVersionID string   `json:"template_version_id"`
+			ChannelIDs        []string `json:"channel_ids"`
+			Targets           []struct {
+				ChannelID         string `json:"channel_id"`
+				TemplateVersionID string `json:"template_version_id"`
+				Enabled           bool   `json:"enabled"`
+				SortOrder         int    `json:"sort_order"`
+			} `json:"targets"`
 		} `json:"action"`
 	} `json:"rules"`
 }

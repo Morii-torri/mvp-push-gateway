@@ -14,22 +14,36 @@ type providerCapabilitiesResponse struct {
 }
 
 type capabilityResponse struct {
-	ID                 string                `json:"id"`
-	ProviderType       provider.ProviderType `json:"provider_type"`
-	MessageType        string                `json:"message_type"`
-	MessageSchema      json.RawMessage       `json:"message_schema"`
-	RecipientRequired  bool                  `json:"recipient_required"`
-	AllowNoRecipient   bool                  `json:"allow_no_recipient"`
-	RecipientFieldName string                `json:"recipient_field_name"`
-	RecipientLocation  provider.Placement    `json:"recipient_location"`
-	RecipientPath      string                `json:"recipient_path"`
-	RecipientFormat    string                `json:"recipient_format"`
-	IdentityKind       string                `json:"identity_kind"`
-	TokenLocation      provider.Placement    `json:"token_location"`
-	TokenFieldName     string                `json:"token_field_name"`
-	RequestExamples    json.RawMessage       `json:"request_examples"`
-	CreatedAt          string                `json:"created_at"`
-	UpdatedAt          string                `json:"updated_at"`
+	ID                      string                `json:"id"`
+	ProviderType            provider.ProviderType `json:"provider_type"`
+	DisplayName             string                `json:"display_name"`
+	Category                string                `json:"category"`
+	MessageType             string                `json:"message_type"`
+	MessageSchema           json.RawMessage       `json:"message_schema"`
+	CredentialSchema        json.RawMessage       `json:"credential_schema"`
+	ChannelConfigSchema     json.RawMessage       `json:"channel_config_schema"`
+	CustomBodyAllowed       bool                  `json:"custom_body_allowed"`
+	RecipientRequired       bool                  `json:"recipient_required"`
+	AllowNoRecipient        bool                  `json:"allow_no_recipient"`
+	RecipientRequirement    string                `json:"recipient_requirement"`
+	RecipientFieldName      string                `json:"recipient_field_name"`
+	RecipientLocation       provider.Placement    `json:"recipient_location"`
+	RecipientPath           string                `json:"recipient_path"`
+	RecipientFormat         string                `json:"recipient_format"`
+	IdentityKind            string                `json:"identity_kind"`
+	TokenLocation           provider.Placement    `json:"token_location"`
+	TokenFieldName          string                `json:"token_field_name"`
+	TokenStrategy           json.RawMessage       `json:"token_strategy"`
+	SendAPI                 json.RawMessage       `json:"send_api"`
+	SuccessRule             json.RawMessage       `json:"success_rule"`
+	RetryRule               json.RawMessage       `json:"retry_rule"`
+	DefaultRateLimit        json.RawMessage       `json:"default_rate_limit"`
+	DefaultTimeoutMS        int                   `json:"default_timeout_ms"`
+	DefaultConcurrencyLimit int                   `json:"default_concurrency_limit"`
+	DefaultRetryPolicy      json.RawMessage       `json:"default_retry_policy"`
+	RequestExamples         json.RawMessage       `json:"request_examples"`
+	CreatedAt               string                `json:"created_at"`
+	UpdatedAt               string                `json:"updated_at"`
 }
 
 type channelsResponse struct {
@@ -273,22 +287,36 @@ func (r channelRequest) toInput() provider.CreateChannelInput {
 
 func toCapabilityResponse(capability provider.Capability) capabilityResponse {
 	return capabilityResponse{
-		ID:                 capability.ID,
-		ProviderType:       capability.ProviderType,
-		MessageType:        capability.MessageType,
-		MessageSchema:      defaultRawJSON(capability.MessageSchema),
-		RecipientRequired:  capability.RecipientRequired,
-		AllowNoRecipient:   capability.AllowNoRecipient,
-		RecipientFieldName: capability.RecipientFieldName,
-		RecipientLocation:  capability.RecipientLocation,
-		RecipientPath:      capability.RecipientPath,
-		RecipientFormat:    capability.RecipientFormat,
-		IdentityKind:       capability.IdentityKind,
-		TokenLocation:      capability.TokenLocation,
-		TokenFieldName:     capability.TokenFieldName,
-		RequestExamples:    defaultRawJSON(capability.RequestExamples),
-		CreatedAt:          formatTime(capability.CreatedAt),
-		UpdatedAt:          formatTime(capability.UpdatedAt),
+		ID:                      capability.ID,
+		ProviderType:            capability.ProviderType,
+		DisplayName:             capability.DisplayName,
+		Category:                capability.Category,
+		MessageType:             capability.MessageType,
+		MessageSchema:           defaultRawJSON(capability.MessageSchema),
+		CredentialSchema:        defaultRawJSON(capability.CredentialSchema),
+		ChannelConfigSchema:     defaultRawJSON(capability.ChannelConfigSchema),
+		CustomBodyAllowed:       capability.CustomBodyAllowed,
+		RecipientRequired:       capability.RecipientRequired,
+		AllowNoRecipient:        capability.AllowNoRecipient,
+		RecipientRequirement:    capability.RecipientRequirement,
+		RecipientFieldName:      capability.RecipientFieldName,
+		RecipientLocation:       capability.RecipientLocation,
+		RecipientPath:           capability.RecipientPath,
+		RecipientFormat:         capability.RecipientFormat,
+		IdentityKind:            capability.IdentityKind,
+		TokenLocation:           capability.TokenLocation,
+		TokenFieldName:          capability.TokenFieldName,
+		TokenStrategy:           defaultRawJSON(capability.TokenStrategy),
+		SendAPI:                 defaultRawJSON(capability.SendAPI),
+		SuccessRule:             defaultRawJSON(capability.SuccessRule),
+		RetryRule:               defaultRawJSON(capability.RetryRule),
+		DefaultRateLimit:        defaultRawJSON(capability.DefaultRateLimit),
+		DefaultTimeoutMS:        capability.DefaultTimeoutMS,
+		DefaultConcurrencyLimit: capability.DefaultConcurrencyLimit,
+		DefaultRetryPolicy:      defaultRawJSON(capability.DefaultRetryPolicy),
+		RequestExamples:         defaultRawJSON(capability.RequestExamples),
+		CreatedAt:               formatTime(capability.CreatedAt),
+		UpdatedAt:               formatTime(capability.UpdatedAt),
 	}
 }
 

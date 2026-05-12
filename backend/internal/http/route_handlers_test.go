@@ -121,6 +121,171 @@ func TestSimulateReturnsMatchedRuleAndStopReason(t *testing.T) {
 	}
 }
 
+func TestRouteRulesAcceptsAndReturnsActionTargets(t *testing.T) {
+	routeService := &fakeRouteService{
+		rulesResult: route.RuleSet{
+			VersionID: "draft-1",
+			Rules: []route.Rule{
+				{
+					ID:        "rule-id",
+					RuleKey:   "00000000-0000-0000-0000-000000000301",
+					SortOrder: 10,
+					Name:      "Critical",
+					Enabled:   true,
+					Action: route.Action{
+						ID:                "action-id",
+						TemplateVersionID: "tpl-a",
+						ChannelIDs:        []string{"channel-a"},
+						Targets: []route.ActionTarget{
+							{
+								ID:                "target-a",
+								ChannelID:         "channel-a",
+								TemplateVersionID: "tpl-a",
+								Enabled:           true,
+								SortOrder:         10,
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+	handler := httpapi.NewHandler(
+		testConfig(),
+		httpapi.WithAuthService(fakeAuthService{authenticatedToken: "admin-session"}),
+		httpapi.WithRouteService(routeService),
+	)
+
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/route-flows/flow-1/rules", strings.NewReader(`{
+		"rules": [{
+			"rule_key": "00000000-0000-0000-0000-000000000301",
+			"sort_order": 10,
+			"name": "Critical",
+			"condition_tree": {"operator":"always"},
+			"enabled": true,
+			"action": {
+				"targets": [{
+					"channel_id": "channel-a",
+					"template_version_id": "tpl-a",
+					"enabled": true
+				}],
+				"recipient_strategy": {},
+				"send_dedupe_config": {},
+				"failure_policy": {}
+			}
+		}]
+	}`))
+	req.Header.Set("Authorization", "Bearer admin-session")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected save rules with targets to return 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	if routeService.saveRulesCalls != 1 || routeService.saveRulesFlowID != "flow-1" {
+		t.Fatalf("expected one save rules call for flow-1, got calls=%d flow=%s", routeService.saveRulesCalls, routeService.saveRulesFlowID)
+	}
+	savedTargets := routeService.saveRulesInput.Rules[0].Action.Targets
+	if len(savedTargets) != 1 || savedTargets[0].ChannelID != "channel-a" || savedTargets[0].TemplateVersionID != "tpl-a" || !savedTargets[0].Enabled {
+		t.Fatalf("expected request targets to map into route input, got %+v", savedTargets)
+	}
+
+	var savedBody routeRulesJSONBody
+	if err := json.NewDecoder(rec.Body).Decode(&savedBody); err != nil {
+		t.Fatalf("decode saved route rules response: %v", err)
+	}
+	assertRouteRuleTargetResponse(t, savedBody)
+
+	getReq := httptest.NewRequest(http.MethodGet, "/api/v1/route-flows/flow-1/rules", nil)
+	getReq.Header.Set("Authorization", "Bearer admin-session")
+	getRec := httptest.NewRecorder()
+	handler.ServeHTTP(getRec, getReq)
+	if getRec.Code != http.StatusOK {
+		t.Fatalf("expected get rules to return 200, got %d body=%s", getRec.Code, getRec.Body.String())
+	}
+	var getBody routeRulesJSONBody
+	if err := json.NewDecoder(getRec.Body).Decode(&getBody); err != nil {
+		t.Fatalf("decode get route rules response: %v", err)
+	}
+	assertRouteRuleTargetResponse(t, getBody)
+}
+
+func TestRouteRulesAcceptsLegacyActionFields(t *testing.T) {
+	routeService := &fakeRouteService{rulesResult: route.RuleSet{VersionID: "draft-1", Rules: []route.Rule{}}}
+	handler := httpapi.NewHandler(
+		testConfig(),
+		httpapi.WithAuthService(fakeAuthService{authenticatedToken: "admin-session"}),
+		httpapi.WithRouteService(routeService),
+	)
+
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/route-flows/flow-1/rules", strings.NewReader(`{
+		"rules": [{
+			"rule_key": "00000000-0000-0000-0000-000000000301",
+			"sort_order": 10,
+			"name": "Critical",
+			"condition_tree": {"operator":"always"},
+			"enabled": true,
+			"action": {
+				"template_version_id": "tpl-legacy",
+				"channel_ids": ["channel-a"],
+				"recipient_strategy": {},
+				"send_dedupe_config": {},
+				"failure_policy": {}
+			}
+		}]
+	}`))
+	req.Header.Set("Authorization", "Bearer admin-session")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected save rules with legacy action fields to return 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	action := routeService.saveRulesInput.Rules[0].Action
+	if action.TemplateVersionID != "tpl-legacy" || len(action.ChannelIDs) != 1 || action.ChannelIDs[0] != "channel-a" {
+		t.Fatalf("expected legacy action fields to map into route input, got %+v", action)
+	}
+	if len(action.Targets) != 0 {
+		t.Fatalf("expected handler to leave legacy payload normalization to route service, got targets %+v", action.Targets)
+	}
+}
+
+type routeRulesJSONBody struct {
+	VersionID string `json:"version_id"`
+	Rules     []struct {
+		Action struct {
+			TemplateVersionID string   `json:"template_version_id"`
+			ChannelIDs        []string `json:"channel_ids"`
+			Targets           []struct {
+				ID                string `json:"id"`
+				ChannelID         string `json:"channel_id"`
+				TemplateVersionID string `json:"template_version_id"`
+				Enabled           bool   `json:"enabled"`
+				SortOrder         int    `json:"sort_order"`
+			} `json:"targets"`
+		} `json:"action"`
+	} `json:"rules"`
+}
+
+func assertRouteRuleTargetResponse(t *testing.T, body routeRulesJSONBody) {
+	t.Helper()
+
+	if body.VersionID != "draft-1" || len(body.Rules) != 1 {
+		t.Fatalf("unexpected route rules response: %+v", body)
+	}
+	action := body.Rules[0].Action
+	if action.TemplateVersionID != "tpl-a" || len(action.ChannelIDs) != 1 || action.ChannelIDs[0] != "channel-a" {
+		t.Fatalf("expected response to keep legacy action fields, got %+v", action)
+	}
+	if len(action.Targets) != 1 {
+		t.Fatalf("expected response action targets, got %+v", action.Targets)
+	}
+	target := action.Targets[0]
+	if target.ID != "target-a" || target.ChannelID != "channel-a" || target.TemplateVersionID != "tpl-a" || !target.Enabled || target.SortOrder != 10 {
+		t.Fatalf("unexpected response action target: %+v", target)
+	}
+}
+
 type fakeRouteService struct {
 	listResult     []route.Flow
 	getResult      route.Flow
@@ -133,6 +298,9 @@ type fakeRouteService struct {
 	publishResult  route.Version
 	simulateResult route.SimulationResult
 
+	saveRulesInput  route.SaveRulesInput
+	saveRulesFlowID string
+
 	createErr   error
 	getErr      error
 	updateErr   error
@@ -141,7 +309,8 @@ type fakeRouteService struct {
 	publishErr  error
 	simulateErr error
 
-	listCalls int
+	listCalls      int
+	saveRulesCalls int
 }
 
 func (f *fakeRouteService) ListFlows(context.Context) ([]route.Flow, error) {
@@ -193,7 +362,10 @@ func (f *fakeRouteService) GetRules(context.Context, string) (route.RuleSet, err
 	return f.rulesResult, nil
 }
 
-func (f *fakeRouteService) SaveRules(context.Context, string, route.SaveRulesInput) (route.RuleSet, error) {
+func (f *fakeRouteService) SaveRules(_ context.Context, flowID string, input route.SaveRulesInput) (route.RuleSet, error) {
+	f.saveRulesCalls++
+	f.saveRulesFlowID = flowID
+	f.saveRulesInput = input
 	return f.rulesResult, nil
 }
 

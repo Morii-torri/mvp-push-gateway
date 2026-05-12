@@ -61,27 +61,32 @@ type MessageDetail struct {
 }
 
 type DeliveryAttempt struct {
-	ID                string
-	MessageID         string
-	ChannelID         string
-	ChannelName       string
-	ProviderType      string
-	TemplateVersionID string
-	RecipientSnapshot json.RawMessage
-	RequestSnapshot   json.RawMessage
-	ResponseSnapshot  json.RawMessage
-	Status            string
-	ErrorCode         string
-	ErrorMessage      string
-	DurationMS        int
-	AttemptNo         int
-	NextRetryAt       *time.Time
-	DeadLetteredAt    *time.Time
-	QueuedAt          *time.Time
-	StartedAt         *time.Time
-	FinishedAt        *time.Time
-	CreatedAt         time.Time
-	UpdatedAt         time.Time
+	ID                 string
+	MessageID          string
+	ChannelID          string
+	ChannelName        string
+	ProviderType       string
+	TemplateVersionID  string
+	RecipientSnapshot  json.RawMessage
+	RequestSnapshot    json.RawMessage
+	ResponseSnapshot   json.RawMessage
+	TargetContext      json.RawMessage
+	RenderedMessage    json.RawMessage
+	ResolvedRecipients json.RawMessage
+	FinalRequest       json.RawMessage
+	UpstreamResponse   json.RawMessage
+	Status             string
+	ErrorCode          string
+	ErrorMessage       string
+	DurationMS         int
+	AttemptNo          int
+	NextRetryAt        *time.Time
+	DeadLetteredAt     *time.Time
+	QueuedAt           *time.Time
+	StartedAt          *time.Time
+	FinishedAt         *time.Time
+	CreatedAt          time.Time
+	UpdatedAt          time.Time
 }
 
 type TimelineEvent struct {
@@ -119,6 +124,7 @@ func (s *Service) GetMessage(ctx context.Context, id string) (MessageDetail, err
 	if err != nil {
 		return MessageDetail{}, err
 	}
+	detail.Attempts = deriveAttemptSnapshots(detail.Attempts)
 	detail.Timeline = buildTimeline(detail)
 	return detail, nil
 }
@@ -176,4 +182,126 @@ func buildTimeline(detail MessageDetail) []TimelineEvent {
 		}
 	}
 	return events
+}
+
+func deriveAttemptSnapshots(attempts []DeliveryAttempt) []DeliveryAttempt {
+	for index := range attempts {
+		attempts[index] = deriveAttemptSnapshot(attempts[index])
+	}
+	return attempts
+}
+
+func deriveAttemptSnapshot(attempt DeliveryAttempt) DeliveryAttempt {
+	if !hasJSON(attempt.TargetContext) {
+		attempt.TargetContext = snapshotField(attempt.RequestSnapshot, "target_context")
+		if !hasJSON(attempt.TargetContext) {
+			attempt.TargetContext = synthesizedTargetContext(attempt)
+		}
+	}
+	if !hasJSON(attempt.RenderedMessage) {
+		attempt.RenderedMessage = snapshotField(attempt.RequestSnapshot, "rendered_message")
+		if !hasJSON(attempt.RenderedMessage) {
+			attempt.RenderedMessage = nestedSnapshotField(attempt.RequestSnapshot, "send", "body")
+		}
+	}
+	if !hasJSON(attempt.ResolvedRecipients) {
+		attempt.ResolvedRecipients = snapshotField(attempt.RequestSnapshot, "resolved_recipients")
+		if !hasJSON(attempt.ResolvedRecipients) {
+			attempt.ResolvedRecipients = normalizeRecipients(nestedSnapshotField(attempt.RequestSnapshot, "send", "recipient"))
+		}
+		if !hasJSON(attempt.ResolvedRecipients) {
+			attempt.ResolvedRecipients = normalizeRecipients(snapshotField(attempt.RecipientSnapshot, "recipient"))
+		}
+	}
+	if !hasJSON(attempt.FinalRequest) {
+		attempt.FinalRequest = snapshotField(attempt.RequestSnapshot, "final_request")
+		if !hasJSON(attempt.FinalRequest) {
+			attempt.FinalRequest = snapshotField(attempt.RequestSnapshot, "send")
+		}
+	}
+	if !hasJSON(attempt.UpstreamResponse) {
+		attempt.UpstreamResponse = snapshotField(attempt.ResponseSnapshot, "upstream_response")
+		if !hasJSON(attempt.UpstreamResponse) {
+			attempt.UpstreamResponse = snapshotField(attempt.ResponseSnapshot, "send")
+		}
+	}
+	return attempt
+}
+
+func snapshotField(snapshot json.RawMessage, key string) json.RawMessage {
+	var fields map[string]json.RawMessage
+	if !decodeSnapshotObject(snapshot, &fields) {
+		return nil
+	}
+	return cloneRawJSON(fields[key])
+}
+
+func nestedSnapshotField(snapshot json.RawMessage, parent string, key string) json.RawMessage {
+	parentRaw := snapshotField(snapshot, parent)
+	var fields map[string]json.RawMessage
+	if !decodeSnapshotObject(parentRaw, &fields) {
+		return nil
+	}
+	return cloneRawJSON(fields[key])
+}
+
+func decodeSnapshotObject(snapshot json.RawMessage, target *map[string]json.RawMessage) bool {
+	if !hasJSON(snapshot) {
+		return false
+	}
+	if err := json.Unmarshal(snapshot, target); err != nil {
+		return false
+	}
+	return *target != nil
+}
+
+func cloneRawJSON(raw json.RawMessage) json.RawMessage {
+	if !hasJSON(raw) {
+		return nil
+	}
+	return append(json.RawMessage(nil), raw...)
+}
+
+func hasJSON(raw json.RawMessage) bool {
+	trimmed := strings.TrimSpace(string(raw))
+	return trimmed != "" && trimmed != "null"
+}
+
+func synthesizedTargetContext(attempt DeliveryAttempt) json.RawMessage {
+	context := map[string]string{}
+	if strings.TrimSpace(attempt.ChannelID) != "" {
+		context["channel_id"] = attempt.ChannelID
+	}
+	if strings.TrimSpace(attempt.ChannelName) != "" {
+		context["channel_name"] = attempt.ChannelName
+	}
+	if strings.TrimSpace(attempt.ProviderType) != "" {
+		context["provider_type"] = attempt.ProviderType
+	}
+	if strings.TrimSpace(attempt.TemplateVersionID) != "" {
+		context["template_version_id"] = attempt.TemplateVersionID
+	}
+	if len(context) == 0 {
+		return nil
+	}
+	raw, err := json.Marshal(context)
+	if err != nil {
+		return nil
+	}
+	return raw
+}
+
+func normalizeRecipients(raw json.RawMessage) json.RawMessage {
+	if !hasJSON(raw) {
+		return nil
+	}
+	var array []json.RawMessage
+	if err := json.Unmarshal(raw, &array); err == nil {
+		return cloneRawJSON(raw)
+	}
+	wrapped, err := json.Marshal([]json.RawMessage{raw})
+	if err != nil {
+		return nil
+	}
+	return wrapped
 }

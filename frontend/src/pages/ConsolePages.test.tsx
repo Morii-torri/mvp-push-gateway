@@ -3,7 +3,11 @@ import type { ReactElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 
+import * as ConsolePages from './ConsolePages';
 import {
+  ProviderConfigForm,
+  RouteRuleForm,
+  TemplateEditorForm,
   OverviewPage,
   MatchGroupsPage,
   OrganizationPage,
@@ -13,7 +17,20 @@ import {
   SettingsPage,
   SourcesPage,
   TemplatesPage,
+  createProviderDraft,
+  createRouteRuleDraft,
+  createTemplateDraft,
+  mapRouteRule,
+  mapTemplateRow,
+  routeTargetTemplateOptions,
+  switchProviderType,
+  switchTemplateContentMode,
+  switchTemplateMessageType,
+  switchTemplateProviderType,
+  templateVersionInputFromDraft,
 } from './ConsolePages';
+import type { ProviderCapabilityApiRecord } from '../api/console';
+import { getProviderTypeLabel } from '../utils/labels';
 
 const lastUpdated = new Date('2026-05-11T09:30:00+08:00');
 
@@ -22,6 +39,62 @@ function renderPage(node: ReactElement) {
 }
 
 describe('critical console pages', () => {
+  const firstBatchProviderLabels = [
+    ['webhook', '通用 Webhook'],
+    ['self', '本平台级联'],
+    ['pushplus', 'PushPlus'],
+    ['wxpusher', 'WxPusher'],
+    ['serverchan', 'Server酱'],
+    ['email', 'SMTP 邮件'],
+    ['aliyun_sms', '阿里云短信'],
+    ['tencent_sms', '腾讯云短信'],
+    ['baidu_sms', '百度智能云短信'],
+    ['wecom_robot', '企业微信群机器人'],
+    ['wecom_app', '企业微信应用消息'],
+    ['wecom', '企业微信应用兼容'],
+    ['dingtalk_robot', '钉钉群机器人'],
+    ['dingtalk_work', '钉钉工作消息'],
+    ['dingtalk', '钉钉工作消息兼容'],
+    ['feishu_robot', '飞书机器人'],
+    ['feishu', '飞书兼容'],
+    ['gov_cloud', '随申办政务云'],
+    ['sms', '短信兼容'],
+    ['custom_token', '自定义 Token 平台'],
+  ] as const;
+
+  const templateCapabilities: ProviderCapabilityApiRecord[] = [
+    {
+      provider_type: 'wecom',
+      display_name: '企业微信应用消息',
+      supported_message_types: ['text', 'markdown'],
+      content_schema: {
+        text: {
+          fields: [
+            { key: 'content', label: '正文内容', required: true, default: '通知' },
+          ],
+        },
+        markdown: {
+          fields: [
+            { key: 'markdown', label: 'Markdown 内容', required: true, default: '通知' },
+          ],
+        },
+      },
+    },
+    {
+      provider_type: 'email',
+      display_name: 'SMTP 邮件',
+      supported_message_types: ['text', 'html'],
+      content_schema: {
+        html: {
+          fields: [
+            { key: 'subject', label: '邮件主题', required: true, default: '通知' },
+            { key: 'html', label: 'HTML 正文', required: true, default: '<p>通知</p>' },
+          ],
+        },
+      },
+    },
+  ];
+
   it('renders overview and queue monitoring shells with localized metric copy', () => {
     const overviewMarkup = renderPage(
       <OverviewPage lastUpdated={lastUpdated} onRefresh={() => undefined} />,
@@ -57,6 +130,218 @@ describe('critical console pages', () => {
     expect(providersMarkup).not.toContain('custom_token');
   });
 
+  it('localizes first batch provider labels and exposes them as provider page options', () => {
+    const providersMarkup = renderPage(
+      <ProvidersPage lastUpdated={lastUpdated} onRefresh={() => undefined} />,
+    );
+
+    for (const [providerType, label] of firstBatchProviderLabels) {
+      expect(getProviderTypeLabel(providerType)).toBe(label);
+      expect(providersMarkup).toContain(label);
+    }
+    expect(providersMarkup).not.toContain('aliyun_sms');
+    expect(providersMarkup).not.toContain('tencent_sms');
+    expect(providersMarkup).not.toContain('baidu_sms');
+    expect(providersMarkup).not.toContain('wecom_robot');
+    expect(providersMarkup).not.toContain('custom_token');
+  });
+
+  it('renders gov cloud fields with documented base URL and no raw mapping fields', () => {
+    const draft = createProviderDraft('gov_cloud', 1);
+    const markup = renderPage(
+      <ProviderConfigForm value={draft} onChange={() => undefined} capabilities={[]} />,
+    );
+
+    expect(markup).toContain('corpsecret');
+    expect(markup).toContain('https://www.ywxt.sh.cegn.cn/api-gateway/uranus/uranus/cgi-bin/');
+    expect(markup).toContain('开发环境不可访问，先实现不联调');
+    expect(markup).not.toContain('Body 映射模板');
+    expect(markup).not.toContain('请求 Header');
+  });
+
+  it('uses simple provider fields and notice template fallbacks for PushPlus WxPusher and ServerChan', () => {
+    const providers = [
+      ['pushplus', 'PushPlus Token', ['topic', 'channel']],
+      ['wxpusher', 'WxPusher AppToken', ['UID 列表', 'Topic ID 列表']],
+      ['serverchan', 'Server酱 SendKey', ['版本', '推送渠道']],
+    ] as const;
+
+    for (const [providerType, credentialLabel, extraLabels] of providers) {
+      const providerMarkup = renderPage(
+        <ProviderConfigForm
+          value={createProviderDraft(providerType, 1)}
+          onChange={() => undefined}
+          capabilities={[]}
+        />,
+      );
+      expect(providerMarkup).toContain(credentialLabel);
+      for (const label of extraLabels) {
+        expect(providerMarkup).toContain(label);
+      }
+      expect(providerMarkup).not.toContain('Body 映射模板');
+      expect(providerMarkup).not.toContain('请求 Header JSON');
+
+      const textInput = templateVersionInputFromDraft(createTemplateDraft([], [], providerType, 'text'));
+      const markdownInput = templateVersionInputFromDraft(createTemplateDraft([], [], providerType, 'markdown'));
+      expect(textInput.template_body).toContain('"title"');
+      expect(textInput.template_body).toContain('"content"');
+      expect(textInput.template_body).toContain('"url"');
+      expect(markdownInput.template_body).toContain('"markdown"');
+    }
+  });
+
+  it('uses vendor fields and template/content fallback schemas for the first SMS providers', () => {
+    const providers = [
+      ['aliyun_sms', 'AccessKey ID', '短信模板 Code'],
+      ['tencent_sms', 'SecretId', '短信 SDK App ID'],
+      ['baidu_sms', 'AccessKey ID', '签名 ID'],
+    ] as const;
+
+    for (const [providerType, credentialLabel, configLabel] of providers) {
+      const providerMarkup = renderPage(
+        <ProviderConfigForm
+          value={createProviderDraft(providerType, 1)}
+          onChange={() => undefined}
+          capabilities={[]}
+        />,
+      );
+      expect(providerMarkup).toContain(credentialLabel);
+      expect(providerMarkup).toContain(configLabel);
+      expect(providerMarkup).not.toContain('Body 映射模板');
+
+      const templateInput = templateVersionInputFromDraft(createTemplateDraft([], [], providerType, 'template'));
+      const textInput = templateVersionInputFromDraft(createTemplateDraft([], [], providerType, 'text'));
+      expect(templateInput.template_body).toContain('"template_params"');
+      expect(textInput.template_body).toContain('"content"');
+    }
+  });
+
+  it('uses robot markdown and enterprise card template fallbacks without exposing raw provider enums', () => {
+    const robotTypes = [
+      ['wecom_robot', '企业微信群机器人'],
+      ['dingtalk_robot', '钉钉群机器人'],
+      ['feishu_robot', '飞书机器人'],
+    ] as const;
+    const appTypes = [
+      ['wecom_app', '企业微信应用消息'],
+      ['wecom', '企业微信应用兼容'],
+      ['dingtalk_work', '钉钉工作消息'],
+      ['dingtalk', '钉钉工作消息兼容'],
+      ['feishu', '飞书兼容'],
+    ] as const;
+
+    for (const [providerType, label] of robotTypes) {
+      const markup = renderPage(
+        <TemplateEditorForm
+          value={createTemplateDraft([], [], providerType, 'markdown')}
+          onChange={() => undefined}
+          sourceRows={[]}
+          capabilities={[]}
+        />,
+      );
+      const input = templateVersionInputFromDraft(createTemplateDraft([], [], providerType, 'markdown'));
+      expect(markup).toContain(label);
+      expect(markup).toContain('Markdown 内容');
+      expect(markup).not.toContain(providerType);
+      expect(input.template_body).toContain('"markdown"');
+    }
+
+    for (const [providerType, label] of appTypes) {
+      const markup = renderPage(
+        <TemplateEditorForm
+          value={createTemplateDraft([], [], providerType, 'card')}
+          onChange={() => undefined}
+          sourceRows={[]}
+          capabilities={[]}
+        />,
+      );
+      const input = templateVersionInputFromDraft(createTemplateDraft([], [], providerType, 'card'));
+      expect(markup).toContain(label);
+      expect(markup).toContain('卡片标题');
+      expect(markup).not.toContain(providerType);
+      expect(input.template_body).toContain('"title"');
+      expect(input.template_body).toContain('"url"');
+    }
+  });
+
+  it('renders provider capability driven fields with collapsed advanced JSON by default', () => {
+    const capabilities: ProviderCapabilityApiRecord[] = [
+      {
+        provider_type: 'wecom',
+        display_name: '企业微信应用消息',
+        category: '企业应用',
+        supported_message_types: ['text', 'markdown'],
+        credential_schema: {
+          fields: [
+            { key: 'corpid', label: '企业 ID', target: 'auth_config', required: true },
+            { key: 'corpsecret', label: '应用 Secret', target: 'auth_config', required: true, input_type: 'password' },
+            { key: 'agentid', label: '应用 AgentId', target: 'send_config', required: true },
+          ],
+        },
+        channel_config_schema: {
+          fields: [{ key: 'base_url', label: 'API 基础地址', target: 'send_config' }],
+        },
+        custom_body_allowed: false,
+        default_timeout_ms: 2000,
+        default_concurrency_limit: 6,
+      },
+    ];
+    const draft = createProviderDraft('wecom', 1, capabilities);
+    const markup = renderPage(
+      <ProviderConfigForm value={draft} onChange={() => undefined} capabilities={capabilities} />,
+    );
+
+    expect(markup).toContain('企业微信应用消息');
+    expect(markup).toContain('企业应用');
+    expect(markup).toContain('text、markdown');
+    expect(markup).toContain('企业 ID');
+    expect(markup).toContain('应用 Secret');
+    expect(markup).toContain('API 基础地址');
+    expect(markup).toContain('高级 JSON 配置');
+    expect(markup).not.toContain('认证配置 JSON');
+    expect(markup).not.toContain('Body 映射模板');
+  });
+
+  it('changes provider fields when provider type switches', () => {
+    const capabilities: ProviderCapabilityApiRecord[] = [
+      {
+        provider_type: 'wecom',
+        display_name: '企业微信应用消息',
+        credential_schema: {
+          fields: [{ key: 'corpid', label: '企业 ID', target: 'auth_config' }],
+        },
+      },
+      {
+        provider_type: 'email',
+        display_name: 'SMTP 邮件',
+        category: '邮件',
+        supported_message_types: ['text', 'html'],
+        credential_schema: {
+          fields: [
+            { key: 'host', label: 'SMTP 主机', target: 'auth_config' },
+            { key: 'port', label: 'SMTP 端口', target: 'auth_config', input_type: 'number' },
+            { key: 'username', label: '用户名', target: 'auth_config' },
+            { key: 'password', label: '密码', target: 'auth_config', input_type: 'password' },
+          ],
+        },
+        channel_config_schema: {
+          fields: [{ key: 'from', label: '发件人', target: 'send_config' }],
+        },
+      },
+    ];
+    const wecomDraft = createProviderDraft('wecom', 1, capabilities);
+    const emailDraft = switchProviderType(wecomDraft, 'email', capabilities);
+    const markup = renderPage(
+      <ProviderConfigForm value={emailDraft} onChange={() => undefined} capabilities={capabilities} />,
+    );
+
+    expect(markup).toContain('SMTP 邮件');
+    expect(markup).toContain('SMTP 主机');
+    expect(markup).toContain('SMTP 端口');
+    expect(markup).toContain('发件人');
+    expect(markup).not.toContain('企业 ID');
+  });
+
   it('renders route page guardrails and hit counts without exposing raw english enums', () => {
     const markup = renderPage(<RoutesPage lastUpdated={lastUpdated} onRefresh={() => undefined} />);
 
@@ -67,6 +352,192 @@ describe('critical console pages', () => {
     expect(markup).not.toContain('first_match_stop');
   });
 
+  it('renders route send action group rows and supports multiple targets', () => {
+    const channelRows = [
+      { id: 'channel-wecom', name: '企业微信实例', providerType: 'wecom' },
+      { id: 'channel-email', name: '邮件实例', providerType: 'email' },
+    ] as any;
+    const templateRows = [
+      {
+        id: 'tpl-wecom',
+        name: '企微模板',
+        version: 'v1',
+        raw: {
+          id: 'tpl-wecom',
+          name: '企微模板',
+          current_version_id: 'version-wecom',
+          target_provider_type: 'wecom',
+        },
+      },
+      {
+        id: 'tpl-email',
+        name: '邮件模板',
+        version: 'v1',
+        raw: {
+          id: 'tpl-email',
+          name: '邮件模板',
+          current_version_id: 'version-email',
+          target_provider_type: 'email',
+        },
+      },
+    ] as any;
+    const draft = {
+      ...createRouteRuleDraft(templateRows, channelRows),
+      targets: [
+        { id: 'target-1', channelId: 'channel-wecom', templateVersionId: 'version-wecom', enabled: true },
+        { id: 'target-2', channelId: 'channel-email', templateVersionId: 'version-email', enabled: true },
+      ],
+    };
+    const markup = renderPage(
+      <RouteRuleForm
+        value={draft}
+        onChange={() => undefined}
+        matchGroupRows={[]}
+        recipientGroupRows={[]}
+        templateRows={templateRows}
+        channelRows={channelRows}
+      />,
+    );
+
+    expect(markup).toContain('发送动作组');
+    expect(markup).toContain('新增发送目标');
+    expect(markup.match(/删除/g)?.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it('filters route target templates by the selected platform provider type', () => {
+    const channelRows = [
+      { id: 'channel-wecom', name: '企业微信实例', providerType: 'wecom' },
+      { id: 'channel-email', name: '邮件实例', providerType: 'email' },
+    ] as any;
+    const templateRows = [
+      {
+        id: 'tpl-wecom',
+        name: '企微模板',
+        version: 'v1',
+        raw: { current_version_id: 'version-wecom', target_provider_type: 'wecom' },
+      },
+      {
+        id: 'tpl-email',
+        name: '邮件模板',
+        version: 'v1',
+        raw: { current_version_id: 'version-email', target_provider_type: 'email' },
+      },
+      {
+        id: 'tpl-unknown',
+        name: '未声明平台模板',
+        version: 'v1',
+        raw: { current_version_id: 'version-unknown' },
+      },
+    ] as any;
+
+    const wecomOptions = routeTargetTemplateOptions(
+      { id: 'target-1', channelId: 'channel-wecom', templateVersionId: '', enabled: true },
+      channelRows,
+      templateRows,
+    );
+    const emailOptions = routeTargetTemplateOptions(
+      { id: 'target-2', channelId: 'channel-email', templateVersionId: '', enabled: true },
+      channelRows,
+      templateRows,
+    );
+
+    expect(wecomOptions.map((option) => option.label)).toEqual([
+      '企微模板 / version-wecom',
+      '未声明平台模板 / version-unknown（未声明平台类型）',
+    ]);
+    expect(emailOptions.map((option) => option.label)).toEqual([
+      '邮件模板 / version-email',
+      '未声明平台模板 / version-unknown（未声明平台类型）',
+    ]);
+  });
+
+  it('maps new route targets and legacy action fields into send action summaries', () => {
+    const group = {
+      id: 'flow-1',
+      name: '路由组',
+      sourceName: '来源 A',
+      sourceCode: 'source-a',
+      enabled: true,
+      currentVersion: 'v1',
+      ruleIds: ['rule-1'],
+      totalHitCount: 0,
+      updatedAt: '2026-05-12 09:00:00',
+    };
+    const channelRows = [
+      { id: 'channel-wecom', name: '企业微信实例', providerType: 'wecom' },
+      { id: 'channel-email', name: '邮件实例', providerType: 'email' },
+    ] as any;
+    const templateRows = [
+      {
+        id: 'tpl-wecom',
+        name: '企微模板',
+        version: 'v1',
+        raw: { current_version_id: 'version-wecom', target_provider_type: 'wecom' },
+      },
+      {
+        id: 'tpl-email',
+        name: '邮件模板',
+        version: 'v1',
+        raw: { current_version_id: 'version-email', target_provider_type: 'email' },
+      },
+    ] as any;
+    const baseRule = {
+      id: 'rule-db-1',
+      rule_key: 'rule-1',
+      sort_order: 1,
+      name: '规则',
+      condition_tree: { operator: 'always' },
+      enabled: true,
+      hit_count: 0,
+      last_hit_at: null,
+      created_at: '2026-05-12T09:00:00+08:00',
+      updated_at: '2026-05-12T09:00:00+08:00',
+    };
+
+    const newRow = mapRouteRule(
+      {
+        ...baseRule,
+        action: {
+          targets: [
+            {
+              id: 'target-1',
+              channel_id: 'channel-wecom',
+              template_version_id: 'version-wecom',
+              enabled: true,
+              sort_order: 1,
+            },
+          ],
+          recipient_strategy: { mode: 'system' },
+          send_dedupe_config: { strategy: 'trace_id' },
+          failure_policy: { policy: 'continue' },
+        },
+      } as any,
+      group,
+      channelRows,
+      templateRows,
+      [],
+    );
+    const legacyRow = mapRouteRule(
+      {
+        ...baseRule,
+        action: {
+          template_version_id: 'version-email',
+          channel_ids: ['channel-email'],
+          recipient_strategy: { mode: 'system' },
+          send_dedupe_config: { strategy: 'trace_id' },
+          failure_policy: { policy: 'continue' },
+        },
+      } as any,
+      group,
+      channelRows,
+      templateRows,
+      [],
+    );
+
+    expect(newRow.sendGroupSummary).toBe('企业微信实例 -> 企微模板');
+    expect(legacyRow.sendGroupSummary).toBe('邮件实例 -> 邮件模板');
+  });
+
   it('renders template page list mappings with localized provider and validation labels', () => {
     const markup = renderPage(
       <TemplatesPage lastUpdated={lastUpdated} onRefresh={() => undefined} />,
@@ -75,8 +546,115 @@ describe('critical console pages', () => {
     expect(markup).toContain('模板中心');
     expect(markup).toContain('提供模板编辑、字段复制、实时预览和保存前校验。');
     expect(markup).toContain('模板列表');
-    expect(markup).toContain('目标平台类型');
+    expect(markup).toContain('推送渠道类型');
+    expect(markup).toContain('消息类型');
     expect(markup).toContain('校验状态');
+  });
+
+  it('renders provider and message type selectors in the template editor', () => {
+    const draft = createTemplateDraft([], templateCapabilities);
+    const markup = renderPage(
+      <TemplateEditorForm
+        value={draft}
+        onChange={() => undefined}
+        sourceRows={[]}
+        capabilities={templateCapabilities}
+      />,
+    );
+
+    expect(markup).toContain('推送渠道类型');
+    expect(markup).toContain('消息类型');
+    expect(markup).toContain('企业微信应用消息');
+    expect(markup).toContain('正文内容');
+  });
+
+  it('changes template content fields when provider and message type switch', () => {
+    const initialDraft = createTemplateDraft([], templateCapabilities);
+    const markdownDraft = switchTemplateMessageType(initialDraft, 'markdown', templateCapabilities);
+    const markdownMarkup = renderPage(
+      <TemplateEditorForm
+        value={markdownDraft}
+        onChange={() => undefined}
+        sourceRows={[]}
+        capabilities={templateCapabilities}
+      />,
+    );
+    const emailDraft = switchTemplateMessageType(
+      switchTemplateProviderType(markdownDraft, 'email', templateCapabilities),
+      'html',
+      templateCapabilities,
+    );
+    const emailMarkup = renderPage(
+      <TemplateEditorForm
+        value={emailDraft}
+        onChange={() => undefined}
+        sourceRows={[]}
+        capabilities={templateCapabilities}
+      />,
+    );
+
+    expect(markdownMarkup).toContain('Markdown 内容');
+    expect(markdownMarkup).not.toContain('邮件主题');
+    expect(emailMarkup).toContain('邮件主题');
+    expect(emailMarkup).toContain('HTML 正文');
+    expect(emailMarkup).not.toContain('Markdown 内容');
+  });
+
+  it('builds template version input with field expressions and default text', () => {
+    const draft = createTemplateDraft([], templateCapabilities);
+    const input = templateVersionInputFromDraft(draft);
+
+    expect(input.target_provider_type).toBe('wecom');
+    expect(input.message_type).toBe('text');
+    expect(input.template_body).toContain('"content"');
+    expect(input.template_body).toContain("{{ payload.content | default('通知') }}");
+  });
+
+  it('renders and switches custom JSON template content mode', () => {
+    const draft = switchTemplateContentMode(createTemplateDraft([], templateCapabilities), 'custom_json');
+    const markup = renderPage(
+      <TemplateEditorForm
+        value={draft}
+        onChange={() => undefined}
+        sourceRows={[]}
+        capabilities={templateCapabilities}
+      />,
+    );
+
+    expect(markup).toContain('自定义 JSON');
+    expect(markup).toContain('完整消息内容 JSON');
+    expect(markup).toContain('{{ payload.content');
+  });
+
+  it('maps template rows with provider type and message type instead of version id as a message field', () => {
+    const row = mapTemplateRow(
+      {
+        id: 'tpl-email',
+        name: '邮件模板',
+        description: '',
+        source_id: 'src-1',
+        enabled: true,
+        current_version_id: 'tpl-version-1',
+        message_type: 'html',
+        target_provider_type: 'email',
+        template_body: '{"subject":"{{ payload.title }}","html":"{{ payload.content }}"}',
+        message_body_schema: {
+          fields: [
+            { key: 'subject', label: '邮件主题' },
+            { key: 'html', label: 'HTML 正文' },
+          ],
+        },
+        sample_payload: { title: '测试', content: '正文' },
+        created_at: '2026-05-11T09:00:00+08:00',
+        updated_at: '2026-05-11T09:30:00+08:00',
+      },
+      [{ id: 'src-1', code: 'source-a', name: '来源 A' }],
+    );
+
+    expect(row.targetProviderType).toBe('email');
+    expect(row.messageType).toBe('html');
+    expect(row.targetField).toBe('邮件主题、HTML 正文');
+    expect(row.targetField).not.toBe('tpl-version-1');
   });
 
   it('renders organization CRUD controls for org units users identities and recipient groups', () => {
@@ -94,6 +672,80 @@ describe('critical console pages', () => {
     expect(markup).toContain('身份类型');
     expect(markup).toContain('验证状态');
     expect(markup).not.toContain('保存到本地');
+  });
+
+  it('renders message log detail attempts as separate send target blocks', () => {
+    const AttemptBlocks = (ConsolePages as Record<string, any>).MessageLogAttemptBlocks;
+    const attempts = [
+      {
+        id: 'attempt-wecom',
+        message_id: 'message-1',
+        channel_id: 'channel-wecom',
+        channel_name: '企业微信生产',
+        provider_type: 'wecom',
+        template_version_id: 'tpl-wecom-v1',
+        status: 'sent',
+        duration_ms: 120,
+        attempt_no: 1,
+        target_context: {
+          channel_id: 'channel-wecom',
+          provider_type: 'wecom',
+          message_type: 'markdown',
+          template_version_id: 'tpl-wecom-v1',
+        },
+        rendered_message: { message_type: 'markdown', content: { markdown: '## paid' } },
+        resolved_recipients: [{ user_id: 'user-1', wecom_userid: 'zhangsan' }],
+        final_request: { method: 'POST', url: 'https://wecom.test/send', body: { touser: 'zhangsan' } },
+        upstream_response: { status_code: 200, body: { errcode: 0 } },
+        request_snapshot: { raw: 'request-a' },
+        response_snapshot: { raw: 'response-a' },
+        created_at: '2026-05-12T10:00:00Z',
+        updated_at: '2026-05-12T10:00:01Z',
+      },
+      {
+        id: 'attempt-email',
+        message_id: 'message-1',
+        channel_id: 'channel-email',
+        channel_name: '邮件生产',
+        provider_type: 'email',
+        template_version_id: 'tpl-email-v2',
+        status: 'failed',
+        error_code: 'MGP-SEND-004',
+        error_message: 'SMTP 邮件 accepted=false',
+        duration_ms: 240,
+        attempt_no: 1,
+        target_context: {
+          channel_id: 'channel-email',
+          provider_type: 'email',
+          message_type: 'html',
+          template_version_id: 'tpl-email-v2',
+        },
+        rendered_message: { message_type: 'html', content: { subject: 'paid', html: '<p>paid</p>' } },
+        resolved_recipients: [{ user_id: 'user-2', email: 'ops@example.com' }],
+        final_request: { method: 'POST', url: 'https://email.test/send', body: { to: ['ops@example.com'] } },
+        upstream_response: { status_code: 500, body: { accepted: false } },
+        request_snapshot: { raw: 'request-b' },
+        response_snapshot: { raw: 'response-b' },
+        created_at: '2026-05-12T10:00:00Z',
+        updated_at: '2026-05-12T10:00:01Z',
+      },
+    ];
+
+    const markup = renderPage(<AttemptBlocks attempts={attempts} />);
+
+    expect(markup).toContain('发送目标 1');
+    expect(markup).toContain('发送目标 2');
+    expect(markup).toContain('企业微信生产');
+    expect(markup).toContain('邮件生产');
+    expect(markup).toContain('tpl-wecom-v1');
+    expect(markup).toContain('tpl-email-v2');
+    expect(markup).toContain('渲染后消息');
+    expect(markup).toContain('接收人解析结果');
+    expect(markup).toContain('最终请求');
+    expect(markup).toContain('上游响应');
+    expect(markup).toContain('原始快照');
+    expect(markup).toContain('https://email.test/send');
+    expect(markup).toContain('SMTP 邮件 accepted=false');
   });
 
   it('renders match group item CRUD controls and settings JSON editor copy', () => {

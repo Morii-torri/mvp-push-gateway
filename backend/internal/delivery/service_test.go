@@ -133,6 +133,7 @@ func TestWorkerProcessOneBuildsRequestResolvesTokenAndStoresSnapshots(t *testing
 	store := newMemoryRepository()
 	store.channels["channel-1"] = provider.Channel{
 		ID:               "channel-1",
+		ProviderType:     provider.ProviderWebhook,
 		Name:             "Webhook",
 		Enabled:          true,
 		ConcurrencyLimit: 1,
@@ -149,7 +150,13 @@ func TestWorkerProcessOneBuildsRequestResolvesTokenAndStoresSnapshots(t *testing
 			"recipient":{"location":"body","path":"touser","format":"array"}
 		}`),
 	}
-	store.addAttempt(Attempt{ID: "attempt-1", MessageID: "message-1", ChannelID: "channel-1", Status: StatusQueued})
+	store.addAttempt(Attempt{
+		ID:                "attempt-1",
+		MessageID:         "message-1",
+		ChannelID:         "channel-1",
+		TemplateVersionID: "template-version-1",
+		Status:            StatusQueued,
+	})
 
 	job := newSendJob("job-1", "channel-1", 3, time.Now().Add(-time.Second), SendMessageJobPayload{
 		DeliveryAttemptID: "attempt-1",
@@ -191,8 +198,63 @@ func TestWorkerProcessOneBuildsRequestResolvesTokenAndStoresSnapshots(t *testing
 	if !jsonContains(t, attempt.RequestSnapshot, `"Authorization":"Bearer resolved-token"`) {
 		t.Fatalf("expected request snapshot to keep outbound headers, got %s", attempt.RequestSnapshot)
 	}
+	var requestSnapshot map[string]any
+	if err := json.Unmarshal(attempt.RequestSnapshot, &requestSnapshot); err != nil {
+		t.Fatalf("decode request snapshot: %v", err)
+	}
+	targetContext, ok := requestSnapshot["target_context"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected request snapshot target_context, got %s", attempt.RequestSnapshot)
+	}
+	for key, want := range map[string]string{
+		"delivery_attempt_id": "attempt-1",
+		"message_id":          "message-1",
+		"channel_id":          "channel-1",
+		"channel_name":        "Webhook",
+		"provider_type":       string(provider.ProviderWebhook),
+		"template_version_id": "template-version-1",
+		"job_id":              "job-1",
+	} {
+		if got := targetContext[key]; got != want {
+			t.Fatalf("expected target_context.%s=%q, got %v in %+v", key, want, got, targetContext)
+		}
+	}
+	renderedMessage, ok := requestSnapshot["rendered_message"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected request snapshot rendered_message, got %s", attempt.RequestSnapshot)
+	}
+	text, ok := renderedMessage["text"].(map[string]any)
+	if !ok || text["content"] != "hello" {
+		t.Fatalf("expected rendered_message to mirror job payload body, got %+v", renderedMessage)
+	}
+	resolvedRecipients, ok := requestSnapshot["resolved_recipients"].([]any)
+	if !ok || len(resolvedRecipients) != 2 {
+		t.Fatalf("expected resolved_recipients to mirror job payload recipient, got %+v", requestSnapshot["resolved_recipients"])
+	}
+	finalRequest, ok := requestSnapshot["final_request"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected request snapshot final_request, got %s", attempt.RequestSnapshot)
+	}
+	finalBody, ok := finalRequest["body"].(map[string]any)
+	if !ok || finalBody["msgtype"] != "text" {
+		t.Fatalf("expected final_request body to include mapped send body, got %+v", finalRequest)
+	}
+	if _, ok := requestSnapshot["send"].(map[string]any); !ok {
+		t.Fatalf("expected request snapshot to keep legacy send field, got %s", attempt.RequestSnapshot)
+	}
 	if !jsonContains(t, attempt.ResponseSnapshot, `"status_code":202`) || !jsonContains(t, attempt.ResponseSnapshot, `"message":"accepted"`) {
 		t.Fatalf("expected response snapshot to keep outbound response, got %s", attempt.ResponseSnapshot)
+	}
+	var responseSnapshot map[string]any
+	if err := json.Unmarshal(attempt.ResponseSnapshot, &responseSnapshot); err != nil {
+		t.Fatalf("decode response snapshot: %v", err)
+	}
+	upstreamResponse, ok := responseSnapshot["upstream_response"].(map[string]any)
+	if !ok || upstreamResponse["status_code"] != float64(http.StatusAccepted) {
+		t.Fatalf("expected upstream_response with status 202, got %+v", responseSnapshot)
+	}
+	if _, ok := responseSnapshot["send"].(map[string]any); !ok {
+		t.Fatalf("expected response snapshot to keep legacy send field, got %s", attempt.ResponseSnapshot)
 	}
 }
 

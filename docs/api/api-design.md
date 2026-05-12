@@ -43,8 +43,8 @@
 同步返回和异步错误边界：
 
 - `POST /ingest/{source_code}` 同步阶段只处理来源、IP 白名单、鉴权、JSON 解析、payload 大小、入站限流、入站去重和队列写入。
-- 同步成功返回 `202 Accepted`，只表示网关已接收并进入异步处理队列，不表示已经完成路由、模板渲染或上级平台发送。
-- 路由未命中、模板错误、接收人错误、上级平台 Token 错误、发送失败和死信都属于异步阶段，不在原入站请求中同步返回。
+- 同步成功返回 `202 Accepted`，只表示网关已接收并进入异步处理队列，不表示已经完成路由、模板渲染或推送渠道发送。
+- 路由未命中、模板错误、接收人错误、推送渠道 Token 错误、发送失败和死信都属于异步阶段，不在原入站请求中同步返回。
 - 异步阶段错误通过 `trace_id` 写入消息日志、出站尝试和队列监控；第一版由平台管理员在管理台查询，不开放下级匿名状态查询接口。
 
 Token 示例：
@@ -104,18 +104,22 @@ SHA256_HEX(raw_body)
 | `GET` | `/sources/{id}/latest-payload` |
 | `POST` | `/sources/{id}/parse-payload` |
 
-## 上级平台
+## 推送渠道
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
-| `GET` | `/provider-types` | 内置平台类型 |
-| `GET` | `/provider-capabilities` | 平台能力 |
+| `GET` | `/provider-types` | 内置和兼容 provider type |
+| `GET` | `/provider-capabilities` | provider capability registry |
 | `POST` | `/provider-capabilities` | 自定义能力 |
-| `GET` / `POST` | `/channels` | 平台实例 |
-| `GET` / `PUT` / `DELETE` | `/channels/{id}` | 平台实例详情 |
-| `PUT` | `/channels/{id}/rate-limit` | 修改平台实例主动限流、并发、超时和重试策略 |
+| `GET` / `POST` | `/channels` | 推送渠道实例 |
+| `GET` / `PUT` / `DELETE` | `/channels/{id}` | 渠道实例详情 |
+| `PUT` | `/channels/{id}/rate-limit` | 修改渠道实例主动限流、并发、超时和重试策略 |
 | `POST` | `/channels/{id}/test-token` | 测试换 token |
 | `POST` | `/channels/{id}/test-send` | 测试发送 |
+
+`/provider-capabilities` 返回数据化 capability：credential schema、channel config schema、message schema、recipient requirement、identity kind、token strategy、send API、success/retry rule、默认限流、超时、并发和重试策略。前端渠道表单、模板表单和路由 target 兼容性筛选都应使用该 registry。
+
+第一批 provider defaults 已实现 build-request/mock 级别支持：`webhook`、`self`、`pushplus`、`wxpusher`、`serverchan`、`email`、`aliyun_sms`、`tencent_sms`、`baidu_sms`、`wecom_robot`、`wecom_app`、legacy `wecom`、`dingtalk_robot`、`dingtalk_work`、legacy `dingtalk`、`feishu_robot`、legacy `feishu`、`gov_cloud`、legacy `sms` 和高级 `custom_token`。PushPlus、WxPusher、Server酱、短信、企微、钉钉、飞书、SMTP/self/gov_cloud 当前为 implemented but not live-tested 或 configuration-dependent；接口文档不要写成已真实发送成功。
 
 `/channels/{id}/rate-limit` 配置由发送 worker 主动执行，不能只依赖上游返回限流错误。
 
@@ -156,7 +160,7 @@ SHA256_HEX(raw_body)
 | `POST` | `/templates/validate` | 保存前校验 |
 | `POST` | `/templates/{id}/publish` | 发布 |
 
-模板语法采用 Jinja-like。第一版后端使用 `pongo2/v7`，但 API 只暴露网关自己的语法版本和错误模型，不对外承诺完整 Jinja2 兼容。
+模板语法采用 Jinja-like。第一版后端使用 `pongo2/v7`，但 API 只暴露网关自己的语法版本和错误模型，不对外承诺完整 Jinja2 兼容。模板版本绑定 `target_provider_type + message_type`，只保存消息内容，不保存接收人字段或最终 HTTP body。
 
 `/templates/parse-payload` 返回两列字段：
 
@@ -179,9 +183,12 @@ SHA256_HEX(raw_body)
   "engine": "pongo2",
   "syntax_version": "jinja-like-v1",
   "message_type": "markdown",
-  "target_provider_type": "wecom",
+  "target_provider_type": "wecom_app",
   "template_body": {
-    "description": "告警：{{ payload.title }}\nIP：{{ payload.alert.ip }}"
+    "content": {
+      "title": "{{ payload.summary | default('通知') }}",
+      "markdown": "告警：{{ payload.title }}\nIP：{{ payload.alert.ip }}"
+    }
   },
   "sample_payload": {
     "title": "CPU 使用率过高",
@@ -201,7 +208,10 @@ SHA256_HEX(raw_body)
   "syntax_version": "jinja-like-v1",
   "used_variables": ["payload.title", "payload.alert.ip"],
   "rendered_body": {
-    "description": "告警：CPU 使用率过高\nIP：10.10.1.8"
+    "content": {
+      "title": "通知",
+      "markdown": "告警：CPU 使用率过高\nIP：10.10.1.8"
+    }
   },
   "errors": []
 }
@@ -264,6 +274,44 @@ SHA256_HEX(raw_body)
 
 `hit_count` 新建策略从 0 开始，重新排序、编辑和发布新版本不清零，最高显示和保存到 99999。
 
+`PUT /route-flows/{id}/rules` 的新 action payload 使用发送动作组：
+
+```json
+{
+  "rules": [
+    {
+      "rule_key": "01J...",
+      "sort_order": 10,
+      "name": "生产网段告警",
+      "enabled": true,
+      "condition_tree": {"operator": "always"},
+      "action": {
+        "targets": [
+          {
+            "channel_id": "channel-wecom-prod",
+            "template_version_id": "tpl-wecom-markdown",
+            "enabled": true
+          },
+          {
+            "channel_id": "channel-dingtalk-ops",
+            "template_version_id": "tpl-dingtalk-markdown",
+            "enabled": true
+          }
+        ],
+        "recipient_strategy": {
+          "mode": "system",
+          "recipient_group_ids": ["ops-oncall"]
+        },
+        "send_dedupe_config": {"strategy": "trace_id"},
+        "failure_policy": {"policy": "continue"}
+      }
+    }
+  ]
+}
+```
+
+兼容期内，后端仍接受旧 payload 的 `action.template_version_id + action.channel_ids` 并转换为 targets；新前端和新客户端必须提交 `action.targets[]`。Planning worker 按 target 单独加载渠道和模板、校验 provider type、渲染模板、解析接收人并生成 delivery attempt。
+
 ## 日志
 
 | 方法 | 路径 | 说明 |
@@ -276,15 +324,17 @@ SHA256_HEX(raw_body)
 
 日志列表不使用 SSE。前端默认 5 秒轮询，右上角支持手动刷新。
 
+消息详情和投递详情应展示新 adapter 快照字段：`target_context`、`rendered_message`、`resolved_recipients`、`final_request`、`upstream_response`；旧 `send` snapshot 保留兼容展示。不要把模板内容误解释为最终 HTTP body。
+
 ## 队列监控
 
 队列监控是第一版独立功能模块，前端同样使用 5 秒轮询和手动刷新。
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
-| `GET` | `/monitor/queues` | 队列积压、最老等待时间、按平台拆分的发送队列 |
+| `GET` | `/monitor/queues` | 队列积压、最老等待时间、按渠道实例拆分的发送队列 |
 | `GET` | `/monitor/workers` | worker 状态、处理量、平均耗时、P95 |
-| `GET` | `/monitor/channels` | 平台实例成功率、失败率、限流次数、死信数 |
+| `GET` | `/monitor/channels` | 渠道实例成功率、失败率、限流次数、死信数 |
 | `GET` | `/monitor/slow-rules` | 慢规则列表和命中统计 |
 | `GET` | `/monitor/transactions` | 从入站接收到全部出站完成的总耗时统计 |
 | `GET` | `/dead-letters` | 死信任务分页 |
@@ -344,11 +394,20 @@ SHA256_HEX(raw_body)
 | `MGP-TPL-002` | 模板消息体与平台 schema 不匹配 |
 | `MGP-TPL-003` | 模板引用字段缺失或未通过样例 payload 校验 |
 | `MGP-TPL-004` | 模板使用了未开放的 filter/function/tag |
+| `MGP-TPL-RECIPIENT` | 模板误包含接收人映射字段，应改由路由接收人策略和 adapter 处理 |
+| `MGP-PLAN-NOROUTE` | 异步规划阶段无命中路由 |
+| `MGP-PLAN-TPL` | 异步规划阶段模板加载或渲染失败 |
+| `MGP-PLAN-RCPT` | 异步规划阶段接收人解析失败 |
+| `MGP-PLAN-CHANNEL` | 异步规划阶段渠道、capability 或 target 模板兼容性错误 |
 | `MGP-REC-001` | 接收人为空且平台要求接收人 |
-| `MGP-REC-002` | 接收人缺少目标平台身份字段 |
+| `MGP-REC-002` | 接收人缺少目标渠道所需身份字段 |
 | `MGP-PROV-001` | 平台配置无效 |
 | `MGP-TOKEN-001` | Token 获取失败 |
-| `MGP-SEND-001` | 上游发送失败 |
+| `MGP-TOKEN-002` | Token 解析、刷新或交换失败 |
+| `MGP-SEND-001` | adapter 构造最终请求失败或发送准备失败 |
+| `MGP-SEND-002` | 上游请求超时 |
+| `MGP-SEND-003` | 上游连接或发送失败 |
+| `MGP-SEND-004` | 上游返回非成功状态 |
 | `MGP-RATE-001` | 限流 |
 | `MGP-JOB-001` | 任务执行失败并进入死信 |
 | `MGP-QUEUE-001` | 队列积压超过阈值 |

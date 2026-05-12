@@ -72,11 +72,18 @@ type routeRuleRequest struct {
 }
 
 type routeActionRequest struct {
-	TemplateVersionID string          `json:"template_version_id"`
-	ChannelIDs        []string        `json:"channel_ids"`
-	RecipientStrategy json.RawMessage `json:"recipient_strategy"`
-	SendDedupeConfig  json.RawMessage `json:"send_dedupe_config"`
-	FailurePolicy     json.RawMessage `json:"failure_policy"`
+	Targets           []routeActionTargetRequest `json:"targets"`
+	TemplateVersionID string                     `json:"template_version_id,omitempty"`
+	ChannelIDs        []string                   `json:"channel_ids,omitempty"`
+	RecipientStrategy json.RawMessage            `json:"recipient_strategy"`
+	SendDedupeConfig  json.RawMessage            `json:"send_dedupe_config"`
+	FailurePolicy     json.RawMessage            `json:"failure_policy"`
+}
+
+type routeActionTargetRequest struct {
+	ChannelID         string `json:"channel_id"`
+	TemplateVersionID string `json:"template_version_id"`
+	Enabled           bool   `json:"enabled"`
 }
 
 type routeRulesResponse struct {
@@ -99,12 +106,21 @@ type routeRuleResponse struct {
 }
 
 type routeActionResponse struct {
-	ID                string          `json:"id"`
-	TemplateVersionID string          `json:"template_version_id"`
-	ChannelIDs        []string        `json:"channel_ids"`
-	RecipientStrategy json.RawMessage `json:"recipient_strategy"`
-	SendDedupeConfig  json.RawMessage `json:"send_dedupe_config"`
-	FailurePolicy     json.RawMessage `json:"failure_policy"`
+	ID                string                      `json:"id"`
+	Targets           []routeActionTargetResponse `json:"targets"`
+	TemplateVersionID string                      `json:"template_version_id,omitempty"`
+	ChannelIDs        []string                    `json:"channel_ids,omitempty"`
+	RecipientStrategy json.RawMessage             `json:"recipient_strategy"`
+	SendDedupeConfig  json.RawMessage             `json:"send_dedupe_config"`
+	FailurePolicy     json.RawMessage             `json:"failure_policy"`
+}
+
+type routeActionTargetResponse struct {
+	ID                string `json:"id"`
+	ChannelID         string `json:"channel_id"`
+	TemplateVersionID string `json:"template_version_id"`
+	Enabled           bool   `json:"enabled"`
+	SortOrder         int    `json:"sort_order"`
 }
 
 type routeReorderRequest struct {
@@ -363,6 +379,7 @@ func (h *Handler) routeRulesHandler(w http.ResponseWriter, r *http.Request, flow
 				ConditionTree: item.ConditionTree,
 				Enabled:       item.Enabled,
 				Action: route.ActionInput{
+					Targets:           routeActionTargetsInput(item.Action.Targets),
 					TemplateVersionID: item.Action.TemplateVersionID,
 					ChannelIDs:        item.Action.ChannelIDs,
 					RecipientStrategy: item.Action.RecipientStrategy,
@@ -487,6 +504,7 @@ func toRouteRulesResponse(ruleSet route.RuleSet) routeRulesResponse {
 			Enabled:       item.Enabled,
 			Action: routeActionResponse{
 				ID:                item.Action.ID,
+				Targets:           toRouteActionTargetResponses(item.Action.Targets),
 				TemplateVersionID: item.Action.TemplateVersionID,
 				ChannelIDs:        item.Action.ChannelIDs,
 				RecipientStrategy: nullableRawJSON(item.Action.RecipientStrategy),
@@ -500,6 +518,32 @@ func toRouteRulesResponse(ruleSet route.RuleSet) routeRulesResponse {
 		})
 	}
 	return routeRulesResponse{VersionID: ruleSet.VersionID, Rules: items}
+}
+
+func routeActionTargetsInput(items []routeActionTargetRequest) []route.ActionTargetInput {
+	targets := make([]route.ActionTargetInput, 0, len(items))
+	for _, item := range items {
+		targets = append(targets, route.ActionTargetInput{
+			ChannelID:         item.ChannelID,
+			TemplateVersionID: item.TemplateVersionID,
+			Enabled:           item.Enabled,
+		})
+	}
+	return targets
+}
+
+func toRouteActionTargetResponses(items []route.ActionTarget) []routeActionTargetResponse {
+	targets := make([]routeActionTargetResponse, 0, len(items))
+	for _, item := range items {
+		targets = append(targets, routeActionTargetResponse{
+			ID:                item.ID,
+			ChannelID:         item.ChannelID,
+			TemplateVersionID: item.TemplateVersionID,
+			Enabled:           item.Enabled,
+			SortOrder:         item.SortOrder,
+		})
+	}
+	return targets
 }
 
 func routeErrorStatus(err error) (int, string, string) {

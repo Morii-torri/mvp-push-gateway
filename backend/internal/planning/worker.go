@@ -256,22 +256,9 @@ func (w *Worker) ProcessOne(ctx context.Context, job queue.Job) error {
 		return w.finishBusinessFailure(ctx, job, message, plan.Flow.ID, nil, ErrorCodeNoRoute, ErrNoRoute, startedAt, metrics)
 	}
 
-	templateVersion, err := w.repo.GetTemplateVersion(ctx, matchedRule.Action.TemplateVersionID)
+	attempts, err := w.buildAttempts(ctx, message, *matchedRule, payloadMap)
 	if err != nil {
-		return w.finishBusinessFailure(ctx, job, message, plan.Flow.ID, []string{matchedRule.RuleKey}, ErrorCodeTemplate, err, startedAt, metrics)
-	}
-	body, err := renderTemplate(templateVersion, message, payloadMap, w.now())
-	if err != nil {
-		return w.finishBusinessFailure(ctx, job, message, plan.Flow.ID, []string{matchedRule.RuleKey}, ErrorCodeTemplate, err, startedAt, metrics)
-	}
-
-	attempts, err := w.buildAttempts(ctx, message, *matchedRule, templateVersion, body, payloadMap)
-	if err != nil {
-		code := ErrorCodeChannel
-		if errors.Is(err, errRecipientResolution) {
-			code = ErrorCodeRecipient
-		}
-		return w.finishBusinessFailure(ctx, job, message, plan.Flow.ID, []string{matchedRule.RuleKey}, code, err, startedAt, metrics)
+		return w.finishBusinessFailure(ctx, job, message, plan.Flow.ID, []string{matchedRule.RuleKey}, planningErrorCode(err), err, startedAt, metrics)
 	}
 
 	finishedAt := w.now()
@@ -351,21 +338,35 @@ func evaluateRules(plan RoutePlan, payload map[string]any) (*route.Rule, []RuleM
 	return nil, metrics, nil
 }
 
-func (w *Worker) buildAttempts(ctx context.Context, message MessageRecord, rule route.Rule, templateVersion msgtemplate.TemplateVersion, body json.RawMessage, payload map[string]any) ([]DeliveryAttemptPlan, error) {
-	channelIDs := cleanStrings(rule.Action.ChannelIDs)
-	if len(channelIDs) == 0 {
-		return nil, fmt.Errorf("route rule %s has no delivery channels", rule.RuleKey)
+func (w *Worker) buildAttempts(ctx context.Context, message MessageRecord, rule route.Rule, payload map[string]any) ([]DeliveryAttemptPlan, error) {
+	targets := enabledActionTargets(rule.Action)
+	if len(targets) == 0 {
+		return nil, fmt.Errorf("route rule %s has no delivery targets", rule.RuleKey)
 	}
 
-	attempts := make([]DeliveryAttemptPlan, 0, len(channelIDs))
-	for _, channelID := range channelIDs {
-		channel, err := w.repo.GetChannel(ctx, channelID)
+	attempts := make([]DeliveryAttemptPlan, 0, len(targets))
+	for _, target := range targets {
+		channel, err := w.repo.GetChannel(ctx, target.ChannelID)
 		if err != nil {
 			return nil, err
 		}
 		if !channel.Enabled {
-			return nil, fmt.Errorf("delivery channel %s is disabled", channelID)
+			return nil, fmt.Errorf("delivery channel %s is disabled", target.ChannelID)
 		}
+
+		templateVersion, err := w.repo.GetTemplateVersion(ctx, target.TemplateVersionID)
+		if err != nil {
+			return nil, fmt.Errorf("%w: load template version %s: %w", errTemplatePlanning, target.TemplateVersionID, err)
+		}
+		templateProviderType := strings.TrimSpace(templateVersion.TargetProviderType)
+		if templateProviderType != "" && templateProviderType != string(channel.ProviderType) {
+			return nil, fmt.Errorf("template %s targets provider %s but channel %s is %s", templateVersion.ID, templateProviderType, channel.ID, channel.ProviderType)
+		}
+		body, err := renderTemplate(templateVersion, message, payload, w.now())
+		if err != nil {
+			return nil, fmt.Errorf("%w: render template version %s: %w", errTemplatePlanning, templateVersion.ID, err)
+		}
+
 		capability, err := w.repo.GetProviderCapability(ctx, channel.ProviderType, templateVersion.MessageType)
 		if err != nil {
 			return nil, err
@@ -388,14 +389,14 @@ func (w *Worker) buildAttempts(ctx context.Context, message MessageRecord, rule 
 			Body:              body,
 		})
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("%w: encode send message job payload: %w", errJobPlanning, err)
 		}
 		recipientSnapshot, err := json.Marshal(map[string]any{
 			"strategy":  snapshotJSON(rule.Action.RecipientStrategy),
 			"recipient": recipientValue,
 		})
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("%w: encode recipient snapshot: %w", errJobPlanning, err)
 		}
 		attempts = append(attempts, DeliveryAttemptPlan{
 			ID:                attemptID,
@@ -410,6 +411,40 @@ func (w *Worker) buildAttempts(ctx context.Context, message MessageRecord, rule 
 		})
 	}
 	return attempts, nil
+}
+
+func enabledActionTargets(action route.Action) []route.ActionTarget {
+	if len(action.Targets) > 0 {
+		targets := make([]route.ActionTarget, 0, len(action.Targets))
+		for _, target := range action.Targets {
+			if !target.Enabled {
+				continue
+			}
+			target.ChannelID = strings.TrimSpace(target.ChannelID)
+			target.TemplateVersionID = strings.TrimSpace(target.TemplateVersionID)
+			if target.ChannelID == "" || target.TemplateVersionID == "" {
+				continue
+			}
+			targets = append(targets, target)
+		}
+		return targets
+	}
+
+	templateVersionID := strings.TrimSpace(action.TemplateVersionID)
+	if templateVersionID == "" {
+		return nil
+	}
+	channelIDs := cleanStrings(action.ChannelIDs)
+	targets := make([]route.ActionTarget, 0, len(channelIDs))
+	for index, channelID := range channelIDs {
+		targets = append(targets, route.ActionTarget{
+			ChannelID:         channelID,
+			TemplateVersionID: templateVersionID,
+			Enabled:           true,
+			SortOrder:         (index + 1) * 10,
+		})
+	}
+	return targets
 }
 
 func (w *Worker) resolveRecipient(ctx context.Context, raw json.RawMessage, payload map[string]any, channel provider.Channel, capability provider.Capability) (any, error) {
@@ -443,7 +478,7 @@ func (w *Worker) resolveRecipient(ctx context.Context, raw json.RawMessage, payl
 			ExcludedOrgIDs:    strategy.ExcludedOrgIDs,
 		})
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("%w: %v", errRecipientResolution, err)
 		}
 		if len(values) == 0 {
 			return nil, fmt.Errorf("%w: system recipient strategy resolved no identities", errRecipientResolution)
@@ -638,7 +673,24 @@ func lookupPath(scope map[string]any, path string) (any, bool) {
 	return current, true
 }
 
-var errRecipientResolution = errors.New("recipient resolution failed")
+var (
+	errRecipientResolution = errors.New("recipient resolution failed")
+	errTemplatePlanning    = errors.New("template planning failed")
+	errJobPlanning         = errors.New("job planning failed")
+)
+
+func planningErrorCode(err error) string {
+	switch {
+	case errors.Is(err, errTemplatePlanning):
+		return ErrorCodeTemplate
+	case errors.Is(err, errRecipientResolution):
+		return ErrorCodeRecipient
+	case errors.Is(err, errJobPlanning):
+		return ErrorCodeJob
+	default:
+		return ErrorCodeChannel
+	}
+}
 
 func isEmptyValue(value any) bool {
 	switch typed := value.(type) {

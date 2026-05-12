@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -260,6 +261,7 @@ func (r Repository) ReplaceRules(ctx context.Context, flowID string, versionID s
 		if actionID == "" {
 			actionID = uuid.NewString()
 		}
+		templateVersionID, channelIDs := routeActionCompatibilityFields(ruleItem.Action)
 		if _, err := tx.Exec(ctx, `
 			INSERT INTO route_rules (
 				id,
@@ -294,12 +296,15 @@ func (r Repository) ReplaceRules(ctx context.Context, flowID string, versionID s
 				$6,
 				$7
 			)
-		`, actionID, ruleID, ruleItem.Action.TemplateVersionID, ruleItem.Action.ChannelIDs,
+		`, actionID, ruleID, templateVersionID, channelIDs,
 			defaultJSON(ruleItem.Action.RecipientStrategy),
 			defaultJSON(ruleItem.Action.SendDedupeConfig),
 			defaultJSON(ruleItem.Action.FailurePolicy),
 		); err != nil {
 			return nil, fmt.Errorf("insert route action: %w", err)
+		}
+		if err := insertRouteActionTargets(ctx, tx, actionID, routeActionTargetsForPersistence(ruleItem.Action)); err != nil {
+			return nil, err
 		}
 		if _, err := tx.Exec(ctx, `
 			INSERT INTO route_rule_counters (flow_id, rule_key, hit_count)
@@ -448,6 +453,7 @@ func (r Repository) Publish(ctx context.Context, params route.PublishParams) (ro
 	for _, item := range publishedRules {
 		newRuleID := uuid.NewString()
 		newActionID := uuid.NewString()
+		templateVersionID, channelIDs := routeActionCompatibilityFields(item.Action)
 		if _, err := tx.Exec(ctx, `
 			INSERT INTO route_rules (
 				id,
@@ -482,12 +488,21 @@ func (r Repository) Publish(ctx context.Context, params route.PublishParams) (ro
 				$6,
 				$7
 			)
-		`, newActionID, newRuleID, item.Action.TemplateVersionID, item.Action.ChannelIDs,
+		`, newActionID, newRuleID, templateVersionID, channelIDs,
 			defaultJSON(item.Action.RecipientStrategy),
 			defaultJSON(item.Action.SendDedupeConfig),
 			defaultJSON(item.Action.FailurePolicy),
 		); err != nil {
 			return route.Version{}, fmt.Errorf("copy published action into draft: %w", err)
+		}
+		copiedTargets := make([]route.ActionTarget, 0, len(item.Action.Targets))
+		for _, target := range item.Action.Targets {
+			target.ID = ""
+			target.ActionID = newActionID
+			copiedTargets = append(copiedTargets, target)
+		}
+		if err := insertRouteActionTargets(ctx, tx, newActionID, copiedTargets); err != nil {
+			return route.Version{}, err
 		}
 	}
 
@@ -646,6 +661,7 @@ func listRulesForVersion(ctx context.Context, queryer routeQueryer, flowID strin
 	defer rows.Close()
 
 	rules := []route.Rule{}
+	actionIDs := []string{}
 	for rows.Next() {
 		var item route.Rule
 		var lastHitAt pgtype.Timestamptz
@@ -681,10 +697,176 @@ func listRulesForVersion(ctx context.Context, queryer routeQueryer, flowID strin
 			value := lastHitAt.Time.UTC()
 			item.LastHitAt = &value
 		}
+		if item.Action.ID != "" {
+			actionIDs = append(actionIDs, item.Action.ID)
+		}
 		rules = append(rules, item)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("route rules rows: %w", err)
 	}
+	rows.Close()
+
+	targetsByActionID, err := loadActionTargets(ctx, queryer, actionIDs)
+	if err != nil {
+		return nil, err
+	}
+	for index := range rules {
+		action := &rules[index].Action
+		action.Targets = targetsByActionID[action.ID]
+		if len(action.Targets) == 0 && action.TemplateVersionID != "" && len(action.ChannelIDs) > 0 {
+			action.Targets = legacyRouteActionTargets(*action)
+		}
+		action.TemplateVersionID, action.ChannelIDs = routeActionCompatibilityFields(*action)
+	}
 	return rules, nil
+}
+
+func insertRouteActionTargets(ctx context.Context, queryer routeQueryer, actionID string, targets []route.ActionTarget) error {
+	inserted := 0
+	for _, target := range targets {
+		channelID := strings.TrimSpace(target.ChannelID)
+		templateVersionID := strings.TrimSpace(target.TemplateVersionID)
+		if channelID == "" || templateVersionID == "" {
+			continue
+		}
+		inserted++
+		targetID := strings.TrimSpace(target.ID)
+		if targetID == "" {
+			targetID = uuid.NewString()
+		}
+		sortOrder := target.SortOrder
+		if sortOrder <= 0 {
+			sortOrder = inserted * 10
+		}
+		if _, err := queryer.Exec(ctx, `
+			INSERT INTO route_action_targets (
+				id,
+				action_id,
+				channel_id,
+				template_version_id,
+				enabled,
+				sort_order
+			)
+			VALUES ($1, $2, $3::uuid, $4::uuid, $5, $6)
+		`, targetID, actionID, channelID, templateVersionID, target.Enabled, sortOrder); err != nil {
+			return fmt.Errorf("insert route action target: %w", err)
+		}
+	}
+	return nil
+}
+
+func loadActionTargets(ctx context.Context, queryer routeQueryer, actionIDs []string) (map[string][]route.ActionTarget, error) {
+	targetsByActionID := map[string][]route.ActionTarget{}
+	if len(actionIDs) == 0 {
+		return targetsByActionID, nil
+	}
+
+	rows, err := queryer.Query(ctx, `
+		SELECT
+			id::text,
+			action_id::text,
+			channel_id::text,
+			template_version_id::text,
+			enabled,
+			sort_order,
+			created_at
+		FROM route_action_targets
+		WHERE action_id = ANY(ARRAY(SELECT unnest($1::text[])::uuid))
+		ORDER BY action_id, sort_order ASC, id ASC
+	`, actionIDs)
+	if err != nil {
+		return nil, fmt.Errorf("load route action targets: %w", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var target route.ActionTarget
+		if err := rows.Scan(
+			&target.ID,
+			&target.ActionID,
+			&target.ChannelID,
+			&target.TemplateVersionID,
+			&target.Enabled,
+			&target.SortOrder,
+			&target.CreatedAt,
+		); err != nil {
+			return nil, fmt.Errorf("scan route action target: %w", err)
+		}
+		targetsByActionID[target.ActionID] = append(targetsByActionID[target.ActionID], target)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("route action target rows: %w", err)
+	}
+	return targetsByActionID, nil
+}
+
+func routeActionTargetsForPersistence(action route.Action) []route.ActionTarget {
+	if len(action.Targets) > 0 {
+		return append([]route.ActionTarget(nil), action.Targets...)
+	}
+	return legacyRouteActionTargets(action)
+}
+
+func legacyRouteActionTargets(action route.Action) []route.ActionTarget {
+	templateVersionID := strings.TrimSpace(action.TemplateVersionID)
+	if templateVersionID == "" {
+		return nil
+	}
+	targets := make([]route.ActionTarget, 0, len(action.ChannelIDs))
+	seen := map[string]struct{}{}
+	for _, value := range action.ChannelIDs {
+		channelID := strings.TrimSpace(value)
+		if channelID == "" {
+			continue
+		}
+		key := channelID + ":" + templateVersionID
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		sortOrder := (len(targets) + 1) * 10
+		targets = append(targets, route.ActionTarget{
+			ID:                uuid.NewSHA1(uuid.NameSpaceOID, []byte(action.ID+":"+key)).String(),
+			ActionID:          action.ID,
+			ChannelID:         channelID,
+			TemplateVersionID: templateVersionID,
+			Enabled:           true,
+			SortOrder:         sortOrder,
+			CreatedAt:         action.CreatedAt,
+		})
+	}
+	return targets
+}
+
+func routeActionCompatibilityFields(action route.Action) (string, []string) {
+	targets := routeActionTargetsForPersistence(action)
+	if len(targets) == 0 {
+		return strings.TrimSpace(action.TemplateVersionID), cleanRouteActionChannelIDs(action.ChannelIDs)
+	}
+	channelIDs := make([]string, 0, len(targets))
+	templateVersionID := ""
+	for _, target := range targets {
+		channelID := strings.TrimSpace(target.ChannelID)
+		targetTemplateVersionID := strings.TrimSpace(target.TemplateVersionID)
+		if channelID == "" || targetTemplateVersionID == "" {
+			continue
+		}
+		if templateVersionID == "" {
+			templateVersionID = targetTemplateVersionID
+		}
+		channelIDs = append(channelIDs, channelID)
+	}
+	return templateVersionID, channelIDs
+}
+
+func cleanRouteActionChannelIDs(values []string) []string {
+	cleaned := make([]string, 0, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value != "" {
+			cleaned = append(cleaned, value)
+		}
+	}
+	return cleaned
 }

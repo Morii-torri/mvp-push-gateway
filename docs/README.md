@@ -12,7 +12,7 @@
 6. `ui-prototypes/list-field-status-spec.md`：统一列表、字段中文名和状态中文映射。
 7. `research/open-source-references.md`：可参考的开源项目总览。
 8. `research/open-source-push-channel-analysis.md`：Austin 与 MagicPush 推送通道实现分析。
-9. `research/provider-adapter-reference.md`：上级推送平台 Adapter 参照。
+9. `research/provider-adapter-reference.md`：推送渠道 Provider Adapter 参照和联调状态。
 10. `operations/end-to-end-smoke.md`：本地和 Docker Compose 端到端验收 Runbook。
 11. `plans/2026-05-07-mvp-push-gateway-implementation-plan.md`：实施计划。
 12. `plans/2026-05-07-ai-execution-roadmap.md`：下一步交给 AI 分阶段执行的路线图。
@@ -32,10 +32,19 @@
 - 模板采用 Jinja-like 语法，Go 后端第一版用 `pongo2/v7` 落地，并通过自研 `TemplateEngine` 接口、安全白名单和保存期校验封装。
 - 模板字段复制统一复制 `{{ payload.title }}` 这类 Jinja-like 变量，内部路径仍保存 `payload.title`。
 - 来源最近 payload 样例来自“鉴权通过且 JSON 合法的最近入站 payload”，不要求路由、模板或接收人配置成功。
-- 上级平台实例支持主动限流、独立并发上限、超时、重试和死信策略。
+- 推送渠道实例支持主动限流、独立并发上限、超时、重试和死信策略。
+- Provider capability registry 已数据化，包含 credential schema、channel config schema、message schema、recipient identity、token strategy、send API、success/retry rule、默认限流、超时、并发和重试。
+- 第一批 provider defaults 已实现 build-request/mock 级别支持：`webhook`、`self`、`pushplus`、`wxpusher`、`serverchan`、`email`、`aliyun_sms`、`tencent_sms`、`baidu_sms`、`wecom_robot`、`wecom_app`、legacy `wecom`、`dingtalk_robot`、`dingtalk_work`、legacy `dingtalk`、`feishu_robot`、legacy `feishu`、`gov_cloud`、legacy `sms` 和高级 `custom_token`。
+- 上述 provider 当前不要描述为已真实发送成功；PushPlus、WxPusher、Server酱、短信、企微、钉钉、飞书、SMTP/self/gov_cloud 均为 implemented but not live-tested 或 configuration-dependent。
+- `ntfy`、`gotify`、`bark`、`pushme` 仅保留后续规划，当前不作为已实现 provider defaults。
 - 路由发布时编译为执行模型，并按来源和版本缓存；planning 阶段先粗过滤，再完整条件判断，同时记录慢规则。
 - 每个来源只允许一个启用路由大组；v1/v2 是同一大组下的版本切换。
 - 路由策略按拖拽顺序执行，第一条命中即发送并停止继续匹配；策略展示累计命中次数，最高 99999。
+- 模板绑定 provider type + message type，不绑定具体渠道实例；模板只保存消息内容，不保存接收人字段或最终 HTTP body，字段可使用 `{{ payload.summary | default('通知') }}` 这类表达式。
+- 路由规则保存发送动作组 `action.targets[]`；每个 target 绑定一个渠道实例和一个兼容模板版本。legacy `template_version_id + channel_ids` 仅用于兼容旧客户端。
+- Planning worker 按 action targets fan-out，每个 target 单独加载渠道和模板、校验 provider type、渲染模板、解析接收人并生成 delivery attempt。
+- Delivery adapter 输入渠道配置、渲染后消息、解析后接收人、target context 和 token，输出 final request；Webhook/custom 保留高级映射。
+- 日志快照包含 `target_context`、`rendered_message`、`resolved_recipients`、`final_request`、`upstream_response`，并兼容旧 `send` snapshot。
 - 队列监控是独立功能模块，展示积压、P95、平台限流、死信、慢规则和端到端耗时。
 - worker 崩溃后的 processing job 由 maintenance worker 根据心跳和超时阈值回收。
 - 入站同步返回只覆盖接收阶段；路由、模板、接收人和发送错误属于异步日志结果。

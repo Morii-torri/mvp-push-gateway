@@ -4,7 +4,7 @@
 
 ## 枚举约定
 
-- `provider_type`: `wecom` / `feishu` / `dingtalk` / `email` / `sms` / `gov_cloud` / `self` / `webhook` / `custom_token`
+- `provider_type`: `webhook` / `self` / `pushplus` / `wxpusher` / `serverchan` / `email` / `aliyun_sms` / `tencent_sms` / `baidu_sms` / `wecom_robot` / `wecom_app` / `dingtalk_robot` / `dingtalk_work` / `feishu_robot` / `gov_cloud`，并兼容 legacy `wecom` / `dingtalk` / `feishu` / `sms` 和高级 `custom_token`
 - `location`: `query` / `header` / `body` / `path` / `none`
 - `message_status`: `accepted` / `deduped` / `planned` / `partial_sent` / `sent` / `failed` / `no_route`
 - `delivery_status`: `queued` / `processing` / `sent` / `failed` / `deduped` / `skipped`
@@ -13,7 +13,7 @@
 
 第一版不包含定时发送，不设计 `scheduled_send` job 和定时消息表。
 
-## 来源与平台
+## 来源与推送渠道
 
 ### `inbound_sources`
 
@@ -49,38 +49,44 @@
 
 ### `delivery_channels`
 
-上级平台实例。
+推送渠道实例。
 
 | 字段 | 类型 | 说明 |
 |---|---|---|
-| `id` | uuid pk | 平台实例 ID |
-| `provider_type` | text | 平台类型 |
+| `id` | uuid pk | 渠道实例 ID |
+| `provider_type` | text | 渠道 provider type |
 | `name` | text | 显示名称 |
 | `enabled` | boolean | 是否启用 |
 | `auth_config` | jsonb | token/secret/SMTP/短信账号等，第一版管理员可明文查看 |
 | `token_config` | jsonb | 换 token URL、方法、请求参数、响应字段 |
 | `send_config` | jsonb | 发送 URL、方法、query、headers、body 模板 |
-| `rate_limit_config` | jsonb | 平台级限流 |
-| `concurrency_limit` | int | 平台实例级主动并发上限 |
+| `rate_limit_config` | jsonb | 渠道级限流 |
+| `concurrency_limit` | int | 渠道实例级主动并发上限 |
 | `timeout_ms` | int | 单次发送超时 |
 | `retry_policy` | jsonb | 重试次数、退避、可重试错误 |
 | `dead_letter_policy` | jsonb | 死信策略 |
 | `created_at` / `updated_at` | timestamptz | 时间 |
 
-`rate_limit_config` 第一版至少支持 `enabled`、`qps`、`per_minute`、`burst`、`strategy`。这些配置由上级平台页面维护，发送 worker 主动执行。
+`rate_limit_config` 第一版至少支持 `enabled`、`qps`、`per_minute`、`burst`、`strategy`。这些配置由推送渠道页面维护，发送 worker 主动执行。
 
 ### `provider_capabilities`
 
-平台能力描述。内置平台也写入该表，允许升级和覆盖。
+推送渠道能力描述。内置 provider defaults 也写入该表，允许升级和覆盖；前端渠道表单、模板表单、路由 target 兼容性校验和 delivery adapter 都以这里的数据化能力为准。
 
 | 字段 | 类型 | 说明 |
 |---|---|---|
 | `id` | uuid pk | 能力 ID |
-| `provider_type` | text | 平台类型 |
+| `provider_type` | text | provider type |
+| `display_name` | text | 中文展示名 |
+| `category` | text | 渠道分类，例如 webhook、enterprise_app、robot、sms、email |
 | `message_type` | text | text、markdown、card、image、file 等 |
-| `message_schema` | jsonb | 消息体 JSON Schema |
+| `message_schema` | jsonb | 模板消息内容 JSON Schema；不是最终 HTTP body schema |
+| `credential_schema` | jsonb | 凭证字段 schema |
+| `channel_config_schema` | jsonb | 渠道配置字段 schema |
+| `custom_body_allowed` | boolean | 是否允许高级自定义 body 映射 |
 | `recipient_required` | boolean | 是否必须有接收人 |
 | `allow_no_recipient` | boolean | 是否允许无接收人 |
+| `recipient_requirement` | text | `none` / `system` / `payload` / `platform-specific` |
 | `recipient_field_name` | text null | 接收人字段名，例如 `touser` |
 | `recipient_location` | text | `query` / `header` / `body` / `path` / `none` |
 | `recipient_path` | text null | 嵌套路径，例如 `body.receivers[0].mobile` |
@@ -88,7 +94,19 @@
 | `identity_kind` | text null | mobile、email、wecom_userid、feishu_open_id 等 |
 | `token_location` | text | `query` / `header` / `body` / `none` |
 | `token_field_name` | text null | `access_token`、`Authorization` 等 |
+| `token_strategy` | jsonb | Token 获取、缓存、刷新和放置策略 |
+| `send_api` | jsonb | 发送 API 元数据；可包含 method、url、protocol、live_test_status 和 notes |
+| `success_rule` | jsonb | 成功判定规则 |
+| `retry_rule` | jsonb | 可重试错误分类 |
+| `default_rate_limit` | jsonb | 默认限流配置 |
+| `default_timeout_ms` | int | 默认超时 |
+| `default_concurrency_limit` | int | 默认并发上限 |
+| `default_retry_policy` | jsonb | 默认重试策略 |
 | `request_examples` | jsonb | 示例 |
+
+第一批 provider defaults 已实现 build-request/mock 级别支持：`webhook`、`self`、`pushplus`、`wxpusher`、`serverchan`、`email`、`aliyun_sms`、`tencent_sms`、`baidu_sms`、`wecom_robot`、`wecom_app`、legacy `wecom`、`dingtalk_robot`、`dingtalk_work`、legacy `dingtalk`、`feishu_robot`、legacy `feishu`、`gov_cloud`、legacy `sms` 和高级 `custom_token`。其中 PushPlus、WxPusher、Server酱、短信、企微、钉钉、飞书、SMTP/self/gov_cloud 当前均不要标注为已真实联调成功。
+
+`ntfy`、`gotify`、`bark`、`pushme` 仅为后续规划项，当前不写入已实现 provider defaults。
 
 ## 组织人员
 
@@ -137,8 +155,8 @@
 |---|---|---|
 | `id` | uuid pk | 身份 ID |
 | `user_id` | uuid | 人员 |
-| `provider_type` | text | 平台类型，可为通用 |
-| `identity_kind` | text | mobile、email、wecom_userid、feishu_open_id |
+| `provider_type` | text | provider type，可为 `common` |
+| `identity_kind` | text | mobile、email、wecom_userid、dingtalk_userid、feishu_open_id、wxpusher_uid、gov_userid、gov_party_id、gov_tag_id 等 |
 | `identity_value` | text | 实际值 |
 | `verified` | boolean | 是否校验 |
 | `unique(provider_type, identity_kind, identity_value)` | index | 防重复 |
@@ -179,6 +197,9 @@
 
 模板字段约定：
 
+- 模板版本绑定 `target_provider_type + message_type`，不绑定具体 `delivery_channel` 实例。
+- `template_body` 只保存消息内容字段，例如 `{"title":"{{ payload.summary | default('通知') }}","body":"{{ payload.content }}"}`；不要保存 `touser`、`mobile`、`email`、`open_id` 等接收人字段，也不要保存最终 HTTP body。
+- `message_body_schema` 对应 provider capability 的 `message_schema`，用于保存期和发布期校验消息内容结构。
 - `template_engine` 第一版固定为 `pongo2`，对外表现为 Jinja-like 语法；后续如替换引擎，业务表结构不需要迁移模板主体。
 - `template_syntax_version` 记录网关定义的模板语法版本，例如 `jinja-like-v1`，不要直接承诺完整 Jinja2 兼容。
 - `used_variables` 保存分析出的变量路径，例如 `payload.title`、`payload.alert.ip`，用于保存校验、字段提示和影响分析。
@@ -222,22 +243,27 @@
 - `execution_mode`：第一版固定为 `first_match_stop`，表示第一条命中后停止继续匹配。
 - `field_dependencies`：每条规则依赖的 payload 字段路径。
 - `match_group_ids`：每条规则引用的匹配组。
-- `actions`：展开后的模板版本、平台实例、接收人策略和去重策略。
+- `actions`：展开后的发送动作组；动作组内包含 `targets[]`，每个 target 绑定一个渠道实例和一个兼容模板版本。
 - `coarse_filter`：粗过滤所需字段、常量值、消息类型或来源特征。
 - `compiled_at` / `compiler_version`：编译时间和编译器版本。
 
 planning worker 使用 `source_id + current_version_id` 缓存执行模型；发布新版本后通过版本变化让缓存失效。
 
-### `route_rules` / `route_actions`
+### `route_rules` / `route_actions` / `route_action_targets`
 
 传统表格模式和编译后的查询辅助表。
 
 | 表 | 关键字段 |
 |---|---|
 | `route_rules` | `id`, `flow_id`, `version_id`, `rule_key`, `sort_order`, `name`, `condition_tree`, `enabled` |
-| `route_actions` | `id`, `rule_id`, `template_version_id`, `channel_ids`, `recipient_strategy`, `send_dedupe_config`, `failure_policy` |
+| `route_actions` | `id`, `rule_id`, `recipient_strategy`, `send_dedupe_config`, `failure_policy`；legacy `template_version_id`、`channel_ids` 仅为兼容字段 |
+| `route_action_targets` | `id`, `action_id`, `channel_id`, `template_version_id`, `enabled`, `sort_order`, `created_at` |
 
 `rule_key` 是策略的稳定 ID：新建策略时生成，拖拽排序、编辑和发布新版本时保持不变，用于累计命中次数不清零。`sort_order` 是执行顺序，planning worker 必须按该顺序从小到大执行，第一条命中后停止。
+
+`route_actions` 表示一条命中分支的发送动作组。`route_action_targets` 表示该动作组的 fan-out 目标列表；planning worker 按 target 逐行加载渠道实例和模板版本，校验 `template_versions.target_provider_type == delivery_channels.provider_type`，再单独渲染模板、解析接收人并生成 `delivery_attempts`。
+
+兼容期内，旧客户端仍可提交 `route_actions.template_version_id + channel_ids`，后端保存前转换为多个 target。新代码和新前端必须使用 `action.targets[]`，不要继续把 legacy 字段作为源数据。
 
 ### `route_rule_counters`
 
@@ -282,11 +308,11 @@ planning worker 使用 `source_id + current_version_id` 缓存执行模型；发
 |---|---|---|
 | `id` | uuid pk | 投递 ID |
 | `message_id` | uuid | 入站主记录 |
-| `channel_id` | uuid | 上级平台实例 |
+| `channel_id` | uuid | 推送渠道实例 |
 | `template_version_id` | uuid null | 模板版本 |
-| `recipient_snapshot` | jsonb | 接收人解析结果 |
-| `request_snapshot` | jsonb | 实际请求 |
-| `response_snapshot` | jsonb | 上游响应 |
+| `recipient_snapshot` | jsonb | 接收人解析结果；兼容旧字段 |
+| `request_snapshot` | jsonb | 请求侧快照，包含 `target_context`、`rendered_message`、`resolved_recipients`、`final_request`，并兼容旧 `send` 节点 |
+| `response_snapshot` | jsonb | 响应侧快照，包含 `upstream_response`，并兼容旧 `send` 节点 |
 | `status` | text | 投递状态 |
 | `error_code` | text null | 标准错误码 |
 | `duration_ms` | int null | 耗时 |
@@ -294,6 +320,8 @@ planning worker 使用 `source_id + current_version_id` 缓存执行模型；发
 | `next_retry_at` | timestamptz null | 下次重试时间 |
 | `dead_lettered_at` | timestamptz null | 进入死信时间 |
 | `queued_at` / `started_at` / `finished_at` | timestamptz | 时间 |
+
+Delivery adapter 边界约定：adapter 输入 channel config、rendered message、resolved recipients、delivery target context 和 token，输出 `final_request`。Webhook/custom_token 可继续使用高级映射；内置 provider 不要求模板保存最终 HTTP body。
 
 ### `dedupe_keys`
 
@@ -304,14 +332,14 @@ planning worker 使用 `source_id + current_version_id` 缓存执行模型；发
 | `id` | uuid pk | ID |
 | `scope` | text | `inbound` / `send` |
 | `source_id` | uuid null | 来源 |
-| `channel_id` | uuid null | 平台 |
+| `channel_id` | uuid null | 渠道实例 |
 | `dedupe_key` | text | 去重 key |
 | `expires_at` | timestamptz | 过期时间 |
 | `message_id` | uuid null | 关联消息 |
 | `unique(scope, source_id, dedupe_key)` | partial index | 入站去重，`scope='inbound'` |
 | `unique(scope, channel_id, dedupe_key)` | partial index | 发送前去重，`scope='send'` |
 
-入站去重必须按来源隔离；发送前去重必须按平台实例隔离。不要只使用 `unique(scope, dedupe_key)`，否则不同来源或不同平台的同名业务 key 会互相误伤。
+入站去重必须按来源隔离；发送前去重必须按渠道实例隔离。不要只使用 `unique(scope, dedupe_key)`，否则不同来源或不同渠道的同名业务 key 会互相误伤。
 
 ### `jobs`
 
@@ -331,7 +359,7 @@ PostgreSQL 队列表。
 | `heartbeat_at` | timestamptz null | worker 心跳时间 |
 | `processing_timeout_seconds` | int null | processing 超时阈值，空值使用系统默认 |
 | `last_error` | text null | 最近错误 |
-| `channel_id` | uuid null | 发送任务对应的平台实例 |
+| `channel_id` | uuid null | 发送任务对应的渠道实例 |
 | `priority` | int | 优先级 |
 | `queue_key` | text null | 队列分片 key，例如 `send:{channel_id}` |
 | `started_at` / `finished_at` | timestamptz null | 执行时间 |

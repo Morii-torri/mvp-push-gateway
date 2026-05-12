@@ -2,17 +2,19 @@
 
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
-**Goal:** 将路由规则从“单模板 + 多平台”改为“一个条件分支命中后执行一个发送动作组，动作组内每个发送目标单独绑定平台实例与兼容模板”。
+**Goal:** 将路由规则从“单模板 + 多平台”改为“一个条件分支命中后执行一个发送动作组，动作组内每个发送目标单独绑定渠道实例与兼容模板”。
 
-**Architecture:** 模板绑定平台类型和消息类型，不再作为路由画布里的独立节点。路由规则保留条件、接收人策略、去重和失败策略，新增 `route_action_targets` 存储多个发送目标；planning worker 按目标逐个加载平台实例、模板版本、校验兼容性、渲染并生成投递任务。前端路由编辑改为在一个“发送动作组”里多行配置 `平台实例 -> 兼容模板`。
+**Architecture:** 模板绑定 provider type 和消息类型，不再作为路由画布里的独立节点。路由规则保留条件、接收人策略、去重和失败策略，新增 `route_action_targets` 存储多个发送目标；planning worker 按目标逐个加载渠道实例、模板版本、校验兼容性、渲染并生成投递任务。前端路由编辑改为在一个“发送动作组”里多行配置 `渠道实例 -> 兼容模板`。
 
 **Tech Stack:** Go backend, PostgreSQL migrations, React + Vite + TypeScript + Ant Design frontend, React Flow route canvas, existing PostgreSQL table queue workers.
+
+**Status 2026-05-12:** route send action group is implemented. Backend/API/DB/frontend/planning now use `action.targets[]`; legacy `template_version_id + channel_ids` remains compatible. Planning worker fans out by target, validates template provider type against channel provider type, renders per target and creates separate delivery attempts. New route canvas should use the send action group node instead of a standalone template node.
 
 ---
 
 ## Product Decision
 
-当前项目的优势是“下级来源驱动的消息路由”：上级平台只是投递目标，用户真正关心的是来源、命中条件、发给谁、发哪些内容。为了保持这个优势，路由页面不要把用户带回到“先理解每个平台 body 映射”的模式。
+当前项目的优势是“下级来源驱动的消息路由”：推送渠道只是投递目标，用户真正关心的是来源、命中条件、发给谁、发哪些内容。为了保持这个优势，路由页面不要把用户带回到“先理解每个 provider body 映射”的模式。
 
 最终交互应是：
 
@@ -20,7 +22,7 @@
 2. 系统根据渠道类型和消息类型展示字段表单，模板只保存消息内容字段。
 3. 路由规则里配置条件和接收人策略。
 4. 路由规则里配置一个发送动作组。
-5. 发送动作组内可添加多个发送目标，每个目标先选平台实例，再选该平台实例兼容的模板。
+5. 发送动作组内可添加多个发送目标，每个目标先选渠道实例，再选该渠道实例兼容的模板。
 
 不要再保留单独的“模板渲染”路由节点。模板是发送目标的一部分，不是路由流程节点。
 
@@ -87,18 +89,16 @@
 - 本次不做 target 级接收人策略覆盖。接收人策略仍然在 action 级别共享。
 - 本次不做 target 级失败策略覆盖。失败策略仍然在 action 级别共享。
 - 本次不改投递 worker 的 HTTP 发送方式，只改变 planning worker 生成 `delivery_attempts` 的方式。
-- 本次不实现新的平台适配器，只为后续平台模板兼容模型打基础。
+- 本路由改造计划本身不实现新的平台适配器；后续阶段已实现 provider defaults 和 adapter boundary，详见 `2026-05-11-product-simplification-and-template-adapter-plan.md` 当前状态。
 
-## Current Code Facts
+## Implementation Facts
 
-- Backend route model: `backend/internal/route/service.go` 里的 `Action` 和 `ActionInput` 当前有 `TemplateVersionID`、`ChannelIDs`。
-- Backend DB repository: `backend/internal/db/route.go` 当前把 `template_version_id` 和 `channel_ids` 写入 `route_actions`。
-- Planning worker: `backend/internal/planning/worker.go` 当前先用 `matchedRule.Action.TemplateVersionID` 渲染一次模板，再对 `matchedRule.Action.ChannelIDs` 循环生成 attempts。
-- HTTP DTO: `backend/internal/http/route_handlers.go` 当前只暴露 `template_version_id` 和 `channel_ids`。
-- Frontend API type: `frontend/src/api/console.ts` 当前 `RouteRuleApiRecord` 和 `RouteRuleInput` 只支持 `template_version_id` 和 `channel_ids`。
-- Frontend route editor: `frontend/src/pages/ConsolePages.tsx` 当前 `RouteRuleDraft` 有 `templateVersionId` 和 `channelIds`。
-- Frontend route canvas: `frontend/src/pages/ConsolePages.tsx` 当前 `RouteNodeKind` 包含 `template`，并生成 source -> condition -> template -> recipient -> platform。
-- Data model docs: `docs/data-model/schema-design.md` 当前 `route_actions` 仍描述 `template_version_id`、`channel_ids`。
+- Backend route model includes `Action.Targets` and compatibility fields for legacy `TemplateVersionID` / `ChannelIDs`.
+- Database has `route_action_targets`; `route_actions.template_version_id` and `route_actions.channel_ids` are compatibility fields only.
+- HTTP route rules API accepts and returns `action.targets[]`; old `template_version_id + channel_ids` payload is still converted.
+- Planning worker no longer renders once per rule. It loops enabled targets, loads each channel/template pair, validates provider compatibility, renders, resolves recipients and creates one delivery attempt per target.
+- Frontend route editing uses the send action group model; new saves should not send legacy fields.
+- Message logs can distinguish delivery attempts by `channel_id`, `template_version_id` and target context.
 
 ## Task 1: Backend Domain Types
 
@@ -931,7 +931,7 @@ git commit -m "feat(frontend): model route send targets"
 In `RouteRuleForm`, remove:
 
 - `Form.Item label="模板版本"`
-- `Form.Item label="目标平台"`
+- `Form.Item label="目标渠道"`
 
 Add a section titled `发送动作组`.
 
@@ -1120,7 +1120,7 @@ type RouteNodeKind = 'source' | 'condition' | 'recipient' | 'send_group';
 Update `routeNodeCatalog`:
 
 ```ts
-{ kind: 'send_group', title: '发送动作组', description: '按目标列表分别渲染模板并投递到平台实例' }
+{ kind: 'send_group', title: '发送动作组', description: '按目标列表分别渲染模板并投递到渠道实例' }
 ```
 
 Remove the `template` catalog entry.
@@ -1274,7 +1274,7 @@ for each target:
 In `docs/plans/2026-05-11-product-simplification-and-template-adapter-plan.md`, replace “路由选择模板版本和目标平台” with:
 
 ```md
-路由规则选择发送动作组；动作组内每个发送目标绑定一个平台实例和一个兼容模板版本。
+路由规则选择发送动作组；动作组内每个发送目标绑定一个渠道实例和一个兼容模板版本。
 ```
 
 **Step 5: Run docs grep**
@@ -1392,7 +1392,7 @@ git commit -m "fix(route): complete send action group migration"
 - 新前端路由保存 payload 使用 `action.targets`。
 - 后端仍兼容旧 payload 的 `template_version_id + channel_ids`。
 - planning worker 按 target 单独渲染模板，生成对应的 delivery attempt。
-- 模板目标平台类型与平台实例 provider type 不一致时，planning 阶段失败并记录明确错误。
+- 模板 target provider type 与渠道实例 provider type 不一致时，planning 阶段失败并记录明确错误。
 - 新生成的路由画布没有独立模板节点，使用“发送动作组”节点表达 fan-out。
 - 文档中明确模板绑定平台类型，不绑定具体实例；路由发送目标负责实例与模板的一一对应。
 

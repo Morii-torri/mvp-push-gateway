@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { consoleApi } from './console';
+import { consoleApi, type ProviderCapabilityApiRecord } from './console';
 import { tokenStore } from './client';
 
 let storage: Storage;
@@ -74,6 +74,57 @@ describe('console api wrappers', () => {
     ]);
   });
 
+  it('loads provider capabilities from the backend with old and extended response fields', async () => {
+    tokenStore.set('admin-token');
+    const capabilities: ProviderCapabilityApiRecord[] = [
+      {
+        id: 'cap-old',
+        provider_type: 'wecom',
+        message_type: 'text',
+        message_schema: { type: 'object' },
+        recipient_required: true,
+        allow_no_recipient: false,
+        recipient_field_name: 'touser',
+        recipient_location: 'body',
+        recipient_path: 'touser',
+        recipient_format: 'pipe_string',
+        identity_kind: 'wecom_userid',
+        token_location: 'query',
+        token_field_name: 'access_token',
+        request_examples: {},
+        created_at: '2026-05-11T00:00:00Z',
+        updated_at: '2026-05-11T00:00:00Z',
+      },
+      {
+        id: 'cap-new',
+        provider_type: 'email',
+        display_name: 'SMTP 邮件',
+        category: 'mail',
+        supported_message_types: ['text', 'html'],
+        credential_schema: {
+          fields: [{ key: 'host', label: 'SMTP 主机', target: 'auth_config' }],
+        },
+        channel_config_schema: {
+          fields: [{ key: 'from', label: '发件人', target: 'send_config' }],
+        },
+        custom_body_allowed: false,
+        default_timeout_ms: 5000,
+        default_concurrency_limit: 4,
+        default_retry_policy: { max_attempts: 2 },
+      },
+    ];
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => json({ capabilities }));
+
+    const result = await consoleApi.listProviderCapabilities(fetchMock);
+
+    expect(fetchMock.mock.calls.map(([input]) => String(input))).toEqual(['/api/v1/provider-capabilities']);
+    expect(result.capabilities[0].provider_type).toBe('wecom');
+    expect(result.capabilities[1].display_name).toBe('SMTP 邮件');
+    expect(result.capabilities[1].credential_schema).toEqual({
+      fields: [{ key: 'host', label: 'SMTP 主机', target: 'auth_config' }],
+    });
+  });
+
   it('saves route canvas, rule order, simulation and publish through backend endpoints', async () => {
     tokenStore.set('admin-token');
     const fetchMock = vi.fn(async (input: RequestInfo | URL, _init?: RequestInit) => {
@@ -129,8 +180,13 @@ describe('console api wrappers', () => {
         },
         enabled: true,
         action: {
-          template_version_id: 'tpl-version-1',
-          channel_ids: ['channel-1'],
+          targets: [
+            {
+              channel_id: 'channel-1',
+              template_version_id: 'tpl-version-1',
+              enabled: true,
+            },
+          ],
           recipient_strategy: { mode: 'system', recipient_group_ids: ['recipient-group-1'] },
           send_dedupe_config: { strategy: 'trace_id' },
           failure_policy: { policy: 'continue' },

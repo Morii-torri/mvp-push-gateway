@@ -37,9 +37,27 @@ func (r Repository) SeedProviderCapabilities(ctx context.Context, capabilities [
 				identity_kind,
 				token_location,
 				token_field_name,
-				request_examples
+				request_examples,
+				display_name,
+				category,
+				credential_schema,
+				channel_config_schema,
+				custom_body_allowed,
+				recipient_requirement,
+				token_strategy,
+				send_api,
+				success_rule,
+				retry_rule,
+				default_rate_limit,
+				default_timeout_ms,
+				default_concurrency_limit,
+				default_retry_policy
 			)
-			VALUES ($1, $2, $3, $4, $5, $6, NULLIF($7, ''), $8, NULLIF($9, ''), $10, NULLIF($11, ''), $12, NULLIF($13, ''), $14)
+			VALUES (
+				$1, $2, $3, $4, $5, $6, NULLIF($7, ''), $8, NULLIF($9, ''),
+				$10, NULLIF($11, ''), $12, NULLIF($13, ''), $14, $15, $16,
+				$17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28
+			)
 			ON CONFLICT (provider_type, message_type) DO UPDATE
 			SET message_schema = EXCLUDED.message_schema,
 				recipient_required = EXCLUDED.recipient_required,
@@ -52,6 +70,20 @@ func (r Repository) SeedProviderCapabilities(ctx context.Context, capabilities [
 				token_location = EXCLUDED.token_location,
 				token_field_name = EXCLUDED.token_field_name,
 				request_examples = EXCLUDED.request_examples,
+				display_name = EXCLUDED.display_name,
+				category = EXCLUDED.category,
+				credential_schema = EXCLUDED.credential_schema,
+				channel_config_schema = EXCLUDED.channel_config_schema,
+				custom_body_allowed = EXCLUDED.custom_body_allowed,
+				recipient_requirement = EXCLUDED.recipient_requirement,
+				token_strategy = EXCLUDED.token_strategy,
+				send_api = EXCLUDED.send_api,
+				success_rule = EXCLUDED.success_rule,
+				retry_rule = EXCLUDED.retry_rule,
+				default_rate_limit = EXCLUDED.default_rate_limit,
+				default_timeout_ms = EXCLUDED.default_timeout_ms,
+				default_concurrency_limit = EXCLUDED.default_concurrency_limit,
+				default_retry_policy = EXCLUDED.default_retry_policy,
 				updated_at = now()
 		`,
 			capability.ID,
@@ -68,6 +100,20 @@ func (r Repository) SeedProviderCapabilities(ctx context.Context, capabilities [
 			capability.TokenLocation,
 			capability.TokenFieldName,
 			defaultJSON(capability.RequestExamples),
+			defaultCapabilityText(capability.DisplayName, string(capability.ProviderType)),
+			defaultCapabilityText(capability.Category, "custom"),
+			defaultJSON(capability.CredentialSchema),
+			defaultJSON(capability.ChannelConfigSchema),
+			capability.CustomBodyAllowed,
+			defaultCapabilityText(capability.RecipientRequirement, "system"),
+			defaultJSON(capability.TokenStrategy),
+			defaultJSON(capability.SendAPI),
+			defaultJSON(capability.SuccessRule),
+			defaultJSON(capability.RetryRule),
+			defaultJSON(capability.DefaultRateLimit),
+			defaultPositiveInt(capability.DefaultTimeoutMS, 5000),
+			defaultPositiveInt(capability.DefaultConcurrencyLimit, 5),
+			defaultJSON(capability.DefaultRetryPolicy),
 		); err != nil {
 			return fmt.Errorf("upsert provider capability %s/%s: %w", capability.ProviderType, capability.MessageType, err)
 		}
@@ -84,10 +130,16 @@ func (r Repository) ListProviderCapabilities(ctx context.Context) ([]provider.Ca
 		SELECT
 			id,
 			provider_type,
+			COALESCE(display_name, ''),
+			COALESCE(category, ''),
 			message_type,
 			message_schema,
+			credential_schema,
+			channel_config_schema,
+			custom_body_allowed,
 			recipient_required,
 			allow_no_recipient,
+			recipient_requirement,
 			COALESCE(recipient_field_name, ''),
 			recipient_location,
 			COALESCE(recipient_path, ''),
@@ -95,6 +147,14 @@ func (r Repository) ListProviderCapabilities(ctx context.Context) ([]provider.Ca
 			COALESCE(identity_kind, ''),
 			token_location,
 			COALESCE(token_field_name, ''),
+			token_strategy,
+			send_api,
+			success_rule,
+			retry_rule,
+			default_rate_limit,
+			default_timeout_ms,
+			default_concurrency_limit,
+			default_retry_policy,
 			request_examples,
 			created_at,
 			updated_at
@@ -108,7 +168,7 @@ func (r Repository) ListProviderCapabilities(ctx context.Context) ([]provider.Ca
 
 	capabilities := []provider.Capability{}
 	for rows.Next() {
-		capability, err := scanCapability(rows)
+		capability, err := scanCapabilityWithMetadata(rows)
 		if err != nil {
 			return nil, err
 		}
@@ -237,6 +297,51 @@ func (r Repository) queryChannel(ctx context.Context, sql string, args ...any) (
 	return scanChannel(r.pool.QueryRow(ctx, sql, args...))
 }
 
+func scanCapabilityWithMetadata(row sourceScanner) (provider.Capability, error) {
+	var capability provider.Capability
+	var providerType string
+	var recipientLocation string
+	var tokenLocation string
+	if err := row.Scan(
+		&capability.ID,
+		&providerType,
+		&capability.DisplayName,
+		&capability.Category,
+		&capability.MessageType,
+		&capability.MessageSchema,
+		&capability.CredentialSchema,
+		&capability.ChannelConfigSchema,
+		&capability.CustomBodyAllowed,
+		&capability.RecipientRequired,
+		&capability.AllowNoRecipient,
+		&capability.RecipientRequirement,
+		&capability.RecipientFieldName,
+		&recipientLocation,
+		&capability.RecipientPath,
+		&capability.RecipientFormat,
+		&capability.IdentityKind,
+		&tokenLocation,
+		&capability.TokenFieldName,
+		&capability.TokenStrategy,
+		&capability.SendAPI,
+		&capability.SuccessRule,
+		&capability.RetryRule,
+		&capability.DefaultRateLimit,
+		&capability.DefaultTimeoutMS,
+		&capability.DefaultConcurrencyLimit,
+		&capability.DefaultRetryPolicy,
+		&capability.RequestExamples,
+		&capability.CreatedAt,
+		&capability.UpdatedAt,
+	); err != nil {
+		return provider.Capability{}, err
+	}
+	capability.ProviderType = provider.ProviderType(providerType)
+	capability.RecipientLocation = provider.Placement(recipientLocation)
+	capability.TokenLocation = provider.Placement(tokenLocation)
+	return capability, nil
+}
+
 func scanCapability(row sourceScanner) (provider.Capability, error) {
 	var capability provider.Capability
 	var providerType string
@@ -291,6 +396,20 @@ func scanChannel(row sourceScanner) (provider.Channel, error) {
 	}
 	channel.ProviderType = provider.ProviderType(providerType)
 	return channel, nil
+}
+
+func defaultCapabilityText(value string, fallback string) string {
+	if value == "" {
+		return fallback
+	}
+	return value
+}
+
+func defaultPositiveInt(value int, fallback int) int {
+	if value <= 0 {
+		return fallback
+	}
+	return value
 }
 
 func channelSelectSQL() string {

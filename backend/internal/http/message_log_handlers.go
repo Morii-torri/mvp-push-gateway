@@ -57,27 +57,32 @@ type messageDetailResponse struct {
 }
 
 type deliveryAttemptResponse struct {
-	ID                string          `json:"id"`
-	MessageID         string          `json:"message_id"`
-	ChannelID         string          `json:"channel_id"`
-	ChannelName       string          `json:"channel_name"`
-	ProviderType      string          `json:"provider_type"`
-	TemplateVersionID string          `json:"template_version_id"`
-	RecipientSnapshot json.RawMessage `json:"recipient_snapshot"`
-	RequestSnapshot   json.RawMessage `json:"request_snapshot"`
-	ResponseSnapshot  json.RawMessage `json:"response_snapshot"`
-	Status            string          `json:"status"`
-	ErrorCode         string          `json:"error_code"`
-	ErrorMessage      string          `json:"error_message"`
-	DurationMS        int             `json:"duration_ms"`
-	AttemptNo         int             `json:"attempt_no"`
-	NextRetryAt       *string         `json:"next_retry_at"`
-	DeadLetteredAt    *string         `json:"dead_lettered_at"`
-	QueuedAt          *string         `json:"queued_at"`
-	StartedAt         *string         `json:"started_at"`
-	FinishedAt        *string         `json:"finished_at"`
-	CreatedAt         string          `json:"created_at"`
-	UpdatedAt         string          `json:"updated_at"`
+	ID                 string          `json:"id"`
+	MessageID          string          `json:"message_id"`
+	ChannelID          string          `json:"channel_id"`
+	ChannelName        string          `json:"channel_name"`
+	ProviderType       string          `json:"provider_type"`
+	TemplateVersionID  string          `json:"template_version_id"`
+	RecipientSnapshot  json.RawMessage `json:"recipient_snapshot"`
+	RequestSnapshot    json.RawMessage `json:"request_snapshot"`
+	ResponseSnapshot   json.RawMessage `json:"response_snapshot"`
+	TargetContext      json.RawMessage `json:"target_context"`
+	RenderedMessage    json.RawMessage `json:"rendered_message"`
+	ResolvedRecipients json.RawMessage `json:"resolved_recipients"`
+	FinalRequest       json.RawMessage `json:"final_request"`
+	UpstreamResponse   json.RawMessage `json:"upstream_response"`
+	Status             string          `json:"status"`
+	ErrorCode          string          `json:"error_code"`
+	ErrorMessage       string          `json:"error_message"`
+	DurationMS         int             `json:"duration_ms"`
+	AttemptNo          int             `json:"attempt_no"`
+	NextRetryAt        *string         `json:"next_retry_at"`
+	DeadLetteredAt     *string         `json:"dead_lettered_at"`
+	QueuedAt           *string         `json:"queued_at"`
+	StartedAt          *string         `json:"started_at"`
+	FinishedAt         *string         `json:"finished_at"`
+	CreatedAt          string          `json:"created_at"`
+	UpdatedAt          string          `json:"updated_at"`
 }
 
 func (h *Handler) messagesHandler(w http.ResponseWriter, r *http.Request) {
@@ -210,28 +215,40 @@ func toMessageDetailResponse(item messagelog.MessageDetail) messageDetailRespons
 
 func toDeliveryAttemptResponse(item messagelog.DeliveryAttempt) deliveryAttemptResponse {
 	return deliveryAttemptResponse{
-		ID:                item.ID,
-		MessageID:         item.MessageID,
-		ChannelID:         item.ChannelID,
-		ChannelName:       item.ChannelName,
-		ProviderType:      item.ProviderType,
-		TemplateVersionID: item.TemplateVersionID,
-		RecipientSnapshot: defaultRawJSON(item.RecipientSnapshot),
-		RequestSnapshot:   defaultRawJSON(item.RequestSnapshot),
-		ResponseSnapshot:  defaultRawJSON(item.ResponseSnapshot),
-		Status:            item.Status,
-		ErrorCode:         item.ErrorCode,
-		ErrorMessage:      item.ErrorMessage,
-		DurationMS:        item.DurationMS,
-		AttemptNo:         item.AttemptNo,
-		NextRetryAt:       formatOptionalTime(item.NextRetryAt),
-		DeadLetteredAt:    formatOptionalTime(item.DeadLetteredAt),
-		QueuedAt:          formatOptionalTime(item.QueuedAt),
-		StartedAt:         formatOptionalTime(item.StartedAt),
-		FinishedAt:        formatOptionalTime(item.FinishedAt),
-		CreatedAt:         formatTime(item.CreatedAt),
-		UpdatedAt:         formatTime(item.UpdatedAt),
+		ID:                 item.ID,
+		MessageID:          item.MessageID,
+		ChannelID:          item.ChannelID,
+		ChannelName:        item.ChannelName,
+		ProviderType:       item.ProviderType,
+		TemplateVersionID:  item.TemplateVersionID,
+		RecipientSnapshot:  defaultRawJSON(item.RecipientSnapshot),
+		RequestSnapshot:    defaultRawJSON(item.RequestSnapshot),
+		ResponseSnapshot:   defaultRawJSON(item.ResponseSnapshot),
+		TargetContext:      defaultRawJSON(item.TargetContext),
+		RenderedMessage:    defaultRawJSON(item.RenderedMessage),
+		ResolvedRecipients: defaultRawJSONArray(item.ResolvedRecipients),
+		FinalRequest:       defaultRawJSON(item.FinalRequest),
+		UpstreamResponse:   defaultRawJSON(item.UpstreamResponse),
+		Status:             item.Status,
+		ErrorCode:          item.ErrorCode,
+		ErrorMessage:       item.ErrorMessage,
+		DurationMS:         item.DurationMS,
+		AttemptNo:          item.AttemptNo,
+		NextRetryAt:        formatOptionalTime(item.NextRetryAt),
+		DeadLetteredAt:     formatOptionalTime(item.DeadLetteredAt),
+		QueuedAt:           formatOptionalTime(item.QueuedAt),
+		StartedAt:          formatOptionalTime(item.StartedAt),
+		FinishedAt:         formatOptionalTime(item.FinishedAt),
+		CreatedAt:          formatTime(item.CreatedAt),
+		UpdatedAt:          formatTime(item.UpdatedAt),
 	}
+}
+
+func defaultRawJSONArray(raw json.RawMessage) json.RawMessage {
+	if len(raw) == 0 {
+		return json.RawMessage(`[]`)
+	}
+	return raw
 }
 
 func messageLogErrorStatus(err error) (int, string, string) {

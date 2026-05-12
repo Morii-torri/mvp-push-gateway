@@ -653,7 +653,8 @@ body {
 }
 
 .node-card--cyan,
-.node-card--platform {
+.node-card--platform,
+.node-card--send_group {
   color: #06aed4;
 }
 
@@ -741,6 +742,10 @@ body {
 }
 
 .route-flow-node--platform {
+  border-color: #67e3f9;
+}
+
+.route-flow-node--send_group {
   border-color: #67e3f9;
 }
 
@@ -868,6 +873,26 @@ body {
   border-radius: 6px;
 }
 
+.send-action-group {
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+  background: #f8fbff;
+  border: 1px solid #dce7f5;
+  border-radius: 6px;
+}
+
+.send-action-row {
+  display: grid;
+  grid-template-columns: minmax(180px, 1fr) minmax(180px, 1fr) auto auto;
+  gap: 8px;
+  align-items: center;
+}
+
+.send-action-row__hint {
+  grid-column: 2 / -1;
+}
+
 .condition-row {
   display: grid;
   grid-template-columns: 1fr 96px 130px 1fr;
@@ -890,6 +915,36 @@ body {
 .dense-tabs .ant-tabs-content-holder {
   max-height: 560px;
   overflow: auto;
+}
+
+.provider-capability-summary {
+  margin-bottom: 12px;
+}
+
+.provider-field-grid {
+  padding-bottom: 4px;
+}
+
+.advanced-json-fields {
+  display: grid;
+  gap: 8px;
+  margin-top: 14px;
+}
+
+.template-content-fields {
+  display: grid;
+  gap: 10px;
+  margin-bottom: 14px;
+}
+
+.template-content-field {
+  display: grid;
+  grid-template-columns: minmax(0, 1.4fr) minmax(140px, 0.6fr);
+  gap: 0 12px;
+  padding: 12px;
+  background: #f8fbff;
+  border: 1px solid #dce7f5;
+  border-radius: 6px;
 }
 
 .two-column-form {
@@ -919,6 +974,33 @@ body {
 
 .code-block {
   padding: 14px;
+}
+
+.message-log-attempts {
+  min-width: 0;
+}
+
+.message-log-attempt {
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+  background: #ffffff;
+  border: 1px solid #d7e3f4;
+  border-radius: 8px;
+}
+
+.message-log-attempt-grid,
+.message-log-snapshot-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.message-log-attempt-grid > section,
+.message-log-snapshot-grid > section {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
 }
 
 .preview-grid {
@@ -1003,8 +1085,12 @@ body {
 
   .metric-grid--six,
   .preview-grid,
+  .message-log-attempt-grid,
+  .message-log-snapshot-grid,
   .template-modal-grid,
+  .template-content-field,
   .two-column-form,
+  .send-action-row,
   .condition-row {
     grid-template-columns: 1fr;
   }

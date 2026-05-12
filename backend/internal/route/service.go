@@ -51,10 +51,23 @@ type Version struct {
 	UpdatedAt        time.Time
 }
 
-type Action struct {
+type ActionTarget struct {
 	ID                string
-	RuleID            string
+	ActionID          string
+	ChannelID         string
 	TemplateVersionID string
+	Enabled           bool
+	SortOrder         int
+	CreatedAt         time.Time
+}
+
+type Action struct {
+	ID      string
+	RuleID  string
+	Targets []ActionTarget
+	// Deprecated: use Targets. Kept during API migration.
+	TemplateVersionID string
+	// Deprecated: use Targets. Kept during API migration.
 	ChannelIDs        []string
 	RecipientStrategy json.RawMessage
 	SendDedupeConfig  json.RawMessage
@@ -140,8 +153,17 @@ type SaveCanvasInput struct {
 	CanvasSnapshot json.RawMessage `json:"canvas_snapshot"`
 }
 
+type ActionTargetInput struct {
+	ChannelID         string `json:"channel_id"`
+	TemplateVersionID string `json:"template_version_id"`
+	Enabled           bool   `json:"enabled"`
+}
+
 type ActionInput struct {
-	TemplateVersionID string          `json:"template_version_id"`
+	Targets []ActionTargetInput `json:"targets"`
+	// Deprecated: use Targets. Kept during API migration.
+	TemplateVersionID string `json:"template_version_id"`
+	// Deprecated: use Targets. Kept during API migration.
 	ChannelIDs        []string        `json:"channel_ids"`
 	RecipientStrategy json.RawMessage `json:"recipient_strategy"`
 	SendDedupeConfig  json.RawMessage `json:"send_dedupe_config"`
@@ -503,6 +525,28 @@ func normalizeRuleInputs(flowID string, versionID string, inputs []RuleInput, id
 			return nil, ErrInvalidInput
 		}
 		ruleID := idGenerator()
+		actionID := idGenerator()
+		targets := normalizeActionTargets(input.Action)
+		if len(targets) == 0 {
+			return nil, ErrInvalidInput
+		}
+		actionTargets := make([]ActionTarget, 0, len(targets))
+		channelIDs := make([]string, 0, len(targets))
+		templateVersionID := ""
+		for index, target := range targets {
+			if templateVersionID == "" {
+				templateVersionID = target.TemplateVersionID
+			}
+			channelIDs = append(channelIDs, target.ChannelID)
+			actionTargets = append(actionTargets, ActionTarget{
+				ID:                idGenerator(),
+				ActionID:          actionID,
+				ChannelID:         target.ChannelID,
+				TemplateVersionID: target.TemplateVersionID,
+				Enabled:           target.Enabled,
+				SortOrder:         (index + 1) * 10,
+			})
+		}
 		sortOrder := input.SortOrder
 		if sortOrder <= 0 {
 			sortOrder = (idx + 1) * 10
@@ -517,10 +561,11 @@ func normalizeRuleInputs(flowID string, versionID string, inputs []RuleInput, id
 			ConditionTree: defaultObjectJSON(input.ConditionTree),
 			Enabled:       input.Enabled,
 			Action: Action{
-				ID:                idGenerator(),
+				ID:                actionID,
 				RuleID:            ruleID,
-				TemplateVersionID: strings.TrimSpace(input.Action.TemplateVersionID),
-				ChannelIDs:        append([]string(nil), input.Action.ChannelIDs...),
+				Targets:           actionTargets,
+				TemplateVersionID: templateVersionID,
+				ChannelIDs:        channelIDs,
 				RecipientStrategy: defaultObjectJSON(input.Action.RecipientStrategy),
 				SendDedupeConfig:  defaultObjectJSON(input.Action.SendDedupeConfig),
 				FailurePolicy:     defaultObjectJSON(input.Action.FailurePolicy),
@@ -528,6 +573,53 @@ func normalizeRuleInputs(flowID string, versionID string, inputs []RuleInput, id
 		})
 	}
 	return sortRules(rules), nil
+}
+
+func normalizeActionTargets(input ActionInput) []ActionTargetInput {
+	targets := make([]ActionTargetInput, 0, len(input.Targets))
+	seen := map[string]struct{}{}
+	for _, target := range input.Targets {
+		channelID := strings.TrimSpace(target.ChannelID)
+		templateVersionID := strings.TrimSpace(target.TemplateVersionID)
+		if channelID == "" || templateVersionID == "" {
+			continue
+		}
+		key := channelID + ":" + templateVersionID
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		targets = append(targets, ActionTargetInput{
+			ChannelID:         channelID,
+			TemplateVersionID: templateVersionID,
+			Enabled:           target.Enabled,
+		})
+	}
+	if len(input.Targets) > 0 {
+		return targets
+	}
+
+	legacyTemplateID := strings.TrimSpace(input.TemplateVersionID)
+	if legacyTemplateID == "" {
+		return nil
+	}
+	for _, channelID := range input.ChannelIDs {
+		channelID = strings.TrimSpace(channelID)
+		if channelID == "" {
+			continue
+		}
+		key := channelID + ":" + legacyTemplateID
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		targets = append(targets, ActionTargetInput{
+			ChannelID:         channelID,
+			TemplateVersionID: legacyTemplateID,
+			Enabled:           true,
+		})
+	}
+	return targets
 }
 
 func validateReorderInput(currentRules []Rule, ruleKeys []string) error {
@@ -572,13 +664,21 @@ func validateRules(rules []Rule) []ValidationError {
 	return errors
 }
 
+type compiledActionTarget struct {
+	ChannelID         string `json:"channel_id"`
+	TemplateVersionID string `json:"template_version_id"`
+	Enabled           bool   `json:"enabled"`
+	SortOrder         int    `json:"sort_order"`
+}
+
 func compileRules(draft Draft, compiledAt time.Time) (json.RawMessage, error) {
 	type compiledAction struct {
-		TemplateVersionID string          `json:"template_version_id"`
-		ChannelIDs        []string        `json:"channel_ids"`
-		RecipientStrategy json.RawMessage `json:"recipient_strategy"`
-		SendDedupeConfig  json.RawMessage `json:"send_dedupe_config"`
-		FailurePolicy     json.RawMessage `json:"failure_policy"`
+		Targets           []compiledActionTarget `json:"targets"`
+		TemplateVersionID string                 `json:"template_version_id"`
+		ChannelIDs        []string               `json:"channel_ids"`
+		RecipientStrategy json.RawMessage        `json:"recipient_strategy"`
+		SendDedupeConfig  json.RawMessage        `json:"send_dedupe_config"`
+		FailurePolicy     json.RawMessage        `json:"failure_policy"`
 	}
 	type compiledRule struct {
 		RuleKey           string          `json:"rule_key"`
@@ -612,6 +712,7 @@ func compileRules(draft Draft, compiledAt time.Time) (json.RawMessage, error) {
 				"field_dependencies": dependencies,
 			},
 			Action: compiledAction{
+				Targets:           compiledActionTargets(rule.Action.Targets),
 				TemplateVersionID: rule.Action.TemplateVersionID,
 				ChannelIDs:        append([]string(nil), rule.Action.ChannelIDs...),
 				RecipientStrategy: defaultObjectJSON(rule.Action.RecipientStrategy),
@@ -628,6 +729,19 @@ func compileRules(draft Draft, compiledAt time.Time) (json.RawMessage, error) {
 		"rules":            rules,
 	}
 	return json.Marshal(compiled)
+}
+
+func compiledActionTargets(items []ActionTarget) []compiledActionTarget {
+	targets := make([]compiledActionTarget, 0, len(items))
+	for _, item := range items {
+		targets = append(targets, compiledActionTarget{
+			ChannelID:         item.ChannelID,
+			TemplateVersionID: item.TemplateVersionID,
+			Enabled:           item.Enabled,
+			SortOrder:         item.SortOrder,
+		})
+	}
+	return targets
 }
 
 type conditionNode struct {

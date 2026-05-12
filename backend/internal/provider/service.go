@@ -19,15 +19,26 @@ import (
 type ProviderType string
 
 const (
-	ProviderWeCom       ProviderType = "wecom"
-	ProviderFeishu      ProviderType = "feishu"
-	ProviderDingTalk    ProviderType = "dingtalk"
-	ProviderEmail       ProviderType = "email"
-	ProviderSMS         ProviderType = "sms"
-	ProviderGovCloud    ProviderType = "gov_cloud"
-	ProviderSelf        ProviderType = "self"
-	ProviderWebhook     ProviderType = "webhook"
-	ProviderCustomToken ProviderType = "custom_token"
+	ProviderWeCom         ProviderType = "wecom"
+	ProviderWeComApp      ProviderType = "wecom_app"
+	ProviderWeComRobot    ProviderType = "wecom_robot"
+	ProviderFeishu        ProviderType = "feishu"
+	ProviderFeishuRobot   ProviderType = "feishu_robot"
+	ProviderDingTalk      ProviderType = "dingtalk"
+	ProviderDingTalkWork  ProviderType = "dingtalk_work"
+	ProviderDingTalkRobot ProviderType = "dingtalk_robot"
+	ProviderEmail         ProviderType = "email"
+	ProviderSMS           ProviderType = "sms"
+	ProviderAliyunSMS     ProviderType = "aliyun_sms"
+	ProviderTencentSMS    ProviderType = "tencent_sms"
+	ProviderBaiduSMS      ProviderType = "baidu_sms"
+	ProviderGovCloud      ProviderType = "gov_cloud"
+	ProviderSelf          ProviderType = "self"
+	ProviderWebhook       ProviderType = "webhook"
+	ProviderCustomToken   ProviderType = "custom_token"
+	ProviderPushPlus      ProviderType = "pushplus"
+	ProviderWxPusher      ProviderType = "wxpusher"
+	ProviderServerChan    ProviderType = "serverchan"
 )
 
 type Placement string
@@ -47,22 +58,36 @@ var (
 )
 
 type Capability struct {
-	ID                 string
-	ProviderType       ProviderType
-	MessageType        string
-	MessageSchema      json.RawMessage
-	RecipientRequired  bool
-	AllowNoRecipient   bool
-	RecipientFieldName string
-	RecipientLocation  Placement
-	RecipientPath      string
-	RecipientFormat    string
-	IdentityKind       string
-	TokenLocation      Placement
-	TokenFieldName     string
-	RequestExamples    json.RawMessage
-	CreatedAt          time.Time
-	UpdatedAt          time.Time
+	ID                      string
+	ProviderType            ProviderType
+	DisplayName             string
+	Category                string
+	MessageType             string
+	MessageSchema           json.RawMessage
+	CredentialSchema        json.RawMessage
+	ChannelConfigSchema     json.RawMessage
+	CustomBodyAllowed       bool
+	RecipientRequired       bool
+	AllowNoRecipient        bool
+	RecipientRequirement    string
+	RecipientFieldName      string
+	RecipientLocation       Placement
+	RecipientPath           string
+	RecipientFormat         string
+	IdentityKind            string
+	TokenLocation           Placement
+	TokenFieldName          string
+	TokenStrategy           json.RawMessage
+	SendAPI                 json.RawMessage
+	SuccessRule             json.RawMessage
+	RetryRule               json.RawMessage
+	DefaultRateLimit        json.RawMessage
+	DefaultTimeoutMS        int
+	DefaultConcurrencyLimit int
+	DefaultRetryPolicy      json.RawMessage
+	RequestExamples         json.RawMessage
+	CreatedAt               time.Time
+	UpdatedAt               time.Time
 }
 
 type Channel struct {
@@ -180,6 +205,14 @@ func (s *Service) BuildRequest(ctx context.Context, channelID string, input Buil
 	return BuildRequest(channel, input)
 }
 
+func (s *Service) BuildDeliveryRequest(ctx context.Context, channelID string, input BuildDeliveryRequestInput) (BuiltRequest, error) {
+	channel, err := s.GetChannel(ctx, channelID)
+	if err != nil {
+		return BuiltRequest{}, err
+	}
+	return BuildDeliveryRequest(channel, input)
+}
+
 func (s *Service) TestSend(ctx context.Context, channelID string, input TestSendInput) (TestSendResult, error) {
 	channel, err := s.GetChannel(ctx, channelID)
 	if err != nil {
@@ -243,36 +276,110 @@ func (s *Service) TestSend(ctx context.Context, channelID string, input TestSend
 }
 
 func DefaultCapabilities() []Capability {
-	return []Capability{
-		capability(ProviderWeCom, "text", true, false, "touser", PlacementBody, "touser", "pipe_string", "wecom_userid", PlacementQuery, "access_token", `{"text":{"content":"{{ payload.title }}"}}`),
-		capability(ProviderFeishu, "text", true, false, "receive_id", PlacementBody, "receive_id", "string", "feishu_open_id", PlacementHeader, "Authorization", `{"msg_type":"text","content":{"text":"{{ payload.title }}"}}`),
-		capability(ProviderDingTalk, "text", true, false, "userid_list", PlacementBody, "userid_list", "comma_string", "dingtalk_userid", PlacementQuery, "access_token", `{"msgtype":"text","text":{"content":"{{ payload.title }}"}}`),
-		capability(ProviderEmail, "text", true, false, "to", PlacementBody, "to", "array", "email", PlacementNone, "", `{"subject":"{{ payload.title }}","html":"{{ payload.content }}"}`),
-		capability(ProviderSMS, "text", true, false, "phones", PlacementBody, "phones", "array", "mobile", PlacementNone, "", `{"content":"{{ payload.title }}"}`),
-		capability(ProviderGovCloud, "text", true, false, "touser", PlacementBody, "touser", "string", "mobile", PlacementHeader, "Authorization", `{"title":"{{ payload.title }}","content":"{{ payload.content }}"}`),
-		capability(ProviderSelf, "text", true, false, "user_id", PlacementBody, "user_id", "string", "system_user_id", PlacementHeader, "Authorization", `{"title":"{{ payload.title }}","body":"{{ payload.content }}"}`),
-		capability(ProviderWebhook, "json", false, true, "", PlacementNone, "", "string", "", PlacementNone, "", `{"payload":"{{ payload }}"}`),
-		capability(ProviderCustomToken, "json", true, true, "recipient", PlacementBody, "recipient", "string", "custom", PlacementHeader, "Authorization", `{"message":"{{ payload.title }}"}`),
+	return builtInCapabilities()
+}
+
+type capabilitySpec struct {
+	ProviderType         ProviderType
+	DisplayName          string
+	Category             string
+	MessageType          string
+	MessageSchema        json.RawMessage
+	CredentialSchema     json.RawMessage
+	ChannelConfigSchema  json.RawMessage
+	CustomBodyAllowed    bool
+	RecipientRequired    bool
+	AllowNoRecipient     bool
+	RecipientRequirement string
+	RecipientFieldName   string
+	RecipientLocation    Placement
+	RecipientPath        string
+	RecipientFormat      string
+	IdentityKind         string
+	TokenLocation        Placement
+	TokenFieldName       string
+	TokenStrategy        json.RawMessage
+	SendAPI              json.RawMessage
+	SuccessRule          json.RawMessage
+	RetryRule            json.RawMessage
+	DefaultRateLimit     json.RawMessage
+	DefaultTimeoutMS     int
+	DefaultConcurrency   int
+	DefaultRetryPolicy   json.RawMessage
+	RequestExamples      json.RawMessage
+}
+
+func capability(spec capabilitySpec) Capability {
+	if spec.RecipientRequirement == "" {
+		spec.RecipientRequirement = "system"
+		if !spec.RecipientRequired && spec.AllowNoRecipient {
+			spec.RecipientRequirement = "none"
+		}
+	}
+	if spec.DefaultTimeoutMS == 0 {
+		spec.DefaultTimeoutMS = 5000
+	}
+	if spec.DefaultConcurrency == 0 {
+		spec.DefaultConcurrency = 5
+	}
+	return Capability{
+		ID:                      uuid.NewString(),
+		ProviderType:            spec.ProviderType,
+		DisplayName:             spec.DisplayName,
+		Category:                spec.Category,
+		MessageType:             spec.MessageType,
+		MessageSchema:           spec.MessageSchema,
+		CredentialSchema:        spec.CredentialSchema,
+		ChannelConfigSchema:     spec.ChannelConfigSchema,
+		CustomBodyAllowed:       spec.CustomBodyAllowed,
+		RecipientRequired:       spec.RecipientRequired,
+		AllowNoRecipient:        spec.AllowNoRecipient,
+		RecipientRequirement:    spec.RecipientRequirement,
+		RecipientFieldName:      spec.RecipientFieldName,
+		RecipientLocation:       spec.RecipientLocation,
+		RecipientPath:           spec.RecipientPath,
+		RecipientFormat:         spec.RecipientFormat,
+		IdentityKind:            spec.IdentityKind,
+		TokenLocation:           spec.TokenLocation,
+		TokenFieldName:          spec.TokenFieldName,
+		TokenStrategy:           spec.TokenStrategy,
+		SendAPI:                 spec.SendAPI,
+		SuccessRule:             spec.SuccessRule,
+		RetryRule:               spec.RetryRule,
+		DefaultRateLimit:        spec.DefaultRateLimit,
+		DefaultTimeoutMS:        spec.DefaultTimeoutMS,
+		DefaultConcurrencyLimit: spec.DefaultConcurrency,
+		DefaultRetryPolicy:      spec.DefaultRetryPolicy,
+		RequestExamples:         spec.RequestExamples,
 	}
 }
 
-func capability(providerType ProviderType, messageType string, recipientRequired bool, allowNoRecipient bool, recipientFieldName string, recipientLocation Placement, recipientPath string, recipientFormat string, identityKind string, tokenLocation Placement, tokenFieldName string, example string) Capability {
-	return Capability{
-		ID:                 uuid.NewString(),
-		ProviderType:       providerType,
-		MessageType:        messageType,
-		MessageSchema:      json.RawMessage(`{"type":"object"}`),
-		RecipientRequired:  recipientRequired,
-		AllowNoRecipient:   allowNoRecipient,
-		RecipientFieldName: recipientFieldName,
-		RecipientLocation:  recipientLocation,
-		RecipientPath:      recipientPath,
-		RecipientFormat:    recipientFormat,
-		IdentityKind:       identityKind,
-		TokenLocation:      tokenLocation,
-		TokenFieldName:     tokenFieldName,
-		RequestExamples:    json.RawMessage(example),
-	}
+func rawJSON(value string) json.RawMessage {
+	return json.RawMessage(value)
+}
+
+func textContentSchema() json.RawMessage {
+	return rawJSON(`{"type":"object","required":["content"],"properties":{"content":{"type":"string","title":"Content","default":"{{ payload.title }}"},"title":{"type":"string","title":"Title","default":"{{ payload.title }}"}}}`)
+}
+
+func titleContentSchema() json.RawMessage {
+	return rawJSON(`{"type":"object","required":["title","content"],"properties":{"title":{"type":"string","title":"Title","default":"{{ payload.title }}"},"content":{"type":"string","title":"Content","default":"{{ payload.content }}"}}}`)
+}
+
+func emailContentSchema() json.RawMessage {
+	return rawJSON(`{"type":"object","required":["subject","html"],"properties":{"subject":{"type":"string","title":"Subject","default":"{{ payload.title }}"},"html":{"type":"string","title":"HTML body","default":"{{ payload.content }}"},"text":{"type":"string","title":"Plain text body"}}}`)
+}
+
+func smsContentSchema() json.RawMessage {
+	return rawJSON(`{"type":"object","required":["content"],"properties":{"content":{"type":"string","title":"SMS content","default":"{{ payload.title }}"},"template_params":{"type":"object","title":"Template parameters","additionalProperties":true}}}`)
+}
+
+func webhookContentSchema() json.RawMessage {
+	return rawJSON(`{"type":"object","properties":{"payload":{"type":"object","title":"Payload","additionalProperties":true},"headers":{"type":"object","additionalProperties":{"type":"string"}}},"additionalProperties":true}`)
+}
+
+func customTokenContentSchema() json.RawMessage {
+	return rawJSON(`{"type":"object","required":["message"],"properties":{"message":{"type":"string","title":"Message","default":"{{ payload.title }}"},"payload":{"type":"object","additionalProperties":true}},"additionalProperties":true}`)
 }
 
 func normalizeChannelInput(input CreateChannelInput) (CreateChannelParams, error) {
@@ -313,7 +420,26 @@ func normalizeChannelInput(input CreateChannelInput) (CreateChannelParams, error
 
 func validProviderType(providerType ProviderType) bool {
 	switch providerType {
-	case ProviderWeCom, ProviderFeishu, ProviderDingTalk, ProviderEmail, ProviderSMS, ProviderGovCloud, ProviderSelf, ProviderWebhook, ProviderCustomToken:
+	case ProviderWeCom,
+		ProviderWeComApp,
+		ProviderWeComRobot,
+		ProviderFeishu,
+		ProviderFeishuRobot,
+		ProviderDingTalk,
+		ProviderDingTalkWork,
+		ProviderDingTalkRobot,
+		ProviderEmail,
+		ProviderSMS,
+		ProviderAliyunSMS,
+		ProviderTencentSMS,
+		ProviderBaiduSMS,
+		ProviderGovCloud,
+		ProviderSelf,
+		ProviderWebhook,
+		ProviderCustomToken,
+		ProviderPushPlus,
+		ProviderWxPusher,
+		ProviderServerChan:
 		return true
 	default:
 		return false
@@ -340,6 +466,38 @@ type BuildRequestInput struct {
 	Body      json.RawMessage `json:"body"`
 }
 
+type RenderedMessage struct {
+	ProviderType ProviderType    `json:"provider_type,omitempty"`
+	MessageType  string          `json:"message_type,omitempty"`
+	Content      json.RawMessage `json:"content,omitempty"`
+}
+
+type ResolvedRecipient struct {
+	SystemUserID string            `json:"system_user_id,omitempty"`
+	Mobile       string            `json:"mobile,omitempty"`
+	Email        string            `json:"email,omitempty"`
+	PlatformIDs  map[string]string `json:"platform_ids,omitempty"`
+	Value        any               `json:"value,omitempty"`
+}
+
+type DeliveryTargetContext struct {
+	DeliveryAttemptID string `json:"delivery_attempt_id"`
+	MessageID         string `json:"message_id"`
+	ChannelID         string `json:"channel_id"`
+	ChannelName       string `json:"channel_name"`
+	ProviderType      string `json:"provider_type"`
+	TemplateVersionID string `json:"template_version_id"`
+	JobID             string `json:"job_id"`
+}
+
+type BuildDeliveryRequestInput struct {
+	Token                string                `json:"token"`
+	RenderedMessage      RenderedMessage       `json:"rendered_message"`
+	ResolvedRecipients   []ResolvedRecipient   `json:"resolved_recipients"`
+	TargetContext        DeliveryTargetContext `json:"target_context"`
+	LegacyRecipientValue any                   `json:"-"`
+}
+
 type TestSendInput struct {
 	BuildRequestInput
 	Send bool `json:"send"`
@@ -364,12 +522,13 @@ type TestSendResult struct {
 }
 
 type requestConfig struct {
-	Method    string            `json:"method"`
-	URL       string            `json:"url"`
-	Headers   map[string]string `json:"headers"`
-	Body      json.RawMessage   `json:"body"`
-	Token     placementConfig   `json:"token"`
-	Recipient placementConfig   `json:"recipient"`
+	Method            string            `json:"method"`
+	URL               string            `json:"url"`
+	Headers           map[string]string `json:"headers"`
+	Body              json.RawMessage   `json:"body"`
+	Token             placementConfig   `json:"token"`
+	Recipient         placementConfig   `json:"recipient"`
+	SkipRenderedMerge bool              `json:"-"`
 }
 
 type placementConfig struct {
@@ -381,6 +540,30 @@ type placementConfig struct {
 }
 
 func BuildRequest(channel Channel, input BuildRequestInput) (BuiltRequest, error) {
+	return BuildDeliveryRequest(channel, BuildDeliveryRequestInput{
+		Token: input.Token,
+		RenderedMessage: RenderedMessage{
+			ProviderType: channel.ProviderType,
+			Content:      input.Body,
+		},
+		ResolvedRecipients:   ResolvedRecipientsFromValue(input.Recipient),
+		LegacyRecipientValue: input.Recipient,
+	})
+}
+
+func BuildDeliveryRequest(channel Channel, input BuildDeliveryRequestInput) (BuiltRequest, error) {
+	recipientValue := input.LegacyRecipientValue
+	if recipientValue == nil {
+		recipientValue = recipientValueFromResolved(channel.ProviderType, input.ResolvedRecipients)
+	}
+	return buildRequest(channel, BuildRequestInput{
+		Token:     input.Token,
+		Recipient: recipientValue,
+		Body:      input.RenderedMessage.Content,
+	})
+}
+
+func buildRequest(channel Channel, input BuildRequestInput) (BuiltRequest, error) {
 	config, err := requestConfigFrom(channel, input)
 	if err != nil {
 		return BuiltRequest{}, err
@@ -397,7 +580,7 @@ func BuildRequest(channel Channel, input BuildRequestInput) (BuiltRequest, error
 	if err != nil {
 		return BuiltRequest{}, err
 	}
-	if len(bytes.TrimSpace(input.Body)) > 0 {
+	if !config.SkipRenderedMerge && len(bytes.TrimSpace(input.Body)) > 0 {
 		inputBody, err := decodeBody(input.Body)
 		if err != nil {
 			return BuiltRequest{}, err
@@ -445,6 +628,169 @@ func BuildRequest(channel Channel, input BuildRequestInput) (BuiltRequest, error
 		Query:   query,
 		Body:    body,
 	}, nil
+}
+
+func ResolvedRecipientsFromValue(value any) []ResolvedRecipient {
+	switch typed := value.(type) {
+	case nil:
+		return nil
+	case []ResolvedRecipient:
+		recipients := make([]ResolvedRecipient, len(typed))
+		copy(recipients, typed)
+		return recipients
+	case []string:
+		recipients := make([]ResolvedRecipient, 0, len(typed))
+		for _, item := range typed {
+			recipients = append(recipients, ResolvedRecipient{Value: item})
+		}
+		return recipients
+	case []any:
+		recipients := make([]ResolvedRecipient, 0, len(typed))
+		for _, item := range typed {
+			recipients = append(recipients, resolvedRecipientFromValue(item))
+		}
+		return recipients
+	case map[string]any:
+		return []ResolvedRecipient{resolvedRecipientFromMap(typed)}
+	case map[string]string:
+		return []ResolvedRecipient{resolvedRecipientFromStringMap(typed)}
+	default:
+		return []ResolvedRecipient{{Value: typed}}
+	}
+}
+
+func resolvedRecipientFromValue(value any) ResolvedRecipient {
+	if object, ok := value.(map[string]any); ok {
+		return resolvedRecipientFromMap(object)
+	}
+	if object, ok := value.(map[string]string); ok {
+		return resolvedRecipientFromStringMap(object)
+	}
+	return ResolvedRecipient{Value: value}
+}
+
+func resolvedRecipientFromStringMap(value map[string]string) ResolvedRecipient {
+	object := make(map[string]any, len(value))
+	for key, item := range value {
+		object[key] = item
+	}
+	return resolvedRecipientFromMap(object)
+}
+
+func resolvedRecipientFromMap(value map[string]any) ResolvedRecipient {
+	recipient := ResolvedRecipient{
+		SystemUserID: stringFromMap(value, "system_user_id", "user_id"),
+		Mobile:       stringFromMap(value, "mobile", "phone"),
+		Email:        stringFromMap(value, "email"),
+		PlatformIDs:  map[string]string{},
+	}
+	if nested, ok := value["platform_ids"].(map[string]any); ok {
+		for key, item := range nested {
+			if stringValue := strings.TrimSpace(fmt.Sprint(item)); stringValue != "" {
+				recipient.PlatformIDs[key] = stringValue
+			}
+		}
+	}
+	if nested, ok := value["platform_ids"].(map[string]string); ok {
+		for key, item := range nested {
+			if stringValue := strings.TrimSpace(item); stringValue != "" {
+				recipient.PlatformIDs[key] = stringValue
+			}
+		}
+	}
+	for _, key := range []string{"wecom_userid", "feishu_open_id", "feishu_user_id", "dingtalk_userid", "wxpusher_uid", "gov_userid", "gov_party_id", "gov_tag_id", "userid", "open_id"} {
+		if stringValue := stringFromMap(value, key); stringValue != "" {
+			recipient.PlatformIDs[key] = stringValue
+		}
+	}
+	if recipient.SystemUserID == "" && recipient.Mobile == "" && recipient.Email == "" && len(recipient.PlatformIDs) == 0 {
+		recipient.Value = value
+	}
+	return recipient
+}
+
+func recipientValueFromResolved(providerType ProviderType, recipients []ResolvedRecipient) any {
+	if len(recipients) == 0 {
+		return nil
+	}
+	values := make([]any, 0, len(recipients))
+	for _, recipient := range recipients {
+		value := recipientIdentityValue(providerType, recipient)
+		if isEmptyValue(value) {
+			continue
+		}
+		values = append(values, value)
+	}
+	if len(values) == 0 {
+		return nil
+	}
+	if len(values) == 1 {
+		return values[0]
+	}
+	return values
+}
+
+func recipientIdentityValue(providerType ProviderType, recipient ResolvedRecipient) any {
+	for _, key := range providerIdentityKeys(providerType) {
+		if value := strings.TrimSpace(recipient.PlatformIDs[key]); value != "" {
+			return value
+		}
+	}
+	if !isEmptyValue(recipient.Value) {
+		return recipient.Value
+	}
+	switch providerType {
+	case ProviderEmail:
+		return recipient.Email
+	case ProviderSMS, ProviderAliyunSMS, ProviderTencentSMS, ProviderBaiduSMS, ProviderDingTalkRobot:
+		return recipient.Mobile
+	case ProviderGovCloud:
+		return firstString(recipient.PlatformIDs["gov_userid"], recipient.Mobile)
+	case ProviderSelf:
+		return recipient.SystemUserID
+	default:
+		return firstString(recipient.SystemUserID, recipient.Mobile, recipient.Email)
+	}
+}
+
+func providerIdentityKeys(providerType ProviderType) []string {
+	switch providerType {
+	case ProviderWeCom, ProviderWeComApp, ProviderWeComRobot:
+		return []string{"wecom_userid", "userid"}
+	case ProviderFeishu, ProviderFeishuRobot:
+		return []string{"feishu_open_id", "feishu_user_id", "open_id", "user_id"}
+	case ProviderDingTalk, ProviderDingTalkWork:
+		return []string{"dingtalk_userid", "userid", "user_id"}
+	case ProviderWxPusher:
+		return []string{"wxpusher_uid", "uid"}
+	case ProviderGovCloud:
+		return []string{"gov_userid", "userid", "user_id"}
+	default:
+		return nil
+	}
+}
+
+func stringFromMap(value map[string]any, keys ...string) string {
+	for _, key := range keys {
+		item, ok := value[key]
+		if !ok || item == nil {
+			continue
+		}
+		stringValue := strings.TrimSpace(fmt.Sprint(item))
+		if stringValue != "" {
+			return stringValue
+		}
+	}
+	return ""
+}
+
+func firstString(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 func sendBuiltRequest(ctx context.Context, channel Channel, built BuiltRequest) (int, map[string][]string, []byte, error) {
@@ -502,6 +848,15 @@ func requestConfigFrom(channel Channel, input BuildRequestInput) (requestConfig,
 	var config requestConfig
 	if err := decodeInto(channel.SendConfig, &config); err != nil {
 		return requestConfig{}, err
+	}
+	if strings.TrimSpace(config.URL) == "" {
+		defaultConfig, ok, err := builtInRequestConfig(channel, input)
+		if err != nil {
+			return requestConfig{}, err
+		}
+		if ok {
+			config = defaultConfig
+		}
 	}
 	tokenPlacement, err := decodePlacement(channel.TokenConfig, "token")
 	if err != nil {

@@ -21,7 +21,7 @@ import (
 	msgtemplate "mvp-push-gateway/backend/internal/template"
 )
 
-func TestWorkerPlansInboundIntoDeliveryAttemptAndSendJob(t *testing.T) {
+func TestWorkerPlansLegacyActionIntoDeliveryAttemptAndSendJob(t *testing.T) {
 	pool := openMigratedPool(t)
 	defer pool.Close()
 
@@ -136,9 +136,7 @@ func TestWorkerPlansInboundIntoDeliveryAttemptAndSendJob(t *testing.T) {
 		t.Fatalf("ingest inbound: %v", err)
 	}
 
-	worker := planning.NewWorker(repository, planning.WithWorkerID("planner-integration"), planning.WithNow(func() time.Time {
-		return time.Date(2026, 5, 11, 12, 0, 0, 0, time.UTC)
-	}))
+	worker := planning.NewWorker(repository, planning.WithWorkerID("planner-integration"))
 	processed, err := worker.ProcessBatch(ctx, 1)
 	if err != nil {
 		t.Fatalf("process planning batch: %v", err)
@@ -194,6 +192,213 @@ func TestWorkerPlansInboundIntoDeliveryAttemptAndSendJob(t *testing.T) {
 	}
 	if hitCount != 1 {
 		t.Fatalf("expected route hit counter to be 1, got %d", hitCount)
+	}
+}
+
+func TestWorkerFansOutActionTargetsIntoDeliveryAttemptsAndSendJobs(t *testing.T) {
+	pool := openMigratedPool(t)
+	defer pool.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	repository := dbrepo.NewRepository(pool)
+	if err := repository.SeedProviderCapabilities(ctx, provider.DefaultCapabilities()); err != nil {
+		t.Fatalf("seed provider capabilities: %v", err)
+	}
+
+	sourceService := source.NewService(repository, source.WithTraceIDGenerator(func() string { return "trace-target-fanout" }))
+	templateService := msgtemplate.NewService(repository)
+	routeService := route.NewService(repository)
+
+	inboundSource, err := sourceService.CreateSource(ctx, source.CreateSourceInput{
+		Code:       "targetfanout",
+		Name:       "Target Fanout",
+		Enabled:    true,
+		AuthMode:   source.AuthModeNone,
+		CompatMode: "standard",
+	})
+	if err != nil {
+		t.Fatalf("create source: %v", err)
+	}
+	webhookChannel, err := repository.CreateChannel(ctx, provider.CreateChannelParams{
+		ProviderType:     provider.ProviderWebhook,
+		Name:             "Webhook",
+		Enabled:          true,
+		SendConfig:       json.RawMessage(`{"method":"POST","url":"https://example.test/webhook","recipient":{"location":"none"}}`),
+		RateLimitConfig:  json.RawMessage(`{}`),
+		ConcurrencyLimit: 1,
+		TimeoutMS:        1000,
+		RetryPolicy:      json.RawMessage(`{"max_attempts":2}`),
+		DeadLetterPolicy: json.RawMessage(`{}`),
+	})
+	if err != nil {
+		t.Fatalf("create webhook channel: %v", err)
+	}
+	customChannel, err := repository.CreateChannel(ctx, provider.CreateChannelParams{
+		ProviderType:     provider.ProviderCustomToken,
+		Name:             "Custom Token",
+		Enabled:          true,
+		SendConfig:       json.RawMessage(`{"method":"POST","url":"https://example.test/custom","recipient":{"location":"body","path":"recipient"}}`),
+		RateLimitConfig:  json.RawMessage(`{}`),
+		ConcurrencyLimit: 1,
+		TimeoutMS:        1000,
+		RetryPolicy:      json.RawMessage(`{"max_attempts":4}`),
+		DeadLetterPolicy: json.RawMessage(`{}`),
+	})
+	if err != nil {
+		t.Fatalf("create custom token channel: %v", err)
+	}
+
+	webhookTemplate, err := templateService.CreateTemplate(ctx, msgtemplate.TemplateInput{Name: "Webhook Template", SourceID: inboundSource.ID, Enabled: true})
+	if err != nil {
+		t.Fatalf("create webhook template: %v", err)
+	}
+	webhookVersion, err := templateService.Publish(ctx, webhookTemplate.ID, msgtemplate.VersionInput{
+		MessageType:        "json",
+		TargetProviderType: string(provider.ProviderWebhook),
+		TemplateBody:       `{"target":"webhook","title":"{{ payload.title }}"}`,
+		MessageBodySchema:  json.RawMessage(`{"type":"object"}`),
+		SamplePayload:      json.RawMessage(`{"title":"critical"}`),
+	})
+	if err != nil {
+		t.Fatalf("publish webhook template: %v", err)
+	}
+	customTemplate, err := templateService.CreateTemplate(ctx, msgtemplate.TemplateInput{Name: "Custom Template", SourceID: inboundSource.ID, Enabled: true})
+	if err != nil {
+		t.Fatalf("create custom template: %v", err)
+	}
+	customVersion, err := templateService.Publish(ctx, customTemplate.ID, msgtemplate.VersionInput{
+		MessageType:        "json",
+		TargetProviderType: string(provider.ProviderCustomToken),
+		TemplateBody:       `{"target":"custom","ticket":"{{ payload.ticket }}"}`,
+		MessageBodySchema:  json.RawMessage(`{"type":"object"}`),
+		SamplePayload:      json.RawMessage(`{"ticket":"T-1001"}`),
+	})
+	if err != nil {
+		t.Fatalf("publish custom template: %v", err)
+	}
+
+	flow, err := routeService.CreateFlow(ctx, route.CreateFlowInput{
+		SourceID: inboundSource.ID,
+		Name:     "Target Fanout Flow",
+		Enabled:  true,
+		Mode:     route.ModeTable,
+	})
+	if err != nil {
+		t.Fatalf("create route flow: %v", err)
+	}
+	ruleKey := "00000000-0000-0000-0000-000000024001"
+	if _, err := routeService.SaveRules(ctx, flow.ID, route.SaveRulesInput{Rules: []route.RuleInput{{
+		RuleKey:       ruleKey,
+		SortOrder:     10,
+		Name:          "Always fan out",
+		ConditionTree: json.RawMessage(`{"operator":"always"}`),
+		Enabled:       true,
+		Action: route.ActionInput{
+			Targets: []route.ActionTargetInput{
+				{ChannelID: webhookChannel.ID, TemplateVersionID: webhookVersion.ID, Enabled: true},
+				{ChannelID: customChannel.ID, TemplateVersionID: customVersion.ID, Enabled: true},
+			},
+			RecipientStrategy: json.RawMessage(`{}`),
+			SendDedupeConfig:  json.RawMessage(`{"enabled":true,"key_path":"payload.ticket","ttl_seconds":600}`),
+		},
+	}}}); err != nil {
+		t.Fatalf("save route rules: %v", err)
+	}
+	if _, err := routeService.Publish(ctx, flow.ID); err != nil {
+		t.Fatalf("publish route: %v", err)
+	}
+
+	if _, err := sourceService.Ingest(ctx, source.IngestInput{
+		SourceCode: "targetfanout",
+		Method:     "POST",
+		Path:       "/api/v1/ingest/targetfanout",
+		Body:       []byte(`{"title":"critical","ticket":"T-1001"}`),
+	}); err != nil {
+		t.Fatalf("ingest inbound: %v", err)
+	}
+
+	worker := planning.NewWorker(repository, planning.WithWorkerID("planner-target-fanout"))
+	processed, err := worker.ProcessBatch(ctx, 1)
+	if err != nil {
+		t.Fatalf("process planning batch: %v", err)
+	}
+	if processed != 1 {
+		t.Fatalf("expected one route_plan job processed, got %d", processed)
+	}
+
+	var messageID string
+	var status string
+	if err := pool.QueryRow(ctx, `
+		SELECT id::text, status
+		FROM message_records
+		WHERE trace_id = 'trace-target-fanout'
+	`).Scan(&messageID, &status); err != nil {
+		t.Fatalf("query planned message: %v", err)
+	}
+	if status != "planned" {
+		t.Fatalf("expected planned message, got %s", status)
+	}
+
+	rows, err := pool.Query(ctx, `
+		SELECT
+			attempt.channel_id::text,
+			attempt.template_version_id::text,
+			job.payload
+		FROM delivery_attempts AS attempt
+		JOIN jobs AS job ON (job.payload->>'delivery_attempt_id')::uuid = attempt.id
+		WHERE attempt.message_id = $1
+			AND job.type = 'send_message'
+			AND job.status = 'queued'
+		ORDER BY attempt.channel_id::text
+	`, messageID)
+	if err != nil {
+		t.Fatalf("query delivery attempts and send jobs: %v", err)
+	}
+	defer rows.Close()
+
+	type plannedTarget struct {
+		channelID         string
+		templateVersionID string
+		payload           map[string]any
+	}
+	planned := map[string]plannedTarget{}
+	for rows.Next() {
+		var channelID string
+		var templateVersionID string
+		var rawPayload json.RawMessage
+		if err := rows.Scan(&channelID, &templateVersionID, &rawPayload); err != nil {
+			t.Fatalf("scan send job: %v", err)
+		}
+		var decoded map[string]any
+		if err := json.Unmarshal(rawPayload, &decoded); err != nil {
+			t.Fatalf("decode send job payload: %v", err)
+		}
+		planned[templateVersionID] = plannedTarget{channelID: channelID, templateVersionID: templateVersionID, payload: decoded}
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("send job rows: %v", err)
+	}
+	if len(planned) != 2 {
+		t.Fatalf("expected two delivery attempts, got %d: %+v", len(planned), planned)
+	}
+
+	webhookTarget, ok := planned[webhookVersion.ID]
+	if !ok || webhookTarget.channelID != webhookChannel.ID {
+		t.Fatalf("missing webhook target attempt: %+v", planned)
+	}
+	webhookBody, ok := webhookTarget.payload["body"].(map[string]any)
+	if !ok || webhookBody["target"] != "webhook" || webhookBody["title"] != "critical" {
+		t.Fatalf("expected webhook rendered body, got %+v", webhookTarget.payload)
+	}
+	customTarget, ok := planned[customVersion.ID]
+	if !ok || customTarget.channelID != customChannel.ID {
+		t.Fatalf("missing custom target attempt: %+v", planned)
+	}
+	customBody, ok := customTarget.payload["body"].(map[string]any)
+	if !ok || customBody["target"] != "custom" || customBody["ticket"] != "T-1001" {
+		t.Fatalf("expected custom rendered body, got %+v", customTarget.payload)
 	}
 }
 
@@ -327,6 +532,96 @@ func TestWorkerMarksBusinessPlanningFailuresDone(t *testing.T) {
 			t.Fatalf("process recipient-error batch: %v", err)
 		}
 		assertMessageAndRouteJob(t, ctx, pool, "trace-recipient-error", "failed", "MGP-PLAN-RCPT")
+	})
+
+	t.Run("template provider mismatch marks channel planning failure", func(t *testing.T) {
+		pool := openMigratedPool(t)
+		defer pool.Close()
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		repository := dbrepo.NewRepository(pool)
+		if err := repository.SeedProviderCapabilities(ctx, provider.DefaultCapabilities()); err != nil {
+			t.Fatalf("seed provider capabilities: %v", err)
+		}
+		sourceService := source.NewService(repository, source.WithTraceIDGenerator(func() string { return "trace-provider-mismatch" }))
+		templateService := msgtemplate.NewService(repository)
+		routeService := route.NewService(repository)
+		inboundSource, err := sourceService.CreateSource(ctx, source.CreateSourceInput{Code: "providermismatch", Name: "Provider Mismatch", Enabled: true, AuthMode: source.AuthModeNone, CompatMode: "standard_json"})
+		if err != nil {
+			t.Fatalf("create source: %v", err)
+		}
+		channel, err := repository.CreateChannel(ctx, provider.CreateChannelParams{
+			ProviderType:     provider.ProviderWeCom,
+			Name:             "WeCom",
+			Enabled:          true,
+			SendConfig:       json.RawMessage(`{"base_url":"https://qyapi.weixin.qq.com","safe":0}`),
+			RateLimitConfig:  json.RawMessage(`{}`),
+			ConcurrencyLimit: 1,
+			TimeoutMS:        1000,
+			RetryPolicy:      json.RawMessage(`{"max_attempts":2}`),
+			DeadLetterPolicy: json.RawMessage(`{}`),
+		})
+		if err != nil {
+			t.Fatalf("create channel: %v", err)
+		}
+		template, err := templateService.CreateTemplate(ctx, msgtemplate.TemplateInput{Name: "DingTalk Body", SourceID: inboundSource.ID, Enabled: true})
+		if err != nil {
+			t.Fatalf("create template: %v", err)
+		}
+		templateVersion, err := templateService.Publish(ctx, template.ID, msgtemplate.VersionInput{
+			MessageType:        "text",
+			TargetProviderType: string(provider.ProviderDingTalk),
+			TemplateBody:       `{"content":"{{ payload.title }}"}`,
+			MessageBodySchema:  json.RawMessage(`{"type":"object"}`),
+			SamplePayload:      json.RawMessage(`{"title":"x"}`),
+		})
+		if err != nil {
+			t.Fatalf("publish template: %v", err)
+		}
+		flow, err := routeService.CreateFlow(ctx, route.CreateFlowInput{SourceID: inboundSource.ID, Name: "Provider Mismatch Flow", Enabled: true, Mode: route.ModeTable})
+		if err != nil {
+			t.Fatalf("create route flow: %v", err)
+		}
+		if _, err := routeService.SaveRules(ctx, flow.ID, route.SaveRulesInput{Rules: []route.RuleInput{{
+			RuleKey:       "00000000-0000-0000-0000-000000025001",
+			SortOrder:     10,
+			Name:          "Always mismatch",
+			ConditionTree: json.RawMessage(`{"operator":"always"}`),
+			Enabled:       true,
+			Action: route.ActionInput{
+				Targets: []route.ActionTargetInput{
+					{ChannelID: channel.ID, TemplateVersionID: templateVersion.ID, Enabled: true},
+				},
+				RecipientStrategy: json.RawMessage(`{}`),
+				SendDedupeConfig:  json.RawMessage(`{}`),
+			},
+		}}}); err != nil {
+			t.Fatalf("save route rules: %v", err)
+		}
+		if _, err := routeService.Publish(ctx, flow.ID); err != nil {
+			t.Fatalf("publish route: %v", err)
+		}
+		if _, err := sourceService.Ingest(ctx, source.IngestInput{SourceCode: "providermismatch", Method: "POST", Path: "/api/v1/ingest/providermismatch", Body: []byte(`{"title":"x"}`)}); err != nil {
+			t.Fatalf("ingest: %v", err)
+		}
+		worker := planning.NewWorker(repository, planning.WithWorkerID("planner-provider-mismatch"))
+		if _, err := worker.ProcessBatch(ctx, 1); err != nil {
+			t.Fatalf("process provider-mismatch batch: %v", err)
+		}
+		assertMessageAndRouteJob(t, ctx, pool, "trace-provider-mismatch", "failed", "MGP-PLAN-CHANNEL")
+
+		var attempts int
+		if err := pool.QueryRow(ctx, `
+			SELECT count(*)
+			FROM delivery_attempts AS attempt
+			JOIN message_records AS message ON message.id = attempt.message_id
+			WHERE message.trace_id = 'trace-provider-mismatch'
+		`).Scan(&attempts); err != nil {
+			t.Fatalf("query delivery attempt count: %v", err)
+		}
+		if attempts != 0 {
+			t.Fatalf("expected no delivery attempts for provider mismatch, got %d", attempts)
+		}
 	})
 }
 

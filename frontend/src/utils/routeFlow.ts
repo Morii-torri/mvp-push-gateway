@@ -1,3 +1,4 @@
+import type { Edge, Node } from '@xyflow/react';
 import type { RouteGroup, RouteRule } from '../data/demoData';
 
 export type RouteConditionOperator =
@@ -27,6 +28,47 @@ type ConditionSummaryOptions = {
   fieldLabels?: Record<string, string>;
   matchGroupNames?: Record<string, string>;
 };
+
+export type RouteNodeKind = 'source' | 'condition' | 'recipient' | 'send_group' | 'template' | 'platform';
+
+export type RouteNodeData = Record<string, unknown> & {
+  kind: RouteNodeKind;
+  title: string;
+  description: string;
+  condition?: string;
+  hitCount?: number;
+};
+
+export type RouteFlowNode = Node<RouteNodeData, 'routeNode'>;
+export type RouteFlowEdge = Edge<Record<string, unknown>>;
+
+export type RouteCanvasSnapshot = {
+  nodes: RouteFlowNode[];
+  edges: RouteFlowEdge[];
+};
+
+type RouteNodeCatalogItem = {
+  kind: RouteNodeKind;
+  title: string;
+  description: string;
+};
+
+type RouteRuleFlowSummary = RouteRule & {
+  sendGroupSummary?: string;
+};
+
+export const routeNodeCatalog: RouteNodeCatalogItem[] = [
+  { kind: 'source', title: '来源开始', description: '固定接收当前路由大组绑定来源' },
+  { kind: 'condition', title: '条件判断', description: '按 payload 字段、匹配组或系统值判断' },
+  { kind: 'recipient', title: '接收人', description: '系统接收人组或 payload 接收人' },
+  { kind: 'send_group', title: '发送动作组', description: '按目标列表分别渲染模板并投递到平台实例' },
+];
+
+export const routeNodeDefaults: Record<RouteNodeKind, RouteNodeCatalogItem> = {
+  ...Object.fromEntries(routeNodeCatalog.map((item) => [item.kind, item])),
+  template: { kind: 'template', title: '模板渲染', description: '历史节点' },
+  platform: { kind: 'platform', title: '发送平台', description: '历史节点' },
+} as Record<RouteNodeKind, RouteNodeCatalogItem>;
 
 const defaultFieldLabels: Record<string, string> = {
   'payload.bizType': '业务类型',
@@ -66,6 +108,82 @@ export function routeRulesForGroup<T extends RouteRule>(group: RouteGroup, rules
   return rules
     .filter((rule) => group.ruleIds.includes(rule.id))
     .sort((left, right) => left.sortOrder - right.sortOrder);
+}
+
+export function buildInitialRouteFlow<T extends RouteRuleFlowSummary>(
+  group: RouteGroup,
+  rules: T[],
+): RouteCanvasSnapshot {
+  const groupRules = routeRulesForGroup(group, rules);
+  const nodes: RouteFlowNode[] = [
+    {
+      id: 'source-start',
+      type: 'routeNode',
+      position: { x: 32, y: 180 },
+      deletable: false,
+      data: {
+        kind: 'source',
+        title: group.sourceName,
+        description: `来源编码 ${group.sourceCode}，当前组内固定不可切换`,
+      },
+    },
+  ];
+  const edges: RouteFlowEdge[] = [];
+
+  groupRules.forEach((rule, index) => {
+    const y = 42 + index * 140;
+    const conditionId = `${rule.id}-condition`;
+    const recipientId = `${rule.id}-recipient`;
+    const sendGroupId = `${rule.id}-send-group`;
+
+    nodes.push(
+      {
+        id: conditionId,
+        type: 'routeNode',
+        position: { x: 300, y },
+        data: {
+          kind: 'condition',
+          title: `${rule.sortOrder}. ${rule.name}`,
+          description: rule.condition,
+          condition: rule.condition,
+          hitCount: rule.hitCount,
+        },
+      },
+      {
+        id: recipientId,
+        type: 'routeNode',
+        position: { x: 560, y },
+        data: { kind: 'recipient', title: rule.recipientStrategy, description: '解析接收人并映射身份字段' },
+      },
+      {
+        id: sendGroupId,
+        type: 'routeNode',
+        position: { x: 820, y },
+        data: {
+          kind: 'send_group',
+          title: rule.sendGroupSummary || rule.targetProviders.join('、') || rule.template || '-',
+          description: '命中后按发送目标逐个渲染和投递',
+        },
+      },
+    );
+
+    [
+      ['source-start', conditionId, `顺序 ${rule.sortOrder}`],
+      [conditionId, recipientId, '命中'],
+      [recipientId, sendGroupId, '发送'],
+    ].forEach(([source, target, label]) => {
+      edges.push({
+        id: `${source}-${target}`,
+        source,
+        target,
+        label,
+        type: 'smoothstep',
+        animated: source === 'source-start',
+      });
+    });
+  });
+
+  return { nodes, edges };
 }
 
 export function buildRouteConditionTree(drafts: RouteConditionDraft[]): RouteConditionTree {

@@ -6,7 +6,7 @@
 
 - 项目名称：MVP Push Gateway
 - 定位：轻量但强扩展的综合消息推送网关。
-- 目标：统一接入下级系统，按条件路由、模板、接收人和上级平台能力完成消息投递，并提供可视化路由、日志审计、统计和安全开箱即用体验。
+- 目标：统一接入下级系统，按条件路由、消息模板、接收人策略和推送渠道能力完成消息投递，并提供可视化路由、日志审计、统计和安全开箱即用体验。
 - 设计基线日期：2026-05-07。
 
 ## 技术路线
@@ -27,8 +27,8 @@
 - 单体优先，模块化边界清晰；先避免微服务和额外中间件。
 - PostgreSQL 是唯一强依赖，承担业务数据、队列、审计、日志、统计和去重。
 - 数据库连接池按 API、planning、sending、maintenance 分离；不要让后台 worker 共用一个小连接池拖慢入站接口。
-- 平台能力必须数据化：消息类型、接收人字段、接收人字段位置、Token 策略、请求体结构和是否允许无接收人都应可描述。
-- 上级平台实例必须支持主动限流、独立并发上限、超时、重试和死信策略。
+- 推送渠道能力必须数据化：credential schema、channel config schema、message schema、recipient identity、Token 策略、发送 API、成功/重试规则、默认限流、超时、并发和重试策略都应可描述。
+- 推送渠道实例必须支持主动限流、独立并发上限、超时、重试和死信策略。
 - 路由必须同时支持可视化画布模式和传统表格模式，两者底层共享同一套发布后的执行模型。
 - 路由发布时必须编译为执行模型，planning worker 按 `source_id + route_version_id` 缓存；执行时先粗过滤，再完整条件判断，并记录慢规则。
 - 每个来源只允许一个启用路由大组；v1/v2 是同一大组内的发布版本，执行版本由 `current_version_id` 切换。
@@ -51,12 +51,12 @@
 - 来源双校验：支持 `token_and_hmac`，要求 Token 和 HMAC 同时通过；不要实现 `token_or_hmac`。
 - 来源 IP 白名单：一期能力，支持 CIDR；无鉴权来源必须提示建议配置白名单。
 - 前端列表：所有管理对象默认使用“查询栏 + 分页表格 + 新增按钮 + 弹窗/抽屉新增编辑”；状态和字段名必须中文化，禁止直接展示英文枚举。
-- 上级平台：内置飞书、钉钉、企业微信、邮箱、短信、随申办政务云、本平台、通用 Webhook、自定义 Token 平台。
-- 平台能力：消息类型、请求结构、Token 换取、Token 放置位置、接收人字段和接收人字段放置位置。
+- 推送渠道：第一批内置 `webhook`、`self`、`pushplus`、`wxpusher`、`serverchan`、`email`、`aliyun_sms`、`tencent_sms`、`baidu_sms`、`wecom_robot`、`wecom_app`、`dingtalk_robot`、`dingtalk_work`、`feishu_robot`、`gov_cloud`；保留 legacy `wecom`、`dingtalk`、`feishu`、`sms` 和高级 `custom_token`。
+- 平台能力：消息类型、凭证配置、渠道配置、消息内容 schema、Token 换取、Token 放置位置、接收人身份、成功/重试规则、默认限流/超时/并发/重试。
 - 组织人员：组织树、人员、平台身份字段，例如手机号、邮箱、企微 userid、飞书 open_id。
 - 匹配组：IP 组、业务值组、系统值组，用于条件判断。
-- 路由：唯一来源起点，多条件分支，多结束节点，多平台、多模板、多接收人策略，按顺序第一条命中即停止。
-- 模板：来源最近 payload、自动解析字段树、可复制变量列、当前值列、实时预览、schema 校验、错误码；复制变量格式为 `{{ payload.title }}`，内部路径仍为 `payload.title`。
+- 路由：唯一来源起点，多条件分支，命中后执行一个发送动作组；动作组内每个 target 绑定一个渠道实例和一个兼容模板版本，按顺序第一条命中即停止。
+- 模板：绑定 provider type + message type，只保存消息内容，不保存接收人字段或最终 HTTP body；字段支持 `{{ payload.summary | default('通知') }}` 这类 Jinja-like 表达式。
 - 来源最近 payload 样例：必须来自“鉴权通过且 JSON 合法的最近入站 payload”，不要求路由、模板或接收人配置成功。
 - 日志审计：入站主记录、出站尝试、配置审计、安全审计。
 - 队列监控：积压、最老等待时间、planning/sending P95、平台失败率、限流次数、死信、慢规则和端到端耗时。
@@ -73,15 +73,13 @@
 - 列表字段状态规范：`docs/ui-prototypes/list-field-status-spec.md`
 - 开源参考总览：`docs/research/open-source-references.md`
 - Austin/MagicPush 推送通道分析：`docs/research/open-source-push-channel-analysis.md`
-- 上级推送平台 Adapter 参照：`docs/research/provider-adapter-reference.md`
+- 推送渠道 Provider Adapter 参照：`docs/research/provider-adapter-reference.md`
 - 实施计划：`docs/plans/2026-05-07-mvp-push-gateway-implementation-plan.md`
 - 产品收敛与模板适配计划：`docs/plans/2026-05-11-product-simplification-and-template-adapter-plan.md`
 - 路由发送动作组改造计划：`docs/plans/2026-05-12-route-send-action-group-plan.md`
 
 ## 当前阶段
 
-当前仅允许先完善设计、原型、计划和项目骨架。正式业务代码开始前，需要确认：
+截至 2026-05-12，核心后端链路、provider capability registry、provider-aware template、route send action group、planning fan-out 和 delivery adapter boundary 已进入实现状态。文档描述应以当前源码和迁移为准，不再沿用“template node / 单模板多渠道 / 自定义 Token 平台作为主路径”的旧模型。
 
-- 设计文档已被接受。
-- 功能模块原型图已生成并确认。
-- 数据表和 API 第一版契约已确认。
+第一批 provider defaults 已实现 build-request/mock 级别支持，但 PushPlus、WxPusher、Server酱、短信、企微、钉钉、飞书、SMTP/self/gov_cloud 均不要写成已经真实联调成功；当前应标注为 implemented but not live-tested 或 configuration-dependent。ntfy、Gotify、Bark、PushMe 只保留后续规划。

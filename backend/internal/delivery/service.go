@@ -136,7 +136,7 @@ type Worker struct {
 	workerID          string
 	now               func() time.Time
 	httpClientFactory func(time.Duration) *http.Client
-	buildRequest      func(provider.Channel, provider.BuildRequestInput) (provider.BuiltRequest, error)
+	buildRequest      func(provider.Channel, provider.BuildDeliveryRequestInput) (provider.BuiltRequest, error)
 
 	mu         sync.Mutex
 	semaphores map[string]chan struct{}
@@ -179,7 +179,7 @@ func NewWorker(repo Repository, opts ...WorkerOption) *Worker {
 		httpClientFactory: func(timeout time.Duration) *http.Client {
 			return &http.Client{Timeout: timeout}
 		},
-		buildRequest: provider.BuildRequest,
+		buildRequest: provider.BuildDeliveryRequest,
 		semaphores:   map[string]chan struct{}{},
 		limiters:     map[string]*channelLimiter{},
 	}
@@ -304,7 +304,20 @@ func (w *Worker) ProcessOne(ctx context.Context, job queue.Job) error {
 		}
 	}
 
-	requestSnapshot := map[string]any{}
+	targetContext := provider.DeliveryTargetContext{
+		DeliveryAttemptID: attempt.ID,
+		MessageID:         attempt.MessageID,
+		ChannelID:         channel.ID,
+		ChannelName:       channel.Name,
+		ProviderType:      string(channel.ProviderType),
+		TemplateVersionID: attempt.TemplateVersionID,
+		JobID:             job.ID,
+	}
+	requestSnapshot := map[string]any{
+		"target_context":      targetContext,
+		"rendered_message":    snapshotValue(payload.Body),
+		"resolved_recipients": payload.Recipient,
+	}
 	responseSnapshot := map[string]any{}
 	resolvedToken := strings.TrimSpace(payload.Token)
 
@@ -327,16 +340,27 @@ func (w *Worker) ProcessOne(ctx context.Context, job queue.Job) error {
 		resolvedToken = token
 	}
 
-	builtRequest, err := w.buildRequest(effectiveChannel, provider.BuildRequestInput{
-		Token:     resolvedToken,
-		Recipient: payload.Recipient,
-		Body:      payload.Body,
+	builtRequest, err := w.buildRequest(effectiveChannel, provider.BuildDeliveryRequestInput{
+		Token: resolvedToken,
+		RenderedMessage: provider.RenderedMessage{
+			ProviderType: channel.ProviderType,
+			Content:      payload.Body,
+		},
+		ResolvedRecipients: provider.ResolvedRecipientsFromValue(payload.Recipient),
+		TargetContext:      targetContext,
 	})
 	if err != nil {
 		return w.failAttempt(ctx, job, attempt, attemptNo, startedAt, "MGP-SEND-001", err.Error(), requestSnapshot, responseSnapshot, retryPolicyFrom(channel.RetryPolicy))
 	}
 
 	requestSnapshot["resolved_token"] = resolvedToken
+	requestSnapshot["final_request"] = map[string]any{
+		"method":  builtRequest.Method,
+		"url":     builtRequest.URL,
+		"headers": builtRequest.Headers,
+		"query":   builtRequest.Query,
+		"body":    snapshotValue(builtRequest.Body),
+	}
 	requestSnapshot["send"] = map[string]any{
 		"method":    builtRequest.Method,
 		"url":       builtRequest.URL,
@@ -347,17 +371,15 @@ func (w *Worker) ProcessOne(ctx context.Context, job queue.Job) error {
 	}
 
 	statusCode, responseHeaders, responseBody, sendErr := w.send(ctx, channel, builtRequest)
-	responseSnapshot["send"] = map[string]any{
+	upstreamResponse := map[string]any{
 		"status_code": statusCode,
 		"headers":     responseHeaders,
 		"body":        snapshotValue(responseBody),
 	}
+	responseSnapshot["upstream_response"] = upstreamResponse
+	responseSnapshot["send"] = upstreamResponse
 	if sendErr != nil {
-		if responseSnapshot["send"] == nil {
-			responseSnapshot["send"] = map[string]any{}
-		}
-		sendSnapshot := responseSnapshot["send"].(map[string]any)
-		sendSnapshot["error"] = sendErr.Error()
+		upstreamResponse["error"] = sendErr.Error()
 		errorCode := "MGP-SEND-003"
 		if isTimeoutError(sendErr) {
 			errorCode = "MGP-SEND-002"

@@ -1,37 +1,46 @@
-# 上级推送平台 Adapter 参照
+# 推送渠道 Provider Adapter 参照
 
 日期：2026-05-12
 
-本文档用于后续改造 MVP Push Gateway 的推送渠道、消息模板和平台 adapter。目标是让普通用户少关心 HTTP URL、Header、Body、Token 放置和字段映射，只关心：
+本文档用于记录 MVP Push Gateway 的推送渠道、消息模板和 provider adapter 边界。目标是让普通用户少关心 HTTP URL、Header、Body、Token 放置和字段映射，只关心：
 
 - 路由条件：什么时候发。
 - 接收人：发给谁。
-- 推送渠道：发到哪些平台。
+- 推送渠道：发到哪些渠道实例。
 - 消息内容：标题、正文、链接、级别等业务字段。
 
 ## 1. 范围和资料状态
 
-### 1.1 本轮保留平台
+### 1.1 Provider 批次和实现状态
 
-| 优先级 | 平台 | 建议 provider type | 类型 | 资料状态 |
+| 批次 | 平台 | provider type | 类型 | 当前状态 |
 |---|---|---|---|---|
-| P0 | 本平台级联 MVP Push Gateway | `mvp_gateway` | 上级网关 | 本仓库接口已知 |
-| P0 | 通用 Webhook | `webhook` | 通用 HTTP | 当前项目已支持基础能力 |
-| P0 | 随申办政务云 | `gov_cloud` | 政务云消息平台 | base URL 和错误码已补；开发环境当前不可访问，先实现不联调 |
-| P0 | 企业微信应用消息 | `wecom_app` | 企业应用 | 接口形态已知，需接入时核对官方最新限制 |
-| P0 | 企业微信群机器人 | `wecom_robot` | 群机器人 | 接口形态已知 |
-| P0 | 钉钉工作消息 | `dingtalk_work` | 企业应用 | 接口形态已知，需核对企业授权和调用量 |
-| P0 | 钉钉群机器人 | `dingtalk_robot` | 群机器人 | 接口形态已知 |
-| P0 | 飞书机器人 | `feishu_robot` | 群机器人 | 接口形态已知 |
-| P0 | SMTP 邮件 | `smtp` | 邮件 | 协议稳定 |
-| P0 | 短信 | `sms` | 短信 | 第一批接阿里云、腾讯云、百度智能云 |
-| P0 | PushPlus | `pushplus` | 第三方推送网关 | 官方文档可查 |
-| P0 | WxPusher | `wxpusher` | 第三方推送网关 | 官方文档可查 |
-| P0 | Server酱 | `serverchan` | 第三方推送网关 | 官方入口和开源实现可查 |
-| P2 | ntfy | `ntfy` | 自托管通知 | 官方文档可查 |
-| P2 | Gotify | `gotify` | 自托管通知 | 官方文档可查 |
-| P2 | Bark | `bark` | iOS 通知 | 官方仓库文档可查 |
-| P2 | PushMe | `pushme` | 多平台通知 | 官方文档可查 |
+| 第一批 | 通用 Webhook | `webhook` | 通用 HTTP | 已实现 build-request/mock；Webhook 闭环依赖目标 URL |
+| 第一批 | 本平台级联 MVP Push Gateway | `self` | 上级网关 | 已实现 build-request/mock；真实级联依赖另一个网关实例配置 |
+| 第一批 | PushPlus | `pushplus` | 第三方推送网关 | 已实现 build-request/mock；未真实联调 |
+| 第一批 | WxPusher | `wxpusher` | 第三方推送网关 | 已实现 build-request/mock；未真实联调 |
+| 第一批 | Server酱 | `serverchan` | 第三方推送网关 | 已实现 build-request/mock；未真实联调 |
+| 第一批 | 邮件 | `email` | SMTP 邮件 | 已实现 build-request/mock；真实发送依赖 SMTP 配置 |
+| 第一批 | 阿里云短信 | `aliyun_sms` | 短信 | 已实现配置模型和 mock build request；暂无测试账号 |
+| 第一批 | 腾讯云短信 | `tencent_sms` | 短信 | 已实现配置模型和 mock build request；暂无测试账号 |
+| 第一批 | 百度智能云短信 | `baidu_sms` | 短信 | 已实现配置模型和 mock build request；暂无测试账号 |
+| 第一批兼容 | 短信聚合别名 | `sms` | legacy aggregate | 保留兼容；新配置优先使用具体短信 provider |
+| 第一批 | 企业微信群机器人 | `wecom_robot` | 群机器人 | 已实现 build-request/mock；未真实联调 |
+| 第一批 | 企业微信应用消息 | `wecom_app` | 企业应用 | 已实现 build-request/mock；未真实联调 |
+| 第一批兼容 | 企业微信旧类型 | `wecom` | legacy enterprise app | 保留兼容；新配置优先使用 `wecom_app` / `wecom_robot` |
+| 第一批 | 钉钉群机器人 | `dingtalk_robot` | 群机器人 | 已实现 build-request/mock；未真实联调 |
+| 第一批 | 钉钉工作消息 | `dingtalk_work` | 企业应用 | 已实现 build-request/mock；未真实联调 |
+| 第一批兼容 | 钉钉旧类型 | `dingtalk` | legacy work notice | 保留兼容；新配置优先使用 `dingtalk_work` / `dingtalk_robot` |
+| 第一批 | 飞书机器人 | `feishu_robot` | 群机器人 | 已实现 build-request/mock；未真实联调 |
+| 第一批兼容 | 飞书旧类型 | `feishu` | legacy robot | 保留兼容；新配置优先使用 `feishu_robot` |
+| 第一批 | 随申办政务云 | `gov_cloud` | 政务云消息平台 | 已实现 build-request/mock 和错误分类；开发环境不可访问，未真实联调 |
+| 高级保留 | 高级 custom_token | `custom_token` | advanced HTTP | 保留高级映射，不作为普通用户主路径 |
+| 第二批规划 | ntfy | `ntfy` | 自托管通知 | 仅规划，不做代码 |
+| 第二批规划 | Gotify | `gotify` | 自托管通知 | 仅规划，不做代码 |
+| 第二批规划 | Bark | `bark` | iOS 通知 | 仅规划，不做代码 |
+| 第二批规划 | PushMe | `pushme` | 多平台通知 | 仅规划，不做代码 |
+
+除通用 Webhook 可用本地假服务完成闭环外，PushPlus、WxPusher、Server酱、短信、企微、钉钉、飞书、SMTP/self/gov_cloud 当前均不要写成已经真实发送成功。
 
 ### 1.2 需要你补充的资料
 
@@ -39,7 +48,7 @@
 |---|---|
 | 随申办政务云 | base URL 已确认；开发环境当前不可访问，第一阶段按文档实现并用 mock/fake server 测试，不做真实联调。后续还需要测试 corpsecret、IP 白名单要求和可用测试接收人。 |
 | 短信供应商账号 | 第一批明确为阿里云、腾讯云、百度智能云；目前没有测试账号，第一阶段按官方 SDK/文档实现并用 mock client 测试，后续补账号、签名、模板 ID、区域后再真实联调。 |
-| 其他内部 Token 平台 | 不作为本批固定平台；如后续要接，需要目标系统的 token API、发送 API、成功判定和错误码。 |
+| 其他高级 custom_token 系统 | 不作为本批固定平台；如后续要接，需要目标系统的 token API、发送 API、成功判定和错误码。 |
 | 企业客户侧限制 | 例如企微、钉钉、飞书是否只允许机器人，不允许企业应用；是否要求私有域名、代理、IP 白名单。 |
 | 本平台级联策略 | 需要确认级联时 payload 是原样透传、包装后透传，还是只透传渲染后的消息内容。 |
 
@@ -66,8 +75,8 @@
 路由规则负责：
 
 - 命中条件。
-- 选择模板版本。
-- 选择推送渠道。
+- 配置发送动作组。
+- 在动作组 target 行中选择推送渠道实例和兼容模板版本。
 - 选择接收人策略。
 
 平台 adapter 负责：
@@ -78,9 +87,9 @@
 - 发 HTTP/SMTP 请求。
 - 解析成功/失败、错误码、重试建议。
 
-### 2.2 Adapter 配置模型
+### 2.2 Capability Registry 和 Adapter 边界
 
-建议未来每个内置平台暴露一份 capability 元数据：
+当前 provider capability registry 已数据化，每个内置 provider 暴露一份 capability 元数据：
 
 ```json
 {
@@ -90,7 +99,7 @@
   "credential_schema": {},
   "channel_config_schema": {},
   "supported_message_types": ["text", "markdown"],
-  "content_schema": {},
+  "message_schema": {},
   "recipient": {
     "required": true,
     "identity_kinds": ["wecom_userid"],
@@ -102,13 +111,24 @@
   },
   "defaults": {
     "timeout_ms": 5000,
+    "rate_limit": {"qps": 1},
     "concurrency_limit": 2,
     "retry_policy": {"max_attempts": 3, "delay_ms": 1000}
   }
 }
 ```
 
-当前数据库已有 `provider_capabilities`、`delivery_channels.auth_config/token_config/send_config/rate_limit_config/retry_policy/dead_letter_policy`，后续可以在此基础上增强字段元数据和内置 adapter。
+Capability 至少包含 credential schema、channel config schema、message schema、recipient identity、token strategy、send API、success/retry rule、默认限流、超时、并发和重试。`delivery_channels.auth_config/token_config/send_config/rate_limit_config/retry_policy/dead_letter_policy` 保存实例级覆盖。
+
+Delivery adapter 输入：
+
+- channel config。
+- rendered message。
+- resolved recipients。
+- delivery target context。
+- token。
+
+Delivery adapter 输出 final request。日志快照记录 `target_context`、`rendered_message`、`resolved_recipients`、`final_request`、`upstream_response`，同时兼容旧 `send` snapshot。Webhook/custom_token 保留高级映射；内置 provider 的普通模板不保存最终 HTTP body。
 
 ## 3. 平台逐项参照
 
@@ -149,13 +169,13 @@
 | 项 | 内容 |
 |---|---|
 | 支持消息类型 | 第一版建议先做 `text`；平台文档还包含图片、音频、视频、文件、文本卡片、图文、模板卡片，后续按需扩展 |
-| 用户填写配置 | `base_url` 默认 `https://www.ywxt.sh.cegn.cn/api-gateway/uranus/uranus/cgi-bin`、`corpsecret`、是否允许 `@all`、超时、限流；后续如平台要求可补应用标识 |
+| 用户填写配置 | `base_url` 默认 `https://www.ywxt.sh.cegn.cn/api-gateway/uranus/uranus/cgi-bin/`、`corpsecret`、是否允许 `@all`、超时、限流；后续如平台要求可补应用标识 |
 | 接收人身份字段 | `gov_userid`、`gov_party_id`、`gov_tag_id`；`touser/toparty/totag` 三者不能同时为空 |
 | Token 获取方式 | `GET {base_url}/gettoken?corpsecret=...`；示例：`https://www.ywxt.sh.cegn.cn/api-gateway/uranus/uranus/cgi-bin/gettoken?corpsecret=...`；返回 `access_token/expires_in`；有效期 3600 秒，必须全局缓存；access_token 至少预留 512 字节 |
 | 发送 API | `POST {base_url}/request/message/send?access_token=...` |
 | 请求体结构 | 文本消息：`{"touser":"UserID1|UserID2","toparty":"PartyID1|PartyID2","totag":"TagID1|TagID2","msgtype":"text","description":"消息内容"}`；`touser=@all` 时忽略 `toparty/totag` |
 | 成功判定 | token 接口 JSON `errcode == 0`；发送接口也按 `errcode == 0` 判定成功 |
-| 错误码和重试建议 | token 获取失败记 `MGP-TOKEN-*`；`access_token` 失效或非法时清缓存后重试一次；系统繁忙/过载可重试，最多 3 次；参数、权限、接收人、secret 错误不重试 |
+| 错误码和重试建议 | token 获取失败记 `MGP-TOKEN-*`；`401/40014/42001` 清缓存后刷新 token 并重试一次；`-1/523/5xx` 有限重试；`40031/40032/82001` 等参数或接收人错误不重试 |
 | 限流/频率限制 | 平台限制待联调确认；本地先配置 QPS、并发和重试次数；开发环境当前不可访问，先实现不测试真实接口 |
 | adapter 配置模型 | `credentials={base_url, corpsecret}`；`token_cache={access_token, expires_at}`；`recipient={identity_kind:gov_userid, party_identity_kind:gov_party_id, tag_identity_kind:gov_tag_id, format:pipe_string}` |
 | 模板内容 schema | `gov_text:{title?, description}`；`description` 支持换行和 A 标签链接 |
@@ -259,7 +279,7 @@
 | adapter 配置模型 | `credentials={webhook_url, secret}`；`recipient={required:false, identity_kind:feishu_open_id}` |
 | 模板内容 schema | `text:{title?, body}`；`card:{title, markdown, url?}` |
 
-### 3.9 SMTP 邮件
+### 3.9 邮件
 
 | 项 | 内容 |
 |---|---|
@@ -411,49 +431,49 @@
 | adapter 配置模型 | `credentials={server_url, push_key, temp_key}`；`send_config={type}` |
 | 模板内容 schema | `notice:{title, body, format}` |
 
-## 4. 实现批次建议
+## 4. 实现状态和后续批次
 
-### 4.1 第一批中的第一小批
+### 4.1 第一批已实现范围
 
-先做最能降低配置复杂度、又能覆盖企业场景的 adapter：
+第一批 provider defaults 已实现 build-request/mock 级别支持：
 
-1. `mvp_gateway`
-2. `wecom_robot`
-3. `dingtalk_robot`
-4. `feishu_robot`
-5. `smtp`
-6. `pushplus`
-7. `wxpusher`
-8. `serverchan`
+1. `webhook`
+2. `self`
+3. `pushplus`
+4. `wxpusher`
+5. `serverchan`
+6. `email`
+7. `aliyun_sms`
+8. `tencent_sms`
+9. `baidu_sms`
+10. `wecom_robot`
+11. `wecom_app` 和 legacy `wecom`
+12. `dingtalk_robot`
+13. `dingtalk_work` 和 legacy `dingtalk`
+14. `feishu_robot` 和 legacy `feishu`
+15. `gov_cloud`
+16. legacy aggregate `sms`
+17. advanced `custom_token`
 
-这些共同点是：大多数不需要复杂组织授权，字段少，测试容易。
+这批 provider 已具备 capability metadata、默认 schema、build request/mock 路径或兼容路径，但除可由本地假服务验证的 Webhook 外，不应声称已经真实联调成功。
 
-### 4.2 第一批中的第二小批
-
-1. `gov_cloud`
-2. `wecom_app`
-3. `dingtalk_work`
-4. `sms`
-
-这些需要更严格处理 token、接收人身份、权限、错误码和限流。
-
-### 4.3 P2 小批
+### 4.2 第二批仅保留规划
 
 1. `ntfy`
 2. `gotify`
 3. `bark`
 4. `pushme`
 
-这些可以作为“轻量通知出口”统一用 `notice` 内容 schema 实现。
+这些可以作为后续“轻量通知出口”统一用 `notice` 内容 schema 设计；当前不做代码，不写入已实现 provider defaults。
 
-## 5. 后续落地时的关键改造点
+## 5. 后续落地时的关键检查点
 
-1. 扩展 provider type。当前枚举偏粗：`wecom/dingtalk/feishu/email/sms/gov_cloud/webhook/custom_token`。建议拆成明确平台：`wecom_app/wecom_robot/dingtalk_work/dingtalk_robot/feishu_robot/smtp/gov_cloud/...`。
-2. 增强 provider capability registry。每个平台提供配置字段 schema、内容 schema、接收人身份字段、默认限流、默认成功判定。
-3. 改造模板语义。模板输出内部消息内容，不输出最终平台 HTTP body。
-4. 新增 adapter 层。通用 HTTP 仍可走 `provider.BuildRequest()`；内置平台用专门 adapter 生成最终请求。
-5. 增加响应判定配置。普通 Webhook 和高级自定义 Token 至少支持 HTTP status、JSON path、固定值判断。
-6. 增加 token cache。随申办政务云、企业微信应用、钉钉工作消息等必须缓存 token，并在 token 失效错误时刷新重试一次。
+1. 真实联调 PushPlus、WxPusher、Server酱、企微、钉钉、飞书、SMTP/self/gov_cloud，并记录账号、白名单、速率限制和失败响应。
+2. 为阿里云、腾讯云、百度短信补测试账号、签名、模板 ID、区域和真实错误码映射。
+3. 随申办政务云在可访问网络中验证 corpsecret、IP 白名单、测试接收人、token 缓存和错误分类。
+4. 保持模板语义：模板输出内部消息内容，不输出最终平台 HTTP body，不保存接收人字段。
+5. 保持 adapter 边界：内置 provider 生成 final request，Webhook/custom_token 继续保留高级映射。
+6. 检查日志详情是否持续展示 target context、rendered message、resolved recipients、final request 和 upstream response。
 
 ## 6. 参考链接
 

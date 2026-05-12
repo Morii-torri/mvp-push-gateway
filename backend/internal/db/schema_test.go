@@ -68,6 +68,96 @@ func TestInitialMigrationDoesNotReintroduceScheduledSend(t *testing.T) {
 	}
 }
 
+func TestProviderCapabilityMetadataMigrationContainsNewColumns(t *testing.T) {
+	migration, err := os.ReadFile("../../migrations/000005_provider_capability_metadata.sql")
+	if err != nil {
+		t.Fatalf("read provider capability metadata migration: %v", err)
+	}
+	content := string(migration)
+	required := []string{
+		"ADD COLUMN display_name text",
+		"ADD COLUMN category text",
+		"ADD COLUMN credential_schema jsonb",
+		"ADD COLUMN channel_config_schema jsonb",
+		"ADD COLUMN custom_body_allowed boolean",
+		"ADD COLUMN recipient_requirement text",
+		"ADD COLUMN token_strategy jsonb",
+		"ADD COLUMN send_api jsonb",
+		"ADD COLUMN success_rule jsonb",
+		"ADD COLUMN retry_rule jsonb",
+		"ADD COLUMN default_rate_limit jsonb",
+		"ADD COLUMN default_timeout_ms integer",
+		"ADD COLUMN default_concurrency_limit integer",
+		"ADD COLUMN default_retry_policy jsonb",
+	}
+
+	for _, snippet := range required {
+		if !strings.Contains(content, snippet) {
+			t.Fatalf("provider capability metadata migration missing snippet: %s", snippet)
+		}
+	}
+}
+
+func TestRouteActionTargetsMigrationContainsTableAndBackfill(t *testing.T) {
+	migration, err := os.ReadFile("../../migrations/000006_route_action_targets.sql")
+	if err != nil {
+		t.Fatalf("read route action targets migration: %v", err)
+	}
+	content := string(migration)
+	required := []string{
+		"CREATE TABLE route_action_targets",
+		"action_id uuid NOT NULL REFERENCES route_actions(id) ON DELETE CASCADE",
+		"channel_id uuid NOT NULL REFERENCES delivery_channels(id) ON DELETE RESTRICT",
+		"template_version_id uuid NOT NULL REFERENCES template_versions(id) ON DELETE RESTRICT",
+		"UNIQUE (action_id, sort_order)",
+		"CREATE INDEX idx_route_action_targets_action",
+		"INSERT INTO route_action_targets",
+		"CROSS JOIN LATERAL unnest(action.channel_ids) WITH ORDINALITY",
+		"DROP TABLE IF EXISTS route_action_targets",
+	}
+
+	for _, snippet := range required {
+		if !strings.Contains(content, snippet) {
+			t.Fatalf("route action targets migration missing snippet: %s", snippet)
+		}
+	}
+}
+
+func TestProviderTypeExpansionMigrationContainsNewProviderTypes(t *testing.T) {
+	migration, err := os.ReadFile("../../migrations/000007_provider_type_expansion.sql")
+	if err != nil {
+		t.Fatalf("read provider type expansion migration: %v", err)
+	}
+	content := string(migration)
+	required := []string{
+		"DROP CONSTRAINT IF EXISTS delivery_channels_provider_type_check",
+		"DROP CONSTRAINT IF EXISTS provider_capabilities_provider_type_check",
+		"ADD CONSTRAINT delivery_channels_provider_type_check",
+		"ADD CONSTRAINT provider_capabilities_provider_type_check",
+		"ADD CONSTRAINT provider_capabilities_recipient_format_check",
+		"ADD CONSTRAINT provider_capabilities_recipient_requirement_check",
+		"'pushplus'",
+		"'wxpusher'",
+		"'serverchan'",
+		"'aliyun_sms'",
+		"'tencent_sms'",
+		"'baidu_sms'",
+		"'wecom_robot'",
+		"'wecom_app'",
+		"'dingtalk_robot'",
+		"'dingtalk_work'",
+		"'feishu_robot'",
+		"'none'",
+		"'system_or_channel'",
+	}
+
+	for _, snippet := range required {
+		if !strings.Contains(content, snippet) {
+			t.Fatalf("provider type expansion migration missing snippet: %s", snippet)
+		}
+	}
+}
+
 func readInitialMigration(t *testing.T) string {
 	t.Helper()
 

@@ -42,8 +42,6 @@ import {
   useEdgesState,
   useNodesState,
   type Connection,
-  type Edge,
-  type Node,
   type NodeProps,
   type OnSelectionChangeParams,
 } from '@xyflow/react';
@@ -77,6 +75,7 @@ import {
   type AuditLogApiRecord,
   type ChannelApiRecord,
   type ChannelInput,
+  type DeliveryAttemptApiRecord,
   type JSONValue,
   type MatchGroupApiRecord,
   type MatchGroupItemApiRecord,
@@ -85,6 +84,7 @@ import {
   type MessageLogApiRecord,
   type OrgUnitApiRecord,
   type OrgUnitInput,
+  type ProviderCapabilityApiRecord,
   type RecipientGroupApiRecord,
   type RecipientGroupInput,
   type RouteFlowApiRecord,
@@ -117,12 +117,20 @@ import {
   templateVariable,
 } from '../utils/labels';
 import {
+  buildInitialRouteFlow,
   buildRouteConditionTree,
   canEnableRouteGroupSource,
+  routeNodeCatalog,
+  routeNodeDefaults,
   routeRulesForGroup,
   summarizeRouteConditionTree,
+  type RouteCanvasSnapshot,
   type RouteConditionDraft,
   type RouteConditionOperator,
+  type RouteFlowEdge,
+  type RouteFlowNode,
+  type RouteNodeData,
+  type RouteNodeKind,
 } from '../utils/routeFlow';
 import {
   buildOverviewViewModel,
@@ -395,16 +403,54 @@ function mapSourceRow(source: SourceApiRecord): SourceRow {
 type ProviderKind = ProviderRecord['providerType'];
 
 const providerTypeOptions: Array<{ label: string; value: ProviderKind }> = [
-  { label: '随申办政务云', value: 'gov_cloud' },
-  { label: '企业微信', value: 'wecom' },
-  { label: '飞书', value: 'feishu' },
-  { label: '钉钉', value: 'dingtalk' },
-  { label: '邮箱', value: 'email' },
-  { label: '短信', value: 'sms' },
-  { label: '本平台', value: 'self' },
   { label: '通用 Webhook', value: 'webhook' },
+  { label: '本平台级联', value: 'self' },
+  { label: 'PushPlus', value: 'pushplus' },
+  { label: 'WxPusher', value: 'wxpusher' },
+  { label: 'Server酱', value: 'serverchan' },
+  { label: 'SMTP 邮件', value: 'email' },
+  { label: '阿里云短信', value: 'aliyun_sms' },
+  { label: '腾讯云短信', value: 'tencent_sms' },
+  { label: '百度智能云短信', value: 'baidu_sms' },
+  { label: '企业微信群机器人', value: 'wecom_robot' },
+  { label: '企业微信应用消息', value: 'wecom_app' },
+  { label: '企业微信应用兼容', value: 'wecom' },
+  { label: '钉钉群机器人', value: 'dingtalk_robot' },
+  { label: '钉钉工作消息', value: 'dingtalk_work' },
+  { label: '钉钉工作消息兼容', value: 'dingtalk' },
+  { label: '飞书机器人', value: 'feishu_robot' },
+  { label: '飞书兼容', value: 'feishu' },
+  { label: '随申办政务云', value: 'gov_cloud' },
+  { label: '短信兼容', value: 'sms' },
   { label: '自定义 Token 平台', value: 'custom_token' },
 ];
+
+type ProviderFieldTarget = 'auth_config' | 'token_config' | 'send_config';
+type ProviderFieldInputType = 'text' | 'password' | 'number' | 'textarea';
+
+type ProviderConfigField = {
+  key: string;
+  label: string;
+  target: ProviderFieldTarget;
+  inputType: ProviderFieldInputType;
+  required: boolean;
+  placeholder: string;
+  advanced: boolean;
+  defaultValue?: ProviderFieldValue;
+};
+
+type ProviderFieldValue = string | number | boolean;
+type ProviderFieldValues = Record<string, ProviderFieldValue>;
+
+type ProviderCapabilityView = {
+  providerType: ProviderKind;
+  displayName: string;
+  category: string;
+  supportedMessageTypes: string[];
+  customBodyAllowed: boolean;
+  fields: ProviderConfigField[];
+  capabilityRecords: ProviderCapabilityApiRecord[];
+};
 
 type ProviderPreset = {
   tokenEndpoint: string;
@@ -427,6 +473,11 @@ type ProviderPreset = {
 };
 
 type ProviderRuntimeConfig = ProviderPreset & {
+  providerDisplayName: string;
+  providerCategory: string;
+  customBodyAllowed: boolean;
+  configFields: ProviderConfigField[];
+  fieldValues: ProviderFieldValues;
   rateLimitEnabled: boolean;
   workerClaimLimit: number;
   slowPlatformIsolation: boolean;
@@ -449,146 +500,13 @@ type ProviderRuntimeConfig = ProviderPreset & {
 type ProviderRow = ProviderRecord & ProviderRuntimeConfig;
 
 const providerPresets: Record<ProviderKind, ProviderPreset> = {
-  gov_cloud: {
-    tokenEndpoint: 'POST /oauth/token',
-    tokenRequest: '{"grant_type":"client_credentials","client_id":"${client_id}","client_secret":"${client_secret}"}',
-    tokenResponsePath: 'data.access_token',
-    tokenPlacement: 'Header.Authorization = Bearer ${token}',
-    sendEndpoint: 'POST /message/send',
-    recipientMapping: 'body.receivers[].mobile / body.receivers[].open_id',
-    bodyMapping: '{"title":"{{ message.title }}","content":"{{ message.content }}","receivers":"{{ receivers }}"}',
-    qps: 80,
-    minuteLimit: 4800,
-    burst: 160,
-    concurrency: 32,
-    timeoutMs: 3000,
-    retryPolicy: '3 次指数退避',
-    retryInterval: '1s / 3s / 9s',
-    deadLetterPolicy: '重试耗尽进入死信',
-    testRecipient: '13800005678',
-    testBody: '政务云测试消息',
-  },
-  wecom: {
-    tokenEndpoint: 'GET /cgi-bin/gettoken',
-    tokenRequest: 'query.corpid + query.corpsecret',
-    tokenResponsePath: 'access_token',
-    tokenPlacement: 'Query.access_token = ${token}',
-    sendEndpoint: 'POST /cgi-bin/message/send',
-    recipientMapping: 'body.touser / body.toparty',
-    bodyMapping: '{"touser":"{{ receivers.userid }}","msgtype":"text","text":{"content":"{{ message.content }}"}}',
-    qps: 120,
-    minuteLimit: 7200,
-    burst: 240,
-    concurrency: 48,
-    timeoutMs: 2000,
-    retryPolicy: '2 次固定间隔',
-    retryInterval: '2s / 2s',
-    deadLetterPolicy: '平台错误进入死信',
-    testRecipient: 'zhangwei',
-    testBody: '企业微信测试消息',
-  },
-  feishu: {
-    tokenEndpoint: 'POST /open-apis/auth/v3/tenant_access_token/internal',
-    tokenRequest: '{"app_id":"${app_id}","app_secret":"${app_secret}"}',
-    tokenResponsePath: 'tenant_access_token',
-    tokenPlacement: 'Header.Authorization = Bearer ${token}',
-    sendEndpoint: 'POST /open-apis/im/v1/messages',
-    recipientMapping: 'query.receive_id_type + body.receive_id',
-    bodyMapping: '{"receive_id":"{{ receivers.open_id }}","msg_type":"text","content":"{\\"text\\":\\"{{ message.content }}\\"}"}',
-    qps: 60,
-    minuteLimit: 3600,
-    burst: 120,
-    concurrency: 24,
-    timeoutMs: 3000,
-    retryPolicy: '3 次指数退避',
-    retryInterval: '1s / 2s / 4s',
-    deadLetterPolicy: '超时进入死信',
-    testRecipient: 'ou_12a8',
-    testBody: '飞书测试消息',
-  },
-  dingtalk: {
-    tokenEndpoint: 'GET /gettoken',
-    tokenRequest: 'query.appkey + query.appsecret',
-    tokenResponsePath: 'access_token',
-    tokenPlacement: 'Query.access_token = ${token}',
-    sendEndpoint: 'POST /topapi/message/corpconversation/asyncsend_v2',
-    recipientMapping: 'body.userid_list',
-    bodyMapping: '{"userid_list":"{{ receivers.userid }}","msg":{"msgtype":"text","text":{"content":"{{ message.content }}"}}}',
-    qps: 80,
-    minuteLimit: 4800,
-    burst: 160,
-    concurrency: 32,
-    timeoutMs: 3000,
-    retryPolicy: '3 次指数退避',
-    retryInterval: '1s / 3s / 9s',
-    deadLetterPolicy: '平台错误进入死信',
-    testRecipient: 'manager001',
-    testBody: '钉钉测试消息',
-  },
-  email: {
-    tokenEndpoint: 'SMTP 登录或固定凭证',
-    tokenRequest: 'username + password / app password',
-    tokenResponsePath: '-',
-    tokenPlacement: 'SMTP AUTH',
-    sendEndpoint: 'SMTP sendmail',
-    recipientMapping: 'mail.to = receivers.email',
-    bodyMapping: '{"to":"{{ receivers.email }}","subject":"{{ message.title }}","html":"{{ message.content }}"}',
-    qps: 20,
-    minuteLimit: 600,
-    burst: 40,
-    concurrency: 8,
-    timeoutMs: 5000,
-    retryPolicy: '2 次固定间隔',
-    retryInterval: '5s / 15s',
-    deadLetterPolicy: '人工复核',
-    testRecipient: 'zhangwei@example.gov.cn',
-    testBody: '邮件测试消息',
-  },
-  sms: {
-    tokenEndpoint: '固定 AccessKey / Secret',
-    tokenRequest: 'access_key + sign',
-    tokenResponsePath: '-',
-    tokenPlacement: 'Header.Authorization / Query.Signature',
-    sendEndpoint: 'POST /sms/send',
-    recipientMapping: 'body.phoneNumbers = receivers.mobile',
-    bodyMapping: '{"phoneNumbers":"{{ receivers.mobile }}","templateParam":{"content":"{{ message.content }}"}}',
-    qps: 20,
-    minuteLimit: 1200,
-    burst: 40,
-    concurrency: 8,
-    timeoutMs: 5000,
-    retryPolicy: '1 次重试',
-    retryInterval: '10s',
-    deadLetterPolicy: '人工复核',
-    testRecipient: '13800005678',
-    testBody: '短信测试消息',
-  },
-  self: {
-    tokenEndpoint: '本平台内部令牌',
-    tokenRequest: 'system channel token',
-    tokenResponsePath: 'token',
-    tokenPlacement: 'Header.Authorization = Bearer ${token}',
-    sendEndpoint: 'POST /internal/messages',
-    recipientMapping: 'body.user_ids',
-    bodyMapping: '{"user_ids":"{{ receivers.system_user_id }}","title":"{{ message.title }}","content":"{{ message.content }}"}',
-    qps: 200,
-    minuteLimit: 12000,
-    burst: 400,
-    concurrency: 64,
-    timeoutMs: 1500,
-    retryPolicy: '2 次固定间隔',
-    retryInterval: '1s / 2s',
-    deadLetterPolicy: '重试耗尽进入死信',
-    testRecipient: 'u-1',
-    testBody: '本平台测试消息',
-  },
   webhook: {
     tokenEndpoint: '无令牌或固定 Header',
     tokenRequest: '{}',
     tokenResponsePath: '-',
     tokenPlacement: 'Header.X-Webhook-Token',
     sendEndpoint: 'POST https://example.com/webhook',
-    recipientMapping: '无接收人字段',
+    recipientMapping: '无接收人字段；高级模式可放入 body/header/query/path',
     bodyMapping: '{"event":"message.push","payload":"{{ message }}"}',
     qps: 50,
     minuteLimit: 3000,
@@ -600,6 +518,348 @@ const providerPresets: Record<ProviderKind, ProviderPreset> = {
     deadLetterPolicy: '重试耗尽进入死信',
     testRecipient: '-',
     testBody: 'Webhook 测试消息',
+  },
+  self: {
+    tokenEndpoint: '下级来源 Token / HMAC',
+    tokenRequest: 'Authorization: Bearer <source_token>',
+    tokenResponsePath: '-',
+    tokenPlacement: 'Header.Authorization',
+    sendEndpoint: 'POST /api/v1/ingest/{source_code}',
+    recipientMapping: '默认无，由上级网关重新规划；也可透传 payload.recipients',
+    bodyMapping: '原样透传 payload，或包装为 upstream/message/context',
+    qps: 120,
+    minuteLimit: 7200,
+    burst: 240,
+    concurrency: 24,
+    timeoutMs: 3000,
+    retryPolicy: '3 次指数退避',
+    retryInterval: '1s / 3s / 9s',
+    deadLetterPolicy: '重试耗尽进入死信',
+    testRecipient: '-',
+    testBody: '本平台级联测试消息',
+  },
+  pushplus: {
+    tokenEndpoint: '固定 PushPlus Token',
+    tokenRequest: 'token',
+    tokenResponsePath: '-',
+    tokenPlacement: 'body.token',
+    sendEndpoint: '内置 PushPlus adapter',
+    recipientMapping: '无需接收人；topic/to 可由渠道配置决定',
+    bodyMapping: 'adapter 根据 title/content/template/topic 生成请求体',
+    qps: 10,
+    minuteLimit: 600,
+    burst: 20,
+    concurrency: 4,
+    timeoutMs: 5000,
+    retryPolicy: '2 次固定间隔',
+    retryInterval: '3s / 10s',
+    deadLetterPolicy: '人工复核',
+    testRecipient: '-',
+    testBody: 'PushPlus 测试消息',
+  },
+  wxpusher: {
+    tokenEndpoint: '固定 AppToken / SPT',
+    tokenRequest: 'appToken 或 SPT',
+    tokenResponsePath: '-',
+    tokenPlacement: 'body.appToken',
+    sendEndpoint: '内置 WxPusher adapter',
+    recipientMapping: 'uids / topicIds；可从 wxpusher_uid 身份字段解析',
+    bodyMapping: 'adapter 根据 title/content/contentType/uids/topicIds 生成请求体',
+    qps: 10,
+    minuteLimit: 600,
+    burst: 20,
+    concurrency: 4,
+    timeoutMs: 5000,
+    retryPolicy: '2 次固定间隔',
+    retryInterval: '3s / 10s',
+    deadLetterPolicy: '人工复核',
+    testRecipient: 'UID_xxx',
+    testBody: 'WxPusher 测试消息',
+  },
+  serverchan: {
+    tokenEndpoint: '固定 SendKey',
+    tokenRequest: 'sendKey',
+    tokenResponsePath: '-',
+    tokenPlacement: 'path',
+    sendEndpoint: '内置 Server酱 adapter',
+    recipientMapping: '无需接收人；SendKey 绑定账号',
+    bodyMapping: 'adapter 根据 title/desp/channel/openid/tags 生成表单',
+    qps: 5,
+    minuteLimit: 300,
+    burst: 10,
+    concurrency: 2,
+    timeoutMs: 5000,
+    retryPolicy: '2 次固定间隔',
+    retryInterval: '5s / 15s',
+    deadLetterPolicy: '人工复核',
+    testRecipient: '-',
+    testBody: 'Server酱测试消息',
+  },
+  email: {
+    tokenEndpoint: 'SMTP 登录或固定凭证',
+    tokenRequest: 'username + password / app password',
+    tokenResponsePath: '-',
+    tokenPlacement: 'SMTP AUTH',
+    sendEndpoint: 'SMTP sendmail',
+    recipientMapping: 'mail.to = receivers.email',
+    bodyMapping: 'adapter 根据 subject/text/html 生成 MIME 邮件',
+    qps: 20,
+    minuteLimit: 600,
+    burst: 40,
+    concurrency: 8,
+    timeoutMs: 5000,
+    retryPolicy: '2 次固定间隔',
+    retryInterval: '5s / 15s',
+    deadLetterPolicy: '人工复核',
+    testRecipient: 'zhangwei@example.gov.cn',
+    testBody: '邮件测试消息',
+  },
+  aliyun_sms: {
+    tokenEndpoint: 'AccessKey 签名鉴权',
+    tokenRequest: 'access_key_id + access_key_secret',
+    tokenResponsePath: '-',
+    tokenPlacement: 'SDK 签名参数',
+    sendEndpoint: '内置阿里云短信 adapter',
+    recipientMapping: 'PhoneNumbers = receivers.mobile',
+    bodyMapping: 'adapter 根据 sign_name/template_code/template_params 生成 SendSms 请求',
+    qps: 20,
+    minuteLimit: 1200,
+    burst: 40,
+    concurrency: 8,
+    timeoutMs: 5000,
+    retryPolicy: '1 次重试',
+    retryInterval: '10s',
+    deadLetterPolicy: '人工复核',
+    testRecipient: '13800005678',
+    testBody: '阿里云短信测试消息',
+  },
+  tencent_sms: {
+    tokenEndpoint: 'SecretId / SecretKey 签名鉴权',
+    tokenRequest: 'secret_id + secret_key',
+    tokenResponsePath: '-',
+    tokenPlacement: 'SDK 签名参数',
+    sendEndpoint: '内置腾讯云短信 adapter',
+    recipientMapping: 'PhoneNumberSet = receivers.mobile',
+    bodyMapping: 'adapter 根据 sms_sdk_app_id/sign_name/template_id/template_params 生成 SendSms 请求',
+    qps: 20,
+    minuteLimit: 1200,
+    burst: 40,
+    concurrency: 8,
+    timeoutMs: 5000,
+    retryPolicy: '1 次重试',
+    retryInterval: '10s',
+    deadLetterPolicy: '人工复核',
+    testRecipient: '13800005678',
+    testBody: '腾讯云短信测试消息',
+  },
+  baidu_sms: {
+    tokenEndpoint: 'AK/SK 签名鉴权',
+    tokenRequest: 'access_key_id + secret_access_key',
+    tokenResponsePath: '-',
+    tokenPlacement: 'SDK 签名参数',
+    sendEndpoint: '内置百度智能云短信 adapter',
+    recipientMapping: 'phones = receivers.mobile',
+    bodyMapping: 'adapter 根据 signature_id/template_id/template_params 生成短信下发请求',
+    qps: 20,
+    minuteLimit: 1200,
+    burst: 40,
+    concurrency: 8,
+    timeoutMs: 5000,
+    retryPolicy: '1 次重试',
+    retryInterval: '10s',
+    deadLetterPolicy: '人工复核',
+    testRecipient: '13800005678',
+    testBody: '百度智能云短信测试消息',
+  },
+  wecom_robot: {
+    tokenEndpoint: '固定机器人 Key',
+    tokenRequest: 'key',
+    tokenResponsePath: '-',
+    tokenPlacement: 'query.key',
+    sendEndpoint: '内置企业微信群机器人 adapter',
+    recipientMapping: '可选 mentioned_list = receivers.wecom_userid',
+    bodyMapping: 'adapter 根据 text/markdown 内容生成机器人消息',
+    qps: 20,
+    minuteLimit: 1200,
+    burst: 40,
+    concurrency: 8,
+    timeoutMs: 3000,
+    retryPolicy: '2 次固定间隔',
+    retryInterval: '2s / 5s',
+    deadLetterPolicy: '平台错误进入死信',
+    testRecipient: 'zhangwei',
+    testBody: '企业微信群机器人测试消息',
+  },
+  wecom_app: {
+    tokenEndpoint: 'GET /cgi-bin/gettoken',
+    tokenRequest: 'query.corpid + query.corpsecret',
+    tokenResponsePath: 'access_token',
+    tokenPlacement: 'Query.access_token = ${token}',
+    sendEndpoint: '内置企业微信应用 adapter',
+    recipientMapping: 'touser/toparty/totag；touser 来自 receivers.wecom_userid',
+    bodyMapping: 'adapter 根据 text/card 内容生成应用消息',
+    qps: 80,
+    minuteLimit: 4800,
+    burst: 160,
+    concurrency: 16,
+    timeoutMs: 3000,
+    retryPolicy: '2 次固定间隔',
+    retryInterval: '2s / 2s',
+    deadLetterPolicy: '平台错误进入死信',
+    testRecipient: 'zhangwei',
+    testBody: '企业微信应用测试消息',
+  },
+  wecom: {
+    tokenEndpoint: 'GET /cgi-bin/gettoken',
+    tokenRequest: 'query.corpid + query.corpsecret',
+    tokenResponsePath: 'access_token',
+    tokenPlacement: 'Query.access_token = ${token}',
+    sendEndpoint: '内置企业微信应用兼容 adapter',
+    recipientMapping: 'touser/toparty/totag；touser 来自 receivers.wecom_userid',
+    bodyMapping: 'adapter 根据 text/card 内容生成应用消息',
+    qps: 80,
+    minuteLimit: 4800,
+    burst: 160,
+    concurrency: 16,
+    timeoutMs: 3000,
+    retryPolicy: '2 次固定间隔',
+    retryInterval: '2s / 2s',
+    deadLetterPolicy: '平台错误进入死信',
+    testRecipient: 'zhangwei',
+    testBody: '企业微信兼容测试消息',
+  },
+  dingtalk_robot: {
+    tokenEndpoint: '固定机器人 Access Token',
+    tokenRequest: 'access_token + optional secret',
+    tokenResponsePath: '-',
+    tokenPlacement: 'query.access_token',
+    sendEndpoint: '内置钉钉群机器人 adapter',
+    recipientMapping: '可选 atMobiles = receivers.mobile',
+    bodyMapping: 'adapter 根据 text/markdown 内容生成机器人消息',
+    qps: 20,
+    minuteLimit: 1200,
+    burst: 40,
+    concurrency: 8,
+    timeoutMs: 3000,
+    retryPolicy: '2 次固定间隔',
+    retryInterval: '2s / 5s',
+    deadLetterPolicy: '平台错误进入死信',
+    testRecipient: '13800005678',
+    testBody: '钉钉机器人测试消息',
+  },
+  dingtalk_work: {
+    tokenEndpoint: '钉钉应用 access token',
+    tokenRequest: 'app_key + app_secret',
+    tokenResponsePath: 'access_token',
+    tokenPlacement: 'Query.access_token = ${token}',
+    sendEndpoint: '内置钉钉工作消息 adapter',
+    recipientMapping: 'userid_list = receivers.dingtalk_userid',
+    bodyMapping: 'adapter 根据 text/card 内容生成工作消息',
+    qps: 60,
+    minuteLimit: 3600,
+    burst: 120,
+    concurrency: 12,
+    timeoutMs: 3000,
+    retryPolicy: '3 次指数退避',
+    retryInterval: '1s / 3s / 9s',
+    deadLetterPolicy: '平台错误进入死信',
+    testRecipient: 'manager001',
+    testBody: '钉钉工作消息测试',
+  },
+  dingtalk: {
+    tokenEndpoint: '钉钉应用 access token',
+    tokenRequest: 'app_key + app_secret',
+    tokenResponsePath: 'access_token',
+    tokenPlacement: 'Query.access_token = ${token}',
+    sendEndpoint: '内置钉钉工作消息兼容 adapter',
+    recipientMapping: 'userid_list = receivers.dingtalk_userid',
+    bodyMapping: 'adapter 根据 text/card 内容生成工作消息',
+    qps: 60,
+    minuteLimit: 3600,
+    burst: 120,
+    concurrency: 12,
+    timeoutMs: 3000,
+    retryPolicy: '3 次指数退避',
+    retryInterval: '1s / 3s / 9s',
+    deadLetterPolicy: '平台错误进入死信',
+    testRecipient: 'manager001',
+    testBody: '钉钉兼容测试消息',
+  },
+  feishu_robot: {
+    tokenEndpoint: '固定机器人 Hook Token',
+    tokenRequest: 'hook_token + optional sign_secret',
+    tokenResponsePath: '-',
+    tokenPlacement: 'path hook token',
+    sendEndpoint: '内置飞书机器人 adapter',
+    recipientMapping: '默认无需接收人；可在内容中引用 feishu_open_id',
+    bodyMapping: 'adapter 根据 text/markdown 内容生成机器人消息',
+    qps: 20,
+    minuteLimit: 1200,
+    burst: 40,
+    concurrency: 8,
+    timeoutMs: 3000,
+    retryPolicy: '2 次固定间隔',
+    retryInterval: '2s / 5s',
+    deadLetterPolicy: '平台错误进入死信',
+    testRecipient: 'ou_12a8',
+    testBody: '飞书机器人测试消息',
+  },
+  feishu: {
+    tokenEndpoint: '飞书 tenant_access_token',
+    tokenRequest: 'app_id + app_secret',
+    tokenResponsePath: 'tenant_access_token',
+    tokenPlacement: 'Header.Authorization = Bearer ${token}',
+    sendEndpoint: '内置飞书兼容 adapter',
+    recipientMapping: 'receive_id = receivers.feishu_open_id',
+    bodyMapping: 'adapter 根据 text/card 内容生成飞书消息',
+    qps: 60,
+    minuteLimit: 3600,
+    burst: 120,
+    concurrency: 12,
+    timeoutMs: 3000,
+    retryPolicy: '3 次指数退避',
+    retryInterval: '1s / 2s / 4s',
+    deadLetterPolicy: '超时进入死信',
+    testRecipient: 'ou_12a8',
+    testBody: '飞书兼容测试消息',
+  },
+  gov_cloud: {
+    tokenEndpoint: 'GET /gettoken?corpsecret=...',
+    tokenRequest: 'corpsecret',
+    tokenResponsePath: 'access_token',
+    tokenPlacement: 'Query.access_token = ${token}',
+    sendEndpoint: 'POST /request/message/send',
+    recipientMapping: 'touser/toparty/totag；touser 来自 receivers.gov_userid',
+    bodyMapping: 'adapter 根据 description 生成随申办文本消息；开发环境不可访问，先实现不联调',
+    qps: 80,
+    minuteLimit: 4800,
+    burst: 160,
+    concurrency: 8,
+    timeoutMs: 3000,
+    retryPolicy: '3 次指数退避',
+    retryInterval: '1s / 3s / 9s',
+    deadLetterPolicy: '重试耗尽进入死信',
+    testRecipient: 'gov-user-1',
+    testBody: '随申办政务云测试消息',
+  },
+  sms: {
+    tokenEndpoint: '固定 AccessKey / Secret（legacy）',
+    tokenRequest: 'access_key + access_secret',
+    tokenResponsePath: '-',
+    tokenPlacement: 'SDK 签名参数',
+    sendEndpoint: '内置短信兼容 adapter',
+    recipientMapping: 'body.phoneNumbers = receivers.mobile',
+    bodyMapping: 'adapter 根据 supplier/sign_name/template_id/template_params 生成短信请求',
+    qps: 20,
+    minuteLimit: 1200,
+    burst: 40,
+    concurrency: 8,
+    timeoutMs: 5000,
+    retryPolicy: '1 次重试',
+    retryInterval: '10s',
+    deadLetterPolicy: '人工复核',
+    testRecipient: '13800005678',
+    testBody: '短信兼容测试消息',
   },
   custom_token: {
     tokenEndpoint: 'POST https://example.com/oauth/token',
@@ -630,16 +890,561 @@ function parseSendEndpoint(endpoint: string): Pick<ProviderRecord, 'requestMetho
   };
 }
 
+function providerCapabilityView(
+  providerType: ProviderKind,
+  capabilities: ProviderCapabilityApiRecord[] = [],
+): ProviderCapabilityView {
+  const records = capabilities.filter((capability) => capability.provider_type === providerType);
+  const primary = records[0];
+  const fields = uniqueConfigFields([
+    ...extractSchemaFields(primary?.credential_schema, 'auth_config'),
+    ...extractSchemaFields(primary?.channel_config_schema, 'send_config'),
+  ]);
+  const supportedMessageTypes = capabilityMessageTypes(providerType, records);
+
+  return {
+    providerType,
+    displayName: primary?.display_name || getProviderTypeLabel(providerType),
+    category: primary?.category || providerCategoryLabel(providerType),
+    supportedMessageTypes,
+    customBodyAllowed: primary?.custom_body_allowed ?? (providerType === 'webhook' || providerType === 'custom_token'),
+    fields: fields.length > 0 ? fields : fallbackProviderFields(providerType),
+    capabilityRecords: records,
+  };
+}
+
+function capabilityMessageTypes(providerType: ProviderKind, records: ProviderCapabilityApiRecord[]): string[] {
+  const explicit = records.find((record) => record.supported_message_types?.length)?.supported_message_types;
+  if (explicit?.length) {
+    return explicit;
+  }
+  const messageTypes = Array.from(new Set(records.map((record) => record.message_type).filter(Boolean))) as string[];
+  return messageTypes.length > 0 ? messageTypes : fallbackMessageTypes(providerType);
+}
+
+function providerCategoryLabel(providerType: ProviderKind): string {
+  if (providerType === 'email') {
+    return '邮件';
+  }
+  if (providerType === 'sms' || providerType === 'aliyun_sms' || providerType === 'tencent_sms' || providerType === 'baidu_sms') {
+    return '短信';
+  }
+  if (providerType === 'webhook' || providerType === 'custom_token') {
+    return '高级 HTTP';
+  }
+  if (providerType === 'self') {
+    return '内部平台';
+  }
+  if (providerType === 'pushplus' || providerType === 'wxpusher' || providerType === 'serverchan') {
+    return '轻量通知';
+  }
+  if (providerType.endsWith('_robot')) {
+    return '群机器人';
+  }
+  if (providerType.endsWith('_app') || providerType.endsWith('_work')) {
+    return '企业应用';
+  }
+  return '内置平台';
+}
+
+function extractSchemaFields(schema: JSONValue | undefined, fallbackTarget: ProviderFieldTarget): ProviderConfigField[] {
+  if (!schema || !isRecord(schema)) {
+    return [];
+  }
+  if (Array.isArray(schema.fields)) {
+    return schema.fields
+      .map((field) => fieldFromSchemaRecord(field, fallbackTarget))
+      .filter((field): field is ProviderConfigField => Boolean(field));
+  }
+  if (isRecord(schema.properties)) {
+    const requiredKeys = Array.isArray(schema.required)
+      ? new Set(schema.required.filter((item): item is string => typeof item === 'string'))
+      : new Set<string>();
+    return Object.entries(schema.properties)
+      .map(([key, field]) => fieldFromSchemaRecord({ ...(isRecord(field) ? field : {}), key, required: requiredKeys.has(key) }, fallbackTarget))
+      .filter((field): field is ProviderConfigField => Boolean(field));
+  }
+  return [];
+}
+
+function fieldFromSchemaRecord(value: JSONValue, fallbackTarget: ProviderFieldTarget): ProviderConfigField | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+  const key = firstString(value.key, value.name, value.field, value.path);
+  if (!key) {
+    return null;
+  }
+  const target = providerFieldTarget(firstString(value.target, value.config_target, value.section) || fallbackTarget, fallbackTarget);
+  return {
+    key,
+    label: firstString(value.label, value.title, value.description) || providerFieldLabel(key),
+    target,
+    inputType: providerFieldInputType(firstString(value.input_type, value.inputType, value.widget, value.type)),
+    required: Boolean(value.required),
+    placeholder: firstString(value.placeholder, value.example),
+    advanced: Boolean(value.advanced),
+    defaultValue: providerFieldDefaultValue(value.default),
+  };
+}
+
+function providerFieldDefaultValue(value: JSONValue | undefined): ProviderFieldValue | undefined {
+  if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
+    return value;
+  }
+  return undefined;
+}
+
+function firstString(...values: Array<JSONValue | undefined>): string {
+  for (const value of values) {
+    if (typeof value === 'string' && value.trim()) {
+      return value;
+    }
+  }
+  return '';
+}
+
+function providerFieldTarget(value: string, fallback: ProviderFieldTarget): ProviderFieldTarget {
+  if (value === 'auth_config' || value === 'auth') {
+    return 'auth_config';
+  }
+  if (value === 'token_config' || value === 'token') {
+    return 'token_config';
+  }
+  if (value === 'send_config' || value === 'send' || value === 'channel_config') {
+    return 'send_config';
+  }
+  return fallback;
+}
+
+function providerFieldInputType(value: string): ProviderFieldInputType {
+  if (value === 'password' || value === 'secret') {
+    return 'password';
+  }
+  if (value === 'number' || value === 'integer') {
+    return 'number';
+  }
+  if (value === 'textarea' || value === 'json') {
+    return 'textarea';
+  }
+  return 'text';
+}
+
+function providerFieldLabel(key: string): string {
+  const labels: Record<string, string> = {
+    access_key: 'Access Key',
+    access_key_id: 'AccessKey ID',
+    access_secret: 'Access Secret',
+    access_key_secret: 'AccessKey Secret',
+    agentid: '应用 AgentId',
+    agent_id: '应用 AgentId',
+    allow_at_all: '允许 @all',
+    app_id: '应用 ID',
+    app_key: 'App Key',
+    app_secret: 'App Secret',
+    app_token: '应用 Token',
+    baas_url: 'API 基础地址',
+    base_url: 'API 基础地址',
+    body_template: 'Body 映射模板',
+    channel: '推送渠道',
+    corpid: '企业 ID',
+    corpsecret: '应用 Secret',
+    endpoint: 'Endpoint',
+    from: '发件人',
+    headers: '请求 Header',
+    hook_token: '机器人 Hook Token',
+    host: 'SMTP 主机',
+    method: '请求方法',
+    mode: '推送模式',
+    openid: 'OpenID',
+    password: '密码',
+    port: '端口',
+    region: 'Region',
+    robot_secret: '机器人签名 Secret',
+    secret_access_key: 'Secret Access Key',
+    secret_id: 'SecretId',
+    secret_key: 'SecretKey',
+    send_url: '发送 URL',
+    send_key: 'Server酱 SendKey',
+    sign_secret: '签名 Secret',
+    sign_name: '短信签名',
+    signature_id: '签名 ID',
+    sms_sdk_app_id: '短信 SDK App ID',
+    source_code: '上级来源编码',
+    source_token: '上级来源 Token',
+    spt: 'WxPusher SPT',
+    supplier: '短信供应商',
+    tags: '标签',
+    template_id: '模板 ID',
+    template_code: '短信模板 Code',
+    topic: 'topic',
+    topic_ids: 'Topic ID 列表',
+    token: 'Token',
+    token_endpoint: 'Token 获取 URL',
+    token_placement: 'Token 放置',
+    token_request: 'Token 请求 JSON',
+    token_response_path: 'Token 字段路径',
+    uid_list: 'UID 列表',
+    username: '用户名',
+    version: '版本',
+    webhook_url: 'Webhook URL',
+  };
+  return labels[key] ?? key;
+}
+
+function fallbackProviderFields(providerType: ProviderKind): ProviderConfigField[] {
+  const field = (
+    key: string,
+    label: string,
+    target: ProviderFieldTarget,
+    inputType: ProviderFieldInputType = 'text',
+    required = false,
+    placeholder = '',
+    defaultValue?: ProviderFieldValue,
+  ): ProviderConfigField => ({ key, label, target, inputType, required, placeholder, advanced: false, defaultValue });
+
+  if (providerType === 'email') {
+    return [
+      field('host', 'SMTP 主机', 'auth_config', 'text', true),
+      field('port', 'SMTP 端口', 'auth_config', 'number', true, '465 / 587'),
+      field('secure', '启用 SSL/TLS', 'send_config'),
+      field('username', '用户名', 'auth_config'),
+      field('password', '密码', 'auth_config', 'password'),
+      field('from', '发件人', 'send_config', 'text', true),
+      field('reply_to', '回复地址', 'send_config'),
+    ];
+  }
+  if (providerType === 'aliyun_sms') {
+    return [
+      field('access_key_id', 'AccessKey ID', 'auth_config', 'text', true),
+      field('access_key_secret', 'AccessKey Secret', 'auth_config', 'password', true),
+      field('region', 'Region', 'send_config', 'text', false, 'cn-hangzhou'),
+      field('endpoint', 'Endpoint', 'send_config', 'text', false, 'dysmsapi.aliyuncs.com'),
+      field('sign_name', '短信签名', 'send_config', 'text', true),
+      field('template_code', '短信模板 Code', 'send_config', 'text', true),
+    ];
+  }
+  if (providerType === 'tencent_sms') {
+    return [
+      field('secret_id', 'SecretId', 'auth_config', 'text', true),
+      field('secret_key', 'SecretKey', 'auth_config', 'password', true),
+      field('region', 'Region', 'send_config', 'text', false, 'ap-guangzhou'),
+      field('sms_sdk_app_id', '短信 SDK App ID', 'send_config', 'text', true),
+      field('sign_name', '短信签名', 'send_config', 'text', true),
+      field('template_id', '短信模板 ID', 'send_config', 'text', true),
+    ];
+  }
+  if (providerType === 'baidu_sms') {
+    return [
+      field('access_key_id', 'AccessKey ID', 'auth_config', 'text', true),
+      field('secret_access_key', 'Secret Access Key', 'auth_config', 'password', true),
+      field('endpoint', 'Endpoint', 'send_config'),
+      field('signature_id', '签名 ID', 'send_config', 'text', true),
+      field('template_id', '短信模板 ID', 'send_config', 'text', true),
+    ];
+  }
+  if (providerType === 'sms') {
+    return [
+      field('supplier', '短信供应商', 'send_config', 'text', true),
+      field('access_key', 'Access Key', 'auth_config', 'text', true),
+      field('access_secret', 'Access Secret', 'auth_config', 'password', true),
+      field('template_id', '短信模板 ID', 'send_config'),
+      field('sign_name', '短信签名', 'send_config'),
+    ];
+  }
+  if (providerType === 'gov_cloud') {
+    return [
+      field(
+        'base_url',
+        'base_url',
+        'send_config',
+        'text',
+        true,
+        '开发环境不可访问，先实现不联调',
+        'https://www.ywxt.sh.cegn.cn/api-gateway/uranus/uranus/cgi-bin/',
+      ),
+      field('corpsecret', 'corpsecret', 'auth_config', 'password', true),
+      field('allow_at_all', '允许 @all', 'send_config'),
+    ];
+  }
+  if (providerType === 'webhook') {
+    return [
+      field('send_url', 'Webhook URL', 'send_config', 'text', true),
+      field('method', '请求方法', 'send_config'),
+      field('headers', '请求 Header JSON', 'send_config', 'textarea'),
+      field('body_template', 'Body 映射模板', 'send_config', 'textarea'),
+      field('token', '固定 Token', 'auth_config', 'password'),
+    ];
+  }
+  if (providerType === 'custom_token') {
+    return [
+      field('token_endpoint', 'Token 获取 URL', 'token_config', 'text', true),
+      field('token_request', 'Token 请求 JSON', 'token_config', 'textarea'),
+      field('token_response_path', 'Token 字段路径', 'token_config'),
+      field('send_url', '发送 URL', 'send_config', 'text', true),
+      field('method', '请求方法', 'send_config'),
+      field('headers', '请求 Header JSON', 'send_config', 'textarea'),
+      field('body_template', 'Body 映射模板', 'send_config', 'textarea'),
+    ];
+  }
+  if (providerType === 'pushplus') {
+    return [
+      field('token', 'PushPlus Token', 'auth_config', 'password', true),
+      field('topic', 'topic', 'send_config'),
+      field('channel', 'channel', 'send_config'),
+      field('template', '消息模板', 'send_config', 'text', false, 'markdown'),
+    ];
+  }
+  if (providerType === 'wxpusher') {
+    return [
+      field('app_token', 'WxPusher AppToken', 'auth_config', 'password', true),
+      field('spt', 'WxPusher SPT', 'auth_config', 'password'),
+      field('mode', '推送模式', 'send_config', 'text', false, 'standard'),
+      field('uid_list', 'UID 列表', 'send_config', 'textarea'),
+      field('topic_ids', 'Topic ID 列表', 'send_config', 'textarea'),
+    ];
+  }
+  if (providerType === 'serverchan') {
+    return [
+      field('version', '版本', 'send_config', 'text', false, 'turbo'),
+      field('send_key', 'Server酱 SendKey', 'auth_config', 'password', true),
+      field('channel', '推送渠道', 'send_config'),
+      field('openid', 'OpenID', 'send_config'),
+      field('tags', '标签', 'send_config'),
+      field('short', '短链文案', 'send_config'),
+    ];
+  }
+  if (providerType === 'wecom_robot') {
+    return [
+      field('key', '机器人 Key', 'auth_config', 'password', true),
+      field('mentioned_list', '提醒成员列表', 'send_config', 'textarea'),
+      field('allow_at_all', '允许 @all', 'send_config'),
+    ];
+  }
+  if (providerType === 'wecom_app' || providerType === 'wecom') {
+    return [
+      field('corpid', '企业 ID', 'auth_config', 'text', true),
+      field('corpsecret', '应用 Secret', 'auth_config', 'password', true),
+      field('agentid', '应用 AgentId', 'send_config', 'text', true),
+      field('allow_at_all', '允许 @all', 'send_config'),
+    ];
+  }
+  if (providerType === 'dingtalk_robot') {
+    return [
+      field('access_token', '机器人 Access Token', 'auth_config', 'password', true),
+      field('robot_secret', '机器人签名 Secret', 'auth_config', 'password'),
+      field('keywords', '安全关键词', 'send_config', 'textarea'),
+      field('allow_at_all', '允许 @all', 'send_config'),
+    ];
+  }
+  if (providerType === 'dingtalk_work' || providerType === 'dingtalk') {
+    return [
+      field('app_key', '钉钉 App Key', 'auth_config', 'text', true),
+      field('app_secret', '钉钉 App Secret', 'auth_config', 'password', true),
+      field('agent_id', '应用 AgentId', 'send_config', 'text', true),
+    ];
+  }
+  if (providerType === 'feishu_robot') {
+    return [
+      field('hook_token', '机器人 Hook Token', 'auth_config', 'password', true),
+      field('sign_secret', '签名 Secret', 'auth_config', 'password'),
+    ];
+  }
+  if (providerType === 'feishu') {
+    return [
+      field('app_id', '飞书 App ID', 'auth_config', 'text', true),
+      field('app_secret', '飞书 App Secret', 'auth_config', 'password', true),
+    ];
+  }
+  if (providerType === 'self') {
+    return [
+      field('base_url', '上级网关地址', 'send_config', 'text', true, 'https://gateway.example.gov.cn'),
+      field('source_code', '上级来源编码', 'send_config', 'text', true),
+      field('source_token', '上级来源 Token', 'auth_config', 'password'),
+      field('hmac_secret', '上级 HMAC 密钥', 'auth_config', 'password'),
+      field('payload_mode', 'Payload 包装模式', 'send_config', 'text', false, 'wrap'),
+    ];
+  }
+  return [];
+}
+
+function uniqueConfigFields(fields: ProviderConfigField[]): ProviderConfigField[] {
+  const seen = new Set<string>();
+  return fields.filter((field) => {
+    const id = providerFieldValueKey(field);
+    if (seen.has(id)) {
+      return false;
+    }
+    seen.add(id);
+    return true;
+  });
+}
+
+function providerFieldValueKey(field: Pick<ProviderConfigField, 'target' | 'key'>): string {
+  return `${field.target}.${field.key}`;
+}
+
+function fieldValuesFromConfigs(
+  fields: ProviderConfigField[],
+  authConfig: JSONValue,
+  tokenConfig: JSONValue,
+  sendConfig: JSONValue,
+): ProviderFieldValues {
+  const configs: Record<ProviderFieldTarget, JSONValue> = {
+    auth_config: authConfig,
+    token_config: tokenConfig,
+    send_config: sendConfig,
+  };
+  return fields.reduce<ProviderFieldValues>((values, field) => {
+    const config = configs[field.target];
+    if (isRecord(config)) {
+      const rawValue = config[field.key];
+      if (typeof rawValue === 'string' || typeof rawValue === 'number' || typeof rawValue === 'boolean') {
+        values[providerFieldValueKey(field)] = rawValue;
+      } else if (rawValue !== undefined && rawValue !== null) {
+        values[providerFieldValueKey(field)] = stringifyJSON(rawValue);
+      }
+    }
+    return values;
+  }, {});
+}
+
+function fieldValuesFromDefaults(fields: ProviderConfigField[]): ProviderFieldValues {
+  return fields.reduce<ProviderFieldValues>((values, field) => {
+    if (field.defaultValue !== undefined) {
+      values[providerFieldValueKey(field)] = field.defaultValue;
+    }
+    return values;
+  }, {});
+}
+
+function configRecordsFromFieldValues(
+  fields: ProviderConfigField[],
+  fieldValues: ProviderFieldValues,
+): Record<ProviderFieldTarget, Record<string, JSONValue>> {
+  const result: Record<ProviderFieldTarget, Record<string, JSONValue>> = {
+    auth_config: {},
+    token_config: {},
+    send_config: {},
+  };
+  for (const field of fields) {
+    const rawValue = fieldValues[providerFieldValueKey(field)];
+    if (rawValue === '' || rawValue === undefined) {
+      continue;
+    }
+    result[field.target][field.key] = providerFieldValueToJSON(rawValue, field);
+  }
+  return result;
+}
+
+function providerFieldValueToJSON(value: ProviderFieldValue, field: ProviderConfigField): JSONValue {
+  if (field.inputType === 'number') {
+    return typeof value === 'number' ? value : Number(value);
+  }
+  if (field.inputType === 'textarea' && typeof value === 'string') {
+    const trimmed = value.trim();
+    if ((trimmed.startsWith('{') && trimmed.endsWith('}')) || (trimmed.startsWith('[') && trimmed.endsWith(']'))) {
+      try {
+        return JSON.parse(trimmed) as JSONValue;
+      } catch {
+        return value;
+      }
+    }
+  }
+  return value;
+}
+
+function mergeAdvancedConfig(base: Record<string, JSONValue>, advanced: JSONValue): JSONValue {
+  return isRecord(advanced) ? { ...base, ...advanced } : advanced;
+}
+
+function parseJSONOrEmpty(value: string): JSONValue {
+  try {
+    return JSON.parse(value || '{}') as JSONValue;
+  } catch {
+    return {};
+  }
+}
+
+function providerWithCapability(value: ProviderRow, view: ProviderCapabilityView): ProviderRow {
+  const fieldValues = fieldValuesFromConfigs(
+    view.fields,
+    parseJSONOrEmpty(value.authConfigJson),
+    parseJSONOrEmpty(value.tokenConfigJson),
+    parseJSONOrEmpty(value.sendConfigJson),
+  );
+  const timeoutMs = capabilityDefaultTimeout(view, value.timeoutMs);
+  const concurrency = capabilityDefaultConcurrency(view, value.concurrency);
+  return {
+    ...value,
+    providerDisplayName: view.displayName,
+    providerCategory: view.category,
+    customBodyAllowed: view.customBodyAllowed,
+    configFields: view.fields,
+    fieldValues: { ...fieldValuesFromDefaults(view.fields), ...fieldValues, ...value.fieldValues },
+    messageTypes: view.supportedMessageTypes,
+    capability: `${view.displayName}；支持消息类型 ${view.supportedMessageTypes.join('、')}；${view.category}`,
+    timeoutMs,
+    timeout: `${timeoutMs} ms`,
+    concurrency,
+    rateLimitConfigJson: stringifyJSON(capabilityDefaultRateLimit(view, parseJSONOrEmpty(value.rateLimitConfigJson))),
+    retryPolicyJson: stringifyJSON(capabilityDefaultRetryPolicy(view, parseJSONOrEmpty(value.retryPolicyJson))),
+  };
+}
+
+function capabilityDefaultTimeout(view: ProviderCapabilityView, fallback: number): number {
+  const direct = view.capabilityRecords.find((record) => typeof record.default_timeout_ms === 'number')?.default_timeout_ms;
+  if (typeof direct === 'number') {
+    return direct;
+  }
+  const defaults = view.capabilityRecords.find((record) => record.defaults !== undefined && isRecord(record.defaults))?.defaults ?? null;
+  return isRecord(defaults) && typeof defaults.timeout_ms === 'number' ? defaults.timeout_ms : fallback;
+}
+
+function capabilityDefaultConcurrency(view: ProviderCapabilityView, fallback: number): number {
+  const direct = view.capabilityRecords.find((record) => typeof record.default_concurrency_limit === 'number')?.default_concurrency_limit;
+  if (typeof direct === 'number') {
+    return direct;
+  }
+  const defaults = view.capabilityRecords.find((record) => record.defaults !== undefined && isRecord(record.defaults))?.defaults ?? null;
+  return isRecord(defaults) && typeof defaults.concurrency_limit === 'number' ? defaults.concurrency_limit : fallback;
+}
+
+function capabilityDefaultRateLimit(view: ProviderCapabilityView, fallback: JSONValue): JSONValue {
+  const direct = view.capabilityRecords.find((record) => record.default_rate_limit !== undefined)?.default_rate_limit;
+  if (direct !== undefined) {
+    return direct;
+  }
+  const defaults = view.capabilityRecords.find((record) => record.defaults !== undefined && isRecord(record.defaults))?.defaults ?? null;
+  return isRecord(defaults) && defaults.rate_limit !== undefined ? defaults.rate_limit : fallback;
+}
+
+function capabilityDefaultRetryPolicy(view: ProviderCapabilityView, fallback: JSONValue): JSONValue {
+  const direct = view.capabilityRecords.find((record) => record.default_retry_policy !== undefined)?.default_retry_policy;
+  if (direct !== undefined) {
+    return direct;
+  }
+  const defaults = view.capabilityRecords.find((record) => record.defaults !== undefined && isRecord(record.defaults))?.defaults ?? null;
+  return isRecord(defaults) && defaults.retry_policy !== undefined ? defaults.retry_policy : fallback;
+}
+
 function providerWithPreset(
   record: ProviderRecord,
   providerType: ProviderKind = record.providerType,
+  capabilities: ProviderCapabilityApiRecord[] = [],
 ): ProviderRow {
   const preset = providerPresets[providerType];
   const endpoint = parseSendEndpoint(preset.sendEndpoint);
-  return {
+  const view = providerCapabilityView(providerType, capabilities);
+  return providerWithCapability({
     ...record,
     ...preset,
     providerType,
+    providerDisplayName: view.displayName,
+    providerCategory: view.category,
+    customBodyAllowed: view.customBodyAllowed,
+    configFields: view.fields,
+    fieldValues: {},
     recipientFields: preset.recipientMapping,
     tokenStrategy: preset.tokenEndpoint,
     requestMethod: endpoint.requestMethod,
@@ -676,10 +1481,14 @@ function providerWithPreset(
       null,
       2,
     ),
-  };
+  }, view);
 }
 
-function createProviderDraft(providerType: ProviderKind, index: number): ProviderRow {
+export function createProviderDraft(
+  providerType: ProviderKind,
+  index: number,
+  capabilities: ProviderCapabilityApiRecord[] = [],
+): ProviderRow {
   return providerWithPreset(
     {
       id: `provider-local-${Date.now()}`,
@@ -702,11 +1511,16 @@ function createProviderDraft(providerType: ProviderKind, index: number): Provide
       capability: '',
     },
     providerType,
+    capabilities,
   );
 }
 
-function switchProviderType(value: ProviderRow, providerType: ProviderKind): ProviderRow {
-  const next = providerWithPreset(value, providerType);
+export function switchProviderType(
+  value: ProviderRow,
+  providerType: ProviderKind,
+  capabilities: ProviderCapabilityApiRecord[] = [],
+): ProviderRow {
+  const next = providerWithPreset(value, providerType, capabilities);
   return {
     ...next,
     id: value.id,
@@ -717,7 +1531,7 @@ function switchProviderType(value: ProviderRow, providerType: ProviderKind): Pro
   };
 }
 
-function mapChannelRow(channel: ChannelApiRecord): ProviderRow {
+function mapChannelRow(channel: ChannelApiRecord, capabilities: ProviderCapabilityApiRecord[] = []): ProviderRow {
   const base = providerWithPreset(
     {
       id: channel.id,
@@ -740,7 +1554,9 @@ function mapChannelRow(channel: ChannelApiRecord): ProviderRow {
       capability: `${getProviderTypeLabel(channel.provider_type)} 平台实例`,
     },
     channel.provider_type,
+    capabilities,
   );
+  const fieldValues = fieldValuesFromConfigs(base.configFields, channel.auth_config, channel.token_config, channel.send_config);
   return {
     ...base,
     concurrency: channel.concurrency_limit,
@@ -752,23 +1568,69 @@ function mapChannelRow(channel: ChannelApiRecord): ProviderRow {
     rateLimitConfigJson: stringifyJSON(channel.rate_limit_config),
     retryPolicyJson: stringifyJSON(channel.retry_policy),
     deadLetterPolicyJson: stringifyJSON(channel.dead_letter_policy),
+    fieldValues,
   };
 }
 
 function channelInputFromProvider(value: ProviderRow): ChannelInput {
+  const basicConfig = configRecordsFromFieldValues(value.configFields, value.fieldValues);
   return {
     provider_type: value.providerType,
     name: value.name.trim(),
     enabled: value.enabled,
-    auth_config: parseJSONField(value.authConfigJson, '认证配置高级 JSON'),
-    token_config: parseJSONField(value.tokenConfigJson, '令牌配置高级 JSON'),
-    send_config: parseJSONField(value.sendConfigJson, '发送配置高级 JSON'),
+    auth_config: mergeAdvancedConfig(basicConfig.auth_config, parseJSONField(value.authConfigJson, '认证配置高级 JSON')),
+    token_config: mergeAdvancedConfig(basicConfig.token_config, parseJSONField(value.tokenConfigJson, '令牌配置高级 JSON')),
+    send_config: mergeAdvancedConfig(basicConfig.send_config, parseJSONField(value.sendConfigJson, '发送配置高级 JSON')),
     rate_limit_config: parseJSONField(value.rateLimitConfigJson, '限流配置高级 JSON'),
     concurrency_limit: value.concurrency,
     timeout_ms: value.timeoutMs,
     retry_policy: parseJSONField(value.retryPolicyJson, '重试策略高级 JSON'),
     dead_letter_policy: parseJSONField(value.deadLetterPolicyJson, '死信策略高级 JSON'),
   };
+}
+
+function renderProviderFieldInput(
+  field: ProviderConfigField,
+  value: ProviderFieldValue | undefined,
+  onChange: (field: ProviderConfigField, value: ProviderFieldValue) => void,
+): ReactNode {
+  if (field.inputType === 'number') {
+    return (
+      <InputNumber
+        min={0}
+        value={typeof value === 'number' ? value : value === undefined || value === '' ? undefined : Number(value)}
+        className="full-width"
+        placeholder={field.placeholder}
+        onChange={(nextValue) => onChange(field, nextValue ?? 0)}
+      />
+    );
+  }
+  if (field.inputType === 'textarea') {
+    return (
+      <Input.TextArea
+        rows={4}
+        value={typeof value === 'string' ? value : value === undefined ? '' : String(value)}
+        placeholder={field.placeholder}
+        onChange={(event) => onChange(field, event.target.value)}
+      />
+    );
+  }
+  if (field.inputType === 'password') {
+    return (
+      <Input.Password
+        value={typeof value === 'string' ? value : value === undefined ? '' : String(value)}
+        placeholder={field.placeholder}
+        onChange={(event) => onChange(field, event.target.value)}
+      />
+    );
+  }
+  return (
+    <Input
+      value={typeof value === 'string' ? value : value === undefined ? '' : String(value)}
+      placeholder={field.placeholder}
+      onChange={(event) => onChange(field, event.target.value)}
+    />
+  );
 }
 
 function SourceConfigForm({
@@ -883,16 +1745,27 @@ function SourceConfigForm({
   );
 }
 
-function ProviderConfigForm({
+export function ProviderConfigForm({
   value,
   onChange,
+  capabilities = [],
 }: {
   value: ProviderRow;
   onChange: (value: ProviderRow) => void;
+  capabilities?: ProviderCapabilityApiRecord[];
 }) {
   const { message } = App.useApp();
-  const customMapping = value.providerType === 'custom_token' || value.providerType === 'webhook';
+  const [advancedOpen, setAdvancedOpen] = useState(false);
+  const customMapping = value.customBodyAllowed || value.providerType === 'custom_token' || value.providerType === 'webhook';
   const update = (patch: Partial<ProviderRow>) => onChange({ ...value, ...patch });
+  const updateFieldValue = (field: ProviderConfigField, nextValue: ProviderFieldValue) => {
+    update({
+      fieldValues: {
+        ...value.fieldValues,
+        [providerFieldValueKey(field)]: nextValue,
+      },
+    });
+  };
   const testPayload = (send: boolean): JSONValue => ({
     send,
     token: '',
@@ -931,10 +1804,38 @@ function ProviderConfigForm({
               <Form.Item label="平台类型">
                 <Select
                   value={value.providerType}
-                  onChange={(providerType) => onChange(switchProviderType(value, providerType))}
+                  onChange={(providerType) => onChange(switchProviderType(value, providerType, capabilities))}
                   options={providerTypeOptions}
                 />
               </Form.Item>
+              <div className="provider-capability-summary">
+                <Descriptions column={1} size="small" bordered>
+                  <Descriptions.Item label="能力名称">{value.providerDisplayName}</Descriptions.Item>
+                  <Descriptions.Item label="能力分类">{value.providerCategory}</Descriptions.Item>
+                  <Descriptions.Item label="支持消息类型">{value.messageTypes.join('、')}</Descriptions.Item>
+                </Descriptions>
+              </div>
+              <Divider orientation="left">基础配置字段</Divider>
+              <div className="two-column-form provider-field-grid">
+                {value.configFields.map((field) => (
+                  <Form.Item
+                    key={providerFieldValueKey(field)}
+                    label={field.label}
+                    required={field.required}
+                    extra={field.advanced ? '该字段来自高级能力 schema，可按平台要求填写。' : undefined}
+                  >
+                    {renderProviderFieldInput(field, value.fieldValues[providerFieldValueKey(field)], updateFieldValue)}
+                  </Form.Item>
+                ))}
+              </div>
+              {!customMapping ? (
+                <Alert
+                  type="info"
+                  showIcon
+                  className="semantic-alert"
+                  message="该平台为内置适配器，基础字段会写入后端配置；URL、Header 和 Body 映射由 adapter 负责生成。"
+                />
+              ) : null}
               <Form.Item label="描述">
                 <Input.TextArea
                   rows={3}
@@ -966,44 +1867,44 @@ function ProviderConfigForm({
                   message="该平台为内置适配器，令牌获取结构使用预置默认值；只需要维护实际凭证和运行参数。"
                 />
               ) : null}
-              <Form.Item label="令牌获取方式">
-                <Input
-                  value={value.tokenEndpoint}
-                  disabled={!customMapping}
-                  onChange={(event) => update({ tokenEndpoint: event.target.value, tokenStrategy: event.target.value })}
-                />
-              </Form.Item>
-              <Form.Item label="请求参数 / 凭证">
-                <Input.TextArea
-                  rows={3}
-                  value={value.tokenRequest}
-                  disabled={!customMapping}
-                  onChange={(event) => update({ tokenRequest: event.target.value })}
-                />
-              </Form.Item>
-              <Form.Item label="返回 token 字段路径">
-                <Input
-                  value={value.tokenResponsePath}
-                  disabled={!customMapping}
-                  onChange={(event) => update({ tokenResponsePath: event.target.value })}
-                />
-              </Form.Item>
-              <Form.Item label="Token 放置">
-                <Input
-                  value={value.tokenPlacement}
-                  disabled={!customMapping}
-                  onChange={(event) => update({ tokenPlacement: event.target.value })}
-                />
-              </Form.Item>
-              <Form.Item label="刷新策略">
-                <Input
-                  value={value.refreshStrategy}
-                  onChange={(event) => update({ refreshStrategy: event.target.value })}
-                />
-              </Form.Item>
-              <Form.Item label="缓存键">
-                <Input value={value.cacheKey} onChange={(event) => update({ cacheKey: event.target.value })} />
-              </Form.Item>
+              {customMapping ? (
+                <>
+                  <Form.Item label="令牌获取方式">
+                    <Input
+                      value={value.tokenEndpoint}
+                      onChange={(event) => update({ tokenEndpoint: event.target.value, tokenStrategy: event.target.value })}
+                    />
+                  </Form.Item>
+                  <Form.Item label="请求参数 / 凭证">
+                    <Input.TextArea
+                      rows={3}
+                      value={value.tokenRequest}
+                      onChange={(event) => update({ tokenRequest: event.target.value })}
+                    />
+                  </Form.Item>
+                  <Form.Item label="返回 token 字段路径">
+                    <Input
+                      value={value.tokenResponsePath}
+                      onChange={(event) => update({ tokenResponsePath: event.target.value })}
+                    />
+                  </Form.Item>
+                  <Form.Item label="Token 放置">
+                    <Input
+                      value={value.tokenPlacement}
+                      onChange={(event) => update({ tokenPlacement: event.target.value })}
+                    />
+                  </Form.Item>
+                  <Form.Item label="刷新策略">
+                    <Input
+                      value={value.refreshStrategy}
+                      onChange={(event) => update({ refreshStrategy: event.target.value })}
+                    />
+                  </Form.Item>
+                  <Form.Item label="缓存键">
+                    <Input value={value.cacheKey} onChange={(event) => update({ cacheKey: event.target.value })} />
+                  </Form.Item>
+                </>
+              ) : null}
             </Form>
           ),
         },
@@ -1020,49 +1921,48 @@ function ProviderConfigForm({
                   message="该平台为内置适配器，已预置常用请求结构；只需要填写凭证、限流、超时重试等运行参数。"
                 />
               ) : null}
-              <div className="two-column-form">
-                <Form.Item label="发送接口">
-                  <Input
-                    value={value.sendEndpoint}
-                    disabled={!customMapping}
-                    onChange={(event) => {
-                      const endpoint = parseSendEndpoint(event.target.value);
-                      update({ sendEndpoint: event.target.value, ...endpoint });
-                    }}
-                  />
-                </Form.Item>
-                <Form.Item label="接收人映射">
-                  <Input
-                    value={value.recipientMapping}
-                    disabled={!customMapping}
-                    onChange={(event) => update({ recipientMapping: event.target.value, recipientFields: event.target.value })}
-                  />
-                </Form.Item>
-                <Form.Item label="请求 Header">
-                  <Input.TextArea
-                    rows={3}
-                    value={value.requestHeaders}
-                    disabled={!customMapping}
-                    onChange={(event) => update({ requestHeaders: event.target.value })}
-                  />
-                </Form.Item>
-                <Form.Item label="请求 Query">
-                  <Input.TextArea
-                    rows={3}
-                    value={value.requestQuery}
-                    disabled={!customMapping}
-                    onChange={(event) => update({ requestQuery: event.target.value })}
-                  />
-                </Form.Item>
-              </div>
-              <Form.Item label="Body 映射模板">
-                <Input.TextArea
-                  rows={6}
-                  value={value.bodyMapping}
-                  disabled={!customMapping}
-                  onChange={(event) => update({ bodyMapping: event.target.value })}
-                />
-              </Form.Item>
+              {customMapping ? (
+                <>
+                  <div className="two-column-form">
+                    <Form.Item label="发送接口">
+                      <Input
+                        value={value.sendEndpoint}
+                        onChange={(event) => {
+                          const endpoint = parseSendEndpoint(event.target.value);
+                          update({ sendEndpoint: event.target.value, ...endpoint });
+                        }}
+                      />
+                    </Form.Item>
+                    <Form.Item label="接收人映射">
+                      <Input
+                        value={value.recipientMapping}
+                        onChange={(event) => update({ recipientMapping: event.target.value, recipientFields: event.target.value })}
+                      />
+                    </Form.Item>
+                    <Form.Item label="请求 Header">
+                      <Input.TextArea
+                        rows={3}
+                        value={value.requestHeaders}
+                        onChange={(event) => update({ requestHeaders: event.target.value })}
+                      />
+                    </Form.Item>
+                    <Form.Item label="请求 Query">
+                      <Input.TextArea
+                        rows={3}
+                        value={value.requestQuery}
+                        onChange={(event) => update({ requestQuery: event.target.value })}
+                      />
+                    </Form.Item>
+                  </div>
+                  <Form.Item label="Body 映射模板">
+                    <Input.TextArea
+                      rows={6}
+                      value={value.bodyMapping}
+                      onChange={(event) => update({ bodyMapping: event.target.value })}
+                    />
+                  </Form.Item>
+                </>
+              ) : null}
             </Form>
           ),
         },
@@ -1235,51 +2135,64 @@ function ProviderConfigForm({
         },
         {
           key: 'advanced-json',
-          label: '高级 JSON',
+          label: '高级 JSON 配置',
           children: (
             <Form layout="vertical">
-              <Form.Item label="认证配置 JSON">
-                <Input.TextArea
-                  rows={5}
-                  value={value.authConfigJson}
-                  onChange={(event) => update({ authConfigJson: event.target.value })}
-                />
-              </Form.Item>
-              <Form.Item label="令牌配置 JSON">
-                <Input.TextArea
-                  rows={5}
-                  value={value.tokenConfigJson}
-                  onChange={(event) => update({ tokenConfigJson: event.target.value })}
-                />
-              </Form.Item>
-              <Form.Item label="发送配置 JSON">
-                <Input.TextArea
-                  rows={5}
-                  value={value.sendConfigJson}
-                  onChange={(event) => update({ sendConfigJson: event.target.value })}
-                />
-              </Form.Item>
-              <Form.Item label="限流配置 JSON">
-                <Input.TextArea
-                  rows={5}
-                  value={value.rateLimitConfigJson}
-                  onChange={(event) => update({ rateLimitConfigJson: event.target.value })}
-                />
-              </Form.Item>
-              <Form.Item label="重试策略 JSON">
-                <Input.TextArea
-                  rows={5}
-                  value={value.retryPolicyJson}
-                  onChange={(event) => update({ retryPolicyJson: event.target.value })}
-                />
-              </Form.Item>
-              <Form.Item label="死信策略 JSON">
-                <Input.TextArea
-                  rows={5}
-                  value={value.deadLetterPolicyJson}
-                  onChange={(event) => update({ deadLetterPolicyJson: event.target.value })}
-                />
-              </Form.Item>
+              <Alert
+                type="info"
+                showIcon
+                className="semantic-alert"
+                message="基础字段会先合并到配置 JSON；这里填写的高级 JSON 会覆盖同名键。"
+              />
+              <Button onClick={() => setAdvancedOpen((open) => !open)}>
+                {advancedOpen ? '收起高级 JSON 配置' : '展开高级 JSON 配置'}
+              </Button>
+              {advancedOpen ? (
+                <div className="advanced-json-fields">
+                  <Form.Item label="认证配置 JSON">
+                    <Input.TextArea
+                      rows={5}
+                      value={value.authConfigJson}
+                      onChange={(event) => update({ authConfigJson: event.target.value })}
+                    />
+                  </Form.Item>
+                  <Form.Item label="令牌配置 JSON">
+                    <Input.TextArea
+                      rows={5}
+                      value={value.tokenConfigJson}
+                      onChange={(event) => update({ tokenConfigJson: event.target.value })}
+                    />
+                  </Form.Item>
+                  <Form.Item label="发送配置 JSON">
+                    <Input.TextArea
+                      rows={5}
+                      value={value.sendConfigJson}
+                      onChange={(event) => update({ sendConfigJson: event.target.value })}
+                    />
+                  </Form.Item>
+                  <Form.Item label="限流配置 JSON">
+                    <Input.TextArea
+                      rows={5}
+                      value={value.rateLimitConfigJson}
+                      onChange={(event) => update({ rateLimitConfigJson: event.target.value })}
+                    />
+                  </Form.Item>
+                  <Form.Item label="重试策略 JSON">
+                    <Input.TextArea
+                      rows={5}
+                      value={value.retryPolicyJson}
+                      onChange={(event) => update({ retryPolicyJson: event.target.value })}
+                    />
+                  </Form.Item>
+                  <Form.Item label="死信策略 JSON">
+                    <Input.TextArea
+                      rows={5}
+                      value={value.deadLetterPolicyJson}
+                      onChange={(event) => update({ deadLetterPolicyJson: event.target.value })}
+                    />
+                  </Form.Item>
+                </div>
+              ) : null}
             </Form>
           ),
         },
@@ -1374,11 +2287,17 @@ function ProviderCapabilityTabs({ provider }: { provider: ProviderRow }) {
 type RouteRuleDraft = {
   name: string;
   conditions: RouteConditionDraft[];
-  templateVersionId: string;
-  channelIds: string[];
+  targets: RouteActionTargetDraft[];
   recipientMode: RouteRecipientMode;
   recipientGroupIds: string[];
   payloadRecipientPath: string;
+  enabled: boolean;
+};
+
+export type RouteActionTargetDraft = {
+  id: string;
+  channelId: string;
+  templateVersionId: string;
   enabled: boolean;
 };
 
@@ -1402,12 +2321,14 @@ function createDefaultConditionDraft(): RouteConditionDraft {
   };
 }
 
-function createRouteRuleDraft(templateRows: Array<TemplateRecord & { raw?: TemplateApiRecord }>, channelRows: ProviderRow[]): RouteRuleDraft {
+export function createRouteRuleDraft(
+  templateRows: Array<TemplateRecord & { raw?: TemplateApiRecord }>,
+  channelRows: ProviderRow[],
+): RouteRuleDraft {
   return {
     name: '新路由规则',
     conditions: [createDefaultConditionDraft()],
-    templateVersionId: firstTemplateVersionId(templateRows),
-    channelIds: channelRows[0] ? [channelRows[0].id] : [],
+    targets: [createDefaultRouteTarget(channelRows, templateRows)],
     recipientMode: 'system',
     recipientGroupIds: [],
     payloadRecipientPath: 'payload.receivers',
@@ -1415,7 +2336,7 @@ function createRouteRuleDraft(templateRows: Array<TemplateRecord & { raw?: Templ
   };
 }
 
-function RouteRuleForm({
+export function RouteRuleForm({
   value,
   onChange,
   matchGroupRows,
@@ -1459,14 +2380,6 @@ function RouteRuleForm({
   };
   const matchGroupNames = Object.fromEntries(matchGroupRows.map((group) => [group.id, group.name]));
   const conditionPreview = summarizeRouteConditionTree(buildRouteConditionTree(value.conditions), { matchGroupNames });
-  const templateOptions = templateRows.map((template) => {
-    const versionId = templateVersionId(template);
-    return {
-      label: `${template.name} / ${versionId || '未发布'}`,
-      value: versionId || `unpublished:${template.id}`,
-      disabled: !versionId,
-    };
-  });
   const channelOptions = channelRows.map((channel) => ({
     label: `${channel.name} / ${getProviderTypeLabel(channel.providerType)}`,
     value: channel.id,
@@ -1474,6 +2387,20 @@ function RouteRuleForm({
   const recipientGroupOptions = recipientGroupRows
     .filter((group) => group.enabled)
     .map((group) => ({ label: group.name, value: group.id }));
+  const updateTarget = (index: number, patch: Partial<RouteActionTargetDraft>) => {
+    onChange({
+      ...value,
+      targets: value.targets.map((target, targetIndex) =>
+        targetIndex === index ? { ...target, ...patch } : target,
+      ),
+    });
+  };
+  const addTarget = () => {
+    onChange({ ...value, targets: [...value.targets, createDefaultRouteTarget(channelRows, templateRows)] });
+  };
+  const removeTarget = (index: number) => {
+    onChange({ ...value, targets: value.targets.filter((_target, targetIndex) => targetIndex !== index) });
+  };
 
   return (
     <Form layout="vertical">
@@ -1547,23 +2474,58 @@ function RouteRuleForm({
         })}
         <Alert type="info" showIcon message={`预览：${conditionPreview}`} />
       </div>
-      <Form.Item label="模板版本" className="drawer-form-gap" required>
-        <Select
-          value={value.templateVersionId}
-          options={templateOptions}
-          placeholder="选择已发布模板版本"
-          onChange={(templateVersionId) => onChange({ ...value, templateVersionId })}
-        />
-      </Form.Item>
-      <Form.Item label="目标平台" required>
-        <Select
-          mode="multiple"
-          value={value.channelIds}
-          options={channelOptions}
-          placeholder="选择一个或多个平台实例"
-          onChange={(channelIds) => onChange({ ...value, channelIds })}
-        />
-      </Form.Item>
+      <div className="send-action-group drawer-form-gap">
+        <Space className="full-width" align="center" style={{ justifyContent: 'space-between' }}>
+          <Typography.Title level={5}>发送动作组</Typography.Title>
+          <Button size="small" onClick={addTarget}>新增发送目标</Button>
+        </Space>
+        {value.targets.map((target, index) => {
+          const selectedTemplate = templateRows.find((template) => templateVersionId(template) === target.templateVersionId);
+          const providerTypeUnknown = Boolean(selectedTemplate && !templateProviderType(selectedTemplate));
+          return (
+            <div className="send-action-row" key={target.id}>
+              <Select
+                value={target.channelId || undefined}
+                options={channelOptions}
+                placeholder="选择平台实例"
+                onChange={(channelId) => {
+                  const nextChannel = channelRows.find((item) => item.id === channelId);
+                  updateTarget(index, {
+                    channelId,
+                    templateVersionId: nextChannel
+                      ? firstCompatibleTemplateVersionId(templateRows, nextChannel.providerType)
+                      : '',
+                  });
+                }}
+              />
+              <Select
+                value={target.templateVersionId || undefined}
+                options={routeTargetTemplateOptions(target, channelRows, templateRows)}
+                placeholder="选择兼容模板"
+                onChange={(templateVersionId) => updateTarget(index, { templateVersionId })}
+              />
+              <Switch
+                checked={target.enabled}
+                checkedChildren="启用"
+                unCheckedChildren="停用"
+                onChange={(enabled) => updateTarget(index, { enabled })}
+              />
+              <Button danger type="link" onClick={() => removeTarget(index)}>
+                删除
+              </Button>
+              {providerTypeUnknown ? (
+                <Typography.Text type="secondary" className="send-action-row__hint">
+                  模板未声明平台类型，已按兼容处理
+                </Typography.Text>
+              ) : null}
+            </div>
+          );
+        })}
+        {value.targets.length === 0 ? (
+          <Alert type="warning" showIcon message="请新增至少一个发送目标。" />
+        ) : null}
+        <Alert type="info" showIcon message="每个发送目标需要选择一个平台实例和一个兼容模板；跨平台发送请新增多行。" />
+      </div>
       <div className="two-column-form">
         <Form.Item label="接收策略">
           <Select
@@ -1609,11 +2571,72 @@ function RouteRuleForm({
 }
 
 function templateVersionId(template: TemplateRecord & { raw?: TemplateApiRecord }) {
-  return template.raw?.current_version_id || (template.targetField === '未发布' ? '' : template.targetField);
+  return template.raw?.current_version_id || (template.version === '草稿' ? '' : template.id);
 }
 
-function firstTemplateVersionId(templateRows: Array<TemplateRecord & { raw?: TemplateApiRecord }>) {
-  return templateRows.map(templateVersionId).find(Boolean) ?? '';
+function templateProviderType(template: TemplateRecord & { raw?: TemplateApiRecord }) {
+  return template.raw?.current_version?.target_provider_type ?? template.raw?.target_provider_type ?? '';
+}
+
+function createDefaultRouteTarget(
+  channelRows: ProviderRow[],
+  templateRows: Array<TemplateRecord & { raw?: TemplateApiRecord }>,
+): RouteActionTargetDraft {
+  const channel = channelRows[0];
+  return {
+    id: randomUUIDValue(),
+    channelId: channel?.id ?? '',
+    templateVersionId: channel ? firstCompatibleTemplateVersionId(templateRows, channel.providerType) : '',
+    enabled: true,
+  };
+}
+
+function firstCompatibleTemplateVersionId(
+  templateRows: Array<TemplateRecord & { raw?: TemplateApiRecord }>,
+  providerType: string,
+) {
+  return templateRows
+    .filter((template) => templateVersionId(template))
+    .filter((template) => {
+      const templateProvider = templateProviderType(template);
+      return !templateProvider || templateProvider === providerType;
+    })
+    .map(templateVersionId)
+    .find(Boolean) ?? '';
+}
+
+export function routeTargetTemplateOptions(
+  target: RouteActionTargetDraft,
+  channelRows: ProviderRow[],
+  templateRows: Array<TemplateRecord & { raw?: TemplateApiRecord }>,
+) {
+  const channel = channelRows.find((item) => item.id === target.channelId);
+  return templateRows
+    .filter((template) => {
+      const providerType = templateProviderType(template);
+      return !channel || !providerType || providerType === channel.providerType;
+    })
+    .map((template) => {
+      const versionId = templateVersionId(template);
+      const providerType = templateProviderType(template);
+      return {
+        label: `${template.name} / ${versionId || '未发布'}${providerType ? '' : '（未声明平台类型）'}`,
+        value: versionId || `unpublished:${template.id}`,
+        disabled: !versionId,
+      };
+    });
+}
+
+function isTemplateCompatibleWithChannel(
+  templateVersionIdValue: string,
+  channelId: string,
+  templateRows: Array<TemplateRecord & { raw?: TemplateApiRecord }>,
+  channelRows: ProviderRow[],
+) {
+  const channel = channelRows.find((item) => item.id === channelId);
+  const template = templateRows.find((item) => templateVersionId(item) === templateVersionIdValue);
+  const providerType = template ? templateProviderType(template) : '';
+  return Boolean(channel && template && (!providerType || providerType === channel.providerType));
 }
 
 function routeConditionDraftsFromTree(value: JSONValue): RouteConditionDraft[] {
@@ -1692,8 +2715,7 @@ function routeRuleDraftFromRow(row: RouteRuleRow): RouteRuleDraft {
   return {
     name: row.name,
     conditions: routeConditionDraftsFromTree(row.conditionTree ?? {}),
-    templateVersionId: row.templateVersionId,
-    channelIds: row.channelIds,
+    targets: row.targets.map((target) => ({ ...target })),
     recipientMode: mode,
     recipientGroupIds,
     payloadRecipientPath: typeof recipient?.payload_recipient_path === 'string' ? recipient.payload_recipient_path : 'payload.receivers',
@@ -1708,10 +2730,12 @@ function routeRuleDraftToRow(
   sortOrder: number,
   matchGroupRows: MatchGroup[],
   templateRows: Array<TemplateRecord & { raw?: TemplateApiRecord }>,
+  channelRows: ProviderRow[],
 ) {
   const conditionTree = buildRouteConditionTree(draft.conditions);
   const matchGroupNames = Object.fromEntries(matchGroupRows.map((group) => [group.id, group.name]));
-  const templateLabel = templateRows.find((template) => templateVersionId(template) === draft.templateVersionId)?.name ?? draft.templateVersionId;
+  const sendGroupSummary = summarizeRouteTargets(draft.targets, channelRows, templateRows);
+  const targetLabels = routeTargetLabels(draft.targets, channelRows, templateRows);
   const recipientStrategyConfig = routeRecipientStrategyFromDraft(draft);
   const row: RouteRuleRow = {
     ...(existingRule ?? {
@@ -1724,12 +2748,12 @@ function routeRuleDraftToRow(
     name: draft.name.trim(),
     source: selectedGroup.sourceName,
     condition: summarizeRouteConditionTree(conditionTree, { matchGroupNames }),
-    template: templateLabel || '-',
-    templateVersionId: draft.templateVersionId,
+    template: sendGroupSummary,
     recipientStrategy: routeRecipientModeLabel(draft.recipientMode),
     recipientStrategyConfig,
-    targetProviders: draft.channelIds,
-    channelIds: draft.channelIds,
+    targetProviders: targetLabels,
+    targets: draft.targets.map((target) => ({ ...target })),
+    sendGroupSummary,
     dedupe: '按 Trace ID',
     sendDedupeConfig: { strategy: 'trace_id' },
     failurePolicy: existingRule?.failurePolicy ?? { policy: 'continue' },
@@ -1756,15 +2780,31 @@ function routeRecipientModeLabel(mode: RouteRecipientMode) {
   return mode === 'payload' ? 'Payload 接收人' : '系统接收人';
 }
 
-function validateRouteRuleDraft(draft: RouteRuleDraft): string {
+function validateRouteRuleDraft(
+  draft: RouteRuleDraft,
+  templateRows: Array<TemplateRecord & { raw?: TemplateApiRecord }>,
+  channelRows: ProviderRow[],
+): string {
   if (!draft.name.trim()) {
     return '请填写规则名称';
   }
-  if (!draft.templateVersionId.trim()) {
-    return '请选择模板版本';
+  const enabledTargets = draft.targets.filter((target) => target.enabled);
+  if (enabledTargets.length === 0) {
+    return '请至少配置一个发送目标';
   }
-  if (draft.channelIds.length === 0) {
-    return '请选择目标平台';
+  if (enabledTargets.some((target) => !target.channelId.trim())) {
+    return '发送目标需要选择平台实例';
+  }
+  if (enabledTargets.some((target) => !target.templateVersionId.trim())) {
+    return '发送目标需要选择兼容模板';
+  }
+  if (
+    enabledTargets.some(
+      (target) =>
+        !isTemplateCompatibleWithChannel(target.templateVersionId, target.channelId, templateRows, channelRows),
+    )
+  ) {
+    return '发送目标的模板与平台类型不兼容';
   }
   if (draft.recipientMode === 'payload' && !draft.payloadRecipientPath.trim()) {
     return 'Payload 接收人模式需要填写接收人路径';
@@ -1782,6 +2822,49 @@ function validateRouteRuleDraft(draft: RouteRuleDraft): string {
     return !condition.value.trim();
   });
   return invalidCondition ? '请补齐条件字段、操作符和值或匹配组' : '';
+}
+
+function routeTargetsFromApi(rule: RouteRuleApiRecord): RouteActionTargetDraft[] {
+  const apiTargets = rule.action.targets ?? [];
+  if (apiTargets.length > 0) {
+    return apiTargets.map((target) => ({
+      id: target.id || randomUUIDValue(),
+      channelId: target.channel_id,
+      templateVersionId: target.template_version_id,
+      enabled: target.enabled,
+    }));
+  }
+  const templateVersionIdValue = rule.action.template_version_id ?? '';
+  return (rule.action.channel_ids ?? []).filter(Boolean).map((channelId) => ({
+    id: randomUUIDValue(),
+    channelId,
+    templateVersionId: templateVersionIdValue,
+    enabled: true,
+  }));
+}
+
+function routeTargetLabels(
+  targets: RouteActionTargetDraft[],
+  channelRows: ProviderRow[],
+  templateRows: Array<TemplateRecord & { raw?: TemplateApiRecord }>,
+) {
+  return targets
+    .filter((target) => target.enabled)
+    .map((target) => {
+      const channel = channelRows.find((item) => item.id === target.channelId);
+      const template = templateRows.find((item) => templateVersionId(item) === target.templateVersionId);
+      const channelLabel = channel?.name ?? target.channelId;
+      const templateLabel = template?.name ?? target.templateVersionId;
+      return `${channelLabel || '-'} -> ${templateLabel || '-'}`;
+    });
+}
+
+function summarizeRouteTargets(
+  targets: RouteActionTargetDraft[],
+  channelRows: ProviderRow[],
+  templateRows: Array<TemplateRecord & { raw?: TemplateApiRecord }>,
+) {
+  return routeTargetLabels(targets, channelRows, templateRows).join('、') || '-';
 }
 
 function IdentityEditor({
@@ -2210,6 +3293,7 @@ export function ProvidersPage({ lastUpdated, onRefresh }: ConsolePageProps) {
   const { message } = App.useApp();
   const { drawer, openDrawer, closeDrawer } = useCreateDrawer('新增上级平台');
   const [providerRows, setProviderRows] = useState<ProviderRow[]>([]);
+  const [providerCapabilities, setProviderCapabilities] = useState<ProviderCapabilityApiRecord[]>([]);
   const [loadState, setLoadState] = useState<ApiLoadState>(emptyLoadState);
   const [selected, setSelected] = useState<ProviderRow | null>(null);
   const [providerDraft, setProviderDraft] = useState<ProviderRow>(() => createProviderDraft('gov_cloud', 1));
@@ -2220,12 +3304,21 @@ export function ProvidersPage({ lastUpdated, onRefresh }: ConsolePageProps) {
   const loadProviders = useCallback(async () => {
     setLoadState({ loading: true, error: '' });
     try {
-      const result = await consoleApi.listChannels();
-      const rows = result.channels.map(mapChannelRow);
+      const [channelResult, capabilityResult] = await Promise.allSettled([
+        consoleApi.listChannels(),
+        consoleApi.listProviderCapabilities(),
+      ]);
+      if (channelResult.status === 'rejected') {
+        throw channelResult.reason;
+      }
+      const capabilities = capabilityResult.status === 'fulfilled' ? capabilityResult.value.capabilities : [];
+      const rows = channelResult.value.channels.map((channel) => mapChannelRow(channel, capabilities));
+      setProviderCapabilities(capabilities);
       setProviderRows(rows);
       setSelected((current) => rows.find((row) => row.id === current?.id) ?? rows[0] ?? null);
       setLoadState(emptyLoadState);
     } catch (error) {
+      setProviderCapabilities([]);
       setProviderRows([]);
       setSelected(null);
       setLoadState({ loading: false, error: userFacingError(error) });
@@ -2243,12 +3336,12 @@ export function ProvidersPage({ lastUpdated, onRefresh }: ConsolePageProps) {
   });
   const openCreateProvider = () => {
     setEditingProviderId(null);
-    setProviderDraft(createProviderDraft('gov_cloud', providerRows.length + 1));
+    setProviderDraft(createProviderDraft('gov_cloud', providerRows.length + 1, providerCapabilities));
     openDrawer();
   };
   const openEditProvider = (record: ProviderRow) => {
     setEditingProviderId(record.id);
-    setProviderDraft(record);
+    setProviderDraft(providerWithCapability(record, providerCapabilityView(record.providerType, providerCapabilities)));
     openDrawer(`编辑平台：${record.name}`);
   };
   const saveProvider = async () => {
@@ -2411,7 +3504,7 @@ export function ProvidersPage({ lastUpdated, onRefresh }: ConsolePageProps) {
         </section>
       </div>
       <CreateDrawer title={drawer.title} open={drawer.open} onClose={closeDrawer} onSave={saveProvider} width={760}>
-        <ProviderConfigForm value={providerDraft} onChange={setProviderDraft} />
+        <ProviderConfigForm value={providerDraft} onChange={setProviderDraft} capabilities={providerCapabilities} />
       </CreateDrawer>
     </PageFrame>
   );
@@ -2472,28 +3565,11 @@ function RouteGroupForm({
   );
 }
 
-type RouteNodeKind = 'source' | 'condition' | 'template' | 'recipient' | 'platform';
-
-type RouteNodeData = Record<string, unknown> & {
-  kind: RouteNodeKind;
-  title: string;
-  description: string;
-  condition?: string;
-  hitCount?: number;
-};
-
-type RouteFlowNode = Node<RouteNodeData, 'routeNode'>;
-type RouteFlowEdge = Edge<Record<string, unknown>>;
-type RouteCanvasSnapshot = {
-  nodes: RouteFlowNode[];
-  edges: RouteFlowEdge[];
-};
-
 type RouteRuleRow = RouteRule & {
   flowId: string;
   conditionTree: JSONValue;
-  templateVersionId: string;
-  channelIds: string[];
+  targets: RouteActionTargetDraft[];
+  sendGroupSummary: string;
   recipientStrategyConfig: JSONValue;
   sendDedupeConfig: JSONValue;
   failurePolicy: JSONValue;
@@ -2505,114 +3581,18 @@ type SelectedFlowElement =
   | { type: 'edge'; id: string }
   | null;
 
-const routeNodeCatalog: Array<{
-  kind: RouteNodeKind;
-  title: string;
-  description: string;
-}> = [
-  { kind: 'source', title: '来源开始', description: '固定接收当前路由大组绑定来源' },
-  { kind: 'condition', title: '条件判断', description: '按 payload 字段、匹配组或系统值判断' },
-  { kind: 'template', title: '模板渲染', description: '选择模板并渲染消息内容' },
-  { kind: 'recipient', title: '接收人', description: '系统接收人组或 payload 接收人' },
-  { kind: 'platform', title: '发送平台/结束', description: '调用上级平台并结束当前命中链路' },
-];
-
-const routeNodeDefaults = Object.fromEntries(
-  routeNodeCatalog.map((item) => [item.kind, item]),
-) as Record<RouteNodeKind, (typeof routeNodeCatalog)[number]>;
-
 function RouteFlowNodeView({ data, selected }: NodeProps<RouteFlowNode>) {
+  const nodeDefault = routeNodeDefaults[data.kind] ?? routeNodeDefaults.send_group;
   return (
     <div className={`route-flow-node route-flow-node--${data.kind}${selected ? ' route-flow-node--selected' : ''}`}>
       {data.kind !== 'source' ? <Handle type="target" position={Position.Left} /> : null}
-      <div className="route-flow-node__type">{routeNodeDefaults[data.kind].title}</div>
+      <div className="route-flow-node__type">{nodeDefault.title}</div>
       <strong>{data.title}</strong>
       <span>{data.description}</span>
       {typeof data.hitCount === 'number' ? <em>命中 {formatHitCount(data.hitCount)}</em> : null}
       <Handle type="source" position={Position.Right} />
     </div>
   );
-}
-
-function buildInitialRouteFlow(group: RouteGroup, rules: RouteRule[]) {
-  const groupRules = routeRulesForGroup(group, rules);
-  const nodes: RouteFlowNode[] = [
-    {
-      id: 'source-start',
-      type: 'routeNode',
-      position: { x: 32, y: 180 },
-      deletable: false,
-      data: {
-        kind: 'source',
-        title: group.sourceName,
-        description: `来源编码 ${group.sourceCode}，当前组内固定不可切换`,
-      },
-    },
-  ];
-  const edges: RouteFlowEdge[] = [];
-
-  groupRules.forEach((rule, index) => {
-    const y = 42 + index * 140;
-    const conditionId = `${rule.id}-condition`;
-    const templateId = `${rule.id}-template`;
-    const recipientId = `${rule.id}-recipient`;
-    const platformId = `${rule.id}-platform`;
-
-    nodes.push(
-      {
-        id: conditionId,
-        type: 'routeNode',
-        position: { x: 300, y },
-        data: {
-          kind: 'condition',
-          title: `${rule.sortOrder}. ${rule.name}`,
-          description: rule.condition,
-          condition: rule.condition,
-          hitCount: rule.hitCount,
-        },
-      },
-      {
-        id: templateId,
-        type: 'routeNode',
-        position: { x: 560, y },
-        data: { kind: 'template', title: rule.template, description: '命中后渲染模板' },
-      },
-      {
-        id: recipientId,
-        type: 'routeNode',
-        position: { x: 820, y },
-        data: { kind: 'recipient', title: rule.recipientStrategy, description: '解析接收人并映射身份字段' },
-      },
-      {
-        id: platformId,
-        type: 'routeNode',
-        position: { x: 1080, y },
-        data: {
-          kind: 'platform',
-          title: rule.targetProviders.join('、'),
-          description: '发送成功或失败后结束当前规则链路',
-        },
-      },
-    );
-
-    [
-      ['source-start', conditionId, `顺序 ${rule.sortOrder}`],
-      [conditionId, templateId, '命中'],
-      [templateId, recipientId, '渲染完成'],
-      [recipientId, platformId, '发送'],
-    ].forEach(([source, target, label]) => {
-      edges.push({
-        id: `${source}-${target}`,
-        source,
-        target,
-        label,
-        type: 'smoothstep',
-        animated: source === 'source-start',
-      });
-    });
-  });
-
-  return { nodes, edges };
 }
 
 function cloneRouteCanvasSnapshot(snapshot: RouteCanvasSnapshot): RouteCanvasSnapshot {
@@ -2641,7 +3621,7 @@ function mapRouteGroup(flow: RouteFlowApiRecord, sourceRows: SourceRow[], rules:
   };
 }
 
-function mapRouteRule(
+export function mapRouteRule(
   rule: RouteRuleApiRecord,
   group: RouteGroup,
   channelRows: ProviderRow[],
@@ -2650,9 +3630,9 @@ function mapRouteRule(
 ): RouteRuleRow {
   const matchGroupNames = Object.fromEntries(matchGroupRows.map((item) => [item.id, item.name]));
   const condition = summarizeRouteConditionTree(rule.condition_tree, { matchGroupNames });
-  const channelIds = rule.action.channel_ids.filter(Boolean);
-  const templateVersion = rule.action.template_version_id || '';
-  const template = templateRows.find((item) => templateVersionId(item) === templateVersion)?.name ?? (templateVersion || '-');
+  const targets = routeTargetsFromApi(rule);
+  const sendGroupSummary = summarizeRouteTargets(targets, channelRows, templateRows);
+  const targetLabels = routeTargetLabels(targets, channelRows, templateRows);
   return {
     id: rule.rule_key || rule.id,
     flowId: group.id,
@@ -2660,16 +3640,16 @@ function mapRouteRule(
     name: rule.name,
     source: group.sourceName,
     condition,
-    template,
+    template: sendGroupSummary,
     recipientStrategy: summarizeJSON(rule.action.recipient_strategy, '接收人策略'),
-    targetProviders: channelIds,
+    targetProviders: targetLabels,
+    targets,
+    sendGroupSummary,
     dedupe: summarizeJSON(rule.action.send_dedupe_config, '发送前去重'),
     hitCount: rule.hit_count,
     enabled: rule.enabled,
     lastHitAt: formatApiTime(rule.last_hit_at),
     conditionTree: rule.condition_tree,
-    templateVersionId: templateVersion,
-    channelIds,
     recipientStrategyConfig: rule.action.recipient_strategy,
     sendDedupeConfig: rule.action.send_dedupe_config,
     failurePolicy: rule.action.failure_policy,
@@ -2685,8 +3665,13 @@ function routeRuleToInput(rule: RouteRuleRow, index: number): RouteRuleInput {
     condition_tree: rule.conditionTree,
     enabled: rule.enabled,
     action: {
-      template_version_id: rule.templateVersionId,
-      channel_ids: rule.channelIds,
+      targets: rule.targets
+        .filter((target) => target.channelId && target.templateVersionId)
+        .map((target) => ({
+          channel_id: target.channelId,
+          template_version_id: target.templateVersionId,
+          enabled: target.enabled,
+        })),
       recipient_strategy: rule.recipientStrategyConfig,
       send_dedupe_config: rule.sendDedupeConfig,
       failure_policy: rule.failurePolicy,
@@ -2758,7 +3743,7 @@ export function RoutesPage({ lastUpdated, onRefresh }: ConsolePageProps) {
       const nextSources =
         sourceResult.status === 'fulfilled' ? sourceResult.value.sources.map(mapSourceRow) : [];
       const nextChannels =
-        channelResult.status === 'fulfilled' ? channelResult.value.channels.map(mapChannelRow) : [];
+        channelResult.status === 'fulfilled' ? channelResult.value.channels.map((channel) => mapChannelRow(channel)) : [];
       const nextTemplates =
         templateResult.status === 'fulfilled'
           ? templateResult.value.templates.map((item) => mapTemplateRow(item, nextSources))
@@ -3063,7 +4048,7 @@ export function RoutesPage({ lastUpdated, onRefresh }: ConsolePageProps) {
     if (!selectedGroup) {
       return;
     }
-    const draftError = validateRouteRuleDraft(ruleDraft);
+    const draftError = validateRouteRuleDraft(ruleDraft, templateRows, channelRows);
     if (draftError) {
       message.error(draftError);
       return;
@@ -3077,6 +4062,7 @@ export function RoutesPage({ lastUpdated, onRefresh }: ConsolePageProps) {
         existingRule?.sortOrder ?? groupRules.length + 1,
         matchGroupRows,
         templateRows,
+        channelRows,
       );
       const nextRules = existingRule
         ? groupRules.map((rule) => (rule.id === existingRule.id ? nextRule : rule))
@@ -3214,14 +4200,8 @@ export function RoutesPage({ lastUpdated, onRefresh }: ConsolePageProps) {
     { title: '规则名称', dataIndex: 'name', width: 180 },
     { title: '来源', dataIndex: 'source', width: 140 },
     { title: '条件', dataIndex: 'condition', width: 240 },
-    { title: '模板', dataIndex: 'template', width: 150 },
+    { title: '发送动作组', dataIndex: 'sendGroupSummary', width: 320 },
     { title: '接收人策略', dataIndex: 'recipientStrategy', width: 140 },
-    {
-      title: '目标平台',
-      dataIndex: 'targetProviders',
-      width: 240,
-      render: (items: string[]) => items.map((item) => <Tag key={item}>{item}</Tag>),
-    },
     { title: '发送前去重', dataIndex: 'dedupe', width: 150 },
     {
       title: '命中次数',
@@ -3478,7 +4458,9 @@ export function RoutesPage({ lastUpdated, onRefresh }: ConsolePageProps) {
                   ) : null}
                 </Form>
                 <Descriptions column={1} size="small" bordered>
-                  <Descriptions.Item label="节点类型">{routeNodeDefaults[selectedNode.data.kind].title}</Descriptions.Item>
+                  <Descriptions.Item label="节点类型">
+                    {(routeNodeDefaults[selectedNode.data.kind] ?? routeNodeDefaults.send_group).title}
+                  </Descriptions.Item>
                   <Descriptions.Item label="当前版本">{selectedGroup.currentVersion}</Descriptions.Item>
                 </Descriptions>
               </Space>
@@ -3577,7 +4559,36 @@ export function RoutesPage({ lastUpdated, onRefresh }: ConsolePageProps) {
   );
 }
 
-type TemplateDraft = {
+type TemplateContentMode = 'fields' | 'custom_json';
+
+type TemplateFieldDraft = {
+  expression: string;
+  defaultValue: string;
+};
+
+type TemplateFieldValues = Record<string, TemplateFieldDraft>;
+
+type TemplateContentField = {
+  key: string;
+  label: string;
+  type: string;
+  required: boolean;
+  placeholder: string;
+  defaultExpression: string;
+  defaultValue: string;
+};
+
+type TemplateCapabilityView = {
+  providerType: ProviderKind;
+  displayName: string;
+  messageTypes: string[];
+  messageType: string;
+  fields: TemplateContentField[];
+  schema: JSONValue;
+  schemaSource: 'capability' | 'fallback';
+};
+
+export type TemplateDraft = {
   id?: string;
   name: string;
   description: string;
@@ -3585,7 +4596,9 @@ type TemplateDraft = {
   enabled: boolean;
   messageType: string;
   targetProviderType: ProviderKind;
-  templateBody: string;
+  contentMode: TemplateContentMode;
+  fieldValues: TemplateFieldValues;
+  customJsonText: string;
   messageBodySchemaText: string;
   samplePayloadText: string;
 };
@@ -3606,32 +4619,808 @@ function createTemplateFeedback(): TemplateFeedback {
   };
 }
 
-function createTemplateDraft(sourceRows: SourceRow[]): TemplateDraft {
+const messageTypeLabels: Record<string, string> = {
+  text: '文本',
+  markdown: 'Markdown',
+  html: 'HTML',
+  card: '卡片',
+  news: '图文',
+  template: '短信模板',
+  json: 'JSON',
+};
+
+function contentField(
+  key: string,
+  label: string,
+  type = 'string',
+  defaultValue = '',
+  defaultExpression = `{{ payload.${key} }}`,
+): TemplateContentField {
+  return {
+    key,
+    label,
+    type,
+    required: true,
+    placeholder: defaultExpression,
+    defaultExpression,
+    defaultValue,
+  };
+}
+
+function titleContentUrlFields(): TemplateContentField[] {
+  return [
+    contentField('title', '标题', 'string', '通知', '{{ payload.title }}'),
+    contentField('content', '正文内容', 'string', '', '{{ payload.content }}'),
+    contentField('url', '跳转链接', 'string', '', '{{ payload.url }}'),
+  ];
+}
+
+function markdownNoticeFields(): TemplateContentField[] {
+  return [
+    contentField('title', '标题', 'string', '通知', '{{ payload.title }}'),
+    contentField('markdown', 'Markdown 内容', 'string', '', '{{ payload.content }}'),
+    contentField('url', '跳转链接', 'string', '', '{{ payload.url }}'),
+  ];
+}
+
+function enterpriseCardFields(): TemplateContentField[] {
+  return [
+    contentField('title', '卡片标题', 'string', '通知', '{{ payload.title }}'),
+    contentField('description', '卡片描述', 'string', '', '{{ payload.summary }}'),
+    contentField('url', '跳转链接', 'string', '', '{{ payload.url }}'),
+  ];
+}
+
+function smsTemplateFields(): TemplateContentField[] {
+  return [
+    contentField('template_params', '模板参数 JSON', 'object', '{}', '{{ payload.template_params }}'),
+    contentField('content', '短信内容', 'string', '', '{{ payload.content }}'),
+  ];
+}
+
+const fallbackTemplateSchemas: Record<ProviderKind, Record<string, { label: string; fields: TemplateContentField[] }>> = {
+  webhook: {
+    json: {
+      label: 'JSON 消息',
+      fields: [
+        contentField('event', '事件名', 'string', 'message.push', '{{ payload.event }}'),
+        contentField('title', '标题', 'string', '通知', '{{ payload.title }}'),
+        contentField('body', '正文', 'string', '', '{{ payload.content }}'),
+      ],
+    },
+    text: {
+      label: '文本',
+      fields: [contentField('content', '正文内容', 'string', '通知', '{{ payload.content }}')],
+    },
+    markdown: {
+      label: 'Markdown',
+      fields: [contentField('markdown', 'Markdown 内容', 'string', '', '{{ payload.content }}')],
+    },
+  },
+  self: {
+    json: {
+      label: 'JSON 消息',
+      fields: [
+        contentField('title', '标题', 'string', '通知', '{{ payload.title }}'),
+        contentField('content', '正文内容', 'string', '', '{{ payload.content }}'),
+        contentField('url', '跳转链接', 'string', '', '{{ payload.url }}'),
+        contentField('severity', '级别', 'string', '', '{{ payload.severity }}'),
+      ],
+    },
+    text: {
+      label: '文本',
+      fields: titleContentUrlFields(),
+    },
+  },
+  pushplus: {
+    text: {
+      label: '文本',
+      fields: titleContentUrlFields(),
+    },
+    markdown: {
+      label: 'Markdown',
+      fields: markdownNoticeFields(),
+    },
+    html: {
+      label: 'HTML',
+      fields: titleContentUrlFields(),
+    },
+  },
+  wxpusher: {
+    text: {
+      label: '文本',
+      fields: titleContentUrlFields(),
+    },
+    markdown: {
+      label: 'Markdown',
+      fields: markdownNoticeFields(),
+    },
+    html: {
+      label: 'HTML',
+      fields: titleContentUrlFields(),
+    },
+  },
+  serverchan: {
+    text: {
+      label: '文本',
+      fields: titleContentUrlFields(),
+    },
+    markdown: {
+      label: 'Markdown',
+      fields: markdownNoticeFields(),
+    },
+  },
+  email: {
+    text: {
+      label: '文本邮件',
+      fields: [
+        contentField('subject', '邮件主题', 'string', '通知', '{{ payload.title }}'),
+        contentField('body', '邮件正文', 'string', '', '{{ payload.content }}'),
+      ],
+    },
+    html: {
+      label: 'HTML 邮件',
+      fields: [
+        contentField('subject', '邮件主题', 'string', '通知', '{{ payload.title }}'),
+        contentField('html', 'HTML 正文', 'string', '', '{{ payload.content }}'),
+      ],
+    },
+  },
+  aliyun_sms: {
+    template: {
+      label: '短信模板',
+      fields: smsTemplateFields(),
+    },
+    text: {
+      label: '短信内容',
+      fields: [contentField('content', '短信内容', 'string', '通知', '{{ payload.content }}')],
+    },
+  },
+  tencent_sms: {
+    template: {
+      label: '短信模板',
+      fields: smsTemplateFields(),
+    },
+    text: {
+      label: '短信内容',
+      fields: [contentField('content', '短信内容', 'string', '通知', '{{ payload.content }}')],
+    },
+  },
+  baidu_sms: {
+    template: {
+      label: '短信模板',
+      fields: smsTemplateFields(),
+    },
+    text: {
+      label: '短信内容',
+      fields: [contentField('content', '短信内容', 'string', '通知', '{{ payload.content }}')],
+    },
+  },
+  wecom_robot: {
+    text: {
+      label: '文本',
+      fields: [contentField('content', '正文内容', 'string', '通知', '{{ payload.content }}')],
+    },
+    markdown: {
+      label: 'Markdown',
+      fields: [contentField('markdown', 'Markdown 内容', 'string', '', '{{ payload.content }}')],
+    },
+  },
+  wecom_app: {
+    text: {
+      label: '文本',
+      fields: [contentField('content', '正文内容', 'string', '通知', '{{ payload.content }}')],
+    },
+    card: {
+      label: '卡片',
+      fields: enterpriseCardFields(),
+    },
+  },
+  wecom: {
+    text: {
+      label: '文本',
+      fields: [contentField('content', '正文内容', 'string', '通知', '{{ payload.content }}')],
+    },
+    card: {
+      label: '卡片',
+      fields: enterpriseCardFields(),
+    },
+  },
+  dingtalk_robot: {
+    text: {
+      label: '文本',
+      fields: [contentField('content', '正文内容', 'string', '通知', '{{ payload.content }}')],
+    },
+    markdown: {
+      label: 'Markdown',
+      fields: [
+        contentField('title', 'Markdown 标题', 'string', '通知', '{{ payload.title }}'),
+        contentField('markdown', 'Markdown 内容', 'string', '', '{{ payload.content }}'),
+      ],
+    },
+  },
+  dingtalk_work: {
+    text: {
+      label: '文本',
+      fields: [contentField('content', '正文内容', 'string', '通知', '{{ payload.content }}')],
+    },
+    card: {
+      label: '卡片',
+      fields: enterpriseCardFields(),
+    },
+  },
+  dingtalk: {
+    text: {
+      label: '文本',
+      fields: [contentField('content', '正文内容', 'string', '通知', '{{ payload.content }}')],
+    },
+    card: {
+      label: '卡片',
+      fields: enterpriseCardFields(),
+    },
+  },
+  feishu_robot: {
+    text: {
+      label: '文本',
+      fields: [contentField('content', '正文内容', 'string', '通知', '{{ payload.content }}')],
+    },
+    markdown: {
+      label: 'Markdown',
+      fields: [contentField('markdown', 'Markdown 内容', 'string', '', '{{ payload.content }}')],
+    },
+  },
+  feishu: {
+    text: {
+      label: '文本',
+      fields: [contentField('content', '正文内容', 'string', '通知', '{{ payload.content }}')],
+    },
+    card: {
+      label: '卡片',
+      fields: [
+        contentField('title', '卡片标题', 'string', '通知', '{{ payload.title }}'),
+        contentField('markdown', '卡片正文 Markdown', 'string', '', '{{ payload.content }}'),
+        contentField('url', '跳转链接', 'string', '', '{{ payload.url }}'),
+      ],
+    },
+  },
+  gov_cloud: {
+    text: {
+      label: '文本',
+      fields: [
+        contentField('title', '标题', 'string', '通知', '{{ payload.title }}'),
+        contentField('description', '消息内容 description', 'string', '', '{{ payload.content }}'),
+      ],
+    },
+    card: {
+      label: '卡片',
+      fields: enterpriseCardFields(),
+    },
+  },
+  sms: {
+    template: {
+      label: '短信模板',
+      fields: smsTemplateFields(),
+    },
+    text: {
+      label: '短信内容',
+      fields: [contentField('content', '短信内容', 'string', '通知', '{{ payload.content }}')],
+    },
+  },
+  custom_token: {
+    json: {
+      label: 'JSON 消息',
+      fields: [
+        contentField('title', '标题', 'string', '通知', '{{ payload.title }}'),
+        contentField('content', '正文内容', 'string', '', '{{ payload.content }}'),
+      ],
+    },
+  },
+};
+
+function providerKindFromString(value: string | undefined): ProviderKind | null {
+  const matched = providerTypeOptions.find((item) => item.value === value);
+  return matched?.value ?? null;
+}
+
+function firstTemplateProvider(capabilities: ProviderCapabilityApiRecord[]): ProviderKind {
+  for (const capability of capabilities) {
+    const providerType = providerKindFromString(String(capability.provider_type));
+    if (providerType) {
+      return providerType;
+    }
+  }
+  return 'wecom';
+}
+
+function uniqueStrings(values: string[]): string[] {
+  return Array.from(new Set(values.map((item) => item.trim()).filter(Boolean)));
+}
+
+function fallbackMessageTypes(providerType: ProviderKind): string[] {
+  return Object.keys(fallbackTemplateSchemas[providerType] ?? { text: { label: '文本', fields: [] } });
+}
+
+function templateCapabilityRecords(
+  providerType: ProviderKind,
+  capabilities: ProviderCapabilityApiRecord[],
+): ProviderCapabilityApiRecord[] {
+  return capabilities.filter((capability) => capability.provider_type === providerType);
+}
+
+function templateMessageTypes(providerType: ProviderKind, capabilities: ProviderCapabilityApiRecord[]): string[] {
+  const records = templateCapabilityRecords(providerType, capabilities);
+  const supported = uniqueStrings(records.flatMap((record) => record.supported_message_types ?? []));
+  if (supported.length) {
+    return supported;
+  }
+  const perMessageRecords = uniqueStrings(records.map((record) => record.message_type ?? ''));
+  if (perMessageRecords.length) {
+    return perMessageRecords;
+  }
+  return fallbackMessageTypes(providerType);
+}
+
+function templateProviderOptions(capabilities: ProviderCapabilityApiRecord[]): Array<{ label: string; value: ProviderKind }> {
+  return providerTypeOptions.map((option) => {
+    const capability = capabilities.find((item) => item.provider_type === option.value && item.display_name);
+    return {
+      value: option.value,
+      label: capability?.display_name ?? option.label,
+    };
+  });
+}
+
+function getMessageTypeLabel(value: string): string {
+  return messageTypeLabels[value] ?? value;
+}
+
+function templateMessageTypeOptions(types: string[]): Array<{ label: string; value: string }> {
+  return types.map((value) => ({ value, label: `${getMessageTypeLabel(value)} / ${value}` }));
+}
+
+function schemaForMessage(schema: JSONValue | undefined, messageType: string): JSONValue | undefined {
+  if (!schema || !isRecord(schema)) {
+    return schema;
+  }
+  const direct = schema[messageType];
+  if (direct !== undefined) {
+    return direct;
+  }
+  const messages = schema.messages;
+  if (isRecord(messages) && messages[messageType] !== undefined) {
+    return messages[messageType];
+  }
+  const messageTypes = schema.message_types;
+  if (isRecord(messageTypes) && messageTypes[messageType] !== undefined) {
+    return messageTypes[messageType];
+  }
+  return schema;
+}
+
+function contentSchemaFromMessageSchema(schema: JSONValue | undefined): JSONValue | undefined {
+  if (!schema || !isRecord(schema)) {
+    return schema;
+  }
+  const properties = schema.properties;
+  if (isRecord(properties) && isRecord(properties.content)) {
+    return properties.content;
+  }
+  if (isRecord(schema.content)) {
+    return schema.content;
+  }
+  return schema;
+}
+
+function capabilitySchemaForMessage(
+  records: ProviderCapabilityApiRecord[],
+  messageType: string,
+): JSONValue | undefined {
+  const ordered = [
+    ...records.filter((record) => record.message_type === messageType),
+    ...records.filter((record) => record.message_type !== messageType),
+  ];
+  for (const record of ordered) {
+    const contentSchema = contentSchemaFromMessageSchema(schemaForMessage(record.content_schema, messageType));
+    if (contentSchema && schemaHasTemplateFields(contentSchema)) {
+      return contentSchema;
+    }
+    const messageSchema = contentSchemaFromMessageSchema(schemaForMessage(record.message_schema, messageType));
+    if (messageSchema && schemaHasTemplateFields(messageSchema)) {
+      return messageSchema;
+    }
+  }
+  return undefined;
+}
+
+function fallbackTemplateSchema(providerType: ProviderKind, messageType: string): JSONValue {
+  const providerFallback = fallbackTemplateSchemas[providerType] ?? fallbackTemplateSchemas.wecom;
+  const definition = providerFallback[messageType] ?? providerFallback[fallbackMessageTypes(providerType)[0]];
+  return {
+    fields: definition.fields.map((field) => ({
+      key: field.key,
+      label: field.label,
+      type: field.type,
+      required: field.required,
+      default: field.defaultValue,
+      expression: field.defaultExpression,
+    })),
+  };
+}
+
+function templateCapabilityView(
+  providerType: ProviderKind,
+  messageType: string | undefined,
+  capabilities: ProviderCapabilityApiRecord[] = [],
+): TemplateCapabilityView {
+  const records = templateCapabilityRecords(providerType, capabilities);
+  const messageTypes = templateMessageTypes(providerType, capabilities);
+  const selectedMessageType = messageType && messageTypes.includes(messageType) ? messageType : messageTypes[0] ?? 'text';
+  const capabilitySchema = capabilitySchemaForMessage(records, selectedMessageType);
+  const schema = capabilitySchema ?? fallbackTemplateSchema(providerType, selectedMessageType);
+  const fields = extractTemplateFieldsFromSchema(schema);
+  const fallbackFields = extractTemplateFieldsFromSchema(fallbackTemplateSchema(providerType, selectedMessageType));
+  const primary = records.find((record) => record.message_type === selectedMessageType) ?? records[0];
+  return {
+    providerType,
+    displayName: primary?.display_name || getProviderTypeLabel(providerType),
+    messageTypes,
+    messageType: selectedMessageType,
+    fields: fields.length ? fields : fallbackFields,
+    schema,
+    schemaSource: capabilitySchema ? 'capability' : 'fallback',
+  };
+}
+
+function schemaHasTemplateFields(schema: JSONValue): boolean {
+  return extractTemplateFieldsFromSchema(schema).length > 0;
+}
+
+function extractTemplateFieldsFromSchema(schema: JSONValue | undefined): TemplateContentField[] {
+  if (!schema || !isRecord(schema)) {
+    return [];
+  }
+  const contentSchema = contentSchemaFromMessageSchema(schema);
+  if (contentSchema && contentSchema !== schema && isRecord(contentSchema)) {
+    const nested = extractTemplateFieldsFromSchema(contentSchema);
+    if (nested.length) {
+      return nested;
+    }
+  }
+  if (Array.isArray(schema.fields)) {
+    return schema.fields
+      .map((field) => templateFieldFromSchemaRecord(field))
+      .filter((field): field is TemplateContentField => Boolean(field));
+  }
+  if (isRecord(schema.properties)) {
+    const requiredKeys = Array.isArray(schema.required)
+      ? new Set(schema.required.filter((item): item is string => typeof item === 'string'))
+      : new Set<string>();
+    return Object.entries(schema.properties)
+      .map(([key, field]) =>
+        templateFieldFromSchemaRecord({ ...(isRecord(field) ? field : {}), key, required: requiredKeys.has(key) }),
+      )
+      .filter((field): field is TemplateContentField => Boolean(field));
+  }
+  return [];
+}
+
+function templateFieldFromSchemaRecord(value: JSONValue, fallbackKey = ''): TemplateContentField | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+  const rawKey = firstString(value.key, value.name, value.field, value.path) || fallbackKey;
+  const key = normalizeTemplateFieldKey(rawKey);
+  if (!key || isRecipientLikeField(key)) {
+    return null;
+  }
+  const defaultValue = jsonScalarToText(value.default) || jsonScalarToText(value.default_value) || jsonScalarToText(value.fallback);
+  const defaultExpression =
+    firstString(value.expression, value.template, value.template_expression) || `{{ payload.${payloadKeyForContentField(key)} }}`;
+  return {
+    key,
+    label: firstString(value.label, value.title, value.description) || providerFieldLabel(key),
+    type: firstString(value.input_type, value.inputType, value.type, value.format) || 'string',
+    required: Boolean(value.required),
+    placeholder: firstString(value.placeholder, value.example) || defaultExpression,
+    defaultExpression,
+    defaultValue,
+  };
+}
+
+function normalizeTemplateFieldKey(value: string): string {
+  return value
+    .trim()
+    .replace(/^\$\.?/, '')
+    .replace(/^message\.content\./, '')
+    .replace(/^content\./, '')
+    .replace(/^body\./, '');
+}
+
+function payloadKeyForContentField(key: string): string {
+  const normalized = key.split('.').pop() ?? key;
+  if (normalized === 'body' || normalized === 'html' || normalized === 'markdown') {
+    return 'content';
+  }
+  return normalized;
+}
+
+function jsonScalarToText(value: JSONValue | undefined): string {
+  if (typeof value === 'string') {
+    return value;
+  }
+  if (typeof value === 'number' || typeof value === 'boolean') {
+    return String(value);
+  }
+  return '';
+}
+
+function isRecipientLikeField(key: string): boolean {
+  const lowerKey = key.toLowerCase();
+  const last = lowerKey.split('.').pop() ?? lowerKey;
+  return [
+    'to',
+    'touser',
+    'to_user',
+    'user_id',
+    'userid',
+    'userids',
+    'open_id',
+    'open_ids',
+    'email',
+    'emails',
+    'mobile',
+    'phone',
+    'phone_number',
+    'phone_numbers',
+    'phonenumbers',
+    'recipient',
+    'recipients',
+    'receiver',
+    'receivers',
+  ].includes(last);
+}
+
+function isRecipientPayloadPath(path: string): boolean {
+  const lowerPath = path.toLowerCase();
+  return lowerPath.includes('receiver') || isRecipientLikeField(lowerPath);
+}
+
+function defaultTemplateFieldValues(
+  fields: TemplateContentField[],
+  currentValues: TemplateFieldValues = {},
+): TemplateFieldValues {
+  return fields.reduce<TemplateFieldValues>((values, field) => {
+    values[field.key] = currentValues[field.key] ?? {
+      expression: field.defaultExpression,
+      defaultValue: field.defaultValue,
+    };
+    return values;
+  }, {});
+}
+
+function sampleValueForTemplateField(field: TemplateContentField): JSONValue {
+  if (field.defaultValue) {
+    return field.defaultValue;
+  }
+  if (field.key === 'url') {
+    return 'https://example.gov.cn/message/123';
+  }
+  if (field.key === 'event') {
+    return 'message.push';
+  }
+  if (field.key.includes('title') || field.key.includes('subject')) {
+    return '测试消息';
+  }
+  return '请及时处理该消息。';
+}
+
+function samplePayloadFromFields(fields: TemplateContentField[]): JSONValue {
+  const payload: Record<string, JSONValue> = {};
+  for (const field of fields) {
+    payload[payloadKeyForContentField(field.key)] = sampleValueForTemplateField(field);
+  }
+  return payload;
+}
+
+function templateBodyObjectFromFieldValues(values: TemplateFieldValues): Record<string, string> {
+  return Object.entries(values).reduce<Record<string, string>>((body, [key, value]) => {
+    body[key] = templateExpressionWithDefault(key, value);
+    return body;
+  }, {});
+}
+
+function templateExpressionWithDefault(key: string, value: TemplateFieldDraft): string {
+  const expression = value.expression.trim() || `{{ payload.${payloadKeyForContentField(key)} }}`;
+  const defaultValue = value.defaultValue.trim();
+  if (!defaultValue || expression.includes('| default(')) {
+    return expression;
+  }
+  const matched = expression.match(/^\{\{\s*([\s\S]*?)\s*\}\}$/);
+  if (!matched) {
+    return expression;
+  }
+  return `{{ ${matched[1].trim()} | default('${escapeTemplateDefault(defaultValue)}') }}`;
+}
+
+function escapeTemplateDefault(value: string): string {
+  return value.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+}
+
+function stringifyTemplateBodyFromFieldValues(values: TemplateFieldValues): string {
+  return JSON.stringify(templateBodyObjectFromFieldValues(values), null, 2);
+}
+
+function templateBodyTextFromDraft(draft: TemplateDraft): string {
+  return draft.contentMode === 'custom_json'
+    ? draft.customJsonText
+    : stringifyTemplateBodyFromFieldValues(draft.fieldValues);
+}
+
+function parseTemplateBodyRecord(value: string): Record<string, JSONValue> | null {
+  try {
+    const parsed = JSON.parse(value) as JSONValue;
+    return isRecord(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function fieldValuesFromTemplateBody(
+  templateBody: string,
+  fields: TemplateContentField[],
+  currentValues: TemplateFieldValues = {},
+): TemplateFieldValues {
+  const values = defaultTemplateFieldValues(fields, currentValues);
+  const parsed = parseTemplateBodyRecord(templateBody);
+  if (parsed) {
+    for (const [key, rawValue] of Object.entries(parsed)) {
+      if (isRecipientLikeField(key)) {
+        continue;
+      }
+      values[key] = {
+        expression: jsonScalarToText(rawValue) || stringifyJSON(rawValue, ''),
+        defaultValue: values[key]?.defaultValue ?? '',
+      };
+    }
+    return values;
+  }
+  const firstField = fields[0];
+  if (templateBody.trim() && firstField) {
+    values[firstField.key] = {
+      expression: templateBody,
+      defaultValue: values[firstField.key]?.defaultValue ?? '',
+    };
+  }
+  return values;
+}
+
+function templateContentFieldSummary(schema: JSONValue | undefined, templateBody: string): string {
+  const fields = extractTemplateFieldsFromSchema(schema);
+  if (fields.length) {
+    return fields.map((field) => field.label).join('、');
+  }
+  const parsed = parseTemplateBodyRecord(templateBody);
+  const keys = parsed ? Object.keys(parsed).filter((key) => !isRecipientLikeField(key)) : [];
+  return keys.length ? keys.join('、') : '-';
+}
+
+function validationStatusFromApi(value: string | undefined, hasVersion: boolean): TemplateRecord['validationStatus'] {
+  if (value === 'valid' || value === 'invalid' || value === 'draft') {
+    return value;
+  }
+  return hasVersion ? 'valid' : 'draft';
+}
+
+export function createTemplateDraft(
+  sourceRows: Array<Pick<SourceRow, 'id'>>,
+  capabilities: ProviderCapabilityApiRecord[] = [],
+  providerType: ProviderKind = firstTemplateProvider(capabilities),
+  messageType?: string,
+): TemplateDraft {
+  const view = templateCapabilityView(providerType, messageType, capabilities);
+  const fieldValues = defaultTemplateFieldValues(view.fields);
   return {
     name: '',
     description: '',
     sourceId: sourceRows[0]?.id ?? '',
     enabled: true,
-    messageType: 'text',
-    targetProviderType: 'wecom',
-    templateBody: '您好，{{ payload.title }}',
-    messageBodySchemaText: '{\n  "required": ["title"]\n}',
-    samplePayloadText: '{\n  "title": "测试消息"\n}',
+    messageType: view.messageType,
+    targetProviderType: providerType,
+    contentMode: 'fields',
+    fieldValues,
+    customJsonText: stringifyTemplateBodyFromFieldValues(fieldValues),
+    messageBodySchemaText: stringifyJSON(view.schema),
+    samplePayloadText: stringifyJSON(samplePayloadFromFields(view.fields)),
   };
 }
 
-function draftFromTemplate(record: TemplateRecord & { raw?: TemplateApiRecord }, sourceRows: SourceRow[]): TemplateDraft {
+function draftFromTemplate(
+  record: TemplateRecord & { raw?: TemplateApiRecord },
+  sourceRows: Array<Pick<SourceRow, 'id'>>,
+  capabilities: ProviderCapabilityApiRecord[] = [],
+): TemplateDraft {
+  const currentVersion = record.raw?.current_version;
+  const targetProviderType =
+    providerKindFromString(currentVersion?.target_provider_type ?? record.raw?.target_provider_type) ?? record.targetProviderType;
+  const messageType = currentVersion?.message_type ?? record.raw?.message_type ?? record.messageType ?? undefined;
+  const base = createTemplateDraft(sourceRows, capabilities, targetProviderType, messageType);
+  const templateBody = currentVersion?.template_body ?? record.raw?.template_body ?? record.content;
+  const schema = currentVersion?.message_body_schema ?? record.raw?.message_body_schema ?? parseJSONOrEmpty(base.messageBodySchemaText);
+  const fields = extractTemplateFieldsFromSchema(schema);
+  const fieldValues = fieldValuesFromTemplateBody(templateBody, fields.length ? fields : baseFieldList(base), base.fieldValues);
+  const parsedBody = parseTemplateBodyRecord(templateBody);
   return {
+    ...base,
     id: record.raw?.id ?? record.id,
     name: record.name,
     description: record.raw?.description ?? '',
     sourceId: record.raw?.source_id ?? sourceRows[0]?.id ?? '',
     enabled: record.raw?.enabled ?? true,
-    messageType: record.messageType || 'text',
-    targetProviderType: record.targetProviderType,
-    templateBody: record.content || '您好，{{ payload.title }}',
-    messageBodySchemaText: '{}',
-    samplePayloadText: '{\n  "title": "测试消息"\n}',
+    messageType: base.messageType,
+    targetProviderType,
+    contentMode: parsedBody ? 'fields' : base.contentMode,
+    fieldValues,
+    customJsonText: parsedBody ? stringifyJSON(parsedBody) : stringifyTemplateBodyFromFieldValues(fieldValues),
+    messageBodySchemaText: stringifyJSON(schema),
+    samplePayloadText: stringifyJSON(currentVersion?.sample_payload ?? record.raw?.sample_payload ?? parseJSONOrEmpty(base.samplePayloadText)),
+  };
+}
+
+function baseFieldList(draft: TemplateDraft): TemplateContentField[] {
+  return Object.keys(draft.fieldValues).map((key) => ({
+    key,
+    label: providerFieldLabel(key),
+    type: 'string',
+    required: false,
+    placeholder: `{{ payload.${payloadKeyForContentField(key)} }}`,
+    defaultExpression: `{{ payload.${payloadKeyForContentField(key)} }}`,
+    defaultValue: draft.fieldValues[key]?.defaultValue ?? '',
+  }));
+}
+
+export function switchTemplateProviderType(
+  draft: TemplateDraft,
+  targetProviderType: ProviderKind,
+  capabilities: ProviderCapabilityApiRecord[] = [],
+): TemplateDraft {
+  const view = templateCapabilityView(targetProviderType, undefined, capabilities);
+  const fieldValues = defaultTemplateFieldValues(view.fields);
+  return {
+    ...draft,
+    targetProviderType,
+    messageType: view.messageType,
+    fieldValues,
+    customJsonText: stringifyTemplateBodyFromFieldValues(fieldValues),
+    messageBodySchemaText: stringifyJSON(view.schema),
+    samplePayloadText: stringifyJSON(samplePayloadFromFields(view.fields)),
+  };
+}
+
+export function switchTemplateMessageType(
+  draft: TemplateDraft,
+  messageType: string,
+  capabilities: ProviderCapabilityApiRecord[] = [],
+): TemplateDraft {
+  const view = templateCapabilityView(draft.targetProviderType, messageType, capabilities);
+  const fieldValues = defaultTemplateFieldValues(view.fields, draft.fieldValues);
+  return {
+    ...draft,
+    messageType: view.messageType,
+    fieldValues,
+    customJsonText: stringifyTemplateBodyFromFieldValues(fieldValues),
+    messageBodySchemaText: stringifyJSON(view.schema),
+    samplePayloadText: stringifyJSON(samplePayloadFromFields(view.fields)),
+  };
+}
+
+export function switchTemplateContentMode(draft: TemplateDraft, contentMode: TemplateContentMode): TemplateDraft {
+  return {
+    ...draft,
+    contentMode,
+    customJsonText:
+      contentMode === 'custom_json' && !draft.customJsonText.trim()
+        ? stringifyTemplateBodyFromFieldValues(draft.fieldValues)
+        : draft.customJsonText,
   };
 }
 
@@ -3644,14 +5433,31 @@ function templateInputFromDraft(draft: TemplateDraft): TemplateInput {
   };
 }
 
-function templateVersionInputFromDraft(draft: TemplateDraft): TemplateVersionInput {
+export function templateVersionInputFromDraft(draft: TemplateDraft): TemplateVersionInput {
   return {
     message_type: draft.messageType,
     target_provider_type: draft.targetProviderType,
-    template_body: draft.templateBody,
+    template_body: templateBodyTextFromDraft(draft),
     message_body_schema: parseJSONField(draft.messageBodySchemaText, '消息体 Schema JSON'),
     sample_payload: parseJSONField(draft.samplePayloadText, '样例 Payload JSON'),
   };
+}
+
+function safeJSONPreview(value: string): JSONValue {
+  try {
+    return JSON.parse(value) as JSONValue;
+  } catch {
+    return value;
+  }
+}
+
+function templatePreviewSnapshot(draft: TemplateDraft): string {
+  return stringifyJSON({
+    message_type: draft.messageType,
+    target_provider_type: draft.targetProviderType,
+    template_body: safeJSONPreview(templateBodyTextFromDraft(draft)),
+    sample_payload: safeJSONPreview(draft.samplePayloadText),
+  });
 }
 
 function templateFeedbackFromResult(result: JSONValue): TemplateFeedback {
@@ -3679,22 +5485,200 @@ function templateFeedbackFromResult(result: JSONValue): TemplateFeedback {
   };
 }
 
-function mapTemplateRow(template: TemplateApiRecord, sourceRows: SourceRow[]): TemplateRecord & { raw: TemplateApiRecord } {
+export function mapTemplateRow(
+  template: TemplateApiRecord,
+  sourceRows: Array<Pick<SourceRow, 'id' | 'name' | 'code'>>,
+  capabilities: ProviderCapabilityApiRecord[] = [],
+): TemplateRecord & { raw: TemplateApiRecord } {
   const source = sourceRows.find((item) => item.id === template.source_id);
+  const currentVersion = template.current_version;
+  const targetProviderType =
+    providerKindFromString(currentVersion?.target_provider_type ?? template.target_provider_type) ?? firstTemplateProvider(capabilities);
+  const messageType = currentVersion?.message_type ?? template.message_type ?? 'text';
+  const templateBody = currentVersion?.template_body ?? template.template_body ?? '';
+  const schema =
+    currentVersion?.message_body_schema ??
+    template.message_body_schema ??
+    templateCapabilityView(targetProviderType, messageType, capabilities).schema;
+  const validationStatus = validationStatusFromApi(
+    currentVersion?.validation_status ?? template.validation_status,
+    Boolean(template.current_version_id),
+  );
   return {
     id: template.id,
     name: template.name,
     source: source ? `${source.name} / ${source.code}` : template.source_id || '-',
-    targetProviderType: 'wecom',
-    messageType: 'text',
-    targetField: template.current_version_id || '未发布',
-    content: '',
-    validationStatus: template.current_version_id ? 'valid' : 'draft',
-    version: template.current_version_id || '草稿',
-    usedVariables: [],
+    targetProviderType,
+    messageType,
+    targetField: templateContentFieldSummary(schema, templateBody),
+    content: templateBody,
+    validationStatus,
+    version: currentVersion?.version_no ? `v${currentVersion.version_no}` : template.current_version_id || '草稿',
+    usedVariables: currentVersion?.used_variables ?? template.used_variables ?? [],
     updatedAt: formatApiTime(template.updated_at),
     raw: template,
   };
+}
+
+export function TemplateEditorForm({
+  value,
+  onChange,
+  sourceRows,
+  capabilities = [],
+}: {
+  value: TemplateDraft;
+  onChange: (value: TemplateDraft) => void;
+  sourceRows: Array<Pick<SourceRow, 'id' | 'name' | 'code'>>;
+  capabilities?: ProviderCapabilityApiRecord[];
+}) {
+  const view = templateCapabilityView(value.targetProviderType, value.messageType, capabilities);
+  const update = (patch: Partial<TemplateDraft>) => onChange({ ...value, ...patch });
+  const updateFieldValue = (field: TemplateContentField, patch: Partial<TemplateFieldDraft>) => {
+    const currentValue = value.fieldValues[field.key] ?? {
+      expression: field.defaultExpression,
+      defaultValue: field.defaultValue,
+    };
+    const fieldValues = {
+      ...value.fieldValues,
+      [field.key]: {
+        ...currentValue,
+        ...patch,
+      },
+    };
+    update({
+      fieldValues,
+      customJsonText: value.contentMode === 'fields' ? stringifyTemplateBodyFromFieldValues(fieldValues) : value.customJsonText,
+    });
+  };
+
+  return (
+    <Form layout="vertical">
+      <Form.Item label="模板名称" required>
+        <Input value={value.name} onChange={(event) => update({ name: event.target.value })} />
+      </Form.Item>
+      <div className="two-column-form">
+        <Form.Item label="来源" required>
+          <Select
+            value={value.sourceId}
+            options={sourceRows.map((source) => ({ label: `${source.name} / ${source.code}`, value: source.id }))}
+            onChange={(sourceId) => update({ sourceId })}
+            placeholder="选择来源"
+          />
+        </Form.Item>
+        <Form.Item label="推送渠道类型" required>
+          <Select
+            value={value.targetProviderType}
+            options={templateProviderOptions(capabilities)}
+            onChange={(targetProviderType) =>
+              onChange(switchTemplateProviderType(value, targetProviderType, capabilities))
+            }
+          />
+        </Form.Item>
+      </div>
+      <div className="two-column-form">
+        <Form.Item label="消息类型" required>
+          <Select
+            value={view.messageType}
+            options={templateMessageTypeOptions(view.messageTypes)}
+            onChange={(messageType) => onChange(switchTemplateMessageType(value, messageType, capabilities))}
+          />
+        </Form.Item>
+        <Form.Item label="内容编辑模式">
+          <Segmented
+            block
+            value={value.contentMode}
+            options={[
+              { label: '字段表单', value: 'fields' },
+              { label: '自定义 JSON', value: 'custom_json' },
+            ]}
+            onChange={(contentMode) => onChange(switchTemplateContentMode(value, contentMode as TemplateContentMode))}
+          />
+        </Form.Item>
+      </div>
+      <div className="provider-capability-summary">
+        <Descriptions column={1} size="small" bordered>
+          <Descriptions.Item label="能力名称">{view.displayName}</Descriptions.Item>
+          <Descriptions.Item label="支持消息类型">{view.messageTypes.map(getMessageTypeLabel).join('、')}</Descriptions.Item>
+          <Descriptions.Item label="字段来源">
+            {view.schemaSource === 'capability' ? '平台能力元数据' : '本地 fallback schema'}
+          </Descriptions.Item>
+        </Descriptions>
+      </div>
+      {value.contentMode === 'fields' ? (
+        <>
+          <Divider orientation="left">消息内容字段</Divider>
+          <div className="template-content-fields">
+            {view.fields.map((field) => {
+              const fieldValue = value.fieldValues[field.key] ?? {
+                expression: field.defaultExpression,
+                defaultValue: field.defaultValue,
+              };
+              return (
+                <div className="template-content-field" key={field.key}>
+                  <Form.Item
+                    label={`${field.label}${field.required ? ' *' : ''}`}
+                    extra={`字段 key：${field.key}；支持 {{ payload.title }} 与 default 过滤器。`}
+                  >
+                    <Input
+                      value={fieldValue.expression}
+                      placeholder={field.placeholder}
+                      onChange={(event) => updateFieldValue(field, { expression: event.target.value })}
+                    />
+                  </Form.Item>
+                  <Form.Item label="默认值">
+                    <Input
+                      value={fieldValue.defaultValue}
+                      placeholder="例如：通知"
+                      onChange={(event) => updateFieldValue(field, { defaultValue: event.target.value })}
+                    />
+                  </Form.Item>
+                </div>
+              );
+            })}
+          </div>
+        </>
+      ) : (
+        <Form.Item label="完整消息内容 JSON" extra="这里是内部消息内容 JSON，不是最终平台 HTTP 请求体。">
+          <Input.TextArea
+            rows={10}
+            value={value.customJsonText}
+            onChange={(event) => update({ customJsonText: event.target.value })}
+          />
+        </Form.Item>
+      )}
+      <div className="two-column-form">
+        <Form.Item label="样例 Payload JSON" required>
+          <Input.TextArea
+            value={value.samplePayloadText}
+            onChange={(event) => update({ samplePayloadText: event.target.value })}
+            rows={6}
+          />
+        </Form.Item>
+        <Form.Item label="消息体 Schema JSON">
+          <Input.TextArea
+            value={value.messageBodySchemaText}
+            onChange={(event) => update({ messageBodySchemaText: event.target.value })}
+            rows={6}
+          />
+        </Form.Item>
+      </div>
+      <Form.Item label="描述">
+        <Input.TextArea
+          rows={3}
+          value={value.description}
+          onChange={(event) => update({ description: event.target.value })}
+        />
+      </Form.Item>
+      <Form.Item label="启停">
+        <Switch
+          checked={value.enabled}
+          onChange={(enabled) => update({ enabled })}
+          checkedChildren="启用"
+          unCheckedChildren="停用"
+        />
+      </Form.Item>
+    </Form>
+  );
 }
 
 export function TemplatesPage({ lastUpdated, onRefresh }: ConsolePageProps) {
@@ -3702,6 +5686,7 @@ export function TemplatesPage({ lastUpdated, onRefresh }: ConsolePageProps) {
   const [modalOpen, setModalOpen] = useState(false);
   const [sourceRows, setSourceRows] = useState<SourceRow[]>([]);
   const [templateRows, setTemplateRows] = useState<Array<TemplateRecord & { raw?: TemplateApiRecord }>>([]);
+  const [providerCapabilities, setProviderCapabilities] = useState<ProviderCapabilityApiRecord[]>([]);
   const [selected, setSelected] = useState<TemplateRecord & { raw?: TemplateApiRecord } | null>(null);
   const [templateDraft, setTemplateDraft] = useState<TemplateDraft>(() => createTemplateDraft([]));
   const [templateFeedback, setTemplateFeedback] = useState<TemplateFeedback>(() => createTemplateFeedback());
@@ -3711,13 +5696,22 @@ export function TemplatesPage({ lastUpdated, onRefresh }: ConsolePageProps) {
   const loadTemplates = useCallback(async () => {
     setLoadState({ loading: true, error: '' });
     try {
-      const [sourceResult, templateResult] = await Promise.all([
+      const [sourceResult, templateResult, capabilityResult] = await Promise.allSettled([
         consoleApi.listSources(),
         consoleApi.listTemplates(),
+        consoleApi.listProviderCapabilities(),
       ]);
-      const nextSources = sourceResult.sources.map(mapSourceRow);
+      if (sourceResult.status === 'rejected') {
+        throw sourceResult.reason;
+      }
+      if (templateResult.status === 'rejected') {
+        throw templateResult.reason;
+      }
+      const nextCapabilities = capabilityResult.status === 'fulfilled' ? capabilityResult.value.capabilities : [];
+      const nextSources = sourceResult.value.sources.map(mapSourceRow);
       setSourceRows(nextSources);
-      setTemplateRows(templateResult.templates.map((item) => mapTemplateRow(item, nextSources)));
+      setProviderCapabilities(nextCapabilities);
+      setTemplateRows(templateResult.value.templates.map((item) => mapTemplateRow(item, nextSources, nextCapabilities)));
       setLoadState(emptyLoadState);
     } catch (error) {
       setTemplateRows([]);
@@ -3729,23 +5723,28 @@ export function TemplatesPage({ lastUpdated, onRefresh }: ConsolePageProps) {
     void loadTemplates();
   }, [loadTemplates, lastUpdated]);
 
-  const createBlankTemplate = (): TemplateRecord & { raw?: TemplateApiRecord } => ({
-    id: `tpl-new-${Date.now()}`,
-    name: '新增模板',
-    source: sourceRows[0] ? `${sourceRows[0].name} / ${sourceRows[0].code}` : '-',
-    messageType: 'text',
-    targetProviderType: 'wecom',
-    targetField: 'message.content',
-    content: '您好，{{ payload.title }}',
-    validationStatus: 'draft',
-    version: '草稿',
-    usedVariables: [],
-    updatedAt: '-',
-  });
+  const createBlankTemplate = (): TemplateRecord & { raw?: TemplateApiRecord } => {
+    const draft = createTemplateDraft(sourceRows, providerCapabilities);
+    return {
+      id: `tpl-new-${Date.now()}`,
+      name: '新增模板',
+      source: sourceRows[0] ? `${sourceRows[0].name} / ${sourceRows[0].code}` : '-',
+      messageType: draft.messageType,
+      targetProviderType: draft.targetProviderType,
+      targetField: templateContentFieldSummary(parseJSONOrEmpty(draft.messageBodySchemaText), templateBodyTextFromDraft(draft)),
+      content: templateBodyTextFromDraft(draft),
+      validationStatus: 'draft',
+      version: '草稿',
+      usedVariables: [],
+      updatedAt: '-',
+    };
+  };
 
   const openTemplateModal = (record?: TemplateRecord & { raw?: TemplateApiRecord }) => {
     const next = record ?? createBlankTemplate();
-    const draft = record ? draftFromTemplate(record, sourceRows) : createTemplateDraft(sourceRows);
+    const draft = record
+      ? draftFromTemplate(record, sourceRows, providerCapabilities)
+      : createTemplateDraft(sourceRows, providerCapabilities);
     setSelected(next);
     setTemplateDraft(draft);
     setTemplateFeedback(createTemplateFeedback());
@@ -3811,16 +5810,20 @@ export function TemplatesPage({ lastUpdated, onRefresh }: ConsolePageProps) {
     }
   };
 
-  const templateColumns: TableProps<TemplateRecord>['columns'] = [
+  const templateColumns: TableProps<TemplateRecord & { raw?: TemplateApiRecord }>['columns'] = [
     { title: '模板名称', dataIndex: 'name' },
     { title: '来源', dataIndex: 'source' },
-    { title: '消息类型', dataIndex: 'messageType' },
-    { title: '消息字段', dataIndex: 'targetField' },
     {
-      title: '目标平台类型',
+      title: '推送渠道类型',
       dataIndex: 'targetProviderType',
       render: (value: TemplateRecord['targetProviderType']) => getProviderTypeLabel(value),
     },
+    {
+      title: '消息类型',
+      dataIndex: 'messageType',
+      render: (value: string) => getMessageTypeLabel(value),
+    },
+    { title: '内容字段', dataIndex: 'targetField' },
     {
       title: '校验状态',
       dataIndex: 'validationStatus',
@@ -3828,7 +5831,7 @@ export function TemplatesPage({ lastUpdated, onRefresh }: ConsolePageProps) {
         <StatusTag meta={getValidationStatusMeta(value)} />
       ),
     },
-    { title: '语法版本', dataIndex: 'version' },
+    { title: '当前版本', dataIndex: 'version' },
     {
       title: '操作',
       render: (_, record) => (
@@ -3843,9 +5846,10 @@ export function TemplatesPage({ lastUpdated, onRefresh }: ConsolePageProps) {
                 await consoleApi.validateTemplate({
                   message_type: record.messageType || 'text',
                   target_provider_type: record.targetProviderType,
-                  template_body: record.content || '您好，{{ payload.title }}',
-                  message_body_schema: {},
-                  sample_payload: { title: '测试消息' },
+                  template_body: record.content || '{}',
+                  message_body_schema: record.raw?.current_version?.message_body_schema ?? record.raw?.message_body_schema ?? {},
+                  sample_payload:
+                    record.raw?.current_version?.sample_payload ?? record.raw?.sample_payload ?? { title: '测试消息' },
                 });
                 message.success(`${record.name} 校验通过`);
               } catch (error) {
@@ -3879,6 +5883,8 @@ export function TemplatesPage({ lastUpdated, onRefresh }: ConsolePageProps) {
     { title: '类型', dataIndex: 'type', width: 90 },
     { title: '当前样例值', dataIndex: 'value' },
   ];
+  const templatePayloadFields = payloadFields.filter((field) => !isRecipientPayloadPath(field.path));
+  const previewSnapshot = templatePreviewSnapshot(templateDraft);
 
   return (
     <PageFrame
@@ -3902,7 +5908,7 @@ export function TemplatesPage({ lastUpdated, onRefresh }: ConsolePageProps) {
           onChange={(event) => setTemplateKeyword(event.target.value)}
         />
         <Select placeholder="来源" />
-        <Select placeholder="目标平台类型" />
+        <Select placeholder="推送渠道类型" />
         <Select placeholder="校验状态" />
       </QueryBar>
 
@@ -3946,77 +5952,17 @@ export function TemplatesPage({ lastUpdated, onRefresh }: ConsolePageProps) {
               size="small"
               pagination={false}
               columns={fieldColumns}
-              dataSource={payloadFields}
+              dataSource={templatePayloadFields}
               scroll={{ y: 420 }}
             />
           </section>
           <section className="template-editor">
-            <Form layout="vertical">
-              <Form.Item label="模板名称" required>
-                <Input
-                  value={templateDraft.name}
-                  onChange={(event) => setTemplateDraft((current) => ({ ...current, name: event.target.value }))}
-                />
-              </Form.Item>
-              <div className="two-column-form">
-                <Form.Item label="来源" required>
-                  <Select
-                    value={templateDraft.sourceId}
-                    options={sourceRows.map((source) => ({ label: `${source.name} / ${source.code}`, value: source.id }))}
-                    onChange={(sourceId) => setTemplateDraft((current) => ({ ...current, sourceId }))}
-                  />
-                </Form.Item>
-                <Form.Item label="目标平台">
-                  <Select
-                    value={templateDraft.targetProviderType}
-                    options={['gov_cloud', 'wecom', 'feishu'].map((value) => ({ label: getProviderTypeLabel(value as TemplateRecord['targetProviderType']), value }))}
-                    onChange={(targetProviderType) =>
-                      setTemplateDraft((current) => ({ ...current, targetProviderType }))
-                    }
-                  />
-                </Form.Item>
-              </div>
-              <div className="two-column-form">
-                <Form.Item label="消息类型">
-                  <Input
-                    value={templateDraft.messageType}
-                    onChange={(event) => setTemplateDraft((current) => ({ ...current, messageType: event.target.value }))}
-                  />
-                </Form.Item>
-                <Form.Item label="消息字段">
-                  <Select
-                    value={selected?.targetField}
-                    options={['message.content', 'message.title', 'markdown.content', 'content.text'].map((value) => ({ label: value, value }))}
-                    onChange={(targetField) =>
-                      setSelected((current) => (current ? { ...current, targetField } : current))
-                    }
-                  />
-                </Form.Item>
-              </div>
-              <Form.Item label="字段内容模板">
-                <Input.TextArea
-                  value={templateDraft.templateBody}
-                  onChange={(event) => setTemplateDraft((current) => ({ ...current, templateBody: event.target.value }))}
-                  rows={8}
-                />
-              </Form.Item>
-              <div className="two-column-form">
-                <Form.Item label="样例 Payload JSON" required>
-                  <Input.TextArea
-                    value={templateDraft.samplePayloadText}
-                    onChange={(event) => setTemplateDraft((current) => ({ ...current, samplePayloadText: event.target.value }))}
-                    rows={5}
-                  />
-                </Form.Item>
-                <Form.Item label="消息体 Schema JSON">
-                  <Input.TextArea
-                    value={templateDraft.messageBodySchemaText}
-                    onChange={(event) => setTemplateDraft((current) => ({ ...current, messageBodySchemaText: event.target.value }))}
-                    rows={5}
-                  />
-                </Form.Item>
-              </div>
-            </Form>
+            <TemplateEditorForm
+              value={templateDraft}
+              onChange={setTemplateDraft}
+              sourceRows={sourceRows}
+              capabilities={providerCapabilities}
+            />
             <Space className="template-action-bar">
               <Button onClick={() => void runTemplateAction('preview')}>后端预览</Button>
               <Button onClick={() => void runTemplateAction('validate')}>后端校验</Button>
@@ -4034,17 +5980,14 @@ export function TemplatesPage({ lastUpdated, onRefresh }: ConsolePageProps) {
             ) : null}
             <div className="preview-grid">
               <section>
-                <Typography.Title level={5}>字段值预览</Typography.Title>
+                <Typography.Title level={5}>内部消息预览</Typography.Title>
                 <div className="preview-card">
-                  {templateFeedback.preview || '点击后端预览后展示渲染结果'}
+                  {templateFeedback.preview || '点击后端预览后展示 rendered internal message'}
                 </div>
               </section>
               <section>
-                <Typography.Title level={5}>最终出站 Body 预览</Typography.Title>
-                <pre className="code-block">{`{
-  "receiver": "...",
-  "${selected?.targetField ?? 'message.content'}": "${(templateFeedback.preview || templateDraft.templateBody).split('"').join('\\"')}"
-}`}</pre>
+                <Typography.Title level={5}>模板 Body / Sample Payload</Typography.Title>
+                <pre className="code-block">{previewSnapshot}</pre>
               </section>
             </div>
           </section>
@@ -4289,7 +6232,7 @@ function cleanStringList(values: string[]): string[] {
   return values.map((item) => item.trim()).filter(Boolean);
 }
 
-function isRecord(value: JSONValue): value is Record<string, JSONValue> {
+function isRecord(value: unknown): value is Record<string, JSONValue> {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
 }
 
@@ -5377,6 +7320,157 @@ export function MatchGroupsPage({ lastUpdated, onRefresh }: ConsolePageProps) {
   );
 }
 
+export function MessageLogAttemptBlocks({ attempts }: { attempts: DeliveryAttemptApiRecord[] }) {
+  if (!attempts.length) {
+    return <Alert type="info" showIcon message="暂无出站投递尝试" />;
+  }
+
+  return (
+    <Space direction="vertical" size={14} className="full-width message-log-attempts">
+      {attempts.map((attempt, index) => {
+        const targetContext = deliveryAttemptTargetContext(attempt);
+        const context: Record<string, JSONValue> = isRecord(targetContext) ? targetContext : {};
+        const providerType = attempt.provider_type || stringField(context.provider_type) || '-';
+        const templateVersionID = attempt.template_version_id || stringField(context.template_version_id) || '-';
+        const messageType = stringField(context.message_type);
+        const status = normalizeOutboundStatus(attempt.status);
+        const title = `发送目标 ${index + 1}`;
+        const channelLabel = attempt.channel_name || attempt.channel_id || stringField(context.channel_name) || '-';
+        const renderedMessage = deliveryAttemptRenderedMessage(attempt);
+        const resolvedRecipients = deliveryAttemptResolvedRecipients(attempt);
+        const finalRequest = deliveryAttemptFinalRequest(attempt);
+        const upstreamResponse = deliveryAttemptUpstreamResponse(attempt);
+
+        return (
+          <section className="message-log-attempt" key={attempt.id || `${attempt.channel_id}-${index}`}>
+            <div className="panel-heading">
+              <Typography.Title level={5}>{title}</Typography.Title>
+              <StatusTag meta={getOutboundStatusMeta(status)} />
+            </div>
+            <Descriptions column={1} size="small" bordered>
+              <Descriptions.Item label="平台实例">{channelLabel}</Descriptions.Item>
+              <Descriptions.Item label="Provider Type">{providerType}</Descriptions.Item>
+              <Descriptions.Item label="Template Version">{templateVersionID}</Descriptions.Item>
+              <Descriptions.Item label="Message Type">{messageType || '-'}</Descriptions.Item>
+              <Descriptions.Item label="状态">
+                <StatusTag meta={getOutboundStatusMeta(status)} />
+              </Descriptions.Item>
+              <Descriptions.Item label="耗时">
+                {typeof attempt.duration_ms === 'number' ? `${attempt.duration_ms} ms` : '-'}
+              </Descriptions.Item>
+              <Descriptions.Item label="错误">
+                {[attempt.error_code, attempt.error_message].filter(Boolean).join(' / ') || '-'}
+              </Descriptions.Item>
+            </Descriptions>
+            <div className="message-log-attempt-grid">
+              <section>
+                <Typography.Text strong>渲染后消息</Typography.Text>
+                <pre className="code-block">{stringifyJSON(renderedMessage, '-')}</pre>
+              </section>
+              <section>
+                <Typography.Text strong>接收人解析结果</Typography.Text>
+                <pre className="code-block">{stringifyJSON(resolvedRecipients, '[]')}</pre>
+              </section>
+              <section>
+                <Typography.Text strong>最终请求</Typography.Text>
+                <pre className="code-block">{stringifyJSON(finalRequest, '-')}</pre>
+              </section>
+              <section>
+                <Typography.Text strong>上游响应</Typography.Text>
+                <pre className="code-block">{stringifyJSON(upstreamResponse, '-')}</pre>
+              </section>
+            </div>
+            <Typography.Text strong>原始快照</Typography.Text>
+            <div className="message-log-snapshot-grid">
+              <section>
+                <Typography.Text type="secondary">Request Snapshot</Typography.Text>
+                <pre className="code-block">{stringifyJSON(attempt.request_snapshot, '-')}</pre>
+              </section>
+              <section>
+                <Typography.Text type="secondary">Response Snapshot</Typography.Text>
+                <pre className="code-block">{stringifyJSON(attempt.response_snapshot, '-')}</pre>
+              </section>
+            </div>
+          </section>
+        );
+      })}
+    </Space>
+  );
+}
+
+function deliveryAttemptTargetContext(attempt: DeliveryAttemptApiRecord): JSONValue {
+  return firstJSONValue(
+    attempt.target_context,
+    snapshotJSONField(attempt.request_snapshot, 'target_context'),
+    {
+      channel_id: attempt.channel_id,
+      channel_name: attempt.channel_name,
+      provider_type: attempt.provider_type,
+      template_version_id: attempt.template_version_id,
+    },
+  );
+}
+
+function deliveryAttemptRenderedMessage(attempt: DeliveryAttemptApiRecord): JSONValue {
+  return firstJSONValue(
+    attempt.rendered_message,
+    snapshotJSONField(attempt.request_snapshot, 'rendered_message'),
+    nestedSnapshotJSONField(attempt.request_snapshot, 'send', 'body'),
+    {},
+  );
+}
+
+function deliveryAttemptResolvedRecipients(attempt: DeliveryAttemptApiRecord): JSONValue {
+  return normalizeRecipientValue(
+    firstJSONValue(
+      attempt.resolved_recipients,
+      snapshotJSONField(attempt.request_snapshot, 'resolved_recipients'),
+      nestedSnapshotJSONField(attempt.request_snapshot, 'send', 'recipient'),
+      snapshotJSONField(attempt.recipient_snapshot, 'recipient'),
+      [],
+    ),
+  );
+}
+
+function deliveryAttemptFinalRequest(attempt: DeliveryAttemptApiRecord): JSONValue {
+  return firstJSONValue(
+    attempt.final_request,
+    snapshotJSONField(attempt.request_snapshot, 'final_request'),
+    snapshotJSONField(attempt.request_snapshot, 'send'),
+    {},
+  );
+}
+
+function deliveryAttemptUpstreamResponse(attempt: DeliveryAttemptApiRecord): JSONValue {
+  return firstJSONValue(
+    attempt.upstream_response,
+    snapshotJSONField(attempt.response_snapshot, 'upstream_response'),
+    snapshotJSONField(attempt.response_snapshot, 'send'),
+    {},
+  );
+}
+
+function snapshotJSONField(snapshot: JSONValue | undefined, key: string): JSONValue | undefined {
+  return isRecord(snapshot) ? snapshot[key] : undefined;
+}
+
+function nestedSnapshotJSONField(snapshot: JSONValue | undefined, parent: string, key: string): JSONValue | undefined {
+  const parentValue = snapshotJSONField(snapshot, parent);
+  return isRecord(parentValue) ? parentValue[key] : undefined;
+}
+
+function firstJSONValue(...values: Array<JSONValue | undefined>): JSONValue {
+  const found = values.find((value) => value !== undefined && value !== null && value !== '');
+  return found === undefined ? null : found;
+}
+
+function normalizeRecipientValue(value: JSONValue): JSONValue {
+  if (value === null || value === '') {
+    return [];
+  }
+  return Array.isArray(value) ? value : [value];
+}
+
 export function MessageLogsPage({ lastUpdated, onRefresh }: ConsolePageProps) {
   const { message } = App.useApp();
   const [selected, setSelected] = useState<MessageLog | null>(null);
@@ -5440,7 +7534,6 @@ export function MessageLogsPage({ lastUpdated, onRefresh }: ConsolePageProps) {
     },
   ];
   const attempts = selectedDetail?.attempts ?? [];
-  const firstAttempt = attempts[0];
   const timelineItems = (selectedDetail?.timeline ?? []).map((item, index) => {
     const record = isRecord(item) ? item : {};
     return {
@@ -5513,13 +7606,12 @@ export function MessageLogsPage({ lastUpdated, onRefresh }: ConsolePageProps) {
             <pre className="code-block">{stringifyJSON(selectedDetail?.payload, '-')}</pre>
             <Typography.Title level={5}>异步时间线</Typography.Title>
             <Timeline items={timelineItems.length ? timelineItems : [{ children: '暂无异步时间线' }]} />
-            <Typography.Title level={5}>出站 Payload</Typography.Title>
-            <pre className="code-block">{firstAttempt ? stringifyJSON(firstAttempt.request_snapshot, '-') : '-'}</pre>
-            <Typography.Title level={5}>出站请求 / 响应</Typography.Title>
-            <Descriptions column={1} size="small" bordered>
-              <Descriptions.Item label="出站请求">{firstAttempt ? stringifyJSON(firstAttempt.request_snapshot, '-') : '-'}</Descriptions.Item>
-              <Descriptions.Item label="上游响应">{firstAttempt ? stringifyJSON(firstAttempt.response_snapshot, '-') : '-'}</Descriptions.Item>
-            </Descriptions>
+            <Typography.Title level={5}>出站投递详情</Typography.Title>
+            {selectedDetail ? (
+              <MessageLogAttemptBlocks attempts={attempts} />
+            ) : (
+              <Alert type="info" showIcon message="正在加载消息日志详情" />
+            )}
           </Space>
         ) : null}
       </Drawer>
