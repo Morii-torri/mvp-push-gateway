@@ -1,5 +1,11 @@
 # 开源参考
 
+## 本目录索引
+
+- `open-source-references.md`：开源参考总览。
+- `open-source-push-channel-analysis.md`：Austin 与 MagicPush 的通道实现、上级接入方式、可借鉴点和当前项目差异。
+- `provider-adapter-reference.md`：后续内置/扩展推送渠道的 adapter 配置模型、模板 schema、发送 API、成功判定和重试建议。
+
 ## 参考项目
 
 | 项目 | 可借鉴能力 | 不直接采用的原因 |
@@ -26,4 +32,3 @@
 - Alertmanager: https://prometheus.io/docs/alerting/latest/alertmanager/
 - PrometheusAlert: https://github.com/feiyu563/PrometheusAlert
 - Honker: https://honker.dev/
-

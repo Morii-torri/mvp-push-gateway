@@ -71,8 +71,12 @@
 - 下级对接文档：`docs/api/downstream-integration-guide.md`
 - UI 原型说明：`docs/ui-prototypes/prototype-brief.md`
 - 列表字段状态规范：`docs/ui-prototypes/list-field-status-spec.md`
-- 开源参考：`docs/research/open-source-references.md`
+- 开源参考总览：`docs/research/open-source-references.md`
+- Austin/MagicPush 推送通道分析：`docs/research/open-source-push-channel-analysis.md`
+- 上级推送平台 Adapter 参照：`docs/research/provider-adapter-reference.md`
 - 实施计划：`docs/plans/2026-05-07-mvp-push-gateway-implementation-plan.md`
+- 产品收敛与模板适配计划：`docs/plans/2026-05-11-product-simplification-and-template-adapter-plan.md`
+- 路由发送动作组改造计划：`docs/plans/2026-05-12-route-send-action-group-plan.md`
 
 ## 当前阶段
 
