@@ -39,6 +39,10 @@ const (
 	ProviderPushPlus      ProviderType = "pushplus"
 	ProviderWxPusher      ProviderType = "wxpusher"
 	ProviderServerChan    ProviderType = "serverchan"
+	ProviderNtfy          ProviderType = "ntfy"
+	ProviderGotify        ProviderType = "gotify"
+	ProviderBark          ProviderType = "bark"
+	ProviderPushMe        ProviderType = "pushme"
 )
 
 type Placement string
@@ -439,7 +443,11 @@ func validProviderType(providerType ProviderType) bool {
 		ProviderCustomToken,
 		ProviderPushPlus,
 		ProviderWxPusher,
-		ProviderServerChan:
+		ProviderServerChan,
+		ProviderNtfy,
+		ProviderGotify,
+		ProviderBark,
+		ProviderPushMe:
 		return true
 	default:
 		return false
@@ -486,6 +494,7 @@ type DeliveryTargetContext struct {
 	ChannelID         string `json:"channel_id"`
 	ChannelName       string `json:"channel_name"`
 	ProviderType      string `json:"provider_type"`
+	MessageType       string `json:"message_type"`
 	TemplateVersionID string `json:"template_version_id"`
 	JobID             string `json:"job_id"`
 }
@@ -698,7 +707,7 @@ func resolvedRecipientFromMap(value map[string]any) ResolvedRecipient {
 			}
 		}
 	}
-	for _, key := range []string{"wecom_userid", "feishu_open_id", "feishu_user_id", "dingtalk_userid", "wxpusher_uid", "gov_userid", "gov_party_id", "gov_tag_id", "userid", "open_id"} {
+	for _, key := range []string{"wecom_userid", "feishu_open_id", "feishu_user_id", "dingtalk_userid", "wxpusher_uid", "bark_device_key", "gov_userid", "gov_party_id", "gov_tag_id", "userid", "open_id"} {
 		if stringValue := stringFromMap(value, key); stringValue != "" {
 			recipient.PlatformIDs[key] = stringValue
 		}
@@ -763,6 +772,8 @@ func providerIdentityKeys(providerType ProviderType) []string {
 		return []string{"dingtalk_userid", "userid", "user_id"}
 	case ProviderWxPusher:
 		return []string{"wxpusher_uid", "uid"}
+	case ProviderBark:
+		return []string{"bark_device_key", "device_key"}
 	case ProviderGovCloud:
 		return []string{"gov_userid", "userid", "user_id"}
 	default:

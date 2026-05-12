@@ -158,6 +158,39 @@ func TestProviderTypeExpansionMigrationContainsNewProviderTypes(t *testing.T) {
 	}
 }
 
+func TestProviderTypeRegistryMigrationRemovesHardCodedProviderTypeChecks(t *testing.T) {
+	migration, err := os.ReadFile("../../migrations/000008_provider_type_registry.sql")
+	if err != nil {
+		t.Fatalf("read provider type registry migration: %v", err)
+	}
+	content := string(migration)
+	required := []string{
+		"CREATE TABLE IF NOT EXISTS provider_types",
+		"provider_type text PRIMARY KEY",
+		"INSERT INTO provider_types",
+		"SELECT DISTINCT provider_type FROM delivery_channels",
+		"SELECT DISTINCT provider_type FROM provider_capabilities",
+		"DROP CONSTRAINT IF EXISTS delivery_channels_provider_type_check",
+		"DROP CONSTRAINT IF EXISTS provider_capabilities_provider_type_check",
+		"ADD CONSTRAINT delivery_channels_provider_type_fkey",
+		"ADD CONSTRAINT provider_capabilities_provider_type_fkey",
+		"'ntfy'",
+		"'gotify'",
+		"'bark'",
+		"'pushme'",
+	}
+
+	for _, snippet := range required {
+		if !strings.Contains(content, snippet) {
+			t.Fatalf("provider type registry migration missing snippet: %s", snippet)
+		}
+	}
+	if strings.Contains(content, "ADD CONSTRAINT delivery_channels_provider_type_check") ||
+		strings.Contains(content, "ADD CONSTRAINT provider_capabilities_provider_type_check") {
+		t.Fatal("registry migration should not reintroduce hard-coded provider_type CHECK constraints in the up migration")
+	}
+}
+
 func readInitialMigration(t *testing.T) string {
 	t.Helper()
 

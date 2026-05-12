@@ -31,7 +31,7 @@
 
 - PushPlus、WxPusher、Server酱、短信、企微、钉钉、飞书、SMTP/self/gov_cloud 当前均为 implemented but not live-tested 或 configuration-dependent；不要写成已真实发送成功。
 - 随申办当前开发环境不可访问，先实现不测试；短信没有测试账号，先按文档/SDK方向建配置模型和 mock build request。
-- `ntfy`、`gotify`、`bark`、`pushme` 仅保留第二批规划，不做当前代码。
+- `ntfy`、`gotify`、`bark`、`pushme` 已补入 P2 provider defaults 和 build-request/mock adapter；当前不做真实联调。
 - 菜单和页面层级偏多，第一版需要降低认知负担。
 
 ## Product Decisions
@@ -437,7 +437,7 @@ First batch:
 10. Feishu robot message.
 11. Suishenban government cloud.
 
-Second batch:
+Second batch implemented at build-request/mock level:
 
 1. ntfy.
 2. Gotify.

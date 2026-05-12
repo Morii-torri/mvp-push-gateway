@@ -69,6 +69,18 @@
 
 `rate_limit_config` 第一版至少支持 `enabled`、`qps`、`per_minute`、`burst`、`strategy`。这些配置由推送渠道页面维护，发送 worker 主动执行。
 
+### `provider_types`
+
+Provider type registry，避免每新增一个 provider 都扩展 `delivery_channels.provider_type` / `provider_capabilities.provider_type` 的硬编码 CHECK constraint。
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `provider_type` | text pk | provider type，例如 `wecom_app`、`ntfy` |
+| `display_name` | text | 展示名 |
+| `category` | text | 渠道分类 |
+| `built_in` | boolean | 是否为内置 provider |
+| `created_at` / `updated_at` | timestamptz | 创建和更新时间 |
+
 ### `provider_capabilities`
 
 推送渠道能力描述。内置 provider defaults 也写入该表，允许升级和覆盖；前端渠道表单、模板表单、路由 target 兼容性校验和 delivery adapter 都以这里的数据化能力为准。
@@ -104,9 +116,9 @@
 | `default_retry_policy` | jsonb | 默认重试策略 |
 | `request_examples` | jsonb | 示例 |
 
-第一批 provider defaults 已实现 build-request/mock 级别支持：`webhook`、`self`、`pushplus`、`wxpusher`、`serverchan`、`email`、`aliyun_sms`、`tencent_sms`、`baidu_sms`、`wecom_robot`、`wecom_app`、legacy `wecom`、`dingtalk_robot`、`dingtalk_work`、legacy `dingtalk`、`feishu_robot`、legacy `feishu`、`gov_cloud`、legacy `sms` 和高级 `custom_token`。其中 PushPlus、WxPusher、Server酱、短信、企微、钉钉、飞书、SMTP/self/gov_cloud 当前均不要标注为已真实联调成功。
+第一批 provider defaults 已实现 build-request/mock 级别支持：`webhook`、`self`、`pushplus`、`wxpusher`、`serverchan`、`email`、`aliyun_sms`、`tencent_sms`、`baidu_sms`、`wecom_robot`、`wecom_app`、legacy `wecom`、`dingtalk_robot`、`dingtalk_work`、legacy `dingtalk`、`feishu_robot`、legacy `feishu`、`gov_cloud`、legacy `sms` 和高级 `custom_token`。P2 provider defaults 已实现 build-request/mock 级别支持：`ntfy`、`gotify`、`bark`、`pushme`。其中 PushPlus、WxPusher、Server酱、短信、企微、钉钉、飞书、SMTP/self/gov_cloud、ntfy、Gotify、Bark、PushMe 当前均不要标注为已真实联调成功。
 
-`ntfy`、`gotify`、`bark`、`pushme` 仅为后续规划项，当前不写入已实现 provider defaults。
+`delivery_channels.provider_type` 和 `provider_capabilities.provider_type` 通过 FK 指向 `provider_types`。
 
 ## 组织人员
 

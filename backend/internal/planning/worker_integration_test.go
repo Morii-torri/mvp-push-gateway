@@ -176,7 +176,7 @@ func TestWorkerPlansLegacyActionIntoDeliveryAttemptAndSendJob(t *testing.T) {
 	if err := json.Unmarshal(attemptBody, &sendPayload); err != nil {
 		t.Fatalf("decode send job payload: %v", err)
 	}
-	if sendPayload["delivery_attempt_id"] != attemptID || sendPayload["dedupe_key"] != "A-1001" {
+	if sendPayload["delivery_attempt_id"] != attemptID || sendPayload["dedupe_key"] != "A-1001" || sendPayload["message_type"] != "json" {
 		t.Fatalf("unexpected send job payload: %+v", sendPayload)
 	}
 	body, ok := sendPayload["body"].(map[string]any)
@@ -392,6 +392,9 @@ func TestWorkerFansOutActionTargetsIntoDeliveryAttemptsAndSendJobs(t *testing.T)
 	if !ok || webhookBody["target"] != "webhook" || webhookBody["title"] != "critical" {
 		t.Fatalf("expected webhook rendered body, got %+v", webhookTarget.payload)
 	}
+	if webhookTarget.payload["message_type"] != "json" || webhookTarget.payload["dedupe_key"] != "T-1001" {
+		t.Fatalf("expected webhook payload to keep message_type and original dedupe key, got %+v", webhookTarget.payload)
+	}
 	customTarget, ok := planned[customVersion.ID]
 	if !ok || customTarget.channelID != customChannel.ID {
 		t.Fatalf("missing custom target attempt: %+v", planned)
@@ -399,6 +402,9 @@ func TestWorkerFansOutActionTargetsIntoDeliveryAttemptsAndSendJobs(t *testing.T)
 	customBody, ok := customTarget.payload["body"].(map[string]any)
 	if !ok || customBody["target"] != "custom" || customBody["ticket"] != "T-1001" {
 		t.Fatalf("expected custom rendered body, got %+v", customTarget.payload)
+	}
+	if customTarget.payload["message_type"] != "json" || customTarget.payload["dedupe_key"] != "T-1001" {
+		t.Fatalf("expected custom payload to keep message_type and original dedupe key, got %+v", customTarget.payload)
 	}
 }
 

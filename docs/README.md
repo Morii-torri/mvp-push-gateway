@@ -35,8 +35,8 @@
 - 推送渠道实例支持主动限流、独立并发上限、超时、重试和死信策略。
 - Provider capability registry 已数据化，包含 credential schema、channel config schema、message schema、recipient identity、token strategy、send API、success/retry rule、默认限流、超时、并发和重试。
 - 第一批 provider defaults 已实现 build-request/mock 级别支持：`webhook`、`self`、`pushplus`、`wxpusher`、`serverchan`、`email`、`aliyun_sms`、`tencent_sms`、`baidu_sms`、`wecom_robot`、`wecom_app`、legacy `wecom`、`dingtalk_robot`、`dingtalk_work`、legacy `dingtalk`、`feishu_robot`、legacy `feishu`、`gov_cloud`、legacy `sms` 和高级 `custom_token`。
-- 上述 provider 当前不要描述为已真实发送成功；PushPlus、WxPusher、Server酱、短信、企微、钉钉、飞书、SMTP/self/gov_cloud 均为 implemented but not live-tested 或 configuration-dependent。
-- `ntfy`、`gotify`、`bark`、`pushme` 仅保留后续规划，当前不作为已实现 provider defaults。
+- P2 provider defaults 已实现 build-request/mock 级别支持：`ntfy`、`gotify`、`bark`、`pushme`。
+- 上述 provider 当前不要描述为已真实发送成功；PushPlus、WxPusher、Server酱、短信、企微、钉钉、飞书、SMTP/self/gov_cloud、ntfy、Gotify、Bark、PushMe 均为 implemented but not live-tested 或 configuration-dependent。
 - 路由发布时编译为执行模型，并按来源和版本缓存；planning 阶段先粗过滤，再完整条件判断，同时记录慢规则。
 - 每个来源只允许一个启用路由大组；v1/v2 是同一大组下的版本切换。
 - 路由策略按拖拽顺序执行，第一条命中即发送并停止继续匹配；策略展示累计命中次数，最高 99999。

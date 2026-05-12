@@ -220,14 +220,20 @@ func (r Repository) GetTemplateVersion(ctx context.Context, id string) (msgtempl
 }
 
 func (r Repository) GetProviderCapability(ctx context.Context, providerType provider.ProviderType, messageType string) (provider.Capability, error) {
-	capability, err := scanCapability(r.pool.QueryRow(ctx, `
+	capability, err := scanCapabilityWithMetadata(r.pool.QueryRow(ctx, `
 		SELECT
 			id,
 			provider_type,
+			COALESCE(display_name, ''),
+			COALESCE(category, ''),
 			message_type,
 			message_schema,
+			credential_schema,
+			channel_config_schema,
+			custom_body_allowed,
 			recipient_required,
 			allow_no_recipient,
+			recipient_requirement,
 			COALESCE(recipient_field_name, ''),
 			recipient_location,
 			COALESCE(recipient_path, ''),
@@ -235,6 +241,14 @@ func (r Repository) GetProviderCapability(ctx context.Context, providerType prov
 			COALESCE(identity_kind, ''),
 			token_location,
 			COALESCE(token_field_name, ''),
+			token_strategy,
+			send_api,
+			success_rule,
+			retry_rule,
+			default_rate_limit,
+			default_timeout_ms,
+			default_concurrency_limit,
+			default_retry_policy,
 			request_examples,
 			created_at,
 			updated_at

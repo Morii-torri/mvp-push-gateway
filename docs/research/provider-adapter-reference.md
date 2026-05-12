@@ -35,10 +35,10 @@
 | 第一批兼容 | 飞书旧类型 | `feishu` | legacy robot | 保留兼容；新配置优先使用 `feishu_robot` |
 | 第一批 | 随申办政务云 | `gov_cloud` | 政务云消息平台 | 已实现 build-request/mock 和错误分类；开发环境不可访问，未真实联调 |
 | 高级保留 | 高级 custom_token | `custom_token` | advanced HTTP | 保留高级映射，不作为普通用户主路径 |
-| 第二批规划 | ntfy | `ntfy` | 自托管通知 | 仅规划，不做代码 |
-| 第二批规划 | Gotify | `gotify` | 自托管通知 | 仅规划，不做代码 |
-| 第二批规划 | Bark | `bark` | iOS 通知 | 仅规划，不做代码 |
-| 第二批规划 | PushMe | `pushme` | 多平台通知 | 仅规划，不做代码 |
+| P2 | ntfy | `ntfy` | 自托管通知 | 已实现 build-request/mock；目标服务依赖用户配置，未真实联调 |
+| P2 | Gotify | `gotify` | 自托管通知 | 已实现 build-request/mock；目标服务依赖用户配置，未真实联调 |
+| P2 | Bark | `bark` | iOS 通知 | 已实现 build-request/mock；未真实联调 |
+| P2 | PushMe | `pushme` | 多平台通知 | 已实现 build-request/mock；未真实联调 |
 
 除通用 Webhook 可用本地假服务完成闭环外，PushPlus、WxPusher、Server酱、短信、企微、钉钉、飞书、SMTP/self/gov_cloud 当前均不要写成已经真实发送成功。
 
@@ -457,14 +457,14 @@ Delivery adapter 输出 final request。日志快照记录 `target_context`、`r
 
 这批 provider 已具备 capability metadata、默认 schema、build request/mock 路径或兼容路径，但除可由本地假服务验证的 Webhook 外，不应声称已经真实联调成功。
 
-### 4.2 第二批仅保留规划
+### 4.2 P2 已实现 build-request/mock
 
 1. `ntfy`
 2. `gotify`
 3. `bark`
 4. `pushme`
 
-这些可以作为后续“轻量通知出口”统一用 `notice` 内容 schema 设计；当前不做代码，不写入已实现 provider defaults。
+这些“轻量通知出口”统一使用 `notice` 内容 schema，已补入 provider capability defaults 和 build-request/mock adapter。当前没有真实账号或目标服务联调，`ntfy`、`gotify` 标注为 `configuration_dependent`，`bark`、`pushme` 标注为 `implemented_but_not_live_tested`。
 
 ## 5. 后续落地时的关键检查点
 
@@ -477,6 +477,7 @@ Delivery adapter 输出 final request。日志快照记录 `target_context`、`r
 
 ## 6. 参考链接
 
+- 2026-05-12 P2 追加实现说明：`ntfy`、`gotify`、`bark`、`pushme` 已补入 provider capability defaults 和 build-request/mock adapter。当前没有做真实联调；`ntfy`、`gotify` 的 `live_test_status` 标注为 `configuration_dependent`，因为目标服务通常是自建或用户配置；`bark`、`pushme` 标注为 `implemented_but_not_live_tested`。
 - 当前项目下级入站：`docs/api/downstream-integration-guide.md`
 - 当前项目端到端验收：`docs/operations/end-to-end-smoke.md`
 - 当前项目平台能力代码：`backend/internal/provider/service.go`

@@ -52,6 +52,22 @@ func TestProviderCapabilitySeedIsIdempotent(t *testing.T) {
 	if err := repository.SeedProviderCapabilities(ctx, capabilities); err != nil {
 		t.Fatalf("first seed provider capabilities: %v", err)
 	}
+	var p2ProviderTypeCount int
+	if err := pool.QueryRow(ctx, `SELECT count(*)::integer FROM provider_types WHERE provider_type IN ('ntfy', 'gotify', 'bark', 'pushme')`).Scan(&p2ProviderTypeCount); err != nil {
+		t.Fatalf("count p2 provider types: %v", err)
+	}
+	if p2ProviderTypeCount != 4 {
+		t.Fatalf("expected 4 P2 provider types in registry, got %d", p2ProviderTypeCount)
+	}
+	if _, err := repository.CreateChannel(ctx, provider.CreateChannelParams{
+		ProviderType:     provider.ProviderNtfy,
+		Name:             "ntfy registry smoke",
+		Enabled:          true,
+		ConcurrencyLimit: 1,
+		TimeoutMS:        1000,
+	}); err != nil {
+		t.Fatalf("create ntfy channel after registry seed: %v", err)
+	}
 	if err := repository.SeedProviderCapabilities(ctx, capabilities); err != nil {
 		t.Fatalf("second seed provider capabilities: %v", err)
 	}

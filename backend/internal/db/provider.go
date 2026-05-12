@@ -23,6 +23,26 @@ func (r Repository) SeedProviderCapabilities(ctx context.Context, capabilities [
 			capability.ID = uuid.NewString()
 		}
 		if _, err := tx.Exec(ctx, `
+			INSERT INTO provider_types (
+				provider_type,
+				display_name,
+				category,
+				built_in
+			)
+			VALUES ($1, $2, $3, true)
+			ON CONFLICT (provider_type) DO UPDATE
+			SET display_name = EXCLUDED.display_name,
+				category = EXCLUDED.category,
+				built_in = true,
+				updated_at = now()
+		`,
+			capability.ProviderType,
+			defaultCapabilityText(capability.DisplayName, string(capability.ProviderType)),
+			defaultCapabilityText(capability.Category, "custom"),
+		); err != nil {
+			return fmt.Errorf("upsert provider type %s: %w", capability.ProviderType, err)
+		}
+		if _, err := tx.Exec(ctx, `
 			INSERT INTO provider_capabilities (
 				id,
 				provider_type,

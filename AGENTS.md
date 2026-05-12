@@ -51,7 +51,7 @@
 - 来源双校验：支持 `token_and_hmac`，要求 Token 和 HMAC 同时通过；不要实现 `token_or_hmac`。
 - 来源 IP 白名单：一期能力，支持 CIDR；无鉴权来源必须提示建议配置白名单。
 - 前端列表：所有管理对象默认使用“查询栏 + 分页表格 + 新增按钮 + 弹窗/抽屉新增编辑”；状态和字段名必须中文化，禁止直接展示英文枚举。
-- 推送渠道：第一批内置 `webhook`、`self`、`pushplus`、`wxpusher`、`serverchan`、`email`、`aliyun_sms`、`tencent_sms`、`baidu_sms`、`wecom_robot`、`wecom_app`、`dingtalk_robot`、`dingtalk_work`、`feishu_robot`、`gov_cloud`；保留 legacy `wecom`、`dingtalk`、`feishu`、`sms` 和高级 `custom_token`。
+- 推送渠道：第一批内置 `webhook`、`self`、`pushplus`、`wxpusher`、`serverchan`、`email`、`aliyun_sms`、`tencent_sms`、`baidu_sms`、`wecom_robot`、`wecom_app`、`dingtalk_robot`、`dingtalk_work`、`feishu_robot`、`gov_cloud`；第二批 build-request/mock 内置 `ntfy`、`gotify`、`bark`、`pushme`；保留 legacy `wecom`、`dingtalk`、`feishu`、`sms` 和高级 `custom_token`。
 - 平台能力：消息类型、凭证配置、渠道配置、消息内容 schema、Token 换取、Token 放置位置、接收人身份、成功/重试规则、默认限流/超时/并发/重试。
 - 组织人员：组织树、人员、平台身份字段，例如手机号、邮箱、企微 userid、飞书 open_id。
 - 匹配组：IP 组、业务值组、系统值组，用于条件判断。
@@ -82,4 +82,4 @@
 
 截至 2026-05-12，核心后端链路、provider capability registry、provider-aware template、route send action group、planning fan-out 和 delivery adapter boundary 已进入实现状态。文档描述应以当前源码和迁移为准，不再沿用“template node / 单模板多渠道 / 自定义 Token 平台作为主路径”的旧模型。
 
-第一批 provider defaults 已实现 build-request/mock 级别支持，但 PushPlus、WxPusher、Server酱、短信、企微、钉钉、飞书、SMTP/self/gov_cloud 均不要写成已经真实联调成功；当前应标注为 implemented but not live-tested 或 configuration-dependent。ntfy、Gotify、Bark、PushMe 只保留后续规划。
+第一批和 P2 provider defaults 已实现 build-request/mock 级别支持，但 PushPlus、WxPusher、Server酱、短信、企微、钉钉、飞书、SMTP/self/gov_cloud、ntfy、Gotify、Bark、PushMe 均不要写成已经真实联调成功；当前应标注为 implemented but not live-tested 或 configuration-dependent。

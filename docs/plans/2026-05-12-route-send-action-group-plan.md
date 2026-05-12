@@ -10,6 +10,8 @@
 
 **Status 2026-05-12:** route send action group is implemented. Backend/API/DB/frontend/planning now use `action.targets[]`; legacy `template_version_id + channel_ids` remains compatible. Planning worker fans out by target, validates template provider type against channel provider type, renders per target and creates separate delivery attempts. New route canvas should use the send action group node instead of a standalone template node.
 
+**Follow-up status 2026-05-12:** automated backend/frontend verification has passed after the follow-up optimization pass. The multi-target dedupe risk noted below is mitigated by scoping the effective send dedupe key with `template_version_id` while keeping the configured key in snapshots. Remaining items are manual UI smoke verification and a later compatibility cleanup decision for legacy `route_actions.template_version_id/channel_ids`.
+
 ---
 
 ## Product Decision

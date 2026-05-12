@@ -385,6 +385,7 @@ func (w *Worker) buildAttempts(ctx context.Context, message MessageRecord, rule 
 			DeliveryAttemptID: attemptID,
 			DedupeKey:         dedupeKey,
 			DedupeTTLSeconds:  dedupeTTL,
+			MessageType:       templateVersion.MessageType,
 			Recipient:         recipientValue,
 			Body:              body,
 		})

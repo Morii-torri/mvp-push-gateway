@@ -82,7 +82,7 @@ MVP Push Gateway 是一个综合消息推送网关。它面向内部系统、政
 
 每个渠道实例必须独立限流、独立并发控制和独立失败隔离。一个慢渠道只能积压自己的 `send_message` job，不能阻塞其他渠道的发送 worker。
 
-第一批 provider defaults 已实现 build-request/mock 级别支持：`webhook`、`self`、`pushplus`、`wxpusher`、`serverchan`、`email`、`aliyun_sms`、`tencent_sms`、`baidu_sms`、`wecom_robot`、`wecom_app`、legacy `wecom`、`dingtalk_robot`、`dingtalk_work`、legacy `dingtalk`、`feishu_robot`、legacy `feishu`、`gov_cloud`、legacy `sms` 和高级 `custom_token`。PushPlus、WxPusher、Server酱、短信、企微、钉钉、飞书、SMTP/self/gov_cloud 当前均为 implemented but not live-tested 或 configuration-dependent；不要写成已真实投递成功。`ntfy`、`gotify`、`bark`、`pushme` 只保留后续规划。
+第一批 provider defaults 已实现 build-request/mock 级别支持：`webhook`、`self`、`pushplus`、`wxpusher`、`serverchan`、`email`、`aliyun_sms`、`tencent_sms`、`baidu_sms`、`wecom_robot`、`wecom_app`、legacy `wecom`、`dingtalk_robot`、`dingtalk_work`、legacy `dingtalk`、`feishu_robot`、legacy `feishu`、`gov_cloud`、legacy `sms` 和高级 `custom_token`。P2 provider defaults 也已实现 build-request/mock 级别支持：`ntfy`、`gotify`、`bark`、`pushme`。PushPlus、WxPusher、Server酱、短信、企微、钉钉、飞书、SMTP/self/gov_cloud、ntfy、Gotify、Bark、PushMe 当前均为 implemented but not live-tested 或 configuration-dependent；不要写成已真实投递成功。
 
 ### 组织人员
 

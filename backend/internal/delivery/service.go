@@ -9,6 +9,7 @@ import (
 	"io"
 	"math"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -56,6 +57,7 @@ type SendMessageJobPayload struct {
 	DeliveryAttemptID string          `json:"delivery_attempt_id"`
 	DedupeKey         string          `json:"dedupe_key"`
 	DedupeTTLSeconds  int             `json:"dedupe_ttl_seconds"`
+	MessageType       string          `json:"message_type"`
 	Token             string          `json:"token"`
 	Recipient         any             `json:"recipient"`
 	Body              json.RawMessage `json:"body"`
@@ -123,6 +125,7 @@ type DeadLetterDeliveryParams struct {
 type Repository interface {
 	ClaimSendJobs(context.Context, queue.ClaimParams) ([]queue.Job, error)
 	GetChannel(context.Context, string) (provider.Channel, error)
+	GetProviderCapability(context.Context, provider.ProviderType, string) (provider.Capability, error)
 	GetAttempt(context.Context, string) (Attempt, error)
 	MarkAttemptProcessing(context.Context, MarkAttemptProcessingParams) error
 	InsertSendDedupeKey(context.Context, SendDedupeParams) (bool, error)
@@ -253,6 +256,11 @@ func (w *Worker) ProcessOne(ctx context.Context, job queue.Job) error {
 	if err != nil {
 		return fmt.Errorf("load channel %s: %w", channelID, err)
 	}
+	messageType := strings.TrimSpace(payload.MessageType)
+	capability, capabilitySource, err := w.loadCapability(ctx, channel.ProviderType, messageType)
+	if err != nil {
+		return fmt.Errorf("load provider capability %s/%s: %w", channel.ProviderType, messageType, err)
+	}
 
 	release, err := w.acquireSemaphore(ctx, channelID, channel.ConcurrencyLimit)
 	if err != nil {
@@ -277,39 +285,13 @@ func (w *Worker) ProcessOne(ctx context.Context, job queue.Job) error {
 		return fmt.Errorf("mark attempt processing: %w", err)
 	}
 
-	if dedupeKey := strings.TrimSpace(payload.DedupeKey); dedupeKey != "" {
-		expiresAt := startedAt.Add(defaultDedupeTTL)
-		if payload.DedupeTTLSeconds > 0 {
-			expiresAt = startedAt.Add(time.Duration(payload.DedupeTTLSeconds) * time.Second)
-		}
-		inserted, err := w.repo.InsertSendDedupeKey(ctx, SendDedupeParams{
-			ChannelID: channelID,
-			DedupeKey: dedupeKey,
-			ExpiresAt: expiresAt,
-			MessageID: attempt.MessageID,
-		})
-		if err != nil {
-			return fmt.Errorf("insert send dedupe key: %w", err)
-		}
-		if !inserted {
-			return w.repo.CompleteDelivery(ctx, CompleteDeliveryParams{
-				JobID:      job.ID,
-				WorkerID:   w.workerID,
-				AttemptID:  attempt.ID,
-				AttemptNo:  attemptNo,
-				Status:     StatusDeduped,
-				DurationMS: durationMS(startedAt, w.now()),
-				FinishedAt: w.now(),
-			})
-		}
-	}
-
 	targetContext := provider.DeliveryTargetContext{
 		DeliveryAttemptID: attempt.ID,
 		MessageID:         attempt.MessageID,
 		ChannelID:         channel.ID,
 		ChannelName:       channel.Name,
 		ProviderType:      string(channel.ProviderType),
+		MessageType:       messageType,
 		TemplateVersionID: attempt.TemplateVersionID,
 		JobID:             job.ID,
 	}
@@ -317,25 +299,81 @@ func (w *Worker) ProcessOne(ctx context.Context, job queue.Job) error {
 		"target_context":      targetContext,
 		"rendered_message":    snapshotValue(payload.Body),
 		"resolved_recipients": payload.Recipient,
+		"capability": map[string]any{
+			"provider_type": string(channel.ProviderType),
+			"message_type":  messageType,
+			"source":        capabilitySource,
+		},
 	}
 	responseSnapshot := map[string]any{}
+
+	if dedupeKey := strings.TrimSpace(payload.DedupeKey); dedupeKey != "" {
+		effectiveDedupeKey := effectiveSendDedupeKey(dedupeKey, attempt.TemplateVersionID)
+		requestSnapshot["dedupe"] = map[string]any{
+			"configured_key":      dedupeKey,
+			"effective_key":       effectiveDedupeKey,
+			"scope":               effectiveDedupeScope(attempt.TemplateVersionID),
+			"template_version_id": attempt.TemplateVersionID,
+			"dedupe_ttl_seconds":  payload.DedupeTTLSeconds,
+		}
+		expiresAt := startedAt.Add(defaultDedupeTTL)
+		if payload.DedupeTTLSeconds > 0 {
+			expiresAt = startedAt.Add(time.Duration(payload.DedupeTTLSeconds) * time.Second)
+		}
+		inserted, err := w.repo.InsertSendDedupeKey(ctx, SendDedupeParams{
+			ChannelID: channelID,
+			DedupeKey: effectiveDedupeKey,
+			ExpiresAt: expiresAt,
+			MessageID: attempt.MessageID,
+		})
+		if err != nil {
+			return fmt.Errorf("insert send dedupe key: %w", err)
+		}
+		if !inserted {
+			responseSnapshot["dedupe"] = map[string]any{
+				"deduped": true,
+				"source":  "send_dedupe",
+			}
+			requestRaw, err := marshalSnapshot(requestSnapshot)
+			if err != nil {
+				return err
+			}
+			responseRaw, err := marshalSnapshot(responseSnapshot)
+			if err != nil {
+				return err
+			}
+			return w.repo.CompleteDelivery(ctx, CompleteDeliveryParams{
+				JobID:            job.ID,
+				WorkerID:         w.workerID,
+				AttemptID:        attempt.ID,
+				AttemptNo:        attemptNo,
+				Status:           StatusDeduped,
+				RequestSnapshot:  requestRaw,
+				ResponseSnapshot: responseRaw,
+				DurationMS:       durationMS(startedAt, w.now()),
+				FinishedAt:       w.now(),
+			})
+		}
+	}
+
 	resolvedToken := strings.TrimSpace(payload.Token)
 
 	effectiveChannel := channel
-	resolver, placement, err := parseTokenBehavior(channel)
+	tokenBehavior, err := parseTokenBehavior(channel, capability, capabilitySource)
 	if err != nil {
-		return w.failAttempt(ctx, job, attempt, attemptNo, startedAt, "MGP-TOKEN-001", err.Error(), requestSnapshot, responseSnapshot, retryPolicyFrom(channel.RetryPolicy))
+		return w.failAttempt(ctx, job, attempt, attemptNo, startedAt, "MGP-TOKEN-001", err.Error(), requestSnapshot, responseSnapshot, retryPolicyFrom(channel.RetryPolicy), retryableFailure())
 	}
-	if len(placement) > 0 {
-		effectiveChannel.TokenConfig = placement
+	requestSnapshot["token_behavior"] = tokenBehavior.snapshot()
+	if len(tokenBehavior.Placement) > 0 {
+		effectiveChannel.TokenConfig = tokenBehavior.Placement
 	}
 
-	if resolver != nil {
-		token, tokenRequestSnapshot, tokenResponseSnapshot, err := w.resolveToken(ctx, channel, *resolver)
+	if tokenBehavior.Resolver != nil {
+		token, tokenRequestSnapshot, tokenResponseSnapshot, err := w.resolveToken(ctx, channel, *tokenBehavior.Resolver)
 		requestSnapshot["token_exchange"] = tokenRequestSnapshot
 		responseSnapshot["token_exchange"] = tokenResponseSnapshot
 		if err != nil {
-			return w.failAttempt(ctx, job, attempt, attemptNo, startedAt, "MGP-TOKEN-002", err.Error(), requestSnapshot, responseSnapshot, retryPolicyFrom(channel.RetryPolicy))
+			return w.failAttempt(ctx, job, attempt, attemptNo, startedAt, "MGP-TOKEN-002", err.Error(), requestSnapshot, responseSnapshot, retryPolicyFrom(channel.RetryPolicy), retryableFailure())
 		}
 		resolvedToken = token
 	}
@@ -344,13 +382,14 @@ func (w *Worker) ProcessOne(ctx context.Context, job queue.Job) error {
 		Token: resolvedToken,
 		RenderedMessage: provider.RenderedMessage{
 			ProviderType: channel.ProviderType,
+			MessageType:  messageType,
 			Content:      payload.Body,
 		},
 		ResolvedRecipients: provider.ResolvedRecipientsFromValue(payload.Recipient),
 		TargetContext:      targetContext,
 	})
 	if err != nil {
-		return w.failAttempt(ctx, job, attempt, attemptNo, startedAt, "MGP-SEND-001", err.Error(), requestSnapshot, responseSnapshot, retryPolicyFrom(channel.RetryPolicy))
+		return w.failAttempt(ctx, job, attempt, attemptNo, startedAt, "MGP-SEND-001", err.Error(), requestSnapshot, responseSnapshot, retryPolicyFrom(channel.RetryPolicy), retryableFailure())
 	}
 
 	requestSnapshot["resolved_token"] = resolvedToken
@@ -384,11 +423,22 @@ func (w *Worker) ProcessOne(ctx context.Context, job queue.Job) error {
 		if isTimeoutError(sendErr) {
 			errorCode = "MGP-SEND-002"
 		}
-		return w.failAttempt(ctx, job, attempt, attemptNo, startedAt, errorCode, sendErr.Error(), requestSnapshot, responseSnapshot, retryPolicyFrom(channel.RetryPolicy))
+		retryDecision := classifyTransportRetry(capability, capabilitySource, sendErr)
+		responseSnapshot["retry_rule"] = retryDecision.snapshot()
+		return w.failAttempt(ctx, job, attempt, attemptNo, startedAt, errorCode, sendErr.Error(), requestSnapshot, responseSnapshot, retryPolicyFrom(channel.RetryPolicy), retryDecision.failureClassification())
 	}
-	if statusCode < http.StatusOK || statusCode >= http.StatusMultipleChoices {
-		return w.failAttempt(ctx, job, attempt, attemptNo, startedAt, "MGP-SEND-004", fmt.Sprintf("upstream returned status %d", statusCode), requestSnapshot, responseSnapshot, retryPolicyFrom(channel.RetryPolicy))
+	successDecision := classifySuccess(statusCode, responseBody, capability, capabilitySource)
+	responseSnapshot["success_rule"] = successDecision.snapshot()
+	if !successDecision.Success {
+		retryDecision := classifyResponseRetry(statusCode, responseBody, capability, capabilitySource, successDecision.JSONField)
+		responseSnapshot["retry_rule"] = retryDecision.snapshot()
+		errorMessage := successDecision.ErrorMessage
+		if strings.TrimSpace(errorMessage) == "" {
+			errorMessage = fmt.Sprintf("upstream response did not match success rule: status %d", statusCode)
+		}
+		return w.failAttempt(ctx, job, attempt, attemptNo, startedAt, "MGP-SEND-004", errorMessage, requestSnapshot, responseSnapshot, retryPolicyFrom(channel.RetryPolicy), retryDecision.failureClassification())
 	}
+	responseSnapshot["retry_rule"] = noRetryNeededDecision(capabilitySource, capability.RetryRule).snapshot()
 
 	requestRaw, err := marshalSnapshot(requestSnapshot)
 	if err != nil {
@@ -411,6 +461,40 @@ func (w *Worker) ProcessOne(ctx context.Context, job queue.Job) error {
 	})
 }
 
+func (w *Worker) loadCapability(ctx context.Context, providerType provider.ProviderType, messageType string) (provider.Capability, string, error) {
+	capability := provider.Capability{
+		ProviderType: providerType,
+		MessageType:  strings.TrimSpace(messageType),
+	}
+	if strings.TrimSpace(messageType) == "" {
+		return capability, "legacy.no_message_type", nil
+	}
+	loaded, err := w.repo.GetProviderCapability(ctx, providerType, messageType)
+	if err != nil {
+		if errors.Is(err, provider.ErrNotFound) {
+			return capability, "legacy.capability_not_found", nil
+		}
+		return provider.Capability{}, "", err
+	}
+	return loaded, "capability", nil
+}
+
+func effectiveSendDedupeKey(configuredKey string, templateVersionID string) string {
+	configuredKey = strings.TrimSpace(configuredKey)
+	templateVersionID = strings.TrimSpace(templateVersionID)
+	if configuredKey == "" || templateVersionID == "" {
+		return configuredKey
+	}
+	return "template_version:" + templateVersionID + ":" + configuredKey
+}
+
+func effectiveDedupeScope(templateVersionID string) string {
+	if strings.TrimSpace(templateVersionID) == "" {
+		return "channel"
+	}
+	return "channel_template_version"
+}
+
 func (w *Worker) failAttempt(
 	ctx context.Context,
 	job queue.Job,
@@ -422,6 +506,7 @@ func (w *Worker) failAttempt(
 	requestSnapshot map[string]any,
 	responseSnapshot map[string]any,
 	retryPolicy retryPolicy,
+	classification failureClassification,
 ) error {
 	requestRaw, err := marshalSnapshot(requestSnapshot)
 	if err != nil {
@@ -442,7 +527,7 @@ func (w *Worker) failAttempt(
 		maxAttempts = 1
 	}
 
-	if attemptNo >= maxAttempts {
+	if !classification.Retryable || attemptNo >= maxAttempts {
 		return w.repo.DeadLetterDelivery(ctx, DeadLetterDeliveryParams{
 			JobID:            job.ID,
 			WorkerID:         w.workerID,
@@ -470,6 +555,14 @@ func (w *Worker) failAttempt(
 		RetryAt:          finishedAt.Add(retryPolicy.Delay()),
 		FinishedAt:       finishedAt,
 	})
+}
+
+type failureClassification struct {
+	Retryable bool
+}
+
+func retryableFailure() failureClassification {
+	return failureClassification{Retryable: true}
 }
 
 func (w *Worker) resolveToken(ctx context.Context, channel provider.Channel, config tokenResolverConfig) (string, map[string]any, map[string]any, error) {
@@ -615,29 +708,81 @@ type tokenRequestConfig struct {
 	Body    json.RawMessage   `json:"body"`
 }
 
-func parseTokenBehavior(channel provider.Channel) (*tokenResolverConfig, json.RawMessage, error) {
+type tokenBehavior struct {
+	Resolver  *tokenResolverConfig
+	Placement json.RawMessage
+	Source    string
+	Strategy  string
+}
+
+func (b tokenBehavior) snapshot() map[string]any {
+	source := b.Source
+	if strings.TrimSpace(source) == "" {
+		source = "none"
+	}
+	return map[string]any{
+		"source":       source,
+		"strategy":     b.Strategy,
+		"has_resolver": b.Resolver != nil,
+		"placement":    snapshotValue(b.Placement),
+	}
+}
+
+func parseTokenBehavior(channel provider.Channel, capability provider.Capability, capabilitySource string) (tokenBehavior, error) {
+	behavior := tokenBehavior{Source: "none"}
 	placement := extractPlacement(channel.TokenConfig)
+	placementSource := "channel.token_config"
 	if len(placement) == 0 {
 		placement = extractPlacement(channel.AuthConfig)
+		placementSource = "channel.auth_config"
 	}
 
 	if resolver, err := decodeResolver(channel.TokenConfig); err != nil {
-		return nil, nil, err
+		return tokenBehavior{}, err
 	} else if resolver != nil {
 		if len(placement) == 0 && len(resolver.Placement) > 0 {
 			placement = append(json.RawMessage(nil), resolver.Placement...)
+			placementSource = "channel.token_config"
 		}
-		return resolver, placement, nil
+		return tokenBehavior{Resolver: resolver, Placement: placement, Source: "channel.token_config"}, nil
 	}
 
 	resolver, err := decodeResolver(channel.AuthConfig)
 	if err != nil {
-		return nil, nil, err
+		return tokenBehavior{}, err
 	}
-	if resolver != nil && len(placement) == 0 && len(resolver.Placement) > 0 {
-		placement = append(json.RawMessage(nil), resolver.Placement...)
+	if resolver != nil {
+		if len(placement) == 0 && len(resolver.Placement) > 0 {
+			placement = append(json.RawMessage(nil), resolver.Placement...)
+			placementSource = "channel.auth_config"
+		}
+		return tokenBehavior{Resolver: resolver, Placement: placement, Source: "channel.auth_config"}, nil
 	}
-	return resolver, placement, nil
+	if len(placement) > 0 {
+		behavior.Placement = placement
+		behavior.Source = placementSource
+		return behavior, nil
+	}
+
+	if capabilitySource == "capability" {
+		capabilityPlacement := extractPlacement(capability.TokenStrategy)
+		capabilityResolver, strategy, err := decodeCapabilityResolver(capability.TokenStrategy, channel)
+		if err != nil {
+			return tokenBehavior{}, err
+		}
+		if capabilityResolver != nil && len(capabilityPlacement) == 0 && len(capabilityResolver.Placement) > 0 {
+			capabilityPlacement = append(json.RawMessage(nil), capabilityResolver.Placement...)
+		}
+		if capabilityResolver != nil || len(capabilityPlacement) > 0 || strings.TrimSpace(strategy) != "" {
+			return tokenBehavior{
+				Resolver:  capabilityResolver,
+				Placement: capabilityPlacement,
+				Source:    "capability.token_strategy",
+				Strategy:  strategy,
+			}, nil
+		}
+	}
+	return behavior, nil
 }
 
 func decodeResolver(raw json.RawMessage) (*tokenResolverConfig, error) {
@@ -655,6 +800,123 @@ func decodeResolver(raw json.RawMessage) (*tokenResolverConfig, error) {
 		candidate.Request.Headers = map[string]string{}
 	}
 	return &candidate, nil
+}
+
+type capabilityTokenStrategyConfig struct {
+	Strategy          string                 `json:"strategy"`
+	TokenURL          string                 `json:"token_url"`
+	ResponseTokenPath string                 `json:"response_token_path"`
+	Request           capabilityTokenRequest `json:"request"`
+	Placement         json.RawMessage        `json:"placement"`
+}
+
+type capabilityTokenRequest struct {
+	Method           string            `json:"method"`
+	QueryFields      []string          `json:"query_fields"`
+	QuerySecretField string            `json:"query_secret_field"`
+	BodyFields       []string          `json:"body_fields"`
+	Headers          map[string]string `json:"headers"`
+	Body             json.RawMessage   `json:"body"`
+}
+
+func decodeCapabilityResolver(raw json.RawMessage, channel provider.Channel) (*tokenResolverConfig, string, error) {
+	if len(bytes.TrimSpace(raw)) == 0 {
+		return nil, "", nil
+	}
+	if resolver, err := decodeResolver(raw); err != nil {
+		return nil, "", err
+	} else if resolver != nil {
+		return resolver, capabilityStrategy(raw), nil
+	}
+	var config capabilityTokenStrategyConfig
+	if err := json.Unmarshal(raw, &config); err != nil {
+		return nil, "", fmt.Errorf("decode capability token strategy: %w", err)
+	}
+	if strings.TrimSpace(config.TokenURL) == "" || strings.TrimSpace(config.ResponseTokenPath) == "" {
+		return nil, strings.TrimSpace(config.Strategy), nil
+	}
+	credentials := mergeCredentialMaps(channel.AuthConfig, channel.TokenConfig)
+	method := strings.ToUpper(strings.TrimSpace(config.Request.Method))
+	if method == "" {
+		method = http.MethodGet
+	}
+	tokenURL := strings.TrimSpace(config.TokenURL)
+	bodyMap := map[string]any{}
+	if len(bytes.TrimSpace(config.Request.Body)) > 0 {
+		_ = json.Unmarshal(config.Request.Body, &bodyMap)
+	}
+	if len(config.Request.QueryFields) > 0 || strings.TrimSpace(config.Request.QuerySecretField) != "" {
+		parsed, err := url.Parse(tokenURL)
+		if err != nil {
+			return nil, strings.TrimSpace(config.Strategy), err
+		}
+		values := parsed.Query()
+		for _, field := range config.Request.QueryFields {
+			if value, ok := credentials[strings.TrimSpace(field)]; ok && strings.TrimSpace(fmt.Sprint(value)) != "" {
+				values.Set(strings.TrimSpace(field), fmt.Sprint(value))
+			}
+		}
+		if field := strings.TrimSpace(config.Request.QuerySecretField); field != "" {
+			if value, ok := credentials[field]; ok && strings.TrimSpace(fmt.Sprint(value)) != "" {
+				values.Set(field, fmt.Sprint(value))
+			}
+		}
+		parsed.RawQuery = values.Encode()
+		tokenURL = parsed.String()
+	}
+	for _, field := range config.Request.BodyFields {
+		field = strings.TrimSpace(field)
+		if value, ok := credentials[field]; ok && field != "" {
+			bodyMap[field] = value
+		}
+	}
+	body := json.RawMessage(`{}`)
+	if len(bodyMap) > 0 {
+		encoded, err := json.Marshal(bodyMap)
+		if err != nil {
+			return nil, strings.TrimSpace(config.Strategy), err
+		}
+		body = encoded
+	}
+	headers := config.Request.Headers
+	if headers == nil {
+		headers = map[string]string{}
+	}
+	return &tokenResolverConfig{
+		Request: tokenRequestConfig{
+			Method:  method,
+			URL:     tokenURL,
+			Headers: headers,
+			Body:    body,
+		},
+		ResponsePath: config.ResponseTokenPath,
+		Placement:    append(json.RawMessage(nil), bytes.TrimSpace(config.Placement)...),
+	}, strings.TrimSpace(config.Strategy), nil
+}
+
+func capabilityStrategy(raw json.RawMessage) string {
+	var object struct {
+		Strategy string `json:"strategy"`
+	}
+	_ = json.Unmarshal(raw, &object)
+	return strings.TrimSpace(object.Strategy)
+}
+
+func mergeCredentialMaps(rawValues ...json.RawMessage) map[string]any {
+	merged := map[string]any{}
+	for _, raw := range rawValues {
+		if len(bytes.TrimSpace(raw)) == 0 || !json.Valid(raw) {
+			continue
+		}
+		var object map[string]any
+		if err := json.Unmarshal(raw, &object); err != nil {
+			continue
+		}
+		for key, value := range object {
+			merged[key] = value
+		}
+	}
+	return merged
 }
 
 func extractPlacement(raw json.RawMessage) json.RawMessage {
@@ -676,6 +938,438 @@ func extractPlacement(raw json.RawMessage) json.RawMessage {
 		return append(json.RawMessage(nil), raw...)
 	}
 	return nil
+}
+
+type successRuleConfig struct {
+	Type               string `json:"type"`
+	StatusCode         int    `json:"status_code"`
+	StatusCodes        []int  `json:"status_codes"`
+	DefaultStatusCodes []int  `json:"default_status_codes"`
+	Field              string `json:"field"`
+	Equals             any    `json:"equals"`
+}
+
+type successDecision struct {
+	Success      bool
+	Source       string
+	Rule         json.RawMessage
+	Type         string
+	JSONField    string
+	ErrorMessage string
+	Fallback     string
+}
+
+func (d successDecision) snapshot() map[string]any {
+	return map[string]any{
+		"source":        d.Source,
+		"type":          d.Type,
+		"matched":       d.Success,
+		"field":         d.JSONField,
+		"rule":          snapshotValue(d.Rule),
+		"fallback":      d.Fallback,
+		"error_message": d.ErrorMessage,
+	}
+}
+
+func classifySuccess(statusCode int, responseBody []byte, capability provider.Capability, capabilitySource string) successDecision {
+	if capabilitySource != "capability" {
+		return successDecision{
+			Success: statusCode >= http.StatusOK && statusCode < http.StatusMultipleChoices,
+			Source:  "legacy_2xx",
+			Type:    "status_code",
+		}
+	}
+
+	rule, known := decodeSuccessRule(capability.SuccessRule)
+	if !known {
+		return successDecision{
+			Success:  statusCode >= http.StatusOK && statusCode < http.StatusMultipleChoices,
+			Source:   "legacy_2xx",
+			Rule:     capability.SuccessRule,
+			Type:     strings.TrimSpace(rule.Type),
+			Fallback: "unknown_success_rule",
+		}
+	}
+
+	decision := successDecision{
+		Source:    "capability.success_rule",
+		Rule:      capability.SuccessRule,
+		Type:      normalizedSuccessRuleType(rule),
+		JSONField: strings.TrimSpace(rule.Field),
+	}
+	statusCodes := successRuleStatusCodes(rule)
+	statusMatches := len(statusCodes) == 0 || containsInt(statusCodes, statusCode)
+
+	switch normalizedSuccessRuleType(rule) {
+	case "status_code":
+		decision.Success = statusMatches
+		if !decision.Success {
+			decision.ErrorMessage = fmt.Sprintf("upstream status %d did not match success status codes", statusCode)
+		}
+	case "json_field":
+		if !statusMatches {
+			decision.Success = false
+			decision.ErrorMessage = fmt.Sprintf("upstream status %d did not match success status codes", statusCode)
+			return decision
+		}
+		value, ok, err := lookupJSONValue(responseBody, rule.Field)
+		if err != nil {
+			decision.ErrorMessage = err.Error()
+			return decision
+		}
+		if !ok {
+			decision.ErrorMessage = fmt.Sprintf("success field %q not found", rule.Field)
+			return decision
+		}
+		decision.Success = jsonValueEqual(value, rule.Equals)
+		if !decision.Success {
+			decision.ErrorMessage = fmt.Sprintf("success field %q did not match expected value", rule.Field)
+		}
+	case "status_and_json_field":
+		if !statusMatches {
+			decision.Success = false
+			decision.ErrorMessage = fmt.Sprintf("upstream status %d did not match success status codes", statusCode)
+			return decision
+		}
+		value, ok, err := lookupJSONValue(responseBody, rule.Field)
+		if err != nil {
+			decision.ErrorMessage = err.Error()
+			return decision
+		}
+		if !ok {
+			decision.ErrorMessage = fmt.Sprintf("success field %q not found", rule.Field)
+			return decision
+		}
+		decision.Success = jsonValueEqual(value, rule.Equals)
+		if !decision.Success {
+			decision.ErrorMessage = fmt.Sprintf("success field %q did not match expected value", rule.Field)
+		}
+	}
+	return decision
+}
+
+func decodeSuccessRule(raw json.RawMessage) (successRuleConfig, bool) {
+	var rule successRuleConfig
+	if len(bytes.TrimSpace(raw)) == 0 || string(bytes.TrimSpace(raw)) == "{}" {
+		return rule, false
+	}
+	if err := json.Unmarshal(raw, &rule); err != nil {
+		return rule, false
+	}
+	switch normalizedSuccessRuleType(rule) {
+	case "status_code":
+		return rule, len(successRuleStatusCodes(rule)) > 0
+	case "json_field", "status_and_json_field":
+		return rule, strings.TrimSpace(rule.Field) != ""
+	default:
+		return rule, false
+	}
+}
+
+func normalizedSuccessRuleType(rule successRuleConfig) string {
+	ruleType := strings.ToLower(strings.TrimSpace(rule.Type))
+	switch ruleType {
+	case "status_code", "status_codes":
+		return "status_code"
+	case "json_field", "status_and_json_field":
+		return ruleType
+	case "configurable":
+		return "status_code"
+	case "":
+		if strings.TrimSpace(rule.Field) != "" {
+			return "json_field"
+		}
+	}
+	return ruleType
+}
+
+func successRuleStatusCodes(rule successRuleConfig) []int {
+	statusCodes := append([]int(nil), rule.StatusCodes...)
+	if rule.StatusCode > 0 {
+		statusCodes = append(statusCodes, rule.StatusCode)
+	}
+	statusCodes = append(statusCodes, rule.DefaultStatusCodes...)
+	return uniqueInts(statusCodes)
+}
+
+type retryRuleConfig struct {
+	StatusCodes               []int  `json:"status_codes"`
+	NetworkErrors             bool   `json:"network_errors"`
+	NonRetryableStatusCodes   []int  `json:"non_retryable_status_codes"`
+	NonRetryableStatusClasses []int  `json:"non_retryable_status_classes"`
+	RetryableJSONCodes        []any  `json:"retryable_json_codes"`
+	JSONCodes                 []any  `json:"json_codes"`
+	RefreshTokenCodes         []any  `json:"refresh_token_codes"`
+	NonRetryableJSONCodes     []any  `json:"non_retryable_json_codes"`
+	RetryableVendorCodes      []any  `json:"retryable_vendor_codes"`
+	VendorCodes               []any  `json:"vendor_codes"`
+	NonRetryableVendorCodes   []any  `json:"non_retryable_vendor_codes"`
+	JSONCodeField             string `json:"json_code_field"`
+	Field                     string `json:"field"`
+}
+
+type retryDecision struct {
+	Retryable bool
+	Source    string
+	Decision  string
+	Reason    string
+	Rule      json.RawMessage
+	Status    int
+	JSONField string
+	JSONCode  any
+}
+
+func (d retryDecision) snapshot() map[string]any {
+	return map[string]any{
+		"source":      d.Source,
+		"decision":    d.Decision,
+		"retryable":   d.Retryable,
+		"reason":      d.Reason,
+		"rule":        snapshotValue(d.Rule),
+		"status_code": d.Status,
+		"json_field":  d.JSONField,
+		"json_code":   d.JSONCode,
+	}
+}
+
+func (d retryDecision) failureClassification() failureClassification {
+	return failureClassification{Retryable: d.Retryable}
+}
+
+func classifyTransportRetry(capability provider.Capability, capabilitySource string, err error) retryDecision {
+	source := "legacy_retry_policy"
+	rule := json.RawMessage(nil)
+	if capabilitySource == "capability" {
+		source = "capability.retry_rule"
+		rule = capability.RetryRule
+	}
+	reason := "network_error"
+	if isTimeoutError(err) {
+		reason = "timeout"
+	}
+	return retryDecision{
+		Retryable: true,
+		Source:    source,
+		Decision:  "retry",
+		Reason:    reason,
+		Rule:      rule,
+	}
+}
+
+func classifyResponseRetry(statusCode int, responseBody []byte, capability provider.Capability, capabilitySource string, successJSONField string) retryDecision {
+	if capabilitySource != "capability" {
+		return retryDecision{
+			Retryable: true,
+			Source:    "legacy_retry_policy",
+			Decision:  "retry",
+			Reason:    "legacy_response_failure",
+			Status:    statusCode,
+		}
+	}
+
+	rule := decodeRetryRule(capability.RetryRule)
+	field := firstNonEmpty(rule.JSONCodeField, rule.Field, successJSONField)
+	jsonCode, jsonField := responseJSONCode(responseBody, field)
+	decision := retryDecision{
+		Source:    "capability.retry_rule",
+		Rule:      capability.RetryRule,
+		Status:    statusCode,
+		JSONField: jsonField,
+		JSONCode:  jsonCode,
+	}
+
+	switch {
+	case containsInt(rule.NonRetryableStatusCodes, statusCode):
+		decision.Decision = "dead"
+		decision.Reason = "non_retryable_status_code"
+	case jsonCodeMatches(jsonCode, appendAny(rule.NonRetryableJSONCodes, rule.NonRetryableVendorCodes)):
+		decision.Decision = "dead"
+		decision.Reason = "non_retryable_json_code"
+	case containsInt(rule.StatusCodes, statusCode):
+		decision.Retryable = true
+		decision.Decision = "retry"
+		decision.Reason = "retryable_status_code"
+	case jsonCodeMatches(jsonCode, appendAny(rule.RetryableJSONCodes, rule.JSONCodes, rule.RefreshTokenCodes, rule.RetryableVendorCodes, rule.VendorCodes)):
+		decision.Retryable = true
+		decision.Decision = "retry"
+		decision.Reason = "retryable_json_code"
+	case containsStatusClass(rule.NonRetryableStatusClasses, statusCode):
+		decision.Decision = "dead"
+		decision.Reason = "non_retryable_status_class"
+	case statusCode == http.StatusRequestTimeout || statusCode == http.StatusTooManyRequests || statusCode >= http.StatusInternalServerError:
+		decision.Retryable = true
+		decision.Decision = "retry"
+		decision.Reason = "default_retryable_status"
+	default:
+		decision.Decision = "dead"
+		decision.Reason = "not_retryable"
+	}
+	return decision
+}
+
+func noRetryNeededDecision(capabilitySource string, retryRule json.RawMessage) retryDecision {
+	source := "legacy_retry_policy"
+	rule := json.RawMessage(nil)
+	if capabilitySource == "capability" {
+		source = "capability.retry_rule"
+		rule = retryRule
+	}
+	return retryDecision{
+		Retryable: false,
+		Source:    source,
+		Decision:  "none",
+		Reason:    "success",
+		Rule:      rule,
+	}
+}
+
+func decodeRetryRule(raw json.RawMessage) retryRuleConfig {
+	var rule retryRuleConfig
+	if len(bytes.TrimSpace(raw)) > 0 {
+		_ = json.Unmarshal(raw, &rule)
+	}
+	return rule
+}
+
+func lookupJSONValue(raw []byte, path string) (any, bool, error) {
+	path = strings.TrimSpace(strings.TrimPrefix(path, "$."))
+	if path == "" {
+		return nil, false, nil
+	}
+	var value any
+	if err := json.Unmarshal(raw, &value); err != nil {
+		return nil, false, fmt.Errorf("decode upstream response json: %w", err)
+	}
+	current := value
+	for _, part := range strings.Split(path, ".") {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		object, ok := current.(map[string]any)
+		if !ok {
+			return nil, false, nil
+		}
+		current, ok = object[part]
+		if !ok {
+			return nil, false, nil
+		}
+	}
+	return current, true, nil
+}
+
+func responseJSONCode(raw []byte, preferredField string) (any, string) {
+	fields := []string{strings.TrimSpace(preferredField), "errcode", "code", "Code", "error_code", "status"}
+	seen := map[string]bool{}
+	for _, field := range fields {
+		if field == "" || seen[field] {
+			continue
+		}
+		seen[field] = true
+		value, ok, err := lookupJSONValue(raw, field)
+		if err == nil && ok {
+			return value, field
+		}
+	}
+	return nil, ""
+}
+
+func jsonCodeMatches(value any, candidates []any) bool {
+	if value == nil || len(candidates) == 0 {
+		return false
+	}
+	for _, candidate := range candidates {
+		if jsonValueEqual(value, candidate) {
+			return true
+		}
+	}
+	return false
+}
+
+func jsonValueEqual(left any, right any) bool {
+	if leftNumber, ok := numericValue(left); ok {
+		if rightNumber, ok := numericValue(right); ok {
+			return leftNumber == rightNumber
+		}
+	}
+	switch leftValue := left.(type) {
+	case bool:
+		rightValue, ok := right.(bool)
+		return ok && leftValue == rightValue
+	case string:
+		rightValue, ok := right.(string)
+		if ok {
+			return leftValue == rightValue
+		}
+	}
+	return fmt.Sprint(left) == fmt.Sprint(right)
+}
+
+func numericValue(value any) (float64, bool) {
+	switch typed := value.(type) {
+	case int:
+		return float64(typed), true
+	case int64:
+		return float64(typed), true
+	case float64:
+		return typed, true
+	case json.Number:
+		number, err := typed.Float64()
+		return number, err == nil
+	default:
+		return 0, false
+	}
+}
+
+func containsInt(values []int, target int) bool {
+	for _, value := range values {
+		if value == target {
+			return true
+		}
+	}
+	return false
+}
+
+func containsStatusClass(classes []int, statusCode int) bool {
+	if statusCode <= 0 {
+		return false
+	}
+	statusClass := (statusCode / 100) * 100
+	return containsInt(classes, statusClass)
+}
+
+func uniqueInts(values []int) []int {
+	seen := map[int]bool{}
+	result := make([]int, 0, len(values))
+	for _, value := range values {
+		if value <= 0 || seen[value] {
+			continue
+		}
+		seen[value] = true
+		result = append(result, value)
+	}
+	return result
+}
+
+func appendAny(values ...[]any) []any {
+	total := 0
+	for _, items := range values {
+		total += len(items)
+	}
+	result := make([]any, 0, total)
+	for _, items := range values {
+		result = append(result, items...)
+	}
+	return result
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return strings.TrimSpace(value)
+		}
+	}
+	return ""
 }
 
 type retryPolicy struct {

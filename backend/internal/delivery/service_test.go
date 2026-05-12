@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -106,6 +107,85 @@ func TestWorkerProcessBatchScopesSendDedupeByChannel(t *testing.T) {
 	}
 	if got := store.attempts["attempt-b1"].Status; got != StatusSent {
 		t.Fatalf("expected other-channel attempt sent, got %s", got)
+	}
+}
+
+func TestWorkerProcessBatchScopesSendDedupeByTemplateVersion(t *testing.T) {
+	var sent int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&sent, 1)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	}))
+	defer server.Close()
+
+	store := newMemoryRepository()
+	channel := provider.Channel{
+		ID:               "channel-templates",
+		Name:             "Template Scoped Channel",
+		ProviderType:     provider.ProviderWebhook,
+		Enabled:          true,
+		ConcurrencyLimit: 1,
+		TimeoutMS:        500,
+		SendConfig:       json.RawMessage(`{"method":"POST","url":"` + server.URL + `/send","recipient":{"location":"none"}}`),
+	}
+	store.channels[channel.ID] = channel
+
+	store.addAttempt(Attempt{ID: "attempt-template-a", MessageID: "message-template-a", ChannelID: channel.ID, TemplateVersionID: "template-version-a", Status: StatusQueued})
+	store.addAttempt(Attempt{ID: "attempt-template-b", MessageID: "message-template-b", ChannelID: channel.ID, TemplateVersionID: "template-version-b", Status: StatusQueued})
+
+	for _, item := range []struct {
+		jobID     string
+		attemptID string
+		title     string
+	}{
+		{jobID: "job-template-a", attemptID: "attempt-template-a", title: "first"},
+		{jobID: "job-template-b", attemptID: "attempt-template-b", title: "second"},
+	} {
+		store.addJob(newSendJob(item.jobID, channel.ID, 3, time.Now().Add(-time.Second), SendMessageJobPayload{
+			DeliveryAttemptID: item.attemptID,
+			DedupeKey:         "same-trace-id",
+			DedupeTTLSeconds:  3600,
+			MessageType:       "json",
+			Body:              json.RawMessage(`{"title":"` + item.title + `"}`),
+		}))
+	}
+
+	worker := NewWorker(store,
+		WithWorkerID("sender-1"),
+		WithHTTPClientFactory(func(timeout time.Duration) *http.Client {
+			client := server.Client()
+			client.Timeout = timeout
+			return client
+		}),
+	)
+
+	processed, err := worker.ProcessBatch(context.Background(), 2)
+	if err != nil {
+		t.Fatalf("process template-scoped dedupe batch: %v", err)
+	}
+	if processed != 2 {
+		t.Fatalf("expected 2 processed jobs, got %d", processed)
+	}
+	if atomic.LoadInt32(&sent) != 2 {
+		t.Fatalf("expected both template-version targets to send, got %d outbound sends", sent)
+	}
+	for _, attemptID := range []string{"attempt-template-a", "attempt-template-b"} {
+		attempt := store.attempts[attemptID]
+		if attempt.Status != StatusSent {
+			t.Fatalf("expected %s sent, got %s", attemptID, attempt.Status)
+		}
+		snapshot := decodeSnapshot(t, attempt.RequestSnapshot)
+		dedupe, ok := snapshot["dedupe"].(map[string]any)
+		if !ok {
+			t.Fatalf("expected request snapshot dedupe metadata, got %+v", snapshot)
+		}
+		if dedupe["configured_key"] != "same-trace-id" {
+			t.Fatalf("expected original dedupe key to remain traceable, got %+v", dedupe)
+		}
+		if dedupe["effective_key"] == "same-trace-id" || !strings.Contains(fmt.Sprint(dedupe["effective_key"]), attempt.TemplateVersionID) {
+			t.Fatalf("expected effective dedupe key scoped by template version, got %+v", dedupe)
+		}
 	}
 }
 
@@ -256,6 +336,330 @@ func TestWorkerProcessOneBuildsRequestResolvesTokenAndStoresSnapshots(t *testing
 	if _, ok := responseSnapshot["send"].(map[string]any); !ok {
 		t.Fatalf("expected response snapshot to keep legacy send field, got %s", attempt.ResponseSnapshot)
 	}
+}
+
+func TestWorkerUsesCapabilityTokenPlacementWhenChannelHasNoExplicitPlacement(t *testing.T) {
+	var tokenQuery string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		tokenQuery = r.URL.Query().Get("access_token")
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	}))
+	defer server.Close()
+
+	store := newMemoryRepository()
+	store.channels["channel-capability-token"] = provider.Channel{
+		ID:               "channel-capability-token",
+		ProviderType:     provider.ProviderWebhook,
+		Name:             "Capability Token",
+		Enabled:          true,
+		ConcurrencyLimit: 1,
+		TimeoutMS:        1000,
+		SendConfig:       json.RawMessage(`{"method":"POST","url":"` + server.URL + `/send","recipient":{"location":"none"}}`),
+	}
+	store.capabilities[capabilityKey(provider.ProviderWebhook, "json")] = provider.Capability{
+		ProviderType:  provider.ProviderWebhook,
+		MessageType:   "json",
+		TokenStrategy: json.RawMessage(`{"strategy":"static_token","placement":{"location":"query","field_name":"access_token"}}`),
+		SuccessRule:   json.RawMessage(`{"type":"status_code","status_codes":[200]}`),
+		RetryRule:     json.RawMessage(`{"status_codes":[408,429,500,502,503,504],"network_errors":true}`),
+	}
+	store.addAttempt(Attempt{ID: "attempt-capability-token", MessageID: "message-capability-token", ChannelID: "channel-capability-token", TemplateVersionID: "template-token", Status: StatusQueued})
+	store.addJob(newSendJob("job-capability-token", "channel-capability-token", 3, time.Now().Add(-time.Second), SendMessageJobPayload{
+		DeliveryAttemptID: "attempt-capability-token",
+		MessageType:       "json",
+		Token:             "capability-token",
+		Body:              json.RawMessage(`{"title":"hello"}`),
+	}))
+
+	worker := NewWorker(store,
+		WithWorkerID("sender-1"),
+		WithHTTPClientFactory(func(timeout time.Duration) *http.Client {
+			client := server.Client()
+			client.Timeout = timeout
+			return client
+		}),
+	)
+
+	if err := worker.ProcessOne(context.Background(), store.jobs["job-capability-token"]); err != nil {
+		t.Fatalf("process capability token job: %v", err)
+	}
+	if tokenQuery != "capability-token" {
+		t.Fatalf("expected capability token placement in query, got %q", tokenQuery)
+	}
+	snapshot := decodeSnapshot(t, store.attempts["attempt-capability-token"].RequestSnapshot)
+	tokenBehavior, ok := snapshot["token_behavior"].(map[string]any)
+	if !ok || tokenBehavior["source"] != "capability.token_strategy" {
+		t.Fatalf("expected token behavior source from capability, got %+v", snapshot)
+	}
+}
+
+func TestWorkerClassifiesSuccessWithCapabilityRules(t *testing.T) {
+	t.Run("json_field success records success rule", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"errcode":0,"message":"ok"}`))
+		}))
+		defer server.Close()
+
+		store := newMemoryRepository()
+		store.channels["channel-json-success"] = provider.Channel{
+			ID:               "channel-json-success",
+			ProviderType:     provider.ProviderWeCom,
+			Name:             "JSON Success",
+			Enabled:          true,
+			ConcurrencyLimit: 1,
+			TimeoutMS:        1000,
+			SendConfig:       json.RawMessage(`{"method":"POST","url":"` + server.URL + `/send","recipient":{"location":"none"}}`),
+		}
+		store.capabilities[capabilityKey(provider.ProviderWeCom, "text")] = provider.Capability{
+			ProviderType: provider.ProviderWeCom,
+			MessageType:  "text",
+			SuccessRule:  json.RawMessage(`{"type":"json_field","status_codes":[200],"field":"errcode","equals":0}`),
+			RetryRule:    json.RawMessage(`{"status_codes":[408,429,500,502,503,504],"network_errors":true}`),
+		}
+		store.addAttempt(Attempt{ID: "attempt-json-success", MessageID: "message-json-success", ChannelID: "channel-json-success", TemplateVersionID: "template-json-success", Status: StatusQueued})
+		store.addJob(newSendJob("job-json-success", "channel-json-success", 3, time.Now().Add(-time.Second), SendMessageJobPayload{
+			DeliveryAttemptID: "attempt-json-success",
+			MessageType:       "text",
+			Body:              json.RawMessage(`{"content":"hello"}`),
+		}))
+
+		worker := NewWorker(store,
+			WithWorkerID("sender-1"),
+			WithHTTPClientFactory(func(timeout time.Duration) *http.Client {
+				client := server.Client()
+				client.Timeout = timeout
+				return client
+			}),
+		)
+
+		if err := worker.ProcessOne(context.Background(), store.jobs["job-json-success"]); err != nil {
+			t.Fatalf("process json success job: %v", err)
+		}
+		attempt := store.attempts["attempt-json-success"]
+		if attempt.Status != StatusSent {
+			t.Fatalf("expected json_field success attempt sent, got %s", attempt.Status)
+		}
+		snapshot := decodeSnapshot(t, attempt.ResponseSnapshot)
+		successRule, ok := snapshot["success_rule"].(map[string]any)
+		if !ok || successRule["source"] != "capability.success_rule" {
+			t.Fatalf("expected response snapshot success_rule source, got %+v", snapshot)
+		}
+	})
+
+	t.Run("status_code rule can fail a 2xx response", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"status":"queued"}`))
+		}))
+		defer server.Close()
+
+		store := newMemoryRepository()
+		store.channels["channel-status-fail"] = provider.Channel{
+			ID:               "channel-status-fail",
+			ProviderType:     provider.ProviderWebhook,
+			Name:             "Status Fail",
+			Enabled:          true,
+			ConcurrencyLimit: 1,
+			TimeoutMS:        1000,
+			RetryPolicy:      json.RawMessage(`{"max_attempts":3,"delay_ms":10}`),
+			SendConfig:       json.RawMessage(`{"method":"POST","url":"` + server.URL + `/send","recipient":{"location":"none"}}`),
+		}
+		store.capabilities[capabilityKey(provider.ProviderWebhook, "json")] = provider.Capability{
+			ProviderType: provider.ProviderWebhook,
+			MessageType:  "json",
+			SuccessRule:  json.RawMessage(`{"type":"status_code","status_codes":[202]}`),
+			RetryRule:    json.RawMessage(`{"status_codes":[408,429,500,502,503,504],"network_errors":true}`),
+		}
+		store.addAttempt(Attempt{ID: "attempt-status-fail", MessageID: "message-status-fail", ChannelID: "channel-status-fail", TemplateVersionID: "template-status-fail", Status: StatusQueued})
+		store.addJob(newSendJob("job-status-fail", "channel-status-fail", 3, time.Now().Add(-time.Second), SendMessageJobPayload{
+			DeliveryAttemptID: "attempt-status-fail",
+			MessageType:       "json",
+			Body:              json.RawMessage(`{"title":"hello"}`),
+		}))
+
+		worker := NewWorker(store,
+			WithWorkerID("sender-1"),
+			WithHTTPClientFactory(func(timeout time.Duration) *http.Client {
+				client := server.Client()
+				client.Timeout = timeout
+				return client
+			}),
+		)
+
+		if err := worker.ProcessOne(context.Background(), store.jobs["job-status-fail"]); err != nil {
+			t.Fatalf("process status fail job: %v", err)
+		}
+		if got := store.attempts["attempt-status-fail"].Status; got != StatusFailed {
+			t.Fatalf("expected status_code rule mismatch to fail, got %s", got)
+		}
+		if store.jobs["job-status-fail"].Status != queue.JobStatusDead {
+			t.Fatalf("expected non-retryable 2xx success-rule mismatch to dead-letter, got %s", store.jobs["job-status-fail"].Status)
+		}
+	})
+}
+
+func TestWorkerClassifiesRetryWithCapabilityRules(t *testing.T) {
+	t.Run("non-retryable status dead-letters without consuming max attempts", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = w.Write([]byte(`{"errcode":40003}`))
+		}))
+		defer server.Close()
+
+		store := newMemoryRepository()
+		store.channels["channel-nonretry-status"] = provider.Channel{
+			ID:               "channel-nonretry-status",
+			ProviderType:     provider.ProviderWeCom,
+			Name:             "Non Retry Status",
+			Enabled:          true,
+			ConcurrencyLimit: 1,
+			TimeoutMS:        1000,
+			RetryPolicy:      json.RawMessage(`{"max_attempts":3,"delay_ms":10}`),
+			SendConfig:       json.RawMessage(`{"method":"POST","url":"` + server.URL + `/send","recipient":{"location":"none"}}`),
+		}
+		store.capabilities[capabilityKey(provider.ProviderWeCom, "text")] = provider.Capability{
+			ProviderType: provider.ProviderWeCom,
+			MessageType:  "text",
+			SuccessRule:  json.RawMessage(`{"type":"json_field","status_codes":[200],"field":"errcode","equals":0}`),
+			RetryRule:    json.RawMessage(`{"status_codes":[408,429,500,502,503,504],"network_errors":true,"non_retryable_status_codes":[400]}`),
+		}
+		store.addAttempt(Attempt{ID: "attempt-nonretry-status", MessageID: "message-nonretry-status", ChannelID: "channel-nonretry-status", TemplateVersionID: "template-nonretry-status", Status: StatusQueued})
+		store.addJob(newSendJob("job-nonretry-status", "channel-nonretry-status", 3, time.Now().Add(-time.Second), SendMessageJobPayload{
+			DeliveryAttemptID: "attempt-nonretry-status",
+			MessageType:       "text",
+			Body:              json.RawMessage(`{"content":"hello"}`),
+		}))
+
+		worker := NewWorker(store,
+			WithWorkerID("sender-1"),
+			WithHTTPClientFactory(func(timeout time.Duration) *http.Client {
+				client := server.Client()
+				client.Timeout = timeout
+				return client
+			}),
+		)
+
+		if err := worker.ProcessOne(context.Background(), store.jobs["job-nonretry-status"]); err != nil {
+			t.Fatalf("process non-retry status job: %v", err)
+		}
+		attempt := store.attempts["attempt-nonretry-status"]
+		if attempt.DeadLetteredAt == nil {
+			t.Fatalf("expected non-retryable status to dead-letter immediately, got %+v", attempt)
+		}
+		if store.jobs["job-nonretry-status"].Status != queue.JobStatusDead {
+			t.Fatalf("expected non-retryable status job dead, got %s", store.jobs["job-nonretry-status"].Status)
+		}
+	})
+
+	t.Run("non-retryable json code dead-letters", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"errcode":40003}`))
+		}))
+		defer server.Close()
+
+		store := newMemoryRepository()
+		store.channels["channel-nonretry-json"] = provider.Channel{
+			ID:               "channel-nonretry-json",
+			ProviderType:     provider.ProviderWeCom,
+			Name:             "Non Retry JSON",
+			Enabled:          true,
+			ConcurrencyLimit: 1,
+			TimeoutMS:        1000,
+			RetryPolicy:      json.RawMessage(`{"max_attempts":3,"delay_ms":10}`),
+			SendConfig:       json.RawMessage(`{"method":"POST","url":"` + server.URL + `/send","recipient":{"location":"none"}}`),
+		}
+		store.capabilities[capabilityKey(provider.ProviderWeCom, "text")] = provider.Capability{
+			ProviderType: provider.ProviderWeCom,
+			MessageType:  "text",
+			SuccessRule:  json.RawMessage(`{"type":"json_field","status_codes":[200],"field":"errcode","equals":0}`),
+			RetryRule:    json.RawMessage(`{"status_codes":[408,429,500,502,503,504],"network_errors":true,"non_retryable_json_codes":[40003]}`),
+		}
+		store.addAttempt(Attempt{ID: "attempt-nonretry-json", MessageID: "message-nonretry-json", ChannelID: "channel-nonretry-json", TemplateVersionID: "template-nonretry-json", Status: StatusQueued})
+		store.addJob(newSendJob("job-nonretry-json", "channel-nonretry-json", 3, time.Now().Add(-time.Second), SendMessageJobPayload{
+			DeliveryAttemptID: "attempt-nonretry-json",
+			MessageType:       "text",
+			Body:              json.RawMessage(`{"content":"hello"}`),
+		}))
+
+		worker := NewWorker(store,
+			WithWorkerID("sender-1"),
+			WithHTTPClientFactory(func(timeout time.Duration) *http.Client {
+				client := server.Client()
+				client.Timeout = timeout
+				return client
+			}),
+		)
+
+		if err := worker.ProcessOne(context.Background(), store.jobs["job-nonretry-json"]); err != nil {
+			t.Fatalf("process non-retry json job: %v", err)
+		}
+		attempt := store.attempts["attempt-nonretry-json"]
+		if attempt.DeadLetteredAt == nil {
+			t.Fatalf("expected non-retryable json code to dead-letter, got %+v", attempt)
+		}
+	})
+
+	t.Run("retryable status enters retry", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusTooManyRequests)
+			_, _ = w.Write([]byte(`{"errcode":45009}`))
+		}))
+		defer server.Close()
+
+		store := newMemoryRepository()
+		store.channels["channel-retry-status"] = provider.Channel{
+			ID:               "channel-retry-status",
+			ProviderType:     provider.ProviderWeCom,
+			Name:             "Retry Status",
+			Enabled:          true,
+			ConcurrencyLimit: 1,
+			TimeoutMS:        1000,
+			RetryPolicy:      json.RawMessage(`{"max_attempts":3,"delay_ms":25}`),
+			SendConfig:       json.RawMessage(`{"method":"POST","url":"` + server.URL + `/send","recipient":{"location":"none"}}`),
+		}
+		store.capabilities[capabilityKey(provider.ProviderWeCom, "text")] = provider.Capability{
+			ProviderType: provider.ProviderWeCom,
+			MessageType:  "text",
+			SuccessRule:  json.RawMessage(`{"type":"json_field","status_codes":[200],"field":"errcode","equals":0}`),
+			RetryRule:    json.RawMessage(`{"status_codes":[408,429,500,502,503,504],"network_errors":true,"retryable_json_codes":[45009],"non_retryable_status_classes":[400]}`),
+		}
+		store.addAttempt(Attempt{ID: "attempt-retry-status", MessageID: "message-retry-status", ChannelID: "channel-retry-status", TemplateVersionID: "template-retry-status", Status: StatusQueued})
+		store.addJob(newSendJob("job-retry-status", "channel-retry-status", 3, time.Now().Add(-time.Second), SendMessageJobPayload{
+			DeliveryAttemptID: "attempt-retry-status",
+			MessageType:       "text",
+			Body:              json.RawMessage(`{"content":"hello"}`),
+		}))
+
+		worker := NewWorker(store,
+			WithWorkerID("sender-1"),
+			WithHTTPClientFactory(func(timeout time.Duration) *http.Client {
+				client := server.Client()
+				client.Timeout = timeout
+				return client
+			}),
+		)
+
+		if err := worker.ProcessOne(context.Background(), store.jobs["job-retry-status"]); err != nil {
+			t.Fatalf("process retry status job: %v", err)
+		}
+		attempt := store.attempts["attempt-retry-status"]
+		if attempt.NextRetryAt == nil || store.jobs["job-retry-status"].Status != queue.JobStatusQueued {
+			t.Fatalf("expected retryable status to requeue, attempt=%+v job=%+v", attempt, store.jobs["job-retry-status"])
+		}
+		snapshot := decodeSnapshot(t, attempt.ResponseSnapshot)
+		retryRule, ok := snapshot["retry_rule"].(map[string]any)
+		if !ok || retryRule["source"] != "capability.retry_rule" || retryRule["decision"] != "retry" {
+			t.Fatalf("expected retry_rule snapshot with retry decision, got %+v", snapshot)
+		}
+	})
 }
 
 func TestWorkerFailuresRetryAndDeadLetter(t *testing.T) {
@@ -569,22 +973,37 @@ func jsonContains(t *testing.T, raw json.RawMessage, needle string) bool {
 	return strings.Contains(string(raw), needle)
 }
 
+func decodeSnapshot(t *testing.T, raw json.RawMessage) map[string]any {
+	t.Helper()
+	var snapshot map[string]any
+	if err := json.Unmarshal(raw, &snapshot); err != nil {
+		t.Fatalf("decode snapshot: %v; raw=%s", err, raw)
+	}
+	return snapshot
+}
+
+func capabilityKey(providerType provider.ProviderType, messageType string) string {
+	return string(providerType) + "::" + strings.TrimSpace(messageType)
+}
+
 type memoryRepository struct {
-	mu          sync.Mutex
-	jobs        map[string]queue.Job
-	jobOrder    []string
-	channels    map[string]provider.Channel
-	attempts    map[string]Attempt
-	dedupe      map[string]string
-	deadLetters []DeadLetterRecord
+	mu           sync.Mutex
+	jobs         map[string]queue.Job
+	jobOrder     []string
+	channels     map[string]provider.Channel
+	capabilities map[string]provider.Capability
+	attempts     map[string]Attempt
+	dedupe       map[string]string
+	deadLetters  []DeadLetterRecord
 }
 
 func newMemoryRepository() *memoryRepository {
 	return &memoryRepository{
-		jobs:     map[string]queue.Job{},
-		channels: map[string]provider.Channel{},
-		attempts: map[string]Attempt{},
-		dedupe:   map[string]string{},
+		jobs:         map[string]queue.Job{},
+		channels:     map[string]provider.Channel{},
+		capabilities: map[string]provider.Capability{},
+		attempts:     map[string]Attempt{},
+		dedupe:       map[string]string{},
 	}
 }
 
@@ -659,6 +1078,16 @@ func (m *memoryRepository) GetChannel(_ context.Context, id string) (provider.Ch
 		return provider.Channel{}, provider.ErrNotFound
 	}
 	return channel, nil
+}
+
+func (m *memoryRepository) GetProviderCapability(_ context.Context, providerType provider.ProviderType, messageType string) (provider.Capability, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	capability, ok := m.capabilities[capabilityKey(providerType, messageType)]
+	if !ok {
+		return provider.Capability{}, provider.ErrNotFound
+	}
+	return capability, nil
 }
 
 func (m *memoryRepository) GetAttempt(_ context.Context, attemptID string) (Attempt, error) {

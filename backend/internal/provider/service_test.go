@@ -95,6 +95,34 @@ func TestDefaultCapabilitiesExposeFirstBatchBuiltInProviders(t *testing.T) {
 	}
 }
 
+func TestDefaultCapabilitiesExposeP2Providers(t *testing.T) {
+	required := []struct {
+		providerType ProviderType
+		messageType  string
+		identityKind string
+		liveStatus   string
+	}{
+		{ProviderNtfy, "notice", "", "configuration_dependent"},
+		{ProviderGotify, "notice", "", "configuration_dependent"},
+		{ProviderBark, "notice", "bark_device_key", "implemented_but_not_live_tested"},
+		{ProviderPushMe, "notice", "", "implemented_but_not_live_tested"},
+	}
+
+	for _, item := range required {
+		t.Run(string(item.providerType), func(t *testing.T) {
+			capability := findCapability(t, item.providerType, item.messageType)
+			if capability.IdentityKind != item.identityKind {
+				t.Fatalf("expected identity kind %q, got %q", item.identityKind, capability.IdentityKind)
+			}
+			assertCapabilityHasLiveTestMetadata(t, capability)
+			assertJSONField(t, capability.SendAPI, "live_test_status", item.liveStatus)
+			if len(capability.RequestExamples) == 0 || string(capability.RequestExamples) == "{}" {
+				t.Fatalf("%s/%s missing request example", capability.ProviderType, capability.MessageType)
+			}
+		})
+	}
+}
+
 func TestGovCloudCapabilityUsesDocumentedTokenAndSendMetadata(t *testing.T) {
 	capability := findCapability(t, ProviderGovCloud, "text")
 	assertJSONField(t, capability.CredentialSchema, "properties.base_url.default", "https://www.ywxt.sh.cegn.cn/api-gateway/uranus/uranus/cgi-bin/")
@@ -481,6 +509,87 @@ func TestBuildDeliveryRequestUsesBuiltInProviderDefaultsWithoutLegacyURL(t *test
 				requireBodyField(t, body, "touser", "gov-u1")
 				requireBodyField(t, body, "msgtype", "text")
 				requireBodyField(t, body, "description", "gov message")
+			},
+		},
+		{
+			name: "ntfy",
+			channel: Channel{
+				ProviderType: ProviderNtfy,
+				AuthConfig:   json.RawMessage(`{"server_url":"https://ntfy.example","bearer_token":"ntfy-token"}`),
+				SendConfig:   json.RawMessage(`{"topic":"ops","priority":"high","tags":["warning","disk"],"markdown":true}`),
+			},
+			message: json.RawMessage(`{"title":"Disk alert","body":"Disk 95%","url":"https://example.test/detail"}`),
+			assert: func(t *testing.T, request BuiltRequest) {
+				requireRequest(t, request, "POST", "https://ntfy.example/ops")
+				if request.Headers["Authorization"] != "Bearer ntfy-token" {
+					t.Fatalf("expected bearer token header, got %+v", request.Headers)
+				}
+				if request.Headers["Title"] != "Disk alert" || request.Headers["Priority"] != "high" || request.Headers["Tags"] != "warning,disk" || request.Headers["Markdown"] != "yes" || request.Headers["Click"] != "https://example.test/detail" {
+					t.Fatalf("unexpected ntfy headers: %+v", request.Headers)
+				}
+				body := decodeRequestBody(t, request)
+				requireBodyField(t, body, "message", "Disk 95%\n\nhttps://example.test/detail")
+				requireBodyField(t, body, "mock_protocol", "ntfy_text_body")
+			},
+		},
+		{
+			name: "gotify",
+			channel: Channel{
+				ProviderType: ProviderGotify,
+				AuthConfig:   json.RawMessage(`{"server_url":"https://gotify.example","app_token":"gotify-token"}`),
+				SendConfig:   json.RawMessage(`{"priority":8,"content_type":"text/markdown"}`),
+			},
+			message: json.RawMessage(`{"title":"Deploy","body":"Finished","format":"markdown"}`),
+			assert: func(t *testing.T, request BuiltRequest) {
+				requireRequest(t, request, "POST", "https://gotify.example/message?token=gotify-token")
+				body := decodeRequestBody(t, request)
+				requireBodyField(t, body, "title", "Deploy")
+				requireBodyField(t, body, "message", "Finished")
+				requireBodyField(t, body, "priority", float64(8))
+				extras := requireObjectField(t, body, "extras")
+				display := requireObjectField(t, extras, "client::display")
+				requireBodyField(t, display, "contentType", "text/markdown")
+			},
+		},
+		{
+			name: "bark",
+			channel: Channel{
+				ProviderType: ProviderBark,
+				AuthConfig:   json.RawMessage(`{"server_url":"https://bark.example","device_key":"channel-key"}`),
+				SendConfig:   json.RawMessage(`{"group":"ops","sound":"alarm","level":"critical","icon":"https://example.test/icon.png"}`),
+			},
+			message:    json.RawMessage(`{"title":"Disk alert","body":"Disk 95%","subtitle":"prod","url":"https://example.test/detail"}`),
+			recipients: []ResolvedRecipient{{PlatformIDs: map[string]string{"bark_device_key": "device-key"}}},
+			assert: func(t *testing.T, request BuiltRequest) {
+				requireRequest(t, request, "POST", "https://bark.example/push")
+				body := decodeRequestBody(t, request)
+				requireBodyField(t, body, "device_key", "device-key")
+				requireBodyField(t, body, "title", "Disk alert")
+				requireBodyField(t, body, "subtitle", "prod")
+				requireBodyField(t, body, "body", "Disk 95%")
+				requireBodyField(t, body, "url", "https://example.test/detail")
+				requireBodyField(t, body, "group", "ops")
+				requireBodyField(t, body, "sound", "alarm")
+				requireBodyField(t, body, "level", "critical")
+				requireBodyField(t, body, "icon", "https://example.test/icon.png")
+			},
+		},
+		{
+			name: "pushme",
+			channel: Channel{
+				ProviderType: ProviderPushMe,
+				AuthConfig:   json.RawMessage(`{"server_url":"https://push.example","push_key":"push-key"}`),
+				SendConfig:   json.RawMessage(`{"type":"markdown"}`),
+			},
+			message: json.RawMessage(`{"title":"Build","body":"Failed","format":"markdown"}`),
+			assert: func(t *testing.T, request BuiltRequest) {
+				requireRequest(t, request, "POST", "https://push.example")
+				body := decodeRequestBody(t, request)
+				requireBodyField(t, body, "push_key", "push-key")
+				requireBodyField(t, body, "title", "Build")
+				requireBodyField(t, body, "content", "Failed")
+				requireBodyField(t, body, "type", "markdown")
+				requireBodyField(t, body, "live_test_status", "implemented_but_not_live_tested")
 			},
 		},
 	} {
