@@ -14,27 +14,65 @@
 
 ## Current Progress
 
+最新状态基准：2026-05-12，已合入以下本地提交但尚未 push：
+
+- `2fb9ea0 docs: add provider research references`
+- `8d78751 feat: dataize push channel routing`
+- `5c96d8a refactor: slim console and complete provider metadata`
+- `20e36de docs: add provider adapter status table`
+
 已完成：
 
 - Go 后端、PostgreSQL、迁移、队列 worker、入站、路由规划、出站发送、日志、监控。
 - React + Vite + Ant Design 管理台已接真实 API。
 - 真实 PostgreSQL + 真实后端 + 前端 + webhook 已验证从入站到出站闭环。
 - Docker Compose 和 All-In-One 部署路径已有基础文档。
+- Austin 和 MagicPush 推送通道实现已调研，并沉淀到 `docs/research/open-source-push-channel-analysis.md`、`docs/research/provider-adapter-reference.md`、`docs/research/provider-adapter-status.md`。
 - Provider capability registry 已数据化，包含 credential schema、channel config schema、message schema、recipient identity、token strategy、send API、success/retry rule、默认限流、超时、并发和重试。
 - 模板已按 provider type + message type 建模，只保存消息内容，不绑定具体渠道实例，不保存接收人字段或最终 HTTP body。
 - 路由规则已改为发送动作组 `action.targets[]`；每个 target 绑定一个渠道实例和一个兼容模板版本，legacy `template_version_id + channel_ids` 仍兼容。
 - Planning worker 已按 action targets fan-out，每个 target 单独加载渠道/模板、校验 provider type、渲染模板、解析接收人并生成 delivery attempt。
 - Delivery adapter boundary 已明确：输入 channel config、rendered message、resolved recipients、target context 和 token，输出 final request；日志快照包含 `target_context`、`rendered_message`、`resolved_recipients`、`final_request`、`upstream_response`。
 - 第一批 provider defaults 已实现 build-request/mock 级别支持：`webhook`、`self`、`pushplus`、`wxpusher`、`serverchan`、`email`、`aliyun_sms`、`tencent_sms`、`baidu_sms`、`wecom_robot`、`wecom_app`、legacy `wecom`、`dingtalk_robot`、`dingtalk_work`、legacy `dingtalk`、`feishu_robot`、legacy `feishu`、`gov_cloud`、legacy `sms` 和高级 `custom_token`。
+- P2 provider defaults 已实现 build-request/mock 级别支持：`ntfy`、`gotify`、`bark`、`pushme`。
+- Provider type registry 已引入，后续新增 provider type 不应再频繁修改数据库 CHECK constraint。
+- 前端过大的 `ConsolePages.tsx` 已拆出 provider config form、template editor、route rule form、message log detail 和 shared helpers。
 
 仍需收敛或联调：
 
+- 当前用户仍在准备上级平台账号、token、测试接收人和网络白名单；在账号准备完成前，不做真实向上级平台发送。
 - PushPlus、WxPusher、Server酱、短信、企微、钉钉、飞书、SMTP/self/gov_cloud 当前均为 implemented but not live-tested 或 configuration-dependent；不要写成已真实发送成功。
-- 随申办当前开发环境不可访问，先实现不测试；短信没有测试账号，先按文档/SDK方向建配置模型和 mock build request。
+- 随申办当前开发环境不可访问，先实现不测试；短信没有测试账号，当前是配置模型和 mock build request，真实发送还需要接 SDK/签名流程。
 - `ntfy`、`gotify`、`bark`、`pushme` 已补入 P2 provider defaults 和 build-request/mock adapter；当前不做真实联调。
+- Route send action group 的自动化测试已覆盖，但手动 UI smoke 没有最终确认记录，不能算已完成手动验收。
+- legacy `route_actions.template_version_id/channel_ids` 仍保留兼容，后续新模型稳定后再清理。
 - 菜单和页面层级偏多，第一版需要降低认知负担。
 
+## No-Live-Send Boundary While Accounts Are Pending
+
+在上级平台账号和测试环境准备完成前，后续 agent 必须遵守：
+
+- 允许做：schema/capability 补齐、build-request、request snapshot、mock adapter、fake server、本地 webhook、自测用本平台级联。
+- 允许做：`test-send` 的 dry-run/build-only 模式，展示将要发送的 URL/header/query/body 和缺失配置提示。
+- 不允许做：主动调用真实 PushPlus、WxPusher、Server酱、短信、企微、钉钉、飞书、SMTP、随申办、ntfy、Gotify、Bark、PushMe 等上级真实发送接口。
+- 不允许把“build-request/mock 通过”描述成“真实发送成功”。
+- 如果需要保留真实发送入口，前端必须有明确的二次确认和中文风险提示；默认按钮应优先触发 dry-run/build-request。
+
 ## Product Decisions
+
+### 0. Simplified Mental Model
+
+后续产品和代码评审统一按以下边界理解：
+
+- 来源接入：负责鉴权、入站样例、入站去重和来源级限流。
+- 推送渠道类型：由 provider capability registry 描述能力和默认配置。
+- 推送渠道实例：保存某个 provider 的凭证、限流、超时、重试和实例级配置。
+- 消息模板：绑定 provider type + message type，只保存消息内容结构。
+- 路由策略：按来源和条件命中一条规则。
+- 接收人策略：把系统人员/组织/接收人组或 payload 字段解析为内部接收人集合。
+- 发送动作组：一条命中规则内包含多个 target，每个 target 绑定一个渠道实例和一个兼容模板版本。
+- Delivery adapter：把渠道实例配置、渲染后消息、解析后接收人和 target context 组装成最终请求。
+- 日志中心：按 target 展示入站 payload、渲染后消息、解析后接收人、最终请求和上级响应。
 
 ### 1. Template Owns Message Content Only
 
@@ -171,6 +209,8 @@ Steps 1-13 are already treated as executed. Steps 14-20 below replace the origin
 - If any wording below conflicts with `docs/plans/2026-05-12-route-send-action-group-plan.md`, use the 2026-05-12 plan as the source of truth for route/send-action-group implementation details.
 
 ## Step 14: Product Simplification Decision Sync
+
+Status as of 2026-05-12: mostly completed as documentation/model sync. Core mental model has been written into architecture, data model, API and provider reference docs. Remaining terminology cleanup can continue under Step 20 when the menu/page merge is implemented.
 
 **Ask AI to do:**
 
@@ -410,7 +450,7 @@ type DeliveryTargetContext struct {
 
 ## Step 19: Built-In Provider Defaults And Priority
 
-Status as of 2026-05-12: first batch implemented at build-request/mock level, not live-tested unless otherwise stated. Second batch remains planning only.
+Status as of 2026-05-12: first batch and P2 batch are implemented at build-request/mock level, not live-tested unless otherwise stated. Do not start live sending until provider accounts, test recipients and network allowlists are ready.
 
 **Ask AI to do:**
 
@@ -437,7 +477,7 @@ First batch:
 10. Feishu robot message.
 11. Suishenban government cloud.
 
-Second batch implemented at build-request/mock level:
+P2 batch implemented at build-request/mock level:
 
 1. ntfy.
 2. Gotify.
@@ -489,7 +529,7 @@ For each provider:
 
 ## Step 20: Console Simplification And Operator Guide Refresh
 
-Status as of 2026-05-12: documentation refresh is in progress; menu/page merge remains a later product step and should not be represented as already switched.
+Status as of 2026-05-12: not completed. Documentation refresh is partially done; menu/page merge remains a later product step and should not be represented as already switched. Frontend navigation still uses the existing page structure and labels in parts of the code.
 
 **Ask AI to do:**
 
@@ -540,7 +580,19 @@ Status as of 2026-05-12: documentation refresh is in progress; menu/page merge r
 
 ## Implementation Status And Remaining Priority
 
-Steps 15-19 are now implemented at the model/build-request level. Remaining priority is live testing, provider-specific configuration hardening and the later console simplification work. Historical execution order was:
+Steps 15-19 are now implemented at the model/build-request/mock level. Live upstream sending is intentionally paused while accounts are being prepared. Remaining priority is no-live-send hardening, manual UI smoke, operator documentation and the later console simplification work.
+
+| Step | Current status | What remains |
+|---|---|---|
+| Step 14 Product simplification decision sync | Mostly complete | Safe terminology cleanup can continue with Step 20. |
+| Step 15 Provider capability registry | Complete | Keep adding capability metadata only when adding new providers. |
+| Step 16 Template content model | Complete at model/UI/test level | Continue compatibility checks for old templates; keep recipient fields out of templates. |
+| Step 17 Route send action group | Complete at backend/API/DB/frontend/planning level | Manual UI smoke still needs a recorded result; legacy fields remain for compatibility. |
+| Step 18 Delivery adapter boundary | Complete at build-request/snapshot level | Real HTTP/SMTP vendor execution remains paused; provider-specific token/send hardening follows after accounts. |
+| Step 19 Built-in provider defaults | Complete at build-request/mock level for first batch and P2 | Live provider integration is deferred; SMS SDK/signature paths still need real-account phase. |
+| Step 20 Console simplification and operator guide | Not complete | Main menu merge, page/tab consolidation and refreshed operator guide still need implementation. |
+
+Historical execution order was:
 
 1. Step 14: documentation-only decision sync.
 2. Step 15: provider capability registry.
@@ -551,6 +603,29 @@ Steps 15-19 are now implemented at the model/build-request level. Remaining prio
 7. Step 20: console simplification and docs refresh.
 
 Menu merge should still wait until the implemented capability, template and route action models are stable in the UI and operator guide. Otherwise the interface will only rename complexity instead of reducing it.
+
+## Next Work Without Provider Accounts
+
+在真实上级账号准备完成前，建议下一轮只做以下工作：
+
+1. Route send action group 手动 UI smoke：
+   - 新建两个不同 provider type 的渠道实例。
+   - 新建两个兼容模板版本。
+   - 在同一个路由规则里配置两个 targets。
+   - 发布激活后用本地 webhook/fake server 验证 fan-out 和日志详情。
+2. `test-send` 产品边界：
+   - 默认 dry-run/build-request。
+   - 真实发送按钮单独放置，并要求二次确认。
+   - 缺少凭证/接收人/网络白名单时给中文错误。
+3. Operator guide 更新：
+   - 按“来源 -> 推送渠道 -> 消息模板 -> 路由策略 -> 日志”重写。
+   - 明确模板不写接收人，接收人在路由策略里处理。
+   - 明确当前 provider 多数是 build-request/mock 完成，等待账号联调。
+4. Console simplification 设计落地前置：
+   - 先写 tab 合并和路由兼容方案。
+   - 再改前端主菜单，避免页面能力丢失。
+5. Legacy cleanup 评估：
+   - 等新前端和 smoke 稳定后，再决定何时删除 `route_actions.template_version_id/channel_ids` 兼容字段。
 
 ## Out Of Scope
 
