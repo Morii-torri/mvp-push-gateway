@@ -74,6 +74,7 @@
 - 开源参考总览：`docs/research/open-source-references.md`
 - Austin/MagicPush 推送通道分析：`docs/research/open-source-push-channel-analysis.md`
 - 推送渠道 Provider Adapter 参照：`docs/research/provider-adapter-reference.md`
+- 上级平台 Adapter 状态表：`docs/research/provider-adapter-status.md`
 - 实施计划：`docs/plans/2026-05-07-mvp-push-gateway-implementation-plan.md`
 - 产品收敛与模板适配计划：`docs/plans/2026-05-11-product-simplification-and-template-adapter-plan.md`
 - 路由发送动作组改造计划：`docs/plans/2026-05-12-route-send-action-group-plan.md`

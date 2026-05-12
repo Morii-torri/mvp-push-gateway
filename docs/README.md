@@ -13,11 +13,12 @@
 7. `research/open-source-references.md`：可参考的开源项目总览。
 8. `research/open-source-push-channel-analysis.md`：Austin 与 MagicPush 推送通道实现分析。
 9. `research/provider-adapter-reference.md`：推送渠道 Provider Adapter 参照和联调状态。
-10. `operations/end-to-end-smoke.md`：本地和 Docker Compose 端到端验收 Runbook。
-11. `plans/2026-05-07-mvp-push-gateway-implementation-plan.md`：实施计划。
-12. `plans/2026-05-07-ai-execution-roadmap.md`：下一步交给 AI 分阶段执行的路线图。
-13. `plans/2026-05-11-product-simplification-and-template-adapter-plan.md`：产品收敛、模板内容模型和平台适配器重构计划。
-14. `plans/2026-05-12-route-send-action-group-plan.md`：路由发送动作组改造计划。
+10. `research/provider-adapter-status.md`：上级平台 adapter 已完成/未完成状态表。
+11. `operations/end-to-end-smoke.md`：本地和 Docker Compose 端到端验收 Runbook。
+12. `plans/2026-05-07-mvp-push-gateway-implementation-plan.md`：实施计划。
+13. `plans/2026-05-07-ai-execution-roadmap.md`：下一步交给 AI 分阶段执行的路线图。
+14. `plans/2026-05-11-product-simplification-and-template-adapter-plan.md`：产品收敛、模板内容模型和平台适配器重构计划。
+15. `plans/2026-05-12-route-send-action-group-plan.md`：路由发送动作组改造计划。
 
 ## 已确认决策
 
