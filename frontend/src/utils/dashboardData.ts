@@ -70,6 +70,13 @@ export type QueueMonitoringApiResponse = {
     dead_letters: number;
     last_error: string;
   }>;
+  trend?: Array<{
+    bucket_start: string;
+    route_plan_processed: number;
+    send_message_processed: number;
+    dead_letters: number;
+    p95_duration_ms: number;
+  }>;
   slow_rules: Array<{
     rule_id: string;
     source: string;
@@ -90,6 +97,8 @@ export type QueueMonitoringApiResponse = {
     has_more: boolean;
   };
 };
+
+export type DashboardWindow = '15m' | '1h' | '6h' | '24h' | '7d';
 
 export type CleanupRow = {
   key: string;
@@ -228,7 +237,7 @@ export function buildQueueMonitoringViewModel(data: QueueMonitoringApiResponse):
       metricCard('success', '平台成功率', formatPercent(100 - data.summary.platform_failure_rate), `失败率 ${formatPercent(data.summary.platform_failure_rate)}`, data.summary.platform_failure_rate > 0 ? 'down' : 'flat', 'green'),
       metricCard('dead', '死信数量', formatInteger(data.summary.dead_letter_count), `限流 ${formatInteger(data.summary.rate_limited_count)} 次`, data.summary.dead_letter_count > 0 ? 'up' : 'flat', 'red'),
     ],
-    trendPoints: snapshotTrendPoints(data.summary.route_plan_pending + data.summary.send_message_pending + data.summary.dead_letter_count),
+    trendPoints: queueTrendPoints(data),
     platformHealth: data.platform_health.map((item) => ({
       id: item.channel_id,
       name: item.name,
@@ -282,12 +291,12 @@ export function buildQueueMonitoringViewModel(data: QueueMonitoringApiResponse):
   };
 }
 
-export async function fetchOverviewData(): Promise<OverviewApiResponse> {
-  return apiRequest<OverviewApiResponse>('/stats/overview');
+export async function fetchOverviewData(window: DashboardWindow = '24h'): Promise<OverviewApiResponse> {
+  return apiRequest<OverviewApiResponse>(`/stats/overview?window=${encodeURIComponent(window)}`);
 }
 
-export async function fetchQueueMonitoringData(): Promise<QueueMonitoringApiResponse> {
-  return apiRequest<QueueMonitoringApiResponse>('/monitor/queues');
+export async function fetchQueueMonitoringData(window: DashboardWindow = '24h'): Promise<QueueMonitoringApiResponse> {
+  return apiRequest<QueueMonitoringApiResponse>(`/monitor/queues?window=${encodeURIComponent(window)}`);
 }
 
 function metricCard(
@@ -314,8 +323,11 @@ function zeroTrendPoints(): number[] {
   return Array.from({ length: 24 }, () => 0);
 }
 
-function snapshotTrendPoints(value: number): number[] {
-  return Array.from({ length: 24 }, () => Math.max(0, Math.round(value)));
+function queueTrendPoints(data: QueueMonitoringApiResponse): number[] {
+  const trend = data.trend ?? [];
+  return trend.map((item) =>
+    Math.max(0, Math.round(item.route_plan_processed + item.send_message_processed + item.dead_letters)),
+  );
 }
 
 function formatInteger(value: number): string {

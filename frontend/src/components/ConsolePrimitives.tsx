@@ -64,6 +64,7 @@ export function QueryBar({
   onReset,
   createText = '新增',
   extra,
+  className = '',
 }: {
   children: ReactNode;
   onCreate?: () => void;
@@ -71,9 +72,10 @@ export function QueryBar({
   onReset?: () => void;
   createText?: string;
   extra?: ReactNode;
+  className?: string;
 }) {
   return (
-    <section className="query-bar" aria-label="查询栏">
+    <section className={`query-bar${className ? ` ${className}` : ''}`} aria-label="查询栏">
       <div className="query-fields">{children}</div>
       <Space wrap className="query-actions">
         <Button onClick={onReset}>重置</Button>
@@ -96,22 +98,29 @@ export function ListContainer({
   children,
   total,
   pageSize = 20,
+  currentPage = 1,
   extra,
   fill = false,
   scrollY,
+  className = '',
+  onPageChange,
 }: {
   title: string;
   children: ReactNode;
   total: number;
   pageSize?: number;
+  currentPage?: number;
   extra?: ReactNode;
   fill?: boolean;
   scrollY?: number;
+  className?: string;
+  onPageChange?: (page: number, pageSize: number) => void;
 }) {
   const scrollStyle = scrollY && !fill ? { maxHeight: scrollY } : undefined;
+  const classNames = ['list-container', fill ? 'list-container--fill' : '', className].filter(Boolean).join(' ');
 
   return (
-    <section className={`list-container${fill ? ' list-container--fill' : ''}`}>
+    <section className={classNames}>
       <div className="list-container__header">
         <Typography.Title level={4}>{title}</Typography.Title>
         {extra}
@@ -122,10 +131,10 @@ export function ListContainer({
       <div className="inline-pagination">
         <Typography.Text type="secondary">共 {total} 条</Typography.Text>
         <Pagination
-          current={1}
+          current={currentPage}
           pageSize={pageSize}
           total={total}
-          onChange={() => undefined}
+          onChange={onPageChange}
           showSizeChanger
           pageSizeOptions={[10, 20, 50]}
         />

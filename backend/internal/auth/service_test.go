@@ -73,11 +73,43 @@ func TestCreateFirstAdminHashesPassword(t *testing.T) {
 	}
 }
 
+func TestUpdateProfileTrimsDisplayName(t *testing.T) {
+	store := &fakeStore{}
+	service := NewService(store)
+
+	admin, err := service.UpdateProfile(context.Background(), UpdateProfileInput{
+		AdminID:     "admin-id",
+		DisplayName: "  管理员  ",
+	})
+	if err != nil {
+		t.Fatalf("update profile: %v", err)
+	}
+	if store.updatedProfileDisplayName != "管理员" {
+		t.Fatalf("expected trimmed display name, got %q", store.updatedProfileDisplayName)
+	}
+	if admin.DisplayName != "管理员" {
+		t.Fatalf("expected updated admin display name, got %q", admin.DisplayName)
+	}
+}
+
+func TestUpdateProfileRejectsEmptyDisplayName(t *testing.T) {
+	service := NewService(&fakeStore{})
+
+	_, err := service.UpdateProfile(context.Background(), UpdateProfileInput{
+		AdminID:     "admin-id",
+		DisplayName: " ",
+	})
+	if !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("expected ErrInvalidInput, got %v", err)
+	}
+}
+
 type fakeStore struct {
-	status  SetupStatus
-	created CreateFirstAdminParams
-	admin   StoredAdmin
-	session Session
+	status                    SetupStatus
+	created                   CreateFirstAdminParams
+	admin                     StoredAdmin
+	session                   Session
+	updatedProfileDisplayName string
 }
 
 func (f *fakeStore) GetSetupStatus(context.Context) (SetupStatus, error) {
@@ -111,6 +143,16 @@ func (f *fakeStore) FindAdminByID(context.Context, string) (StoredAdmin, error) 
 
 func (f *fakeStore) UpdateAdminPassword(context.Context, string, string, bool) error {
 	return nil
+}
+
+func (f *fakeStore) UpdateAdminProfile(_ context.Context, adminID string, displayName string) (Admin, error) {
+	f.updatedProfileDisplayName = displayName
+	return Admin{
+		ID:          adminID,
+		Username:    "admin",
+		DisplayName: displayName,
+		Enabled:     true,
+	}, nil
 }
 
 func (f *fakeStore) CreateAdminSession(context.Context, CreateSessionParams) error {

@@ -11,6 +11,7 @@ describe('console navigation mapping', () => {
       '消息模板',
       '路由策略',
       '日志与监控',
+      '组织人员',
       '系统设置',
     ]);
   });
@@ -23,10 +24,11 @@ describe('console navigation mapping', () => {
       'templates',
       'routes',
       'monitoring',
+      'organization',
       'settings',
     ]);
     expect(systemNavigationItems.map((item) => item.label)).toEqual(['系统设置']);
-    expect(legacyPageKeyMap.organization).toBe('settings');
+    expect(legacyPageKeyMap.organization).toBeUndefined();
     expect(legacyPageKeyMap.matchGroups).toBe('routes');
     expect(legacyPageKeyMap.logs).toBe('monitoring');
     expect(legacyPageKeyMap.queue).toBe('monitoring');

@@ -108,6 +108,15 @@ describe('dashboard data mapping', () => {
           last_error: '',
         },
       ],
+      trend: [
+        {
+          bucket_start: '2026-05-09T12:00:00Z',
+          route_plan_processed: 4,
+          send_message_processed: 9,
+          dead_letters: 1,
+          p95_duration_ms: 480,
+        },
+      ],
       slow_rules: [
         {
           rule_id: 'rule-1',
@@ -139,6 +148,7 @@ describe('dashboard data mapping', () => {
     expect(viewModel.metrics[4]?.value).toBe('94.50%');
     expect(viewModel.platformHealth.map((item) => item.health)).toEqual(['警告', '异常']);
     expect(viewModel.platformHealth[1]?.lastError).toBe('-');
+    expect(viewModel.trendPoints).toEqual([14]);
     expect(viewModel.slowRules[0]?.avgDuration).toBe('320 ms');
     expect(viewModel.cleanupRows[0]?.value).toBe('30 天');
     expect(viewModel.cleanupRows[1]?.status).toBe('单批上限 200，去重键 2');

@@ -131,6 +131,19 @@ func TestRepositoryGetQueueMonitoringSnapshotAggregatesOperationalMetrics(t *tes
 	if snapshot.PlatformHealth[0].Pending != 1 || snapshot.PlatformHealth[0].RateLimited != 4 || snapshot.PlatformHealth[0].DeadLetters != 1 {
 		t.Fatalf("unexpected platform health row: %+v", snapshot.PlatformHealth[0])
 	}
+	if len(snapshot.Trend) == 0 {
+		t.Fatalf("expected queue trend points from worker metrics")
+	}
+	hasWorkerMetricTrend := false
+	for _, point := range snapshot.Trend {
+		if point.RoutePlanProcessed > 0 || point.SendMessageProcessed > 0 {
+			hasWorkerMetricTrend = true
+			break
+		}
+	}
+	if !hasWorkerMetricTrend {
+		t.Fatalf("expected queue trend to include real worker metric counts, got %+v", snapshot.Trend)
+	}
 	if snapshot.CleanupStatus.LastRunAt != nil {
 		t.Fatalf("expected cleanup status to be empty before cleanup, got %+v", snapshot.CleanupStatus)
 	}

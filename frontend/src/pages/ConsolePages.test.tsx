@@ -13,13 +13,22 @@ import {
   OrganizationPage,
   ProvidersPage,
   QueueMonitorPage,
+  RouteStrategyPage,
   RoutesPage,
   SettingsPage,
   SourcesPage,
+  SystemSettingsPage,
   TemplatesPage,
+  buildOrgTreeData,
+  createChildOrgDraft,
   createProviderDraft,
   createRouteRuleDraft,
   createTemplateDraft,
+  filterMessageLogsByQuery,
+  filterProviderRowsByQuery,
+  filterSourceRowsByQuery,
+  payloadFieldOptionsFromLatestSamples,
+  signedIngestHeaders,
   mapRouteRule,
   mapTemplateRow,
   routeTargetTemplateOptions,
@@ -31,6 +40,7 @@ import {
 } from './ConsolePages';
 import type { ProviderCapabilityApiRecord } from '../api/console';
 import { getProviderTypeLabel } from '../utils/labels';
+import type { OrgUnitApiRecord } from '../api/console';
 
 const lastUpdated = new Date('2026-05-11T09:30:00+08:00');
 
@@ -129,6 +139,100 @@ describe('critical console pages', () => {
     expect(providersMarkup).toContain('通用 Webhook');
     expect(providersMarkup).toContain('自定义 Token 平台');
     expect(providersMarkup).not.toContain('custom_token');
+  });
+
+  it('applies submitted query conditions across global list filters', () => {
+    const sourceRows = [
+      { id: 'src-1', code: 'alpha', name: 'Alpha 来源', enabled: true, authMode: 'token' },
+      { id: 'src-2', code: 'beta', name: 'Beta 来源', enabled: false, authMode: 'none' },
+    ] as any;
+    const providerRows = [
+      { id: 'provider-1', name: '邮件生产', enabled: true, providerType: 'email' },
+      { id: 'provider-2', name: 'Webhook 演示', enabled: false, providerType: 'webhook' },
+    ] as any;
+    const messageRows = [
+      {
+        id: 'msg-1',
+        traceId: 'trace-a',
+        source: '来源 A',
+        status: 'accepted',
+        outboundStatus: 'sent',
+        targetProvider: '邮件生产',
+        errorCode: '',
+      },
+      {
+        id: 'msg-2',
+        traceId: 'trace-b',
+        source: '来源 B',
+        status: 'failed',
+        outboundStatus: 'failed',
+        targetProvider: 'Webhook 演示',
+        errorCode: 'MGP-SEND-004',
+      },
+    ] as any;
+
+    expect(
+      filterSourceRowsByQuery(sourceRows, {
+        keyword: '',
+        code: '',
+        status: 'disabled',
+        authMode: 'none',
+      }).map((row: any) => row.code),
+    ).toEqual(['beta']);
+    expect(
+      filterProviderRowsByQuery(providerRows, {
+        name: '',
+        providerType: 'email',
+        status: 'enabled',
+      }).map((row: any) => row.name),
+    ).toEqual(['邮件生产']);
+    expect(
+      filterMessageLogsByQuery(messageRows, {
+        traceId: '',
+        keyword: '',
+        source: '来源 B',
+        targetProvider: 'all',
+        status: 'failed',
+        errorCode: 'MGP-SEND-004',
+      }).map((row: any) => row.traceId),
+    ).toEqual(['trace-b']);
+  });
+
+  it('derives payload field selectors from latest authenticated JSON samples', async () => {
+    const options = payloadFieldOptionsFromLatestSamples([
+      {
+        id: 'source-1',
+        code: 'orders',
+        name: '订单来源',
+        latestPayload: JSON.stringify({
+          title: '告警',
+          sender: { name: '张三', department: '热线中心' },
+          tags: ['urgent'],
+        }),
+      },
+    ] as any);
+
+    expect(options.map((item) => item.value)).toContain('payload.title');
+    expect(options.map((item) => item.value)).toContain('payload.sender.name');
+    expect(options.map((item) => item.value)).toContain('payload.tags');
+    expect(options.map((item) => item.value)).not.toContain('payload.demo');
+  });
+
+  it('generates real HMAC headers for UI inbound tests', async () => {
+    const body = JSON.stringify({ title: '告警' });
+    const headers = await signedIngestHeaders({
+      secret: 'hmacSecret',
+      method: 'POST',
+      path: '/api/v1/ingest/orders',
+      body,
+      timestamp: '2026-05-13T10:00:00Z',
+      nonce: 'nonce-1',
+    });
+
+    expect(headers['X-MGP-Timestamp']).toBe('2026-05-13T10:00:00Z');
+    expect(headers['X-MGP-Nonce']).toBe('nonce-1');
+    expect(headers['X-MGP-Signature']).toMatch(/^sha256=[0-9a-f]{64}$/);
+    expect(headers['X-MGP-Signature']).not.toBe('sha256=');
   });
 
   it('localizes first batch provider labels and exposes them as provider page options', () => {
@@ -670,21 +774,62 @@ describe('critical console pages', () => {
     expect(row.targetField).not.toBe('tpl-version-1');
   });
 
-  it('renders organization CRUD controls for org units users identities and recipient groups', () => {
+  it('renders organization as separate org user and recipient group subpages', () => {
     const markup = renderPage(
       <OrganizationPage lastUpdated={lastUpdated} onRefresh={() => undefined} />,
     );
 
+    expect(markup).toContain('组织管理');
+    expect(markup).toContain('人员管理');
+    expect(markup).toContain('接收人组');
     expect(markup).toContain('组织树');
+    expect(markup).toContain('组织列表');
     expect(markup).toContain('新增组织');
     expect(markup).toContain('人员列表');
     expect(markup).toContain('新增人员');
     expect(markup).toContain('接收人组列表');
     expect(markup).toContain('新增接收人组');
+    expect(markup).not.toContain('保存到本地');
+  });
+
+  it('builds polished organization tree nodes with hover add-child actions', () => {
+    const org: OrgUnitApiRecord = {
+      id: 'org-root',
+      parent_id: '',
+      code: 'root',
+      name: '数据中心',
+      sort_order: 1,
+      path: '/root',
+      created_at: '2026-05-13T10:00:00+08:00',
+      updated_at: '2026-05-13T10:00:00+08:00',
+    };
+    const tree = buildOrgTreeData([org], () => undefined);
+
+    expect(renderToStaticMarkup(<>{tree[0]?.title}</>)).toContain('新增下级组织：数据中心');
+    expect(renderToStaticMarkup(<>{tree[0]?.title}</>)).toContain('org-tree-node__add');
+    expect(createChildOrgDraft(org)).toEqual(expect.objectContaining({ parentId: 'org-root' }));
+  });
+
+  it('keeps recipient groups under organization instead of route strategy tabs', () => {
+    const markup = renderPage(
+      <RouteStrategyPage lastUpdated={lastUpdated} onRefresh={() => undefined} />,
+    );
+
+    expect(markup).toContain('路由大组');
+    expect(markup).toContain('匹配组');
+    expect(markup).not.toContain('接收人组');
+  });
+
+  it('renders person management controls for users and identities', () => {
+    const markup = renderPage(
+      <OrganizationPage lastUpdated={lastUpdated} onRefresh={() => undefined} />,
+    );
+
+    expect(markup).toContain('人员列表');
+    expect(markup).toContain('新增人员');
     expect(markup).toContain('平台身份字段');
     expect(markup).toContain('身份类型');
     expect(markup).toContain('验证状态');
-    expect(markup).not.toContain('保存到本地');
   });
 
   it('renders message log detail attempts as separate send target blocks', () => {
@@ -777,5 +922,14 @@ describe('critical console pages', () => {
     expect(settingsMarkup).toContain('系统参数列表');
     expect(settingsMarkup).toContain('参数值 JSON');
     expect(settingsMarkup).toContain('必须是合法 JSON');
+  });
+
+  it('keeps organization users out of the system settings page', () => {
+    const settingsMarkup = renderPage(
+      <SystemSettingsPage lastUpdated={lastUpdated} onRefresh={() => undefined} />,
+    );
+
+    expect(settingsMarkup).toContain('系统参数列表');
+    expect(settingsMarkup).not.toContain('组织人员');
   });
 });

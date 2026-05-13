@@ -435,13 +435,22 @@ export const consoleApi = {
   deleteSource(id: string, fetcher?: ApiFetcher) {
     return apiRequest<{ ok: boolean }>(`/sources/${id}`, { method: 'DELETE', fetcher });
   },
-  ingestSourcePayload(sourceCode: string, sourceToken: string, payload: JSONValue, fetcher?: ApiFetcher) {
-    const headers = sourceToken ? { Authorization: `Bearer ${sourceToken}` } : undefined;
+  ingestSourcePayload(
+    sourceCode: string,
+    sourceToken: string,
+    payload: JSONValue,
+    extraHeaders: Record<string, string> = {},
+    fetcher?: ApiFetcher,
+  ) {
+    const headers = {
+      ...extraHeaders,
+      ...(sourceToken ? { Authorization: `Bearer ${sourceToken}` } : {}),
+    };
     return apiRequest<IngestSourcePayloadResponse>(`/ingest/${encodeURIComponent(sourceCode)}`, {
       method: 'POST',
       auth: false,
       body: payload,
-      headers,
+      headers: Object.keys(headers).length ? headers : undefined,
       fetcher,
     });
   },

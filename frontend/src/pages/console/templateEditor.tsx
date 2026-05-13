@@ -1071,7 +1071,7 @@ export function TemplateEditorForm({
           <Descriptions.Item label="能力名称">{view.displayName}</Descriptions.Item>
           <Descriptions.Item label="支持消息类型">{view.messageTypes.map(getMessageTypeLabel).join('、')}</Descriptions.Item>
           <Descriptions.Item label="字段来源">
-            {view.schemaSource === 'capability' ? '平台能力元数据' : '本地 fallback schema'}
+            {view.schemaSource === 'capability' ? '平台能力元数据' : '内置默认消息 schema'}
           </Descriptions.Item>
         </Descriptions>
       </div>

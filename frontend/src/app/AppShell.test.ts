@@ -1,0 +1,118 @@
+import { describe, expect, it, vi } from 'vitest';
+
+import {
+  buildHeaderNotificationState,
+  createAccountMenuItems,
+  createLogoutConfirmConfig,
+  createProfileFormValues,
+} from './AppShell';
+
+describe('app shell logout confirmation', () => {
+  it('requires a second confirmation before logging out', async () => {
+    const logout = vi.fn(async () => undefined);
+
+    const config = createLogoutConfirmConfig(logout);
+
+    expect(config.title).toBe('确认退出登录？');
+    expect(config.content).toBe('退出后需要重新登录管理台。');
+    expect(config.okText).toBe('退出登录');
+    expect(config.cancelText).toBe('取消');
+    expect(config.okButtonProps).toEqual({ danger: true });
+
+    expect(logout).not.toHaveBeenCalled();
+    await config.onOk();
+    expect(logout).toHaveBeenCalledTimes(1);
+  });
+
+  it('exposes account profile password and logout actions in the avatar menu', () => {
+    const menuItems = createAccountMenuItems();
+
+    expect(menuItems?.map((item) => (item && 'key' in item ? item.key : item?.type))).toEqual([
+      'profile',
+      'password',
+      'divider',
+      'logout',
+    ]);
+    expect(menuItems?.[0]).toEqual(expect.objectContaining({ label: '修改显示名称' }));
+  });
+
+  it('prefills profile form values from the current admin', () => {
+    expect(createProfileFormValues({ username: 'admin', display_name: '系统管理员' })).toEqual({
+      username: 'admin',
+      display_name: '系统管理员',
+    });
+    expect(createProfileFormValues({ username: 'admin', display_name: '' })).toEqual({
+      username: 'admin',
+      display_name: 'admin',
+    });
+  });
+
+  it('builds the header notification badge from live queue and overview data', () => {
+    const state = buildHeaderNotificationState(
+      {
+        summary: {
+          route_plan_pending: 2,
+          send_message_pending: 3,
+          oldest_job_wait_seconds: 90,
+          planning_avg_duration_ms: 12,
+          planning_p95_duration_ms: 30,
+          sending_avg_duration_ms: 40,
+          sending_p95_duration_ms: 90,
+          platform_failure_rate: 12.5,
+          rate_limited_count: 4,
+          dead_letter_count: 1,
+        },
+        platform_health: [
+          {
+            channel_id: 'channel-1',
+            name: 'Webhook A',
+            provider_type: 'webhook',
+            health: 'critical',
+            pending: 3,
+            failure_rate: 30,
+            rate_limited: 2,
+            retries: 1,
+            dead_letters: 1,
+            last_error: '上级超时',
+          },
+        ],
+        slow_rules: [],
+        cleanup_status: {
+          last_run_at: null,
+          retention_days: 30,
+          batch_size: 200,
+          last_batch_deleted: 0,
+          total_deleted: 0,
+          deleted_dedupe_keys: 0,
+          completed: true,
+          has_more: false,
+        },
+      },
+      {
+        summary: {
+          total_sent: 10,
+          successful: 8,
+          failed: 2,
+          success_rate: 80,
+          average_qps: 0.1,
+          active_platforms: 1,
+        },
+        trend: [],
+        platform_rankings: [],
+        failure_rankings: [],
+        recent_anomalies: [{ level: '高', title: '模板渲染失败', time: '2026-05-13T08:00:00Z', count: 2, ratio: 20 }],
+      },
+    );
+
+    expect(state.badgeCount).toBe(12);
+    expect(state.items.map((item) => item.title)).toEqual([
+      '路由规划积压',
+      '出站发送积压',
+      '死信任务',
+      '平台限流',
+      '模板渲染失败',
+      '异常渠道',
+    ]);
+    expect(state.items[0]?.description).toContain('最老任务等待 1 分钟');
+  });
+});

@@ -100,6 +100,39 @@ func TestQueueMonitoringEndpointReturnsCleanupStatus(t *testing.T) {
 	}
 }
 
+func TestMonitoringEndpointsPassWindowQueryToServices(t *testing.T) {
+	monitoringService := &fakeMonitoringService{}
+	statisticsService := &fakeStatisticsService{}
+	handler := httpapi.NewHandler(
+		testConfig(),
+		httpapi.WithAuthService(fakeAuthService{authenticatedToken: "admin-session"}),
+		httpapi.WithMonitoringService(monitoringService),
+		httpapi.WithStatisticsService(statisticsService),
+	)
+
+	queueReq := httptest.NewRequest(http.MethodGet, "/api/v1/monitor/queues?window=1h", nil)
+	queueReq.Header.Set("Authorization", "Bearer admin-session")
+	queueRec := httptest.NewRecorder()
+	handler.ServeHTTP(queueRec, queueReq)
+	if queueRec.Code != http.StatusOK {
+		t.Fatalf("expected queue monitoring status 200, got %d body=%s", queueRec.Code, queueRec.Body.String())
+	}
+	if monitoringService.queueParams.Window != time.Hour {
+		t.Fatalf("expected queue window 1h, got %s", monitoringService.queueParams.Window)
+	}
+
+	overviewReq := httptest.NewRequest(http.MethodGet, "/api/v1/stats/overview?window=7d", nil)
+	overviewReq.Header.Set("Authorization", "Bearer admin-session")
+	overviewRec := httptest.NewRecorder()
+	handler.ServeHTTP(overviewRec, overviewReq)
+	if overviewRec.Code != http.StatusOK {
+		t.Fatalf("expected overview status 200, got %d body=%s", overviewRec.Code, overviewRec.Body.String())
+	}
+	if statisticsService.params.Window != 7*24*time.Hour {
+		t.Fatalf("expected overview window 7d, got %s", statisticsService.params.Window)
+	}
+}
+
 func TestOverviewStatisticsEndpointReturnsStableDashboardShape(t *testing.T) {
 	handler := httpapi.NewHandler(
 		testConfig(),
@@ -178,9 +211,11 @@ type fakeMonitoringService struct {
 	queueSnapshot monitoring.QueueSnapshot
 	cleanupStatus monitoring.CleanupStatus
 	cleanupInput  monitoring.RetentionCleanupParams
+	queueParams   monitoring.QueryParams
 }
 
-func (f *fakeMonitoringService) GetQueueMonitoringSnapshot(context.Context) (monitoring.QueueSnapshot, error) {
+func (f *fakeMonitoringService) GetQueueMonitoringSnapshot(_ context.Context, params monitoring.QueryParams) (monitoring.QueueSnapshot, error) {
+	f.queueParams = params
 	return f.queueSnapshot, nil
 }
 
@@ -191,8 +226,10 @@ func (f *fakeMonitoringService) RunRetentionCleanup(_ context.Context, params mo
 
 type fakeStatisticsService struct {
 	overview statistics.Overview
+	params   statistics.QueryParams
 }
 
-func (f *fakeStatisticsService) GetOverview(context.Context) (statistics.Overview, error) {
+func (f *fakeStatisticsService) GetOverview(_ context.Context, params statistics.QueryParams) (statistics.Overview, error) {
+	f.params = params
 	return f.overview, nil
 }

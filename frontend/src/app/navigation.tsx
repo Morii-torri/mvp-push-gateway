@@ -6,6 +6,7 @@ import {
   FileTextOutlined,
   HistoryOutlined,
   SettingOutlined,
+  TeamOutlined,
 } from '@ant-design/icons';
 
 import type { ReactNode } from 'react';
@@ -43,6 +44,7 @@ export const navigationItems: NavigationItem[] = [
   { key: 'templates', icon: decorativeIcon(<FileTextOutlined />), label: '消息模板' },
   { key: 'routes', icon: decorativeIcon(<DeploymentUnitOutlined />), label: '路由策略' },
   { key: 'monitoring', icon: decorativeIcon(<HistoryOutlined />), label: '日志与监控' },
+  { key: 'organization', icon: decorativeIcon(<TeamOutlined />), label: '组织人员' },
   { key: 'settings', icon: decorativeIcon(<SettingOutlined />), label: '系统设置' },
 ];
 
@@ -57,7 +59,6 @@ export const systemNavigationItems: NavigationItem[] = [
 ];
 
 export const legacyPageKeyMap: Partial<Record<PageKey, PageKey>> = {
-  organization: 'settings',
   matchGroups: 'routes',
   logs: 'monitoring',
   queue: 'monitoring',

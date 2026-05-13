@@ -20,6 +20,30 @@ type AuthContextValue = {
 };
 
 const AuthContext = createContext<AuthContextValue | null>(null);
+export const ADMIN_PASSWORD_MIN_LENGTH = 10;
+export const ADMIN_PASSWORD_MAX_LENGTH = 128;
+export const adminPasswordRules = [
+  { required: true, message: '请输入密码' },
+  { min: ADMIN_PASSWORD_MIN_LENGTH, message: '密码不少于 10 位' },
+];
+export const adminPasswordInputProps = {
+  minLength: ADMIN_PASSWORD_MIN_LENGTH,
+  maxLength: ADMIN_PASSWORD_MAX_LENGTH,
+  placeholder: '密码不少于 10 位',
+} as const;
+export function createConfirmNewPasswordRules(getFieldValue: (name: string) => unknown) {
+  return [
+    { required: true, message: '请再次输入新密码' },
+    {
+      validator: (_: unknown, value?: string) => {
+        if (!value || getFieldValue('new_password') === value) {
+          return Promise.resolve();
+        }
+        return Promise.reject(new Error('两次输入的新密码不一致'));
+      },
+    },
+  ];
+}
 
 type AuthMode = 'checking' | 'setup' | 'login' | 'change-password' | 'ready' | 'error';
 
@@ -212,8 +236,8 @@ function SetupForm({ onDone }: { onDone: () => void }) {
       <Form.Item label="显示名称" name="display_name" rules={[{ required: true, message: '请输入显示名称' }]}>
         <Input />
       </Form.Item>
-      <Form.Item label="初始密码" name="password" rules={[{ required: true, min: 8, message: '请输入至少 8 位密码' }]}>
-        <Input.Password prefix={<LockOutlined />} autoComplete="new-password" />
+      <Form.Item label="初始密码" name="password" rules={adminPasswordRules}>
+        <Input.Password prefix={<LockOutlined />} autoComplete="new-password" {...adminPasswordInputProps} />
       </Form.Item>
       <Button type="primary" htmlType="submit" loading={loading} block>
         创建管理员
@@ -256,9 +280,11 @@ function LoginForm({ onDone }: { onDone: (admin: AdminUser) => void }) {
 
 function ChangePasswordForm({ onDone }: { onDone: () => Promise<void> }) {
   const { message } = App.useApp();
+  const [form] = Form.useForm();
   const [loading, setLoading] = useState(false);
   return (
     <Form
+      form={form}
       layout="vertical"
       onFinish={async (values) => {
         setLoading(true);
@@ -278,8 +304,16 @@ function ChangePasswordForm({ onDone }: { onDone: () => Promise<void> }) {
       <Form.Item label="当前密码" name="current_password" rules={[{ required: true, message: '请输入当前密码' }]}>
         <Input.Password autoComplete="current-password" />
       </Form.Item>
-      <Form.Item label="新密码" name="new_password" rules={[{ required: true, min: 8, message: '请输入至少 8 位新密码' }]}>
-        <Input.Password autoComplete="new-password" />
+      <Form.Item label="新密码" name="new_password" rules={adminPasswordRules}>
+        <Input.Password autoComplete="new-password" {...adminPasswordInputProps} />
+      </Form.Item>
+      <Form.Item
+        label="确认新密码"
+        name="confirm_new_password"
+        dependencies={['new_password']}
+        rules={createConfirmNewPasswordRules(form.getFieldValue)}
+      >
+        <Input.Password autoComplete="new-password" {...adminPasswordInputProps} />
       </Form.Item>
       <Button type="primary" htmlType="submit" loading={loading} block>
         修改密码并进入

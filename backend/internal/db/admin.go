@@ -159,6 +159,30 @@ func (r Repository) UpdateAdminPassword(ctx context.Context, adminID string, pas
 	return nil
 }
 
+func (r Repository) UpdateAdminProfile(ctx context.Context, adminID string, displayName string) (auth.Admin, error) {
+	admin := auth.Admin{}
+	err := r.pool.QueryRow(ctx, `
+		UPDATE admin_users
+		SET display_name = $2,
+			updated_at = now()
+		WHERE id = $1 AND enabled = true
+		RETURNING id, username, display_name, must_change_password, enabled
+	`, adminID, displayName).Scan(
+		&admin.ID,
+		&admin.Username,
+		&admin.DisplayName,
+		&admin.MustChangePassword,
+		&admin.Enabled,
+	)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return auth.Admin{}, auth.ErrNotFound
+		}
+		return auth.Admin{}, fmt.Errorf("update admin profile: %w", err)
+	}
+	return admin, nil
+}
+
 func (r Repository) CreateAdminSession(ctx context.Context, params auth.CreateSessionParams) error {
 	_, err := r.pool.Exec(ctx, `
 		INSERT INTO admin_sessions (id, admin_id, token_hash, expires_at, user_agent, ip_address)

@@ -51,6 +51,10 @@ type meResponse struct {
 	Admin adminResponse `json:"admin"`
 }
 
+type updateProfileRequest struct {
+	DisplayName string `json:"display_name"`
+}
+
 type changePasswordRequest struct {
 	CurrentPassword string `json:"current_password"`
 	NewPassword     string `json:"new_password"`
@@ -184,6 +188,34 @@ func (h *Handler) meHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, meResponse{Admin: toAdminResponse(adminUser)})
+}
+
+func (h *Handler) profileHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPut {
+		methodNotAllowed(w, http.MethodPut)
+		return
+	}
+	adminUser, ok := h.authenticateRequest(w, r)
+	if !ok {
+		return
+	}
+
+	var request updateProfileRequest
+	if err := decodeJSON(r, &request); err != nil {
+		writeAPIError(w, http.StatusBadRequest, "MGP-REQ-001", "请求 JSON 不合法")
+		return
+	}
+
+	updated, err := h.auth.UpdateProfile(r.Context(), auth.UpdateProfileInput{
+		AdminID:     adminUser.ID,
+		DisplayName: request.DisplayName,
+	})
+	if err != nil {
+		statusCode, code, message := authErrorStatus(err)
+		writeAPIError(w, statusCode, code, message)
+		return
+	}
+	writeJSON(w, http.StatusOK, meResponse{Admin: toAdminResponse(updated)})
 }
 
 func (h *Handler) changePasswordHandler(w http.ResponseWriter, r *http.Request) {

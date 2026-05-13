@@ -6,7 +6,8 @@ import (
 )
 
 type QueryParams struct {
-	Now time.Time
+	Now    time.Time
+	Window time.Duration
 }
 
 type Summary struct {
@@ -96,6 +97,9 @@ func NewService(store store, options ...Option) *Service {
 	return service
 }
 
-func (s *Service) GetOverview(ctx context.Context) (Overview, error) {
-	return s.store.GetOverviewStatistics(ctx, QueryParams{Now: s.now()})
+func (s *Service) GetOverview(ctx context.Context, params QueryParams) (Overview, error) {
+	if params.Now.IsZero() {
+		params.Now = s.now()
+	}
+	return s.store.GetOverviewStatistics(ctx, params)
 }

@@ -7,7 +7,7 @@ import Space from 'antd/es/space';
 import Switch from 'antd/es/switch';
 import Typography from 'antd/es/typography';
 
-import { payloadFields, type MatchGroup, type RouteGroup, type RouteRule, type TemplateRecord } from '../../data/demoData';
+import type { MatchGroup, RouteGroup, RouteRule, TemplateRecord } from '../../data/demoData';
 import type { JSONValue, RecipientGroupApiRecord, RouteRuleApiRecord, RouteRuleInput, TemplateApiRecord } from '../../api/console';
 import { getProviderTypeLabel } from '../../utils/labels';
 import {
@@ -78,6 +78,7 @@ export function RouteRuleForm({
   recipientGroupRows,
   templateRows,
   channelRows,
+  payloadFieldOptions,
 }: {
   value: RouteRuleDraft;
   onChange: (value: RouteRuleDraft) => void;
@@ -85,6 +86,7 @@ export function RouteRuleForm({
   recipientGroupRows: RecipientGroupApiRecord[];
   templateRows: Array<TemplateRecord & { raw?: TemplateApiRecord }>;
   channelRows: ProviderRow[];
+  payloadFieldOptions?: Array<{ label: string; value: string; type: string }>;
 }) {
   const updateCondition = (index: number, patch: Partial<RouteConditionDraft>) => {
     onChange({
@@ -99,9 +101,9 @@ export function RouteRuleForm({
     const nextConditions = value.conditions.filter((_item, itemIndex) => itemIndex !== index);
     onChange({ ...value, conditions: nextConditions.length ? nextConditions : [createDefaultConditionDraft()] });
   };
-  const fieldOptions = payloadFields.map((field) => ({
-    label: `${field.path} (${field.type})`,
-    value: field.path,
+  const fieldOptions = (payloadFieldOptions ?? []).map((field) => ({
+    label: field.label,
+    value: field.value,
   }));
   const matchGroupOptionsForField = (fieldPath: string) => {
     const fieldLooksLikeIp = fieldPath.toLowerCase().includes('ip');

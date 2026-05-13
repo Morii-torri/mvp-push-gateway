@@ -33,6 +33,8 @@
 - 数据库连接池按 API、planning、sending、maintenance 分离。
 - 前端采用 React + Vite + TypeScript + Ant Design。
 - 前端所有列表统一为查询栏、分页表格、新增弹窗/抽屉；字段和状态必须中文化。
+- 前端布局数据验证统一使用固定 viewport `1920x1080`；元素高度、底部留白、`getBoundingClientRect()` 和响应式判断都以该 viewport 为准。
+- 纯视觉截图用于检查观感时，在固定 viewport 基础上额外最大化浏览器窗口，避免实际窗口偏窄造成误判。
 - 路由画布采用 React Flow。
 - 模板采用 Jinja-like 语法，Go 后端第一版用 `pongo2/v7` 落地，并通过自研 `TemplateEngine` 接口、安全白名单和保存期校验封装。
 - 模板字段复制统一复制 `{{ payload.title }}` 这类 Jinja-like 变量，内部路径仍保存 `payload.title`。

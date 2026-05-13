@@ -15,7 +15,8 @@ const (
 var ErrInvalidInput = errors.New("invalid monitoring input")
 
 type QueryParams struct {
-	Now time.Time
+	Now    time.Time
+	Window time.Duration
 }
 
 type QueueSummary struct {
@@ -54,6 +55,14 @@ type SlowRule struct {
 	P95DurationMS int    `json:"p95_duration_ms"`
 }
 
+type QueueTrendPoint struct {
+	BucketStart          time.Time `json:"bucket_start"`
+	RoutePlanProcessed   int       `json:"route_plan_processed"`
+	SendMessageProcessed int       `json:"send_message_processed"`
+	DeadLetters          int       `json:"dead_letters"`
+	P95DurationMS        int       `json:"p95_duration_ms"`
+}
+
 type CleanupStatus struct {
 	LastRunAt               *time.Time `json:"last_run_at"`
 	RetentionDays           int        `json:"retention_days"`
@@ -72,10 +81,11 @@ type CleanupStatus struct {
 }
 
 type QueueSnapshot struct {
-	Summary        QueueSummary     `json:"summary"`
-	PlatformHealth []PlatformHealth `json:"platform_health"`
-	SlowRules      []SlowRule       `json:"slow_rules"`
-	CleanupStatus  CleanupStatus    `json:"cleanup_status"`
+	Summary        QueueSummary      `json:"summary"`
+	PlatformHealth []PlatformHealth  `json:"platform_health"`
+	Trend          []QueueTrendPoint `json:"trend"`
+	SlowRules      []SlowRule        `json:"slow_rules"`
+	CleanupStatus  CleanupStatus     `json:"cleanup_status"`
 }
 
 type RetentionCleanupParams struct {
@@ -122,11 +132,14 @@ func NewService(reader readerStore, cleaner cleanupStore, options ...Option) *Se
 	return service
 }
 
-func (s *Service) GetQueueMonitoringSnapshot(ctx context.Context) (QueueSnapshot, error) {
+func (s *Service) GetQueueMonitoringSnapshot(ctx context.Context, params QueryParams) (QueueSnapshot, error) {
 	if s == nil || s.reader == nil {
 		return QueueSnapshot{}, ErrInvalidInput
 	}
-	return s.reader.GetQueueMonitoringSnapshot(ctx, QueryParams{Now: s.now()})
+	if params.Now.IsZero() {
+		params.Now = s.now()
+	}
+	return s.reader.GetQueueMonitoringSnapshot(ctx, params)
 }
 
 func (s *Service) RunRetentionCleanup(ctx context.Context, params RetentionCleanupParams) (CleanupStatus, error) {

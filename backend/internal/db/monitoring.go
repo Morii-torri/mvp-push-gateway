@@ -21,13 +21,19 @@ func (r Repository) GetQueueMonitoringSnapshot(ctx context.Context, params monit
 	if now.IsZero() {
 		now = time.Now().UTC()
 	}
-	windowStart := now.Add(-24 * time.Hour)
+	window := normalizedQueryWindow(params.Window)
+	windowStart := now.Add(-window)
+	bucketInterval := bucketIntervalLiteral(window)
 
 	summary, err := r.getQueueSummary(ctx, now, windowStart)
 	if err != nil {
 		return monitoring.QueueSnapshot{}, err
 	}
 	platformHealth, err := r.getPlatformHealth(ctx, windowStart)
+	if err != nil {
+		return monitoring.QueueSnapshot{}, err
+	}
+	trend, err := r.getQueueTrend(ctx, windowStart, now, bucketInterval)
 	if err != nil {
 		return monitoring.QueueSnapshot{}, err
 	}
@@ -43,6 +49,7 @@ func (r Repository) GetQueueMonitoringSnapshot(ctx context.Context, params monit
 	return monitoring.QueueSnapshot{
 		Summary:        summary,
 		PlatformHealth: platformHealth,
+		Trend:          trend,
 		SlowRules:      slowRules,
 		CleanupStatus:  cleanupStatus,
 	}, nil
@@ -56,25 +63,25 @@ func (r Repository) GetOverviewStatistics(ctx context.Context, params statistics
 	if now.IsZero() {
 		now = time.Now().UTC()
 	}
-	windowStart := now.Add(-24 * time.Hour)
-	trendEnd := now.Truncate(time.Hour)
-	trendStart := trendEnd.Add(-23 * time.Hour)
+	window := normalizedQueryWindow(params.Window)
+	windowStart := now.Add(-window)
+	bucketInterval := bucketIntervalLiteral(window)
 
 	overview := statistics.Overview{
 		WindowStart: windowStart,
 		WindowEnd:   now,
 	}
 
-	summary, err := r.getOverviewSummary(ctx, windowStart, now)
+	summary, err := r.getOverviewSummary(ctx, windowStart, now, int(window.Seconds()))
 	if err != nil {
 		return statistics.Overview{}, err
 	}
 	overview.Summary = summary
 
-	if overview.Trend, err = r.getOverviewTrend(ctx, trendStart, trendEnd); err != nil {
+	if overview.Trend, err = r.getOverviewTrend(ctx, windowStart, now, bucketInterval); err != nil {
 		return statistics.Overview{}, err
 	}
-	if overview.PlatformRankings, err = r.getPlatformRankings(ctx, windowStart, now); err != nil {
+	if overview.PlatformRankings, err = r.getPlatformRankings(ctx, windowStart, now, int(window.Seconds())); err != nil {
 		return statistics.Overview{}, err
 	}
 	if overview.FailureRankings, err = r.getFailureRankings(ctx, windowStart, now); err != nil {
@@ -352,6 +359,62 @@ func (r Repository) getPlatformHealth(ctx context.Context, windowStart time.Time
 	return platforms, nil
 }
 
+func (r Repository) getQueueTrend(ctx context.Context, windowStart, now time.Time, bucketInterval string) ([]monitoring.QueueTrendPoint, error) {
+	rows, err := r.pool.Query(ctx, `
+		WITH buckets AS (
+			SELECT generate_series(
+				date_bin($3::interval, $1, $4::timestamptz),
+				date_bin($3::interval, $2, $4::timestamptz),
+				$3::interval
+			) AS bucket_start
+		),
+		metrics AS (
+			SELECT
+				date_bin($3::interval, bucket_start, $4::timestamptz) AS bucket_start,
+				COALESCE(sum(processed) FILTER (WHERE job_type = 'route_plan'), 0)::integer AS route_plan_processed,
+				COALESCE(sum(processed) FILTER (WHERE job_type = 'send_message'), 0)::integer AS send_message_processed,
+				COALESCE(sum(dead_lettered), 0)::integer AS dead_letters,
+				COALESCE(max(p95_duration_ms), 0)::integer AS p95_duration_ms
+			FROM worker_metrics
+			WHERE bucket_start >= $1
+				AND bucket_start <= $2
+			GROUP BY date_bin($3::interval, bucket_start, $4::timestamptz)
+		)
+		SELECT
+			buckets.bucket_start,
+			COALESCE(metrics.route_plan_processed, 0)::integer,
+			COALESCE(metrics.send_message_processed, 0)::integer,
+			COALESCE(metrics.dead_letters, 0)::integer,
+			COALESCE(metrics.p95_duration_ms, 0)::integer
+		FROM buckets
+		LEFT JOIN metrics ON metrics.bucket_start = buckets.bucket_start
+		ORDER BY buckets.bucket_start ASC
+	`, windowStart, now, bucketInterval, time.Unix(0, 0).UTC())
+	if err != nil {
+		return nil, fmt.Errorf("query queue trend: %w", err)
+	}
+	defer rows.Close()
+
+	trend := make([]monitoring.QueueTrendPoint, 0)
+	for rows.Next() {
+		var item monitoring.QueueTrendPoint
+		if err := rows.Scan(
+			&item.BucketStart,
+			&item.RoutePlanProcessed,
+			&item.SendMessageProcessed,
+			&item.DeadLetters,
+			&item.P95DurationMS,
+		); err != nil {
+			return nil, fmt.Errorf("scan queue trend: %w", err)
+		}
+		trend = append(trend, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate queue trend: %w", err)
+	}
+	return trend, nil
+}
+
 func (r Repository) getSlowRules(ctx context.Context, windowStart time.Time) ([]monitoring.SlowRule, error) {
 	rows, err := r.pool.Query(ctx, `
 		SELECT
@@ -472,7 +535,10 @@ func (r Repository) getCleanupStatus(ctx context.Context) (monitoring.CleanupSta
 	return status, nil
 }
 
-func (r Repository) getOverviewSummary(ctx context.Context, windowStart, now time.Time) (statistics.Summary, error) {
+func (r Repository) getOverviewSummary(ctx context.Context, windowStart, now time.Time, windowSeconds int) (statistics.Summary, error) {
+	if windowSeconds <= 0 {
+		windowSeconds = int((24 * time.Hour).Seconds())
+	}
 	var summary statistics.Summary
 	err := r.pool.QueryRow(ctx, `
 		WITH delivery_summary AS (
@@ -496,10 +562,10 @@ func (r Repository) getOverviewSummary(ctx context.Context, windowStart, now tim
 			delivery_summary.successful,
 			delivery_summary.failed,
 			COALESCE(round((delivery_summary.successful::numeric * 100.0) / NULLIF(delivery_summary.total_sent::numeric, 0), 2), 0)::float8 AS success_rate,
-			COALESCE(round(delivery_summary.total_sent::numeric / 86400.0, 2), 0)::float8 AS average_qps,
+			COALESCE(round(delivery_summary.total_sent::numeric / $3::numeric, 2), 0)::float8 AS average_qps,
 			active_platforms.active_platform_count
 		FROM delivery_summary, active_platforms
-	`, windowStart, now).Scan(
+	`, windowStart, now, windowSeconds).Scan(
 		&summary.TotalSent,
 		&summary.Successful,
 		&summary.Failed,
@@ -513,32 +579,37 @@ func (r Repository) getOverviewSummary(ctx context.Context, windowStart, now tim
 	return summary, nil
 }
 
-func (r Repository) getOverviewTrend(ctx context.Context, windowStart, now time.Time) ([]statistics.TrendPoint, error) {
+func (r Repository) getOverviewTrend(ctx context.Context, windowStart, now time.Time, bucketInterval string) ([]statistics.TrendPoint, error) {
+	bucketSeconds := bucketIntervalSeconds(bucketInterval)
 	rows, err := r.pool.Query(ctx, `
 		WITH buckets AS (
-			SELECT generate_series($1, $2, interval '1 hour') AS bucket_start
+			SELECT generate_series(
+				date_bin($3::interval, $1, $4::timestamptz),
+				date_bin($3::interval, $2, $4::timestamptz),
+				$3::interval
+			) AS bucket_start
 		),
 		attempts AS (
 			SELECT
-				date_trunc('hour', COALESCE(finished_at, queued_at)) AS bucket_start,
+				date_bin($3::interval, COALESCE(finished_at, queued_at), $4::timestamptz) AS bucket_start,
 				count(*) FILTER (WHERE status IN ('sent', 'failed', 'deduped', 'skipped'))::integer AS sent,
 				count(*) FILTER (WHERE status = 'sent')::integer AS successful,
 				count(*) FILTER (WHERE status = 'failed')::integer AS failed
 			FROM delivery_attempts
 			WHERE COALESCE(finished_at, queued_at) >= $1
 				AND COALESCE(finished_at, queued_at) <= $2
-			GROUP BY date_trunc('hour', COALESCE(finished_at, queued_at))
+			GROUP BY date_bin($3::interval, COALESCE(finished_at, queued_at), $4::timestamptz)
 		)
 		SELECT
 			buckets.bucket_start,
 			COALESCE(attempts.sent, 0)::integer,
 			COALESCE(attempts.successful, 0)::integer,
 			COALESCE(attempts.failed, 0)::integer,
-			COALESCE(round(COALESCE(attempts.sent, 0)::numeric / 3600.0, 2), 0)::float8 AS qps
+			COALESCE(round(COALESCE(attempts.sent, 0)::numeric / $5::numeric, 2), 0)::float8 AS qps
 		FROM buckets
 		LEFT JOIN attempts ON attempts.bucket_start = buckets.bucket_start
 		ORDER BY buckets.bucket_start ASC
-	`, windowStart, now.Truncate(time.Hour))
+	`, windowStart, now, bucketInterval, time.Unix(0, 0).UTC(), bucketSeconds)
 	if err != nil {
 		return nil, fmt.Errorf("query overview trend: %w", err)
 	}
@@ -558,7 +629,10 @@ func (r Repository) getOverviewTrend(ctx context.Context, windowStart, now time.
 	return trend, nil
 }
 
-func (r Repository) getPlatformRankings(ctx context.Context, windowStart, now time.Time) ([]statistics.PlatformRanking, error) {
+func (r Repository) getPlatformRankings(ctx context.Context, windowStart, now time.Time, windowSeconds int) ([]statistics.PlatformRanking, error) {
+	if windowSeconds <= 0 {
+		windowSeconds = int((24 * time.Hour).Seconds())
+	}
 	rows, err := r.pool.Query(ctx, `
 		WITH attempt_stats AS (
 			SELECT
@@ -607,7 +681,7 @@ func (r Repository) getPlatformRankings(ctx context.Context, windowStart, now ti
 			channel.provider_type,
 			attempt_stats.sent,
 			COALESCE(round((attempt_stats.successful::numeric * 100.0) / NULLIF(attempt_stats.sent::numeric, 0), 2), 0)::float8 AS success_rate,
-			COALESCE(round(attempt_stats.sent::numeric / 86400.0, 2), 0)::float8 AS qps,
+			COALESCE(round(attempt_stats.sent::numeric / $3::numeric, 2), 0)::float8 AS qps,
 			attempt_stats.failed,
 			COALESCE(rate_limits.rate_limited, 0)::integer,
 			attempt_stats.avg_duration_ms,
@@ -619,7 +693,7 @@ func (r Repository) getPlatformRankings(ctx context.Context, windowStart, now ti
 		LEFT JOIN last_errors ON last_errors.channel_id = channel.id
 		ORDER BY attempt_stats.sent DESC, channel.name ASC
 		LIMIT 10
-	`, windowStart, now)
+	`, windowStart, now, windowSeconds)
 	if err != nil {
 		return nil, fmt.Errorf("query platform rankings: %w", err)
 	}
@@ -930,5 +1004,47 @@ func deriveHealth(failureRate float64, deadLetters int, rateLimited int) string 
 		return "warning"
 	default:
 		return "healthy"
+	}
+}
+
+func normalizedQueryWindow(window time.Duration) time.Duration {
+	switch window {
+	case 15 * time.Minute, time.Hour, 6 * time.Hour, 24 * time.Hour, 7 * 24 * time.Hour:
+		return window
+	default:
+		if window > 0 && window < 15*time.Minute {
+			return 15 * time.Minute
+		}
+		return 24 * time.Hour
+	}
+}
+
+func bucketIntervalLiteral(window time.Duration) string {
+	switch {
+	case window <= 15*time.Minute:
+		return "1 minute"
+	case window <= time.Hour:
+		return "5 minutes"
+	case window <= 6*time.Hour:
+		return "15 minutes"
+	case window <= 24*time.Hour:
+		return "1 hour"
+	default:
+		return "6 hours"
+	}
+}
+
+func bucketIntervalSeconds(interval string) int {
+	switch interval {
+	case "1 minute":
+		return 60
+	case "5 minutes":
+		return 5 * 60
+	case "15 minutes":
+		return 15 * 60
+	case "6 hours":
+		return 6 * 3600
+	default:
+		return 3600
 	}
 }

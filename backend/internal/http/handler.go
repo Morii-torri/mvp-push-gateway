@@ -28,6 +28,7 @@ type authService interface {
 	Authenticate(context.Context, string) (auth.Admin, error)
 	Logout(context.Context, string) error
 	ChangePassword(context.Context, auth.ChangePasswordInput) error
+	UpdateProfile(context.Context, auth.UpdateProfileInput) (auth.Admin, error)
 }
 
 type Handler struct {
@@ -123,12 +124,12 @@ type routeService interface {
 }
 
 type monitoringService interface {
-	GetQueueMonitoringSnapshot(context.Context) (monitoring.QueueSnapshot, error)
+	GetQueueMonitoringSnapshot(context.Context, monitoring.QueryParams) (monitoring.QueueSnapshot, error)
 	RunRetentionCleanup(context.Context, monitoring.RetentionCleanupParams) (monitoring.CleanupStatus, error)
 }
 
 type statisticsService interface {
-	GetOverview(context.Context) (statistics.Overview, error)
+	GetOverview(context.Context, statistics.QueryParams) (statistics.Overview, error)
 }
 
 type matchGroupService interface {
@@ -252,6 +253,7 @@ func NewHandler(cfg config.Config, options ...Option) http.Handler {
 	mux.HandleFunc(cfg.Server.APIPrefix+"/auth/login", handler.loginHandler)
 	mux.HandleFunc(cfg.Server.APIPrefix+"/auth/logout", handler.logoutHandler)
 	mux.HandleFunc(cfg.Server.APIPrefix+"/auth/me", handler.meHandler)
+	mux.HandleFunc(cfg.Server.APIPrefix+"/auth/profile", handler.profileHandler)
 	mux.HandleFunc(cfg.Server.APIPrefix+"/auth/change-password", handler.changePasswordHandler)
 	mux.HandleFunc(cfg.Server.APIPrefix+"/sources", handler.sourcesHandler)
 	mux.HandleFunc(cfg.Server.APIPrefix+"/sources/", handler.sourceDetailHandler)

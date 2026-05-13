@@ -46,6 +46,13 @@ export const authApi = {
   me(fetcher?: ApiFetcher) {
     return apiRequest<{ admin: AdminUser }>('/auth/me', { fetcher });
   },
+  updateProfile(input: { display_name: string }, fetcher?: ApiFetcher) {
+    return apiRequest<{ admin: AdminUser }>('/auth/profile', {
+      method: 'PUT',
+      body: input,
+      fetcher,
+    });
+  },
   changePassword(
     input: { current_password: string; new_password: string },
     fetcher?: ApiFetcher,

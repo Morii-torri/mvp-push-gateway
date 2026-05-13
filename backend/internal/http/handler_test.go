@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"mvp-push-gateway/backend/internal/auth"
@@ -111,6 +112,33 @@ func TestSetupStatusEndpointReturnsClosedState(t *testing.T) {
 	}
 }
 
+func TestProfileEndpointUpdatesCurrentAdminDisplayName(t *testing.T) {
+	handler := httpapi.NewHandler(testConfig(), httpapi.WithAuthService(fakeAuthService{
+		authenticatedToken: "admin-session",
+	}))
+
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/auth/profile", strings.NewReader(`{"display_name":"管理员"}`))
+	req.Header.Set("Authorization", "Bearer admin-session")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+
+	var body struct {
+		Admin struct {
+			DisplayName string `json:"display_name"`
+		} `json:"admin"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
+		t.Fatalf("decode profile response: %v", err)
+	}
+	if body.Admin.DisplayName != "管理员" {
+		t.Fatalf("expected updated display name, got %q", body.Admin.DisplayName)
+	}
+}
+
 func testConfig() config.Config {
 	return config.Config{
 		App: config.AppConfig{
@@ -158,4 +186,13 @@ func (fakeAuthService) Logout(context.Context, string) error {
 
 func (fakeAuthService) ChangePassword(context.Context, auth.ChangePasswordInput) error {
 	return nil
+}
+
+func (fakeAuthService) UpdateProfile(_ context.Context, input auth.UpdateProfileInput) (auth.Admin, error) {
+	return auth.Admin{
+		ID:          input.AdminID,
+		Username:    "admin",
+		DisplayName: input.DisplayName,
+		Enabled:     true,
+	}, nil
 }
