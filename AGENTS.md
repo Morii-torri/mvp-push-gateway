@@ -51,6 +51,10 @@
 - 来源双校验：支持 `token_and_hmac`，要求 Token 和 HMAC 同时通过；不要实现 `token_or_hmac`。
 - 来源 IP 白名单：一期能力，支持 CIDR；无鉴权来源必须提示建议配置白名单。
 - 前端列表：所有管理对象默认使用“查询栏 + 分页表格 + 新增按钮 + 弹窗/抽屉新增编辑”；状态和字段名必须中文化，禁止直接展示英文枚举。
+- 前端主菜单：固定为 `总览 / 来源接入 / 推送渠道 / 消息模板 / 路由策略 / 日志与监控 / 组织人员 / 系统设置`。`路由策略` 只包含路由大组和匹配组；`组织人员` 包含组织管理、人员管理和接收人组；`日志与监控` 包含消息日志、队列监控和操作审计。
+- 前端实时通知：右上角通知入口只跳转“日志与监控”，不新增独立日志页；通知数字和列表必须来自后端统计或日志接口。
+- 总览趋势：时间筛选是最近 N 分钟/小时/天滚动窗口，X 轴跟随后端 `bucket_start`，不要固定 0-24。
+- 账户菜单：管理员头像菜单支持修改密码、修改账户别名和退出登录；新密码不少于 10 位且需二次确认；退出登录需要二次确认。
 - 推送渠道：第一批内置 `webhook`、`self`、`pushplus`、`wxpusher`、`serverchan`、`email`、`aliyun_sms`、`tencent_sms`、`baidu_sms`、`wecom_robot`、`wecom_app`、`dingtalk_robot`、`dingtalk_work`、`feishu_robot`、`gov_cloud`；第二批 build-request/mock 内置 `ntfy`、`gotify`、`bark`、`pushme`；保留 legacy `wecom`、`dingtalk`、`feishu`、`sms` 和高级 `custom_token`。
 - 平台能力：消息类型、凭证配置、渠道配置、消息内容 schema、Token 换取、Token 放置位置、接收人身份、成功/重试规则、默认限流/超时/并发/重试。
 - 组织人员：组织树、人员、平台身份字段，例如手机号、邮箱、企微 userid、飞书 open_id。
@@ -87,6 +91,6 @@
 
 ## 当前阶段
 
-截至 2026-05-12，核心后端链路、provider capability registry、provider-aware template、route send action group、planning fan-out 和 delivery adapter boundary 已进入实现状态。文档描述应以当前源码和迁移为准，不再沿用“template node / 单模板多渠道 / 自定义 Token 平台作为主路径”的旧模型。
+截至 2026-05-13，核心后端链路、provider capability registry、provider-aware template、route send action group、planning fan-out 和 delivery adapter boundary 已进入实现状态。管理台已收敛为八个主菜单，真实接口替代 demo/fallback，右上角通知、总览趋势、组织人员拆分和账户菜单已进入当前产品基线。文档描述应以当前源码和迁移为准，不再沿用“template node / 单模板多渠道 / 自定义 Token 平台作为主路径”的旧模型。
 
 第一批和 P2 provider defaults 已实现 build-request/mock 级别支持，但 PushPlus、WxPusher、Server酱、短信、企微、钉钉、飞书、SMTP/self/gov_cloud、ntfy、Gotify、Bark、PushMe 均不要写成已经真实联调成功；当前应标注为 implemented but not live-tested 或 configuration-dependent。
