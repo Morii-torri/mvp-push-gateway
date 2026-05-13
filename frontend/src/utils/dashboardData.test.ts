@@ -62,6 +62,7 @@ describe('dashboard data mapping', () => {
     expect(viewModel.metrics[0]?.value).toBe('240 条');
     expect(viewModel.metrics[1]?.value).toBe('87.50%');
     expect(viewModel.trendPoints).toEqual([12]);
+    expect(buildOverviewViewModel(overview, '1h').trendLabels).toEqual(['18:00']);
     expect(viewModel.platformRanking[0]?.providerType).toBe('通用 Webhook');
     expect(viewModel.platformRanking[0]?.lastError).toBe('目标平台超时');
     expect(viewModel.failureReasons[0]?.reason).toBe('目标平台超时');
@@ -149,6 +150,7 @@ describe('dashboard data mapping', () => {
     expect(viewModel.platformHealth.map((item) => item.health)).toEqual(['警告', '异常']);
     expect(viewModel.platformHealth[1]?.lastError).toBe('-');
     expect(viewModel.trendPoints).toEqual([14]);
+    expect(buildQueueMonitoringViewModel(queue, '7d').trendLabels).toEqual(['05/09']);
     expect(viewModel.slowRules[0]?.avgDuration).toBe('320 ms');
     expect(viewModel.cleanupRows[0]?.value).toBe('30 天');
     expect(viewModel.cleanupRows[1]?.status).toBe('单批上限 200，去重键 2');

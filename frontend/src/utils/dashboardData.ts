@@ -137,6 +137,7 @@ export type RecentAnomalyRow = {
 export type OverviewViewModel = {
   metrics: Metric[];
   trendPoints: number[];
+  trendLabels: string[];
   platformRanking: PlatformRankingRow[];
   failureReasons: FailureReasonRow[];
   recentAnomalies: RecentAnomalyRow[];
@@ -145,6 +146,7 @@ export type OverviewViewModel = {
 export type QueueMonitoringViewModel = {
   metrics: QueueMetric[];
   trendPoints: number[];
+  trendLabels: string[];
   platformHealth: PlatformHealth[];
   slowRules: SlowRule[];
   cleanupRows: CleanupRow[];
@@ -161,6 +163,7 @@ export function defaultOverviewViewModel(): OverviewViewModel {
       metricCard('successful', '成功发送量', '0 条', '用于总览成功吞吐', 'flat', 'green'),
     ],
     trendPoints: zeroTrendPoints(),
+    trendLabels: zeroTrendLabels(),
     platformRanking: [],
     failureReasons: [],
     recentAnomalies: [],
@@ -178,6 +181,7 @@ export function defaultQueueMonitoringViewModel(): QueueMonitoringViewModel {
       metricCard('dead', '死信数量', '0', '限流 0 次', 'flat', 'red'),
     ],
     trendPoints: zeroTrendPoints(),
+    trendLabels: zeroTrendLabels(),
     platformHealth: [],
     slowRules: [],
     cleanupRows: [
@@ -189,7 +193,7 @@ export function defaultQueueMonitoringViewModel(): QueueMonitoringViewModel {
   };
 }
 
-export function buildOverviewViewModel(data: OverviewApiResponse): OverviewViewModel {
+export function buildOverviewViewModel(data: OverviewApiResponse, window: DashboardWindow = '24h'): OverviewViewModel {
   return {
     metrics: [
       metricCard('sent', '总发送量', `${formatInteger(data.summary.total_sent)} 条`, '24 小时窗口', 'flat', 'blue'),
@@ -200,6 +204,7 @@ export function buildOverviewViewModel(data: OverviewApiResponse): OverviewViewM
       metricCard('successful', '成功发送量', `${formatInteger(data.summary.successful)} 条`, '用于总览成功吞吐', 'flat', 'green'),
     ],
     trendPoints: data.trend.map((item) => item.sent),
+    trendLabels: trendBucketLabels(data.trend, window),
     platformRanking: data.platform_rankings.map((item) => ({
       name: item.name,
       providerType: getProviderTypeLabel(item.provider_type),
@@ -227,7 +232,10 @@ export function buildOverviewViewModel(data: OverviewApiResponse): OverviewViewM
   };
 }
 
-export function buildQueueMonitoringViewModel(data: QueueMonitoringApiResponse): QueueMonitoringViewModel {
+export function buildQueueMonitoringViewModel(
+  data: QueueMonitoringApiResponse,
+  window: DashboardWindow = '24h',
+): QueueMonitoringViewModel {
   return {
     metrics: [
       metricCard('plan', '路由规划积压', formatInteger(data.summary.route_plan_pending), '待规划任务数', data.summary.route_plan_pending > 0 ? 'up' : 'flat', 'blue', 'route_plan'),
@@ -238,6 +246,7 @@ export function buildQueueMonitoringViewModel(data: QueueMonitoringApiResponse):
       metricCard('dead', '死信数量', formatInteger(data.summary.dead_letter_count), `限流 ${formatInteger(data.summary.rate_limited_count)} 次`, data.summary.dead_letter_count > 0 ? 'up' : 'flat', 'red'),
     ],
     trendPoints: queueTrendPoints(data),
+    trendLabels: trendBucketLabels(data.trend ?? [], window),
     platformHealth: data.platform_health.map((item) => ({
       id: item.channel_id,
       name: item.name,
@@ -323,11 +332,42 @@ function zeroTrendPoints(): number[] {
   return Array.from({ length: 24 }, () => 0);
 }
 
+function zeroTrendLabels(): string[] {
+  return ['00:00', '06:00', '12:00', '18:00', '24:00'];
+}
+
 function queueTrendPoints(data: QueueMonitoringApiResponse): number[] {
   const trend = data.trend ?? [];
   return trend.map((item) =>
     Math.max(0, Math.round(item.route_plan_processed + item.send_message_processed + item.dead_letters)),
   );
+}
+
+function trendBucketLabels(items: Array<{ bucket_start: string }>, window: DashboardWindow): string[] {
+  if (items.length === 0) {
+    return zeroTrendLabels();
+  }
+  return items.map((item) => formatTrendBucketLabel(item.bucket_start, window));
+}
+
+function formatTrendBucketLabel(value: string, window: DashboardWindow): string {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return '-';
+  }
+  if (window === '7d') {
+    return new Intl.DateTimeFormat('zh-CN', {
+      timeZone: 'Asia/Shanghai',
+      month: '2-digit',
+      day: '2-digit',
+    }).format(date);
+  }
+  return new Intl.DateTimeFormat('zh-CN', {
+    timeZone: 'Asia/Shanghai',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  }).format(date);
 }
 
 function formatInteger(value: number): string {

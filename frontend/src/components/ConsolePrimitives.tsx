@@ -226,6 +226,11 @@ export function LineChart({
   } Z`;
   const yTicks = [max, min + range * 0.66, min + range * 0.33, min];
   const xLabels = labels ?? ['00:00', '06:00', '12:00', '18:00', '24:00'];
+  const xAxisLabels = xLabels
+    .map((label, index) => ({ label, index }))
+    .filter((_, index) => shouldRenderAxisLabel(index, xLabels.length));
+  const xLabelDenominator =
+    labels?.length === points.length ? Math.max(points.length - 1, 1) : Math.max(xLabels.length - 1, 1);
 
   return (
     <div className="line-chart" aria-label={seriesLabel}>
@@ -242,7 +247,7 @@ export function LineChart({
             <g key={tick}>
               <line x1={padding.left} x2={padding.left + innerWidth} y1={y} y2={y} className="chart-grid" />
               <text x={padding.left - 10} y={y + 4} textAnchor="end" className="chart-axis-label">
-                {Math.round(tick).toLocaleString('zh-CN')}
+                {formatChartTick(tick)}
               </text>
             </g>
           );
@@ -261,10 +266,10 @@ export function LineChart({
           y2={padding.top + innerHeight}
           className="chart-axis"
         />
-        {xLabels.map((label, index) => {
-          const x = padding.left + (innerWidth * index) / Math.max(xLabels.length - 1, 1);
+        {xAxisLabels.map(({ label, index }) => {
+          const x = padding.left + (innerWidth * index) / xLabelDenominator;
           return (
-            <text key={label} x={x} y={height - 14} textAnchor="middle" className="chart-axis-label">
+            <text key={`${label}-${index}`} x={x} y={height - 14} textAnchor="middle" className="chart-axis-label">
               {label}
             </text>
           );
@@ -272,10 +277,16 @@ export function LineChart({
         <path d={areaPath} fill={`url(#chart-area-${seriesLabel})`} />
         <path d={linePath} className="chart-line" />
         {coords.map(({ x, y, point }, index) =>
-          index % 4 === 0 || index === coords.length - 1 ? (
+          shouldRenderPointLabel(point, index, coords.length) ? (
             <g key={`${point}-${index}`}>
               <circle cx={x} cy={y} r="4" className="chart-point" />
-              <text x={x} y={y - 10} textAnchor="middle" className="chart-point-label">
+              <text
+                x={x}
+                y={y - 10}
+                dx={pointLabelOffset(index, coords.length)}
+                textAnchor={pointLabelAnchor(index, coords.length)}
+                className="chart-point-label"
+              >
                 {point}
               </text>
             </g>
@@ -284,6 +295,54 @@ export function LineChart({
       </svg>
     </div>
   );
+}
+
+function shouldRenderAxisLabel(index: number, total: number): boolean {
+  if (total <= 6) {
+    return true;
+  }
+  if (index === 0 || index === total - 1) {
+    return true;
+  }
+  const interval = Math.ceil((total - 1) / 4);
+  return index % interval === 0;
+}
+
+function shouldRenderPointLabel(point: number, index: number, total: number): boolean {
+  if (point <= 0) {
+    return false;
+  }
+  return index % 4 === 0 || index === total - 1;
+}
+
+function pointLabelAnchor(index: number, total: number): 'start' | 'middle' | 'end' {
+  if (index === 0) {
+    return 'start';
+  }
+  if (index === total - 1) {
+    return 'end';
+  }
+  return 'middle';
+}
+
+function pointLabelOffset(index: number, total: number): number {
+  if (index === 0) {
+    return 6;
+  }
+  if (index === total - 1) {
+    return -6;
+  }
+  return 0;
+}
+
+function formatChartTick(value: number): string {
+  if (Number.isInteger(value)) {
+    return value.toLocaleString('zh-CN');
+  }
+  return value.toLocaleString('zh-CN', {
+    minimumFractionDigits: 0,
+    maximumFractionDigits: 1,
+  });
 }
 
 export function MiniTrend({ points }: { points: number[] }) {

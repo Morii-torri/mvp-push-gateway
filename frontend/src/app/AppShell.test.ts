@@ -5,6 +5,7 @@ import {
   createAccountMenuItems,
   createLogoutConfirmConfig,
   createProfileFormValues,
+  resolveNavigationPageKey,
 } from './AppShell';
 
 describe('app shell logout confirmation', () => {
@@ -114,5 +115,12 @@ describe('app shell logout confirmation', () => {
       '异常渠道',
     ]);
     expect(state.items[0]?.description).toContain('最老任务等待 1 分钟');
+  });
+
+  it('maps legacy log pages back to the combined monitoring page', () => {
+    expect(resolveNavigationPageKey('logs')).toBe('monitoring');
+    expect(resolveNavigationPageKey('queue')).toBe('monitoring');
+    expect(resolveNavigationPageKey('audit')).toBe('monitoring');
+    expect(resolveNavigationPageKey('monitoring')).toBe('monitoring');
   });
 });

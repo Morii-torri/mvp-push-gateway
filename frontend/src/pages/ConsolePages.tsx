@@ -285,18 +285,18 @@ const emptyLoadState: ApiLoadState = {
 };
 
 const dashboardWindowOptions: Array<{ label: string; value: DashboardWindow }> = [
-  { label: '15 分钟', value: '15m' },
-  { label: '1 小时', value: '1h' },
-  { label: '24 小时', value: '24h' },
-  { label: '7 天', value: '7d' },
+  { label: '近 15 分钟', value: '15m' },
+  { label: '近 1 小时', value: '1h' },
+  { label: '近 24 小时', value: '24h' },
+  { label: '近 7 天', value: '7d' },
 ];
 
 const queueWindowOptions: Array<{ label: string; value: DashboardWindow }> = [
-  { label: '15 分钟', value: '15m' },
-  { label: '1 小时', value: '1h' },
-  { label: '6 小时', value: '6h' },
-  { label: '24 小时', value: '24h' },
-  { label: '7 天', value: '7d' },
+  { label: '近 15 分钟', value: '15m' },
+  { label: '近 1 小时', value: '1h' },
+  { label: '近 6 小时', value: '6h' },
+  { label: '近 24 小时', value: '24h' },
+  { label: '近 7 天', value: '7d' },
 ];
 
 export type EnabledStatusQuery = 'all' | 'enabled' | 'disabled';
@@ -1156,7 +1156,7 @@ export function OverviewPage({ lastUpdated, onRefresh }: ConsolePageProps) {
     fetchOverviewData(windowValue)
       .then((data) => {
         if (!cancelled) {
-          setViewModel(buildOverviewViewModel(data));
+          setViewModel(buildOverviewViewModel(data, windowValue));
           setLoadState(emptyLoadState);
         }
       })
@@ -1208,7 +1208,7 @@ export function OverviewPage({ lastUpdated, onRefresh }: ConsolePageProps) {
               onChange={(value) => setWindowValue(value as DashboardWindow)}
             />
           </div>
-          <LineChart points={viewModel.trendPoints} seriesLabel="消息发送趋势" />
+          <LineChart points={viewModel.trendPoints} labels={viewModel.trendLabels} seriesLabel="消息发送趋势" />
           <div className="legend-row">
             <Tag color="blue">发送量</Tag>
             <Tag color="green">成功量</Tag>
@@ -5287,7 +5287,7 @@ export function QueueMonitorPage({ lastUpdated, onRefresh }: ConsolePageProps) {
     fetchQueueMonitoringData(windowValue)
       .then((data) => {
         if (!cancelled) {
-          setViewModel(buildQueueMonitoringViewModel(data));
+          setViewModel(buildQueueMonitoringViewModel(data, windowValue));
           setLoadState(emptyLoadState);
         }
       })
@@ -5365,7 +5365,7 @@ export function QueueMonitorPage({ lastUpdated, onRefresh }: ConsolePageProps) {
               onChange={(value) => setWindowValue(value as DashboardWindow)}
             />
           </div>
-          <LineChart points={viewModel.trendPoints} seriesLabel="队列处理趋势" />
+          <LineChart points={viewModel.trendPoints} labels={viewModel.trendLabels} seriesLabel="队列处理趋势" />
           <div className="legend-row">
             <Tag color="blue">路由规划处理量</Tag>
             <Tag color="green">出站发送处理量</Tag>

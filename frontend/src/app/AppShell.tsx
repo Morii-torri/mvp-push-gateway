@@ -33,7 +33,7 @@ import Typography from 'antd/es/typography';
 import zhCN from 'antd/es/locale/zh_CN';
 import { Suspense, lazy, useCallback, useEffect, useMemo, useState, type ComponentType } from 'react';
 
-import { navigationItems, type PageKey } from './navigation';
+import { legacyPageKeyMap, navigationItems, type PageKey } from './navigation';
 import type { ConsolePageProps } from '../pages/ConsolePages';
 import { formatRefreshTime } from '../utils/labels';
 import {
@@ -117,6 +117,10 @@ export function createLogoutConfirmConfig(logout: () => Promise<void>): LogoutCo
     okButtonProps: { danger: true },
     onOk: logout,
   };
+}
+
+export function resolveNavigationPageKey(page: PageKey): PageKey {
+  return legacyPageKeyMap[page] ?? page;
 }
 
 export function buildHeaderNotificationState(
@@ -331,15 +335,22 @@ function ConsoleChrome() {
     [],
   );
 
-  const openPage = useCallback((page: PageKey) => {
-    setOpenPages((current) => (current.includes(page) ? current : [...current, page]));
-    setActivePage(page);
-  }, []);
+  const openPage = useCallback(
+    (page: PageKey) => {
+      const nextPage = resolveNavigationPageKey(page);
+      if (!navigationMap.has(nextPage)) {
+        return;
+      }
+      setOpenPages((current) => (current.includes(nextPage) ? current : [...current, nextPage]));
+      setActivePage(nextPage);
+    },
+    [navigationMap],
+  );
 
   useEffect(() => {
     const handler = (event: Event) => {
       const page = (event as CustomEvent<{ page?: string }>).detail?.page;
-      if (page && navigationMap.has(page as PageKey)) {
+      if (page && page in lazyPages) {
         openPage(page as PageKey);
       }
     };
@@ -487,7 +498,6 @@ function ConsoleChrome() {
                 loading={notificationLoading}
                 error={notificationError}
                 onOpenMonitoring={() => openPage('monitoring')}
-                onOpenLogs={() => openPage('logs')}
               />
             }
           >
@@ -658,13 +668,11 @@ function HeaderNotificationPanel({
   loading,
   error,
   onOpenMonitoring,
-  onOpenLogs,
 }: {
   state: HeaderNotificationState;
   loading: boolean;
   error: string;
   onOpenMonitoring: () => void;
-  onOpenLogs: () => void;
 }) {
   return (
     <div className="header-popover-panel notification-panel">
@@ -689,12 +697,11 @@ function HeaderNotificationPanel({
         <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无需要处理的通知" />
       )}
       <Divider />
-      <Space wrap>
+      <div className="notification-panel__actions">
         <Button type="primary" onClick={onOpenMonitoring}>
           查看日志与监控
         </Button>
-        <Button onClick={onOpenLogs}>查看消息日志</Button>
-      </Space>
+      </div>
     </div>
   );
 }

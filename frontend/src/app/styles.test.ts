@@ -27,6 +27,8 @@ describe('console list layout rhythm', () => {
     expect(styles).toContain('.split-layout--provider');
     expect(styles).toContain('.query-bar--logs .query-fields');
     expect(styles).toContain('.provider-type-filter');
+    expect(styles).toContain('width: min(100% - 30px, 206px);');
+    expect(styles).toContain('.provider-type-filter .provider-type-option:not(.ant-btn-primary)');
     expect(styles).toContain('.list-container--fill .ant-table-empty .ant-table-tbody');
     expect(styles).toContain('.template-wide-modal');
     expect(styles).toContain('.query-bar--compact');
