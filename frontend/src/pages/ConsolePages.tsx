@@ -23,7 +23,6 @@ import Tree from 'antd/es/tree';
 import Typography from 'antd/es/typography';
 import {
   ArrowLeftOutlined,
-  CopyOutlined,
   DeleteOutlined,
   DeploymentUnitOutlined,
   EditOutlined,
@@ -46,7 +45,7 @@ import {
   type NodeProps,
   type OnSelectionChangeParams,
 } from '@xyflow/react';
-import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent, type KeyboardEvent, type ReactNode } from 'react';
 
 import {
   ListContainer,
@@ -179,9 +178,11 @@ import {
   switchTemplateProviderType,
   templateBodyTextFromDraft,
   templateContentFieldSummary,
+  templateDraftWithSourcePayload,
   templateFeedbackFromResult,
   templateInputFromDraft,
-  templatePreviewSnapshot,
+  templateRenderedPreview,
+  templateUserFacingPreview,
   templateVersionInputFromDraft,
   type TemplateDraft,
   type TemplateFeedback,
@@ -198,6 +199,9 @@ export {
   switchTemplateContentMode,
   switchTemplateMessageType,
   switchTemplateProviderType,
+  templateDraftWithSourcePayload,
+  templateRenderedPreview,
+  templateUserFacingPreview,
   templateVersionInputFromDraft,
 } from './console/templateEditor';
 export { MessageLogAttemptBlocks } from './console/messageLogDetail';
@@ -210,10 +214,10 @@ type ProviderTypeGroup = {
 
 const providerTypeGroups: ProviderTypeGroup[] = [
   { label: '基础通道', tone: 'blue', values: ['webhook', 'self', 'custom_token'] },
-  { label: '个人推送', tone: 'cyan', values: ['pushplus', 'wxpusher', 'serverchan'] },
+  { label: '个人推送', tone: 'cyan', values: ['pushplus', 'wxpusher', 'serverchan', 'bark', 'pushme'] },
   { label: '邮件短信', tone: 'green', values: ['email', 'aliyun_sms', 'tencent_sms', 'baidu_sms', 'sms'] },
   { label: '企业协同', tone: 'purple', values: ['wecom_robot', 'wecom_app', 'wecom', 'dingtalk_robot', 'dingtalk_work', 'dingtalk', 'feishu_robot', 'feishu'] },
-  { label: '政务与自托管', tone: 'orange', values: ['gov_cloud'] },
+  { label: '政务与自托管', tone: 'orange', values: ['gov_cloud', 'ntfy', 'gotify'] },
 ];
 
 export type ConsolePageProps = {
@@ -704,6 +708,39 @@ export function payloadFieldOptionsFromLatestSamples(sources: Array<Partial<Sour
     collectPayloadFields(sample, 'payload', seen);
   }
   return Array.from(seen.values()).sort((left, right) => left.value.localeCompare(right.value));
+}
+
+export function TemplateVariableCopyText({
+  path,
+  onCopy,
+}: {
+  path: string;
+  onCopy: (path: string) => void;
+}) {
+  const variable = templateVariable(path);
+  const handleCopy = () => onCopy(path);
+  const handleKeyDown = (event: KeyboardEvent<HTMLElement>) => {
+    if (event.key !== 'Enter' && event.key !== ' ') {
+      return;
+    }
+    event.preventDefault();
+    handleCopy();
+  };
+
+  return (
+    <Typography.Text
+      code
+      role="button"
+      tabIndex={0}
+      className="template-variable-token template-variable-copy-token"
+      aria-label={`变量 ${variable}，点击复制`}
+      title="点击复制变量"
+      onClick={handleCopy}
+      onKeyDown={handleKeyDown}
+    >
+      {variable}
+    </Typography.Text>
+  );
 }
 
 function payloadSampleFromSource(source: Partial<SourceRow>): JSONValue | null {
@@ -3100,6 +3137,12 @@ export function TemplatesPage({ lastUpdated, onRefresh }: ConsolePageProps) {
     setTemplateFeedback(createTemplateFeedback());
     setModalOpen(true);
   };
+  useEffect(() => {
+    if (!modalOpen || !templateDraft.sourceId) {
+      return;
+    }
+    setTemplateDraft((current) => templateDraftWithSourcePayload(current, sourceRows, current.sourceId));
+  }, [modalOpen, sourceRows, templateDraft.sourceId]);
   const runTemplateAction = async (action: 'parse' | 'preview' | 'validate') => {
     try {
       const input = templateVersionInputFromDraft(templateDraft);
@@ -3216,27 +3259,23 @@ export function TemplatesPage({ lastUpdated, onRefresh }: ConsolePageProps) {
 
   const fieldColumns: TableProps<PayloadFieldOption>['columns'] = [
     {
-      title: '可复制变量',
+      title: '可用变量',
       dataIndex: 'path',
+      width: 184,
       render: (path: string) => (
-        <Space>
-          <Typography.Text code>{templateVariable(path)}</Typography.Text>
-          <Button
-            size="small"
-            icon={<CopyOutlined />}
-            aria-label={`复制 ${templateVariable(path)}`}
-            onClick={() => void copyVariable(path)}
-          />
+        <Space className="template-variable-cell">
+          <TemplateVariableCopyText path={path} onCopy={(nextPath) => void copyVariable(nextPath)} />
         </Space>
       ),
     },
-    { title: '类型', dataIndex: 'type', width: 90 },
-    { title: '当前样例值', dataIndex: 'sample' },
+    { title: '当前值', dataIndex: 'sample', className: 'template-variable-sample' },
   ];
-  const templatePayloadFields = payloadFieldOptionsFromLatestSamples(sourceRows).filter(
+  const selectedTemplateSource = sourceRows.find((source) => source.id === templateDraft.sourceId);
+  const selectedPayloadFields = payloadFieldOptionsFromLatestSamples(selectedTemplateSource ? [selectedTemplateSource] : []).filter(
     (field) => !isRecipientPayloadPath(field.path),
   );
-  const previewSnapshot = templatePreviewSnapshot(templateDraft);
+  const renderedMessagePreview = templateRenderedPreview(templateDraft);
+  const userFacingPreview = templateUserFacingPreview(templateDraft);
 
   return (
     <PageFrame
@@ -3324,61 +3363,74 @@ export function TemplatesPage({ lastUpdated, onRefresh }: ConsolePageProps) {
         cancelText="取消"
       >
         <div className="template-modal-grid">
-          <section className="template-fields">
+          <section className="template-modal-panel template-payload-panel">
             <div className="panel-heading">
-              <Typography.Title level={4}>Payload 字段</Typography.Title>
-              <Button onClick={() => void runTemplateAction('parse')}>后端解析</Button>
+              <Typography.Title level={4}>Payload 预览</Typography.Title>
+              <Tag>{selectedPayloadFields.length} 个字段</Tag>
             </div>
-            {templateFeedback.variables.length ? (
-              <Alert
-                type="success"
-                showIcon
-                className="semantic-alert"
-                message={`后端解析变量：${templateFeedback.variables.map(templateVariable).join('、')}`}
+            <div className="template-panel-scroll">
+              <Descriptions size="small" column={1}>
+                <Descriptions.Item label="来源">
+                  {selectedTemplateSource ? `${selectedTemplateSource.name} / ${selectedTemplateSource.code}` : '-'}
+                </Descriptions.Item>
+                <Descriptions.Item label="接收时间">{selectedTemplateSource?.lastInboundAt ?? '-'}</Descriptions.Item>
+              </Descriptions>
+              <Table
+                rowKey="path"
+                size="small"
+                pagination={false}
+                columns={fieldColumns}
+                dataSource={selectedPayloadFields}
               />
-            ) : null}
-            <Table
-              rowKey="path"
-              size="small"
-              pagination={false}
-              columns={fieldColumns}
-              dataSource={templatePayloadFields}
-              scroll={{ y: 420 }}
-            />
+            </div>
           </section>
-          <section className="template-editor">
-            <TemplateEditorForm
-              value={templateDraft}
-              onChange={setTemplateDraft}
-              sourceRows={sourceRows}
-              capabilities={providerCapabilities}
-            />
-            <Space className="template-action-bar">
-              <Button onClick={() => void runTemplateAction('preview')}>后端预览</Button>
-              <Button onClick={() => void runTemplateAction('validate')}>后端校验</Button>
-              {templateFeedback.status === 'valid' ? <Tag color="success">校验通过</Tag> : null}
-              {templateFeedback.status === 'invalid' ? <Tag color="error">校验失败</Tag> : null}
-            </Space>
-            {templateFeedback.errors.length ? (
-              <Alert
-                type="error"
-                showIcon
-                className="semantic-alert"
-                message="模板校验错误"
-                description={templateFeedback.errors.join('；')}
+          <section className="template-modal-panel template-form-panel">
+            <div className="panel-heading">
+              <Typography.Title level={4}>模板表单</Typography.Title>
+              <Space>
+                {templateFeedback.status === 'valid' ? <Tag color="success">校验通过</Tag> : null}
+                {templateFeedback.status === 'invalid' ? <Tag color="error">校验失败</Tag> : null}
+                <Button onClick={() => void runTemplateAction('validate')}>校验模板</Button>
+              </Space>
+            </div>
+            <div className="template-panel-scroll">
+              <TemplateEditorForm
+                value={templateDraft}
+                onChange={setTemplateDraft}
+                sourceRows={sourceRows}
+                capabilities={providerCapabilities}
               />
-            ) : null}
-            <div className="preview-grid">
-              <section>
-                <Typography.Title level={5}>内部消息预览</Typography.Title>
-                <div className="preview-card">
-                  {templateFeedback.preview || '点击“后端预览”后展示内部消息内容'}
-                </div>
-              </section>
-              <section>
-                <Typography.Title level={5}>模板 Body / Sample Payload</Typography.Title>
-                <pre className="code-block">{previewSnapshot}</pre>
-              </section>
+              {templateFeedback.errors.length ? (
+                <Alert
+                  type="error"
+                  showIcon
+                  className="semantic-alert"
+                  message="模板校验错误"
+                  description={templateFeedback.errors.join('；')}
+                />
+              ) : null}
+            </div>
+          </section>
+          <section className="template-modal-panel template-preview-panel">
+            <div className="panel-heading">
+              <Typography.Title level={4}>消息预览</Typography.Title>
+              <Tag>{getProviderTypeLabel(templateDraft.targetProviderType)}</Tag>
+            </div>
+            <div className="template-panel-scroll">
+              <Tabs
+                items={[
+                  {
+                    key: 'json',
+                    label: 'JSON',
+                    children: <pre className="code-block template-preview-code">{renderedMessagePreview}</pre>,
+                  },
+                  {
+                    key: 'received',
+                    label: '接收效果',
+                    children: <div className="template-received-preview">{userFacingPreview || '暂无可预览内容'}</div>,
+                  },
+                ]}
+              />
             </div>
           </section>
         </div>

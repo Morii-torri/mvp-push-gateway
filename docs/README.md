@@ -36,7 +36,7 @@
 - 前端布局数据验证统一使用固定 viewport `1920x1080`；元素高度、底部留白、`getBoundingClientRect()` 和响应式判断都以该 viewport 为准。
 - 纯视觉截图用于检查观感时，在固定 viewport 基础上额外最大化浏览器窗口，避免实际窗口偏窄造成误判。
 - 路由画布采用 React Flow。
-- 模板采用 Jinja-like 语法，Go 后端第一版用 `pongo2/v7` 落地，并通过自研 `TemplateEngine` 接口、安全白名单和保存期校验封装。
+- 模板采用 Jinja-like 语法，Go 后端第一版用 `pongo2/v6` 落地，并通过自研 `TemplateEngine` 接口、安全白名单和保存期校验封装。
 - 模板字段复制统一复制 `{{ payload.title }}` 这类 Jinja-like 变量，内部路径仍保存 `payload.title`。
 - 来源最近 payload 样例来自“鉴权通过且 JSON 合法的最近入站 payload”，不要求路由、模板或接收人配置成功。
 - 推送渠道实例支持主动限流、独立并发上限、超时、重试和死信策略。

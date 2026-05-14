@@ -38,6 +38,9 @@ import {
   switchTemplateMessageType,
   switchTemplateProviderType,
   sourceInputFromDraft,
+  templateDraftWithSourcePayload,
+  templateRenderedPreview,
+  templateUserFacingPreview,
   templateVersionInputFromDraft,
 } from './ConsolePages';
 import type { ProviderCapabilityApiRecord } from '../api/console';
@@ -51,7 +54,7 @@ function renderPage(node: ReactElement) {
 }
 
 describe('critical console pages', () => {
-  const firstBatchProviderLabels = [
+  const supportedProviderLabels = [
     ['webhook', '通用 Webhook'],
     ['self', '本平台级联'],
     ['pushplus', 'PushPlus'],
@@ -72,6 +75,10 @@ describe('critical console pages', () => {
     ['gov_cloud', '随申办政务云'],
     ['sms', '短信兼容'],
     ['custom_token', '自定义 Token 平台'],
+    ['ntfy', 'ntfy'],
+    ['gotify', 'Gotify'],
+    ['bark', 'Bark'],
+    ['pushme', 'PushMe'],
   ] as const;
 
   const templateCapabilities: ProviderCapabilityApiRecord[] = [
@@ -354,12 +361,12 @@ describe('critical console pages', () => {
     expect(headers['X-MGP-Signature']).not.toBe('sha256=');
   });
 
-  it('localizes first batch provider labels and exposes them as provider page options', () => {
+  it('localizes supported provider labels and exposes them as provider page options', () => {
     const providersMarkup = renderPage(
       <ProvidersPage lastUpdated={lastUpdated} onRefresh={() => undefined} />,
     );
 
-    for (const [providerType, label] of firstBatchProviderLabels) {
+    for (const [providerType, label] of supportedProviderLabels) {
       expect(getProviderTypeLabel(providerType)).toBe(label);
       expect(providersMarkup).toContain(label);
     }
@@ -411,6 +418,43 @@ describe('critical console pages', () => {
       expect(textInput.template_body).toContain('"content"');
       expect(textInput.template_body).toContain('"url"');
       expect(markdownInput.template_body).toContain('"markdown"');
+    }
+  });
+
+  it('uses P2 provider fields and notice template fallbacks', () => {
+    const providers = [
+      ['ntfy', 'Topic', ['服务地址', '优先级']],
+      ['gotify', 'Gotify App Token', ['服务地址', '优先级']],
+      ['bark', 'Bark Device Key', ['服务地址', '通知级别']],
+      ['pushme', 'PushMe Push Key', ['服务地址', '内容类型']],
+    ] as const;
+
+    for (const [providerType, credentialLabel, extraLabels] of providers) {
+      const providerMarkup = renderPage(
+        <ProviderConfigForm
+          value={createProviderDraft(providerType, 1)}
+          onChange={() => undefined}
+          capabilities={[]}
+        />,
+      );
+      expect(providerMarkup).toContain(credentialLabel);
+      for (const label of extraLabels) {
+        expect(providerMarkup).toContain(label);
+      }
+
+      const markup = renderPage(
+        <TemplateEditorForm
+          value={createTemplateDraft([], [], providerType, 'notice')}
+          onChange={() => undefined}
+          sourceRows={[]}
+          capabilities={[]}
+        />,
+      );
+      const input = templateVersionInputFromDraft(createTemplateDraft([], [], providerType, 'notice'));
+      expect(markup).toContain(getProviderTypeLabel(providerType));
+      expect(markup).toContain('正文内容');
+      expect(input.message_type).toBe('notice');
+      expect(input.template_body).toContain('"body"');
     }
   });
 
@@ -515,7 +559,7 @@ describe('critical console pages', () => {
       <ProviderConfigForm value={draft} onChange={() => undefined} capabilities={capabilities} />,
     );
 
-    expect(markup).toContain('企业微信应用消息');
+    expect(markup).toContain('企业微信应用兼容');
     expect(markup).toContain('企业应用');
     expect(markup).toContain('text、markdown');
     expect(markup).toContain('企业 ID');
@@ -800,8 +844,129 @@ describe('critical console pages', () => {
 
     expect(markup).toContain('推送渠道类型');
     expect(markup).toContain('消息类型');
-    expect(markup).toContain('企业微信应用消息');
+    expect(markup).toContain('企业微信应用兼容');
     expect(markup).toContain('正文内容');
+    expect(markup).not.toContain('能力名称');
+    expect(markup).not.toContain('字段来源');
+    expect(markup).not.toContain('内置默认消息 schema');
+    expect(markup).not.toContain('例如：通知');
+
+    const nameIndex = markup.indexOf('模板名称');
+    const enabledIndex = markup.indexOf('启停');
+    const sourceIndex = markup.indexOf('来源');
+    expect(nameIndex).toBeGreaterThanOrEqual(0);
+    expect(enabledIndex).toBeGreaterThan(nameIndex);
+    expect(enabledIndex).toBeLessThan(sourceIndex);
+  });
+
+  it('renders long message content fields as multiline textareas', () => {
+    const draft = createTemplateDraft([], templateCapabilities);
+    const markup = renderPage(
+      <TemplateEditorForm
+        value={draft}
+        onChange={() => undefined}
+        sourceRows={[]}
+        capabilities={templateCapabilities}
+      />,
+    );
+
+    const textareaCount = markup.match(/<textarea/g)?.length ?? 0;
+    expect(markup).toContain('正文内容');
+    expect(textareaCount).toBeGreaterThanOrEqual(2);
+  });
+
+  it('renders template variables as direct clickable copy text without a copy button', () => {
+    type VariableTokenComponent = (props: { path: string; onCopy: (path: string) => void }) => ReactElement;
+    const VariableToken = (ConsolePages as typeof ConsolePages & { TemplateVariableCopyText?: VariableTokenComponent })
+      .TemplateVariableCopyText;
+
+    expect(VariableToken).toBeTypeOf('function');
+    if (!VariableToken) {
+      throw new Error('TemplateVariableCopyText is not exported');
+    }
+
+    const markup = renderPage(<VariableToken path="payload.title" onCopy={() => undefined} />);
+
+    expect(markup).toContain('{{ payload.title }}');
+    expect(markup).toContain('role="button"');
+    expect(markup).toContain('tabindex="0"');
+    expect(markup).not.toContain('<button');
+    expect(markup).not.toContain('复制 {{ payload.title }}');
+  });
+
+  it('uses localized provider labels over backend capability names in template editor', () => {
+    const draft = createTemplateDraft([], [
+      {
+        provider_type: 'feishu',
+        display_name: 'Feishu application message (legacy)',
+        supported_message_types: ['text'],
+      },
+    ]);
+    const markup = renderPage(
+      <TemplateEditorForm
+        value={draft}
+        onChange={() => undefined}
+        sourceRows={[]}
+        capabilities={[
+          {
+            provider_type: 'feishu',
+            display_name: 'Feishu application message (legacy)',
+            supported_message_types: ['text'],
+          },
+        ]}
+      />,
+    );
+
+    expect(markup).toContain('飞书兼容');
+    expect(markup).not.toContain('Feishu application message (legacy)');
+  });
+
+  it('uses selected source latest payload as the template sample payload', () => {
+    const sources = [
+      {
+        id: 'src-a',
+        code: 'orders',
+        name: '订单来源',
+        latestPayload: JSON.stringify({ title: '订单超时', content: '订单 A 已超时' }),
+        lastInboundAt: '2026-05-14 10:00:00',
+      },
+      {
+        id: 'src-b',
+        code: 'alerts',
+        name: '告警来源',
+        latestPayload: JSON.stringify({ title: 'CPU 告警', content: 'CPU 90%' }),
+        lastInboundAt: '2026-05-14 10:05:00',
+      },
+    ];
+    const draft = createTemplateDraft(sources, templateCapabilities);
+    const switched = templateDraftWithSourcePayload(draft, sources, 'src-b');
+
+    expect(templateVersionInputFromDraft(draft).sample_payload).toEqual({
+      title: '订单超时',
+      content: '订单 A 已超时',
+    });
+    expect(templateVersionInputFromDraft(switched).sample_payload).toEqual({
+      title: 'CPU 告警',
+      content: 'CPU 90%',
+    });
+  });
+
+  it('renders template preview from sample payload values instead of variables', () => {
+    const draft = createTemplateDraft(
+      [
+        {
+          id: 'src-a',
+          code: 'alerts',
+          name: '告警来源',
+          latestPayload: JSON.stringify({ title: 'CPU 告警', content: 'CPU 90%' }),
+        },
+      ],
+      templateCapabilities,
+    );
+
+    expect(templateRenderedPreview(draft)).toContain('CPU 90%');
+    expect(templateRenderedPreview(draft)).not.toContain('{{ payload.content');
+    expect(templateUserFacingPreview(draft)).toContain('CPU 90%');
   });
 
   it('changes template content fields when provider and message type switch', () => {
@@ -836,14 +1001,16 @@ describe('critical console pages', () => {
     expect(emailMarkup).not.toContain('Markdown 内容');
   });
 
-  it('builds template version input with field expressions and default text', () => {
+  it('builds template version input with field expressions and blank default text', () => {
     const draft = createTemplateDraft([], templateCapabilities);
     const input = templateVersionInputFromDraft(draft);
+    const body = JSON.parse(input.template_body) as Record<string, string>;
 
     expect(input.target_provider_type).toBe('wecom');
     expect(input.message_type).toBe('text');
     expect(input.template_body).toContain('"content"');
-    expect(input.template_body).toContain("{{ payload.content | default('通知') }}");
+    expect(body.content).toBe('{{ payload.content }}');
+    expect(input.template_body).not.toContain("default('通知')");
   });
 
   it('renders and switches custom JSON template content mode', () => {

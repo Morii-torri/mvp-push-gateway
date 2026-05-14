@@ -124,11 +124,7 @@ func (h *Handler) templateValidationAction(w http.ResponseWriter, r *http.Reques
 		writeJSON(w, status, validationResponse{Result: result})
 	default:
 		result := h.templates.Validate(request)
-		status := http.StatusOK
-		if result.Status == "invalid" {
-			status = http.StatusBadRequest
-		}
-		writeJSON(w, status, validationResponse{Result: result})
+		writeJSON(w, http.StatusOK, validationResponse{Result: result})
 	}
 }
 

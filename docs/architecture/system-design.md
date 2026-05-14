@@ -12,7 +12,7 @@ MVP Push Gateway 是一个综合消息推送网关。它面向内部系统、政
 - 前端：React + Vite + TypeScript + Ant Design。
 - 路由画布：React Flow。
 - 模板编辑：Monaco Editor。
-- 模板引擎：Jinja-like 语法，第一版 Go 实现采用 `pongo2/v7`，通过网关自研 `TemplateEngine` 接口封装。
+- 模板引擎：Jinja-like 语法，第一版 Go 实现采用 `pongo2/v6`，通过网关自研 `TemplateEngine` 接口封装。
 - 图表：Ant Design Charts 或 ECharts。
 - API 契约：OpenAPI。
 
@@ -181,7 +181,7 @@ MVP Push Gateway 是一个综合消息推送网关。它面向内部系统、政
 
 #### 模板引擎选型
 
-第一版模板采用 Jinja-like 语法，底层使用 Go 生态的 `pongo2/v7`。用户侧保持 `{{ payload.title }}`、`{% if ... %}`、`{% for ... %}` 这类表达方式，降低从当前系统迁移和后台运营配置的理解成本。
+第一版模板采用 Jinja-like 语法，底层使用 Go 生态的 `pongo2/v6`，并通过网关自研 `TemplateEngine` 接口隔离业务边界。用户侧保持 `{{ payload.title }}`、`{% if ... %}`、`{% for ... %}` 这类表达方式，降低从当前系统迁移和后台运营配置的理解成本。
 
 不采用 `html/template` 作为主模板引擎。它适合 Go 服务端 HTML 页面渲染，安全稳定，但语法对非开发用户不够友好，且本系统主要渲染 JSON、Markdown、文本和 Webhook body，不是 HTML 页面。
 

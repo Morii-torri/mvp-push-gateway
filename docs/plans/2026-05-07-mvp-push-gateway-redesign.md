@@ -13,7 +13,7 @@
 2. 模板页左侧最近 payload 解析结果展示两列：
    - 可复制变量，例如 `{{ payload.title }}`
    - 当前样例值
-3. 模板引擎采用 Jinja-like 语法，第一版 Go 后端使用 `pongo2/v7`，但通过内部 `TemplateEngine` 接口、安全白名单和保存期校验封装，不直接把第三方库能力暴露给业务。
+3. 模板引擎采用 Jinja-like 语法，第一版 Go 后端使用 `pongo2/v6`，但通过内部 `TemplateEngine` 接口、安全白名单和保存期校验封装，不直接把第三方库能力暴露给业务。
 4. 上级平台实例需要支持可配置主动限流、独立并发上限、超时、重试和死信策略。
 5. 数据库连接池需要按 API、planning、sending、maintenance 分离。
 6. 路由发布时编译为执行模型，planning worker 按来源和版本缓存；执行时先粗过滤，再完整条件判断，并记录慢规则。

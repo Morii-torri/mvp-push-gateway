@@ -1,4 +1,3 @@
-import Descriptions from 'antd/es/descriptions';
 import Divider from 'antd/es/divider';
 import Form from 'antd/es/form';
 import Input from 'antd/es/input';
@@ -25,7 +24,17 @@ import {
 } from './shared';
 import { firstString, parseJSONOrEmpty, providerFieldLabel } from './providerConfig';
 
-export type TemplateSourceRow = { id: string; name?: string; code?: string };
+export type TemplateSourceRow = {
+  id: string;
+  name?: string;
+  code?: string;
+  latestPayload?: string;
+  lastInboundAt?: string;
+  raw?: {
+    latest_payload_sample?: JSONValue;
+    latest_payload_sample_updated_at?: string | null;
+  };
+};
 
 export type TemplateContentMode = 'fields' | 'custom_json';
 
@@ -94,6 +103,7 @@ const messageTypeLabels: Record<string, string> = {
   card: '卡片',
   news: '图文',
   template: '短信模板',
+  notice: '通知',
   json: 'JSON',
 };
 
@@ -115,6 +125,34 @@ function contentField(
   };
 }
 
+const multilineTemplateFieldTypes = new Set(['textarea', 'markdown', 'html', 'json', 'object', 'array']);
+const multilineTemplateFieldKeys = new Set([
+  'body',
+  'content',
+  'description',
+  'desp',
+  'html',
+  'markdown',
+  'message',
+  'params',
+  'payload',
+  'template_params',
+  'text',
+]);
+const multilineTemplateFieldLabelPattern = /正文|内容|描述|markdown|html|json|payload|参数|消息/;
+
+function isMultilineTemplateField(field: TemplateContentField): boolean {
+  const key = field.key.toLowerCase();
+  const lastKeyPart = key.split('.').pop() ?? key;
+  const label = field.label.toLowerCase();
+  const type = field.type.toLowerCase();
+  return (
+    multilineTemplateFieldTypes.has(type) ||
+    multilineTemplateFieldKeys.has(lastKeyPart) ||
+    multilineTemplateFieldLabelPattern.test(label)
+  );
+}
+
 function titleContentUrlFields(): TemplateContentField[] {
   return [
     contentField('title', '标题', 'string', '通知', '{{ payload.title }}'),
@@ -128,6 +166,25 @@ function markdownNoticeFields(): TemplateContentField[] {
     contentField('title', '标题', 'string', '通知', '{{ payload.title }}'),
     contentField('markdown', 'Markdown 内容', 'string', '', '{{ payload.content }}'),
     contentField('url', '跳转链接', 'string', '', '{{ payload.url }}'),
+  ];
+}
+
+function noticeFields(): TemplateContentField[] {
+  return [
+    contentField('title', '标题', 'string', '通知', '{{ payload.title }}'),
+    contentField('body', '正文内容', 'string', '', '{{ payload.content }}'),
+    contentField('url', '跳转链接', 'string', '', '{{ payload.url }}'),
+    contentField('format', '内容格式', 'string', 'markdown', 'markdown'),
+  ];
+}
+
+function barkNoticeFields(): TemplateContentField[] {
+  return [
+    contentField('title', '标题', 'string', '通知', '{{ payload.title }}'),
+    contentField('subtitle', '副标题', 'string', '', '{{ payload.subtitle }}'),
+    contentField('body', '正文内容', 'string', '', '{{ payload.content }}'),
+    contentField('url', '跳转链接', 'string', '', '{{ payload.url }}'),
+    contentField('level', '通知级别', 'string', 'active', '{{ payload.level }}'),
   ];
 }
 
@@ -216,6 +273,30 @@ const fallbackTemplateSchemas: Record<ProviderKind, Record<string, { label: stri
     markdown: {
       label: 'Markdown',
       fields: markdownNoticeFields(),
+    },
+  },
+  ntfy: {
+    notice: {
+      label: '通知',
+      fields: noticeFields(),
+    },
+  },
+  gotify: {
+    notice: {
+      label: '通知',
+      fields: noticeFields(),
+    },
+  },
+  bark: {
+    notice: {
+      label: '通知',
+      fields: barkNoticeFields(),
+    },
+  },
+  pushme: {
+    notice: {
+      label: '通知',
+      fields: noticeFields(),
     },
   },
   email: {
@@ -434,9 +515,10 @@ function templateMessageTypes(providerType: ProviderKind, capabilities: Provider
 function templateProviderOptions(capabilities: ProviderCapabilityApiRecord[]): Array<{ label: string; value: ProviderKind }> {
   return providerTypeOptions.map((option) => {
     const capability = capabilities.find((item) => item.provider_type === option.value && item.display_name);
+    const localized = getProviderTypeLabel(option.value);
     return {
       value: option.value,
-      label: capability?.display_name ?? option.label,
+      label: localized !== '未知平台' ? localized : capability?.display_name ?? option.label,
     };
   });
 }
@@ -531,9 +613,10 @@ function templateCapabilityView(
   const fields = extractTemplateFieldsFromSchema(schema);
   const fallbackFields = extractTemplateFieldsFromSchema(fallbackTemplateSchema(providerType, selectedMessageType));
   const primary = records.find((record) => record.message_type === selectedMessageType) ?? records[0];
+  const localized = getProviderTypeLabel(providerType);
   return {
     providerType,
-    displayName: primary?.display_name || getProviderTypeLabel(providerType),
+    displayName: localized !== '未知平台' ? localized : primary?.display_name || localized,
     messageTypes,
     messageType: selectedMessageType,
     fields: fields.length ? fields : fallbackFields,
@@ -663,7 +746,7 @@ function defaultTemplateFieldValues(
   return fields.reduce<TemplateFieldValues>((values, field) => {
     values[field.key] = currentValues[field.key] ?? {
       expression: field.defaultExpression,
-      defaultValue: field.defaultValue,
+      defaultValue: '',
     };
     return values;
   }, {});
@@ -691,6 +774,27 @@ function samplePayloadFromFields(fields: TemplateContentField[]): JSONValue {
     payload[payloadKeyForContentField(field.key)] = sampleValueForTemplateField(field);
   }
   return payload;
+}
+
+function sourcePayloadValue(source: TemplateSourceRow | undefined): JSONValue | null {
+  const rawPayload = source?.raw?.latest_payload_sample;
+  if (rawPayload !== undefined && rawPayload !== null) {
+    return rawPayload;
+  }
+  const latestPayload = source?.latestPayload;
+  if (typeof latestPayload === 'string' && latestPayload.trim() && latestPayload !== '暂无') {
+    try {
+      return JSON.parse(latestPayload) as JSONValue;
+    } catch {
+      return null;
+    }
+  }
+  return null;
+}
+
+export function samplePayloadTextFromSource(source: TemplateSourceRow | undefined, fallback: string): string {
+  const payload = sourcePayloadValue(source);
+  return payload === null ? fallback : stringifyJSON(payload);
 }
 
 function templateBodyObjectFromFieldValues(values: TemplateFieldValues): Record<string, string> {
@@ -790,6 +894,7 @@ export function createTemplateDraft(
 ): TemplateDraft {
   const view = templateCapabilityView(providerType, messageType, capabilities);
   const fieldValues = defaultTemplateFieldValues(view.fields);
+  const fallbackSamplePayloadText = stringifyJSON(samplePayloadFromFields(view.fields));
   return {
     name: '',
     description: '',
@@ -801,7 +906,7 @@ export function createTemplateDraft(
     fieldValues,
     customJsonText: stringifyTemplateBodyFromFieldValues(fieldValues),
     messageBodySchemaText: stringifyJSON(view.schema),
-    samplePayloadText: stringifyJSON(samplePayloadFromFields(view.fields)),
+    samplePayloadText: samplePayloadTextFromSource(sourceRows[0], fallbackSamplePayloadText),
   };
 }
 
@@ -863,7 +968,7 @@ export function switchTemplateProviderType(
     fieldValues,
     customJsonText: stringifyTemplateBodyFromFieldValues(fieldValues),
     messageBodySchemaText: stringifyJSON(view.schema),
-    samplePayloadText: stringifyJSON(samplePayloadFromFields(view.fields)),
+    samplePayloadText: draft.samplePayloadText || stringifyJSON(samplePayloadFromFields(view.fields)),
   };
 }
 
@@ -880,7 +985,20 @@ export function switchTemplateMessageType(
     fieldValues,
     customJsonText: stringifyTemplateBodyFromFieldValues(fieldValues),
     messageBodySchemaText: stringifyJSON(view.schema),
-    samplePayloadText: stringifyJSON(samplePayloadFromFields(view.fields)),
+    samplePayloadText: draft.samplePayloadText || stringifyJSON(samplePayloadFromFields(view.fields)),
+  };
+}
+
+export function templateDraftWithSourcePayload(
+  draft: TemplateDraft,
+  sourceRows: TemplateSourceRow[],
+  sourceId: string,
+): TemplateDraft {
+  const fallback = draft.samplePayloadText || stringifyJSON(samplePayloadFromFields(baseFieldList(draft)));
+  return {
+    ...draft,
+    sourceId,
+    samplePayloadText: samplePayloadTextFromSource(sourceRows.find((source) => source.id === sourceId), fallback),
   };
 }
 
@@ -929,6 +1047,86 @@ export function templatePreviewSnapshot(draft: TemplateDraft): string {
     template_body: safeJSONPreview(templateBodyTextFromDraft(draft)),
     sample_payload: safeJSONPreview(draft.samplePayloadText),
   });
+}
+
+function valueAtPayloadPath(payload: JSONValue, path: string): JSONValue | undefined {
+  const parts = path.trim().split('.');
+  if (parts[0] !== 'payload') {
+    return undefined;
+  }
+  let current: JSONValue | undefined = payload;
+  for (const part of parts.slice(1)) {
+    if (!isRecord(current)) {
+      return undefined;
+    }
+    current = current[part];
+  }
+  return current;
+}
+
+function templateValueToText(value: JSONValue | undefined, fallback = ''): string {
+  if (value === undefined || value === null || value === '') {
+    return fallback;
+  }
+  if (typeof value === 'string') {
+    return value;
+  }
+  if (typeof value === 'number' || typeof value === 'boolean') {
+    return String(value);
+  }
+  return stringifyJSON(value);
+}
+
+function defaultFilterValue(filter: string): string {
+  const matched =
+    filter.match(/^default\(\s*'([\s\S]*?)'\s*\)$/) ??
+    filter.match(/^default\(\s*"([\s\S]*?)"\s*\)$/) ??
+    filter.match(/^default\s*:\s*"([\s\S]*?)"\s*$/) ??
+    filter.match(/^default\s*:\s*'([\s\S]*?)'\s*$/);
+  return matched?.[1] ?? '';
+}
+
+function renderTemplateExpression(expression: string, payload: JSONValue): string {
+  const [pathExpression, ...filters] = expression.split('|').map((part) => part.trim());
+  const fallback = filters.map(defaultFilterValue).find((value) => value !== '') ?? '';
+  return templateValueToText(valueAtPayloadPath(payload, pathExpression), fallback);
+}
+
+function renderTemplateTextWithPayload(templateText: string, payload: JSONValue): string {
+  return templateText.replace(/\{\{\s*([\s\S]*?)\s*\}\}/g, (_, expression: string) =>
+    renderTemplateExpression(expression, payload),
+  );
+}
+
+export function templateRenderedPreviewValue(draft: TemplateDraft): JSONValue {
+  const rendered = renderTemplateTextWithPayload(templateBodyTextFromDraft(draft), safeJSONPreview(draft.samplePayloadText));
+  return safeJSONPreview(rendered);
+}
+
+export function templateRenderedPreview(draft: TemplateDraft): string {
+  return stringifyJSON(templateRenderedPreviewValue(draft), templateBodyTextFromDraft(draft));
+}
+
+function firstRenderedString(record: Record<string, JSONValue>, keys: string[]): string {
+  for (const key of keys) {
+    const value = record[key];
+    if (typeof value === 'string' && value.trim()) {
+      return value;
+    }
+  }
+  return '';
+}
+
+export function templateUserFacingPreview(draft: TemplateDraft): string {
+  const rendered = templateRenderedPreviewValue(draft);
+  if (!isRecord(rendered)) {
+    return typeof rendered === 'string' ? rendered : stringifyJSON(rendered);
+  }
+  const title = firstRenderedString(rendered, ['title', 'subject']);
+  const body =
+    firstRenderedString(rendered, ['body', 'content', 'message', 'markdown', 'html', 'description', 'desp']) ||
+    stringifyJSON(rendered);
+  return [title, body].filter(Boolean).join('\n\n');
 }
 
 export function templateFeedbackFromResult(result: JSONValue): TemplateFeedback {
@@ -1024,15 +1222,25 @@ export function TemplateEditorForm({
 
   return (
     <Form layout="vertical">
-      <Form.Item label="模板名称" required>
-        <Input value={value.name} onChange={(event) => update({ name: event.target.value })} />
-      </Form.Item>
+      <div className="template-name-row">
+        <Form.Item label="模板名称" required>
+          <Input value={value.name} onChange={(event) => update({ name: event.target.value })} />
+        </Form.Item>
+        <Form.Item label="启停">
+          <Switch
+            checked={value.enabled}
+            onChange={(enabled) => update({ enabled })}
+            checkedChildren="启用"
+            unCheckedChildren="停用"
+          />
+        </Form.Item>
+      </div>
       <div className="two-column-form">
         <Form.Item label="来源" required>
           <Select
             value={value.sourceId}
             options={sourceRows.map((source) => ({ label: `${source.name} / ${source.code}`, value: source.id }))}
-            onChange={(sourceId) => update({ sourceId })}
+            onChange={(sourceId) => onChange(templateDraftWithSourcePayload(value, sourceRows, sourceId))}
             placeholder="选择来源"
           />
         </Form.Item>
@@ -1066,15 +1274,6 @@ export function TemplateEditorForm({
           />
         </Form.Item>
       </div>
-      <div className="provider-capability-summary">
-        <Descriptions column={1} size="small" bordered>
-          <Descriptions.Item label="能力名称">{view.displayName}</Descriptions.Item>
-          <Descriptions.Item label="支持消息类型">{view.messageTypes.map(getMessageTypeLabel).join('、')}</Descriptions.Item>
-          <Descriptions.Item label="字段来源">
-            {view.schemaSource === 'capability' ? '平台能力元数据' : '内置默认消息 schema'}
-          </Descriptions.Item>
-        </Descriptions>
-      </div>
       {value.contentMode === 'fields' ? (
         <>
           <Divider orientation="left">消息内容字段</Divider>
@@ -1082,26 +1281,40 @@ export function TemplateEditorForm({
             {view.fields.map((field) => {
               const fieldValue = value.fieldValues[field.key] ?? {
                 expression: field.defaultExpression,
-                defaultValue: field.defaultValue,
+                defaultValue: '',
               };
+              const multiline = isMultilineTemplateField(field);
               return (
                 <div className="template-content-field" key={field.key}>
-                  <Form.Item
-                    label={`${field.label}${field.required ? ' *' : ''}`}
-                    extra={`字段 key：${field.key}；支持 {{ payload.title }} 与 default 过滤器。`}
-                  >
-                    <Input
-                      value={fieldValue.expression}
-                      placeholder={field.placeholder}
-                      onChange={(event) => updateFieldValue(field, { expression: event.target.value })}
-                    />
+                  <Form.Item label={`${field.label}${field.required ? ' *' : ''}`}>
+                    {multiline ? (
+                      <Input.TextArea
+                        value={fieldValue.expression}
+                        placeholder={field.placeholder}
+                        autoSize={{ minRows: 2, maxRows: 8 }}
+                        onChange={(event) => updateFieldValue(field, { expression: event.target.value })}
+                      />
+                    ) : (
+                      <Input
+                        value={fieldValue.expression}
+                        placeholder={field.placeholder}
+                        onChange={(event) => updateFieldValue(field, { expression: event.target.value })}
+                      />
+                    )}
                   </Form.Item>
                   <Form.Item label="默认值">
-                    <Input
-                      value={fieldValue.defaultValue}
-                      placeholder="例如：通知"
-                      onChange={(event) => updateFieldValue(field, { defaultValue: event.target.value })}
-                    />
+                    {multiline ? (
+                      <Input.TextArea
+                        value={fieldValue.defaultValue}
+                        autoSize={{ minRows: 2, maxRows: 6 }}
+                        onChange={(event) => updateFieldValue(field, { defaultValue: event.target.value })}
+                      />
+                    ) : (
+                      <Input
+                        value={fieldValue.defaultValue}
+                        onChange={(event) => updateFieldValue(field, { defaultValue: event.target.value })}
+                      />
+                    )}
                   </Form.Item>
                 </div>
               );
@@ -1117,35 +1330,11 @@ export function TemplateEditorForm({
           />
         </Form.Item>
       )}
-      <div className="two-column-form">
-        <Form.Item label="样例 Payload JSON" required>
-          <Input.TextArea
-            value={value.samplePayloadText}
-            onChange={(event) => update({ samplePayloadText: event.target.value })}
-            rows={6}
-          />
-        </Form.Item>
-        <Form.Item label="消息体 Schema JSON">
-          <Input.TextArea
-            value={value.messageBodySchemaText}
-            onChange={(event) => update({ messageBodySchemaText: event.target.value })}
-            rows={6}
-          />
-        </Form.Item>
-      </div>
       <Form.Item label="描述">
         <Input.TextArea
           rows={3}
           value={value.description}
           onChange={(event) => update({ description: event.target.value })}
-        />
-      </Form.Item>
-      <Form.Item label="启停">
-        <Switch
-          checked={value.enabled}
-          onChange={(enabled) => update({ enabled })}
-          checkedChildren="启用"
-          unCheckedChildren="停用"
         />
       </Form.Item>
     </Form>

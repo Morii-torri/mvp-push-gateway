@@ -10,6 +10,10 @@ export type ProviderType =
   | 'pushplus'
   | 'wxpusher'
   | 'serverchan'
+  | 'ntfy'
+  | 'gotify'
+  | 'bark'
+  | 'pushme'
   | 'email'
   | 'aliyun_sms'
   | 'tencent_sms'
@@ -78,6 +82,10 @@ const providerTypeLabels: Record<ProviderType, string> = {
   pushplus: 'PushPlus',
   wxpusher: 'WxPusher',
   serverchan: 'Server酱',
+  ntfy: 'ntfy',
+  gotify: 'Gotify',
+  bark: 'Bark',
+  pushme: 'PushMe',
   email: 'SMTP 邮件',
   aliyun_sms: '阿里云短信',
   tencent_sms: '腾讯云短信',

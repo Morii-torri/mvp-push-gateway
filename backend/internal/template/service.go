@@ -11,8 +11,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/flosch/pongo2/v6"
-
 	"mvp-push-gateway/backend/internal/provider"
 )
 
@@ -109,11 +107,29 @@ type Store interface {
 }
 
 type Service struct {
-	store Store
+	store  Store
+	engine TemplateEngine
 }
 
-func NewService(store Store) *Service {
-	return &Service{store: store}
+type ServiceOption func(*Service)
+
+func WithTemplateEngine(engine TemplateEngine) ServiceOption {
+	return func(s *Service) {
+		if engine != nil {
+			s.engine = engine
+		}
+	}
+}
+
+func NewService(store Store, options ...ServiceOption) *Service {
+	service := &Service{
+		store:  store,
+		engine: DefaultTemplateEngine(),
+	}
+	for _, option := range options {
+		option(service)
+	}
+	return service
 }
 
 func (s *Service) ListTemplates(ctx context.Context) ([]Template, error) {
@@ -161,7 +177,7 @@ func (s *Service) Parse(input VersionInput) (ValidationResult, error) {
 	if result.Status != "valid" {
 		return result, ErrInvalidTemplate
 	}
-	if _, err := parsePongoTemplate(input.TemplateBody); err != nil {
+	if err := s.engine.Compile(input.TemplateBody); err != nil {
 		result.Status = "invalid"
 		result.Errors = append(result.Errors, ValidationError{
 			Code:    "MGP-TPL-001",
@@ -192,8 +208,7 @@ func (s *Service) Validate(input VersionInput) ValidationResult {
 		return result
 	}
 
-	tpl, err := parsePongoTemplate(input.TemplateBody)
-	if err != nil {
+	if err := s.engine.Compile(input.TemplateBody); err != nil {
 		result.Status = "invalid"
 		result.Errors = append(result.Errors, ValidationError{Code: "MGP-TPL-001", Message: err.Error()})
 		return result
@@ -254,7 +269,7 @@ func (s *Service) Validate(input VersionInput) ValidationResult {
 		return result
 	}
 
-	preview, err := tpl.Execute(pongo2.Context{"payload": payloadMap})
+	preview, err := s.engine.Render(input.TemplateBody, map[string]any{"payload": payloadMap})
 	if err != nil {
 		result.Status = "invalid"
 		result.Errors = append(result.Errors, ValidationError{Code: "MGP-TPL-005", Message: err.Error()})
@@ -416,10 +431,6 @@ func isRecipientFieldName(name string) bool {
 	default:
 		return false
 	}
-}
-
-func parsePongoTemplate(templateBody string) (*pongo2.Template, error) {
-	return pongo2.FromString(normalizeDefaultFilterSyntax(templateBody))
 }
 
 func normalizeDefaultFilterSyntax(templateBody string) string {

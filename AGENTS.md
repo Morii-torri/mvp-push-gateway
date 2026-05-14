@@ -19,7 +19,7 @@
 - 路由画布：React Flow。
 - 数据请求：TanStack Query。
 - 模板编辑：Monaco Editor。
-- 模板引擎：Jinja-like 语法，第一版采用 Go `pongo2/v7`，但必须通过内部 `TemplateEngine` 接口、安全白名单和保存期校验封装。
+- 模板引擎：Jinja-like 语法，第一版采用 Go `pongo2/v6`，但业务代码必须通过内部 `TemplateEngine` 接口、安全白名单和保存期校验封装。
 - API：OpenAPI 优先，后端生成/维护接口契约。
 
 ## 架构原则

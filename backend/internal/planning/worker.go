@@ -11,7 +11,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/flosch/pongo2/v6"
 	"github.com/google/uuid"
 
 	"mvp-push-gateway/backend/internal/delivery"
@@ -531,11 +530,7 @@ func decodeRoutePlanPayload(raw json.RawMessage) (RoutePlanJobPayload, error) {
 }
 
 func renderTemplate(version msgtemplate.TemplateVersion, message MessageRecord, payload map[string]any, now time.Time) (json.RawMessage, error) {
-	tpl, err := pongo2.FromString(version.TemplateBody)
-	if err != nil {
-		return nil, err
-	}
-	rendered, err := tpl.Execute(pongo2.Context{
+	rendered, err := msgtemplate.DefaultTemplateEngine().Render(version.TemplateBody, map[string]any{
 		"payload": payload,
 		"message": map[string]any{
 			"id":       message.ID,

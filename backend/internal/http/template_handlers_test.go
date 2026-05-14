@@ -20,9 +20,16 @@ func TestTemplateValidationHandlersReturnTemplateValidationErrors(t *testing.T) 
 		httpapi.WithTemplateService(msgtemplate.NewService(&httpTemplateStore{})),
 	)
 
-	for _, path := range []string{"/api/v1/templates/parse", "/api/v1/templates/preview", "/api/v1/templates/validate"} {
-		t.Run(path, func(t *testing.T) {
-			req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(`{
+	for _, tc := range []struct {
+		path       string
+		wantStatus int
+	}{
+		{path: "/api/v1/templates/parse", wantStatus: http.StatusBadRequest},
+		{path: "/api/v1/templates/preview", wantStatus: http.StatusBadRequest},
+		{path: "/api/v1/templates/validate", wantStatus: http.StatusOK},
+	} {
+		t.Run(tc.path, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodPost, tc.path, strings.NewReader(`{
 				"message_type":"text",
 				"target_provider_type":"wecom",
 				"template_body":"{\"touser\":\"{{ payload.user }}\",\"content\":\"{{ payload.title }}\"}",
@@ -32,8 +39,8 @@ func TestTemplateValidationHandlersReturnTemplateValidationErrors(t *testing.T) 
 			rec := httptest.NewRecorder()
 			handler.ServeHTTP(rec, req)
 
-			if rec.Code != http.StatusBadRequest {
-				t.Fatalf("expected status 400, got %d body=%s", rec.Code, rec.Body.String())
+			if rec.Code != tc.wantStatus {
+				t.Fatalf("expected status %d, got %d body=%s", tc.wantStatus, rec.Code, rec.Body.String())
 			}
 
 			var body struct {

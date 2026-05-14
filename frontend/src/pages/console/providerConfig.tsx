@@ -203,6 +203,82 @@ const providerPresets: Record<ProviderKind, ProviderPreset> = {
     testRecipient: '-',
     testBody: 'Server酱测试消息',
   },
+  ntfy: {
+    tokenEndpoint: '无鉴权 / Basic / Bearer',
+    tokenRequest: 'server_url + auth_type + credential',
+    tokenResponsePath: '-',
+    tokenPlacement: 'Header.Authorization',
+    sendEndpoint: '内置 ntfy adapter',
+    recipientMapping: '无需接收人；topic 由渠道配置决定',
+    bodyMapping: 'adapter 根据 title/body/priority/tags 生成文本请求',
+    qps: 5,
+    minuteLimit: 300,
+    burst: 10,
+    concurrency: 2,
+    timeoutMs: 5000,
+    retryPolicy: '3 次线性重试',
+    retryInterval: '1s / 2s / 3s',
+    deadLetterPolicy: '重试耗尽进入死信',
+    testRecipient: '-',
+    testBody: 'ntfy 测试消息',
+  },
+  gotify: {
+    tokenEndpoint: '固定 Gotify App Token',
+    tokenRequest: 'app_token',
+    tokenResponsePath: '-',
+    tokenPlacement: 'Query.token',
+    sendEndpoint: '内置 Gotify adapter',
+    recipientMapping: '无需接收人；应用 Token 绑定目标应用',
+    bodyMapping: 'adapter 根据 title/body/priority/content_type 生成请求体',
+    qps: 10,
+    minuteLimit: 600,
+    burst: 20,
+    concurrency: 3,
+    timeoutMs: 5000,
+    retryPolicy: '3 次线性重试',
+    retryInterval: '1s / 2s / 3s',
+    deadLetterPolicy: '重试耗尽进入死信',
+    testRecipient: '-',
+    testBody: 'Gotify 测试消息',
+  },
+  bark: {
+    tokenEndpoint: '固定 Bark Device Key',
+    tokenRequest: 'device_key 或 device_keys',
+    tokenResponsePath: '-',
+    tokenPlacement: 'body.device_key',
+    sendEndpoint: '内置 Bark adapter',
+    recipientMapping: 'device_key 可由渠道配置或 bark_device_key 身份解析',
+    bodyMapping: 'adapter 根据 title/body/subtitle/url/level 生成请求体',
+    qps: 5,
+    minuteLimit: 300,
+    burst: 10,
+    concurrency: 2,
+    timeoutMs: 5000,
+    retryPolicy: '3 次线性重试',
+    retryInterval: '1s / 2s / 3s',
+    deadLetterPolicy: '重试耗尽进入死信',
+    testRecipient: 'bark-device-key',
+    testBody: 'Bark 测试消息',
+  },
+  pushme: {
+    tokenEndpoint: '固定 PushMe Push Key / Temp Key',
+    tokenRequest: 'push_key 或 temp_key',
+    tokenResponsePath: '-',
+    tokenPlacement: 'body.push_key',
+    sendEndpoint: '内置 PushMe adapter',
+    recipientMapping: '无需接收人；Push Key 绑定目标设备或账号',
+    bodyMapping: 'adapter 根据 title/content/type 生成请求体',
+    qps: 2,
+    minuteLimit: 120,
+    burst: 5,
+    concurrency: 2,
+    timeoutMs: 5000,
+    retryPolicy: '3 次线性重试',
+    retryInterval: '1s / 2s / 3s',
+    deadLetterPolicy: '重试耗尽进入死信',
+    testRecipient: '-',
+    testBody: 'PushMe 测试消息',
+  },
   email: {
     tokenEndpoint: 'SMTP 登录或固定凭证',
     tokenRequest: 'username + password / app password',
@@ -543,7 +619,16 @@ function providerCategoryLabel(providerType: ProviderKind): string {
   if (providerType === 'self') {
     return '内部平台';
   }
-  if (providerType === 'pushplus' || providerType === 'wxpusher' || providerType === 'serverchan') {
+  if (providerType === 'ntfy' || providerType === 'gotify') {
+    return '自托管通知';
+  }
+  if (
+    providerType === 'pushplus' ||
+    providerType === 'wxpusher' ||
+    providerType === 'serverchan' ||
+    providerType === 'bark' ||
+    providerType === 'pushme'
+  ) {
     return '轻量通知';
   }
   if (providerType.endsWith('_robot')) {
@@ -651,22 +736,32 @@ export function providerFieldLabel(key: string): string {
     app_key: 'App Key',
     app_secret: 'App Secret',
     app_token: '应用 Token',
+    auth_type: '鉴权类型',
     baas_url: 'API 基础地址',
     base_url: 'API 基础地址',
+    bearer_token: 'Bearer Token',
     body_template: 'Body 映射模板',
     channel: '推送渠道',
+    content_type: '内容类型',
     corpid: '企业 ID',
     corpsecret: '应用 Secret',
+    device_key: 'Device Key',
+    device_keys: 'Device Key 列表',
     endpoint: 'Endpoint',
     from: '发件人',
     headers: '请求 Header',
     hook_token: '机器人 Hook Token',
     host: 'SMTP 主机',
+    icon: '图标 URL',
+    level: '通知级别',
+    markdown: 'Markdown 开关',
     method: '请求方法',
     mode: '推送模式',
     openid: 'OpenID',
     password: '密码',
     port: '端口',
+    priority: '优先级',
+    push_key: 'Push Key',
     region: 'Region',
     robot_secret: '机器人签名 Secret',
     secret_access_key: 'Secret Access Key',
@@ -678,20 +773,24 @@ export function providerFieldLabel(key: string): string {
     sign_name: '短信签名',
     signature_id: '签名 ID',
     sms_sdk_app_id: '短信 SDK App ID',
+    server_url: '服务地址',
     source_code: '上级来源编码',
     source_token: '上级来源 Token',
     spt: 'WxPusher SPT',
+    sound: '提示音',
     supplier: '短信供应商',
     tags: '标签',
+    temp_key: '临时 Key',
     template_id: '模板 ID',
     template_code: '短信模板 Code',
-    topic: 'topic',
+    topic: 'Topic',
     topic_ids: 'Topic ID 列表',
     token: 'Token',
     token_endpoint: 'Token 获取 URL',
     token_placement: 'Token 放置',
     token_request: 'Token 请求 JSON',
     token_response_path: 'Token 字段路径',
+    type: '内容类型',
     uid_list: 'UID 列表',
     username: '用户名',
     version: '版本',
@@ -820,6 +919,48 @@ function fallbackProviderFields(providerType: ProviderKind): ProviderConfigField
       field('openid', 'OpenID', 'send_config'),
       field('tags', '标签', 'send_config'),
       field('short', '短链文案', 'send_config'),
+    ];
+  }
+  if (providerType === 'ntfy') {
+    return [
+      field('server_url', '服务地址', 'auth_config', 'text', true, 'https://ntfy.sh', 'https://ntfy.sh'),
+      field('topic', 'Topic', 'send_config', 'text', true),
+      field('auth_type', '鉴权类型', 'auth_config', 'text', false, 'none'),
+      field('username', '用户名', 'auth_config'),
+      field('password', '密码', 'auth_config', 'password'),
+      field('bearer_token', 'Bearer Token', 'auth_config', 'password'),
+      field('priority', '优先级', 'send_config', 'text', false, 'default'),
+      field('tags', '标签', 'send_config', 'textarea'),
+      field('markdown', 'Markdown 开关', 'send_config'),
+    ];
+  }
+  if (providerType === 'gotify') {
+    return [
+      field('server_url', '服务地址', 'auth_config', 'text', true),
+      field('app_token', 'Gotify App Token', 'auth_config', 'password', true),
+      field('priority', '优先级', 'send_config', 'number', false, '5', 5),
+      field('content_type', '内容类型', 'send_config', 'text', false, 'text/plain'),
+    ];
+  }
+  if (providerType === 'bark') {
+    return [
+      field('server_url', '服务地址', 'auth_config', 'text', true, 'https://api.day.app', 'https://api.day.app'),
+      field('device_key', 'Bark Device Key', 'auth_config', 'password'),
+      field('device_keys', 'Bark Device Key 列表', 'auth_config', 'textarea'),
+      field('group', '分组', 'send_config'),
+      field('sound', '提示音', 'send_config'),
+      field('level', '通知级别', 'send_config', 'text', false, 'active'),
+      field('icon', '图标 URL', 'send_config'),
+      field('url', '跳转链接', 'send_config'),
+    ];
+  }
+  if (providerType === 'pushme') {
+    return [
+      field('server_url', '服务地址', 'auth_config', 'text', true, 'https://push.i-i.me', 'https://push.i-i.me'),
+      field('push_key', 'PushMe Push Key', 'auth_config', 'password'),
+      field('temp_key', 'PushMe 临时 Key', 'auth_config', 'password'),
+      field('type', '内容类型', 'send_config', 'text', false, 'markdown'),
+      field('method', '请求方法', 'send_config', 'text', false, 'POST'),
     ];
   }
   if (providerType === 'wecom_robot') {

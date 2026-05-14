@@ -438,8 +438,7 @@ body {
 .tree-panel,
 .side-filter,
 .capability-panel,
-.template-fields,
-.template-editor {
+.template-modal-panel {
   min-width: 0;
   background: #ffffff;
   border: 1px solid #d7e3f4;
@@ -1368,8 +1367,10 @@ body {
 
 .template-modal-grid {
   display: grid;
-  grid-template-columns: minmax(330px, 0.9fr) minmax(440px, 1.1fr);
+  grid-template-columns: minmax(300px, 0.82fr) minmax(420px, 1fr) minmax(340px, 0.92fr);
   gap: 14px;
+  min-height: 0;
+  height: calc(min(78vh, 810px) - 150px);
 }
 
 .template-wide-modal .ant-modal-content {
@@ -1377,12 +1378,64 @@ body {
 }
 
 .template-wide-modal .ant-modal-body {
+  height: calc(min(78vh, 810px) - 116px);
   max-height: calc(min(78vh, 810px) - 116px);
+  overflow: hidden;
+}
+
+.template-modal-panel {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  min-height: 0;
+  overflow: hidden;
+}
+
+.template-panel-scroll {
+  min-height: 0;
+  padding: 14px 16px 16px;
   overflow: auto;
 }
 
-.template-wide-modal .template-modal-grid {
-  min-height: calc(min(78vh, 810px) - 150px);
+.template-variable-cell {
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: center;
+}
+
+.template-variable-token {
+  white-space: nowrap;
+}
+
+.template-variable-copy-token {
+  cursor: pointer;
+  transition: color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.template-variable-copy-token:hover {
+  color: #0958d9;
+}
+
+.template-variable-copy-token:focus-visible {
+  outline: 2px solid #1677ff;
+  outline-offset: 2px;
+}
+
+.template-variable-sample {
+  word-break: break-word;
+}
+
+.template-preview-code {
+  max-height: 280px;
+}
+
+.template-received-preview {
+  min-height: 240px;
+  padding: 16px;
+  white-space: pre-wrap;
+  color: #14345a;
+  background: #f8fbff;
+  border: 1px solid #dce7f5;
+  border-radius: 6px;
 }
 
 .dense-tabs .ant-tabs-content-holder {
@@ -1418,6 +1471,13 @@ body {
   background: #f8fbff;
   border: 1px solid #dce7f5;
   border-radius: 6px;
+}
+
+.template-name-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 14px;
+  align-items: end;
 }
 
 .two-column-form {
@@ -1584,6 +1644,7 @@ body {
   .message-log-attempt-grid,
   .message-log-snapshot-grid,
   .template-modal-grid,
+  .template-name-row,
   .template-content-field,
   .two-column-form,
   .send-action-row,

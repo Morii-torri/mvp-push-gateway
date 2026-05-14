@@ -162,7 +162,7 @@ SHA256_HEX(raw_body)
 | `POST` | `/templates/validate` | 保存前校验 |
 | `POST` | `/templates/{id}/publish` | 发布 |
 
-模板语法采用 Jinja-like。第一版后端使用 `pongo2/v7`，但 API 只暴露网关自己的语法版本和错误模型，不对外承诺完整 Jinja2 兼容。模板版本绑定 `target_provider_type + message_type`，只保存消息内容，不保存接收人字段或最终 HTTP body。
+模板语法采用 Jinja-like。第一版后端使用 `pongo2/v6`，并通过内部 `TemplateEngine` 封装；API 只暴露网关自己的语法版本和错误模型，不对外承诺完整 Jinja2 兼容。模板版本绑定 `target_provider_type + message_type`，只保存消息内容，不保存接收人字段或最终 HTTP body。
 
 `/templates/parse-payload` 返回两列字段：
 
