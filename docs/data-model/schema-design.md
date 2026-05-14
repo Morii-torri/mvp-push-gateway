@@ -6,7 +6,7 @@
 
 - `provider_type`: `webhook` / `self` / `pushplus` / `wxpusher` / `serverchan` / `email` / `aliyun_sms` / `tencent_sms` / `baidu_sms` / `wecom_robot` / `wecom_app` / `dingtalk_robot` / `dingtalk_work` / `feishu_robot` / `gov_cloud`，并兼容 legacy `wecom` / `dingtalk` / `feishu` / `sms` 和高级 `custom_token`
 - `location`: `query` / `header` / `body` / `path` / `none`
-- `message_status`: `accepted` / `deduped` / `planned` / `partial_sent` / `sent` / `failed` / `no_route`
+- `message_status`: `accepted` / `deduped` / `silenced` / `planned` / `partial_sent` / `sent` / `failed` / `no_route`
 - `delivery_status`: `queued` / `processing` / `sent` / `failed` / `deduped` / `skipped`
 - `job_status`: `queued` / `processing` / `done` / `failed` / `dead`
 - `job_type`: `route_plan` / `send_message` / `stats_aggregate` / `retention_cleanup` / `dead_letter_replay`
@@ -34,6 +34,7 @@
 | `inbound_dedupe_strategy` | text | 固定为 `payload_hash` |
 | `inbound_dedupe_config` | jsonb | Payload Hash 去重保留时间，例如 `{"ttl_seconds":86400}` |
 | `rate_limit_config` | jsonb | 限流配置 |
+| `do_not_disturb_config` | jsonb | 消息免打扰配置，例如 `{"enabled":true,"windows":[{"start":"22:00","end":"08:00"}]}`，最多 5 个时间段，按服务端本地时间判断，支持跨天 |
 | `latest_payload_sample` | jsonb | 鉴权通过且 JSON 合法的最近入站 payload，不要求路由成功 |
 | `created_at` / `updated_at` | timestamptz | 时间 |
 
@@ -46,6 +47,7 @@
 - `auth_mode=none` 主要用于无法携带鉴权头的来源；配置时应强烈建议同时填写 IP 白名单。
 - 生产环境支持 `auth_mode=token`，不强制要求 HMAC。
 - `latest_payload_sample` 只由鉴权通过且 JSON 合法的入站请求更新；无路由、无模板、模板不匹配和接收人缺失不影响样本保存。
+- `do_not_disturb_config` 启用后，命中时间段的入站消息写入 `message_records.status=silenced`，不创建 `route_plan` job。
 
 ### `delivery_channels`
 

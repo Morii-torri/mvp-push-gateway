@@ -220,8 +220,8 @@ POST /api/inbound/:token
 
 当前代码体现出的关键链路：
 
-1. 下级系统调用 `POST /api/v1/ingest/{source_code}`。入口按来源做启停校验、Token/HMAC/Token+HMAC/无鉴权、IP 白名单、1MB payload 限制、JSON 校验、最近 payload 样例更新、来源限流和入站去重。
-2. 入站成功后写入 `message_records`，再写入 `jobs(type=route_plan, queue_key=source_id)`，同步返回 `202 accepted` 和 `trace_id`。入口只负责接收，不等待路由和发送完成。
+1. 下级系统调用 `POST /api/v1/ingest/{source_code}`。入口按来源做启停校验、Token/HMAC/Token+HMAC/无鉴权、IP 白名单、1MB payload 限制、JSON 校验、最近 payload 样例更新、来源消息免打扰、来源限流和入站去重。
+2. 入站成功后写入 `message_records`，未命中免打扰时再写入 `jobs(type=route_plan, queue_key=source_id)`，同步返回 `202 accepted` 或 `202 silenced` 和 `trace_id`。入口只负责接收，不等待路由和发送完成。
 3. runtime 启动 planning、delivery、recovery、retention worker，并使用 API、planning、sending、maintenance 分离的 PostgreSQL 连接池。job 认领用 `FOR UPDATE SKIP LOCKED`，worker 崩溃后的 `processing` job 由 recovery 逻辑按 heartbeat 超时回收。
 4. planning worker 认领 `route_plan` job 后，按 `source_id` 加载当前已发布且有效的 `route_version`，缓存 key 为 `source_id:version_id`。规则按 `sort_order` 执行，第一条命中即停止，并记录规则评估指标和命中计数。
 5. 命中规则后，planning worker 用 pongo2/Jinja-like 模板渲染 JSON 消息体；按 `recipient_strategy` 解析接收人：`none`、从 payload 路径取值，或从系统组织、人员、接收人组、排除名单解析到平台身份字段。

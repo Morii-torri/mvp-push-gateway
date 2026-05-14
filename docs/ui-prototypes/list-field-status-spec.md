@@ -117,6 +117,7 @@
 | `ip_allowlist` | IP 白名单 | CIDR、单 IP、IP 段列表 |
 | `inbound_dedupe_enabled` | 入站去重 | 开关/标签 |
 | `rate_limit_config` | 入站限流 | 摘要 |
+| `do_not_disturb_config` | 消息免打扰 | 编辑来源中配置；最多 5 个时间段，支持跨天 |
 | `latest_payload_sample` | 最近 Payload | 来源列表操作列点击“查看”后展示 |
 
 ### 来源鉴权方式
@@ -222,6 +223,7 @@
 |---|---|---|
 | `accepted` | 已接收 | 蓝色 |
 | `deduped` | 已去重 | 默认 |
+| `silenced` | 已静默 | 黄色 |
 | `planned` | 已规划 | 青色 |
 | `partial_sent` | 部分成功 | 橙色 |
 | `sent` | 全部成功 | 绿色 |

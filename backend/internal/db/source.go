@@ -30,6 +30,7 @@ func (r Repository) ListSources(ctx context.Context) ([]source.Source, error) {
 			inbound_dedupe_strategy,
 			inbound_dedupe_config,
 			rate_limit_config,
+			do_not_disturb_config,
 			latest_payload_sample,
 			latest_payload_sample_updated_at,
 			created_at,
@@ -72,13 +73,14 @@ func (r Repository) CreateSource(ctx context.Context, params source.CreateSource
 			inbound_dedupe_strategy,
 			inbound_dedupe_config,
 			rate_limit_config,
+			do_not_disturb_config,
 			latest_payload_sample,
 			latest_payload_sample_updated_at
 		)
 		VALUES (
 			$1, $2, $3, $4, $5, NULLIF($6, ''), NULLIF($7, ''),
 			$8::text[],
-			$9, $10, $11, $12, $13, $14, $15
+			$9, $10, $11, $12, $13, $14, $15, $16
 		)
 		RETURNING
 			id,
@@ -94,6 +96,7 @@ func (r Repository) CreateSource(ctx context.Context, params source.CreateSource
 			inbound_dedupe_strategy,
 			inbound_dedupe_config,
 			rate_limit_config,
+			do_not_disturb_config,
 			latest_payload_sample,
 			latest_payload_sample_updated_at,
 			created_at,
@@ -112,6 +115,7 @@ func (r Repository) CreateSource(ctx context.Context, params source.CreateSource
 		params.InboundDedupeStrategy,
 		defaultJSON(params.InboundDedupeConfig),
 		defaultJSON(params.RateLimitConfig),
+		defaultJSON(params.QuietHoursConfig),
 		optionalJSON(params.LatestPayloadSample),
 		params.LatestPayloadSampleUpdatedAt,
 	)
@@ -155,6 +159,7 @@ func (r Repository) UpdateSource(ctx context.Context, id string, params source.U
 			inbound_dedupe_strategy = $11,
 			inbound_dedupe_config = $12,
 			rate_limit_config = $13,
+			do_not_disturb_config = $14,
 			updated_at = now()
 		WHERE id = $1
 		RETURNING
@@ -171,6 +176,7 @@ func (r Repository) UpdateSource(ctx context.Context, id string, params source.U
 			inbound_dedupe_strategy,
 			inbound_dedupe_config,
 			rate_limit_config,
+			do_not_disturb_config,
 			latest_payload_sample,
 			latest_payload_sample_updated_at,
 			created_at,
@@ -189,6 +195,7 @@ func (r Repository) UpdateSource(ctx context.Context, id string, params source.U
 		params.InboundDedupeStrategy,
 		defaultJSON(params.InboundDedupeConfig),
 		defaultJSON(params.RateLimitConfig),
+		defaultJSON(params.QuietHoursConfig),
 	)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -246,10 +253,12 @@ func (r Repository) EnqueueInbound(ctx context.Context, params source.EnqueueInb
 			headers,
 			payload,
 			payload_hash,
-			status
+			status,
+			error_code,
+			error_message
 		)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, 'accepted')
-	`, params.MessageID, params.TraceID, params.SourceID, params.ReceivedAt, params.Headers, params.Payload, params.PayloadHash); err != nil {
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NULLIF($9, ''), NULLIF($10, ''))
+	`, params.MessageID, params.TraceID, params.SourceID, params.ReceivedAt, params.Headers, params.Payload, params.PayloadHash, inboundMessageStatus(params.Status), params.ErrorCode, params.ErrorMessage); err != nil {
 		return fmt.Errorf("insert message record: %w", err)
 	}
 
@@ -287,6 +296,13 @@ func (r Repository) EnqueueInbound(ctx context.Context, params source.EnqueueInb
 		}
 	}
 
+	if params.SkipRoutePlan {
+		if err := tx.Commit(ctx); err != nil {
+			return fmt.Errorf("commit skipped route plan inbound transaction: %w", err)
+		}
+		return nil
+	}
+
 	if _, err := tx.Exec(ctx, `
 		INSERT INTO jobs (
 			id,
@@ -306,6 +322,13 @@ func (r Repository) EnqueueInbound(ctx context.Context, params source.EnqueueInb
 		return fmt.Errorf("commit enqueue inbound transaction: %w", err)
 	}
 	return nil
+}
+
+func inboundMessageStatus(status string) string {
+	if status == "" {
+		return "accepted"
+	}
+	return status
 }
 
 func (r Repository) querySource(ctx context.Context, sql string, args ...any) (source.Source, error) {
@@ -336,6 +359,7 @@ func scanSource(row sourceScanner) (source.Source, error) {
 		&dedupeStrategy,
 		&configuredSource.InboundDedupeConfig,
 		&configuredSource.RateLimitConfig,
+		&configuredSource.QuietHoursConfig,
 		&latestPayload,
 		&latestPayloadUpdatedAt,
 		&configuredSource.CreatedAt,
@@ -371,6 +395,7 @@ func sourceSelectSQL() string {
 			inbound_dedupe_strategy,
 			inbound_dedupe_config,
 			rate_limit_config,
+			do_not_disturb_config,
 			latest_payload_sample,
 			latest_payload_sample_updated_at,
 			created_at,

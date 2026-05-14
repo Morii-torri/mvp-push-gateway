@@ -165,6 +165,8 @@ describe('critical console pages', () => {
           inboundDedupeTtlSeconds: '86400',
           rateLimitEnabled: true,
           rateLimitPerMinute: '1000',
+          quietHoursEnabled: true,
+          quietHoursWindows: [{ start: '22:00', end: '08:00' }],
         } as any}
         onChange={() => undefined}
       />,
@@ -180,6 +182,12 @@ describe('critical console pages', () => {
     expect(enabledMarkup).toContain('source-access-value-grid');
     expect(enabledMarkup).toContain('去重保留时间');
     expect(enabledMarkup).toContain('每分钟最多接收');
+    expect(enabledMarkup).toContain('消息免打扰');
+    expect(enabledMarkup).toContain('启用消息免打扰');
+    expect(enabledMarkup).toContain('在指定时间段内暂停推送，推送记录仍会正常保存');
+    expect(enabledMarkup).toContain('时间段设置 (1/5)');
+    expect(enabledMarkup).toContain('免打扰说明');
+    expect(enabledMarkup).toContain('状态显示为「已静默」');
     expect(enabledMarkup).not.toContain('入站格式');
     expect(enabledMarkup).not.toContain('标准 JSON');
     expect(enabledMarkup).not.toContain('standard_json');
@@ -202,6 +210,8 @@ describe('critical console pages', () => {
           inboundDedupeTtlSeconds: '86400',
           rateLimitEnabled: false,
           rateLimitPerMinute: '1000',
+          quietHoursEnabled: false,
+          quietHoursWindows: [{ start: '22:00', end: '08:00' }],
         } as any}
         onChange={() => undefined}
       />,
@@ -209,6 +219,7 @@ describe('critical console pages', () => {
 
     expect(disabledMarkup).not.toContain('去重保留时间');
     expect(disabledMarkup).not.toContain('每分钟最多接收');
+    expect(disabledMarkup).not.toContain('时间段设置 (1/5)');
 
     const readOnlyCodeMarkup = renderPage(
       <ConsolePages.SourceConfigForm
@@ -224,6 +235,8 @@ describe('critical console pages', () => {
           inboundDedupeTtlSeconds: '86400',
           rateLimitEnabled: false,
           rateLimitPerMinute: '1000',
+          quietHoursEnabled: false,
+          quietHoursWindows: [{ start: '22:00', end: '08:00' }],
         } as any}
         codeReadOnly
         onChange={() => undefined}
@@ -252,6 +265,7 @@ describe('critical console pages', () => {
     expect(input.inbound_dedupe_strategy).toBe('payload_hash');
     expect(input.inbound_dedupe_config).toEqual({});
     expect(input.rate_limit_config).toEqual({ enabled: false });
+    expect(input.do_not_disturb_config).toEqual({ enabled: false, windows: [] });
 
     const mixedAllowlistInput = sourceInputFromDraft({
       ...draft,
@@ -265,6 +279,24 @@ describe('critical console pages', () => {
       '127.0.0.1',
       '172.169.10.11-172.169.10.13',
     ]);
+
+    const quietHoursInput = sourceInputFromDraft({
+      ...draft,
+      name: '订单来源',
+      code: 'orders',
+      quietHoursEnabled: true,
+      quietHoursWindows: [
+        { start: '22:00', end: '08:00' },
+        { start: '12:30', end: '13:15' },
+      ],
+    });
+    expect(quietHoursInput.do_not_disturb_config).toEqual({
+      enabled: true,
+      windows: [
+        { start: '22:00', end: '08:00' },
+        { start: '12:30', end: '13:15' },
+      ],
+    });
   });
 
   it('applies submitted query conditions across global list filters', () => {

@@ -82,6 +82,88 @@ func TestIngestAcceptsBearerSourceToken(t *testing.T) {
 	}
 }
 
+func TestIngestSilencesMessageDuringQuietHours(t *testing.T) {
+	quietNow := time.Date(2026, 5, 14, 23, 15, 0, 0, time.FixedZone("CST", 8*60*60))
+	store := newMemoryStore(Source{
+		ID:                   "source-1",
+		Code:                 "orders",
+		Name:                 "Orders",
+		Enabled:              true,
+		AuthMode:             AuthModeNone,
+		QuietHoursConfig:     json.RawMessage(`{"enabled":true,"windows":[{"start":"22:00","end":"08:00"}]}`),
+		RateLimitConfig:      json.RawMessage(`{"enabled":true,"per_minute":1}`),
+		InboundDedupeEnabled: true,
+	})
+	service := NewService(
+		store,
+		WithNow(func() time.Time { return quietNow }),
+		WithTraceIDGenerator(func() string { return "trace-silenced" }),
+	)
+
+	result, err := service.Ingest(context.Background(), IngestInput{
+		SourceCode: "orders",
+		Method:     http.MethodPost,
+		Path:       "/api/v1/ingest/orders",
+		Headers:    http.Header{},
+		RemoteAddr: "127.0.0.1:4321",
+		Body:       []byte(`{"title":"quiet"}`),
+	})
+	if err != nil {
+		t.Fatalf("ingest during quiet hours: %v", err)
+	}
+	if result.TraceID != "trace-silenced" || result.Status != "silenced" || result.Message != "silenced" {
+		t.Fatalf("unexpected silenced ingest result: %+v", result)
+	}
+	if store.latestPayloadUpdates != 1 {
+		t.Fatalf("expected latest payload update, got %d", store.latestPayloadUpdates)
+	}
+	if len(store.enqueued) != 1 {
+		t.Fatalf("expected one stored inbound record, got %d", len(store.enqueued))
+	}
+	stored := store.enqueued[0]
+	if stored.Status != "silenced" || !stored.SkipRoutePlan || stored.JobType != "" {
+		t.Fatalf("expected silenced record without route job, got %+v", stored)
+	}
+	if stored.ErrorCode != "MGP-DND-001" || stored.ErrorMessage != "消息免打扰时间段内静默" {
+		t.Fatalf("unexpected silenced message fields: code=%q message=%q", stored.ErrorCode, stored.ErrorMessage)
+	}
+}
+
+func TestIngestQueuesMessageOutsideQuietHours(t *testing.T) {
+	activeNow := time.Date(2026, 5, 14, 9, 15, 0, 0, time.FixedZone("CST", 8*60*60))
+	store := newMemoryStore(Source{
+		ID:               "source-1",
+		Code:             "orders",
+		Name:             "Orders",
+		Enabled:          true,
+		AuthMode:         AuthModeNone,
+		QuietHoursConfig: json.RawMessage(`{"enabled":true,"windows":[{"start":"22:00","end":"08:00"}]}`),
+	})
+	service := NewService(
+		store,
+		WithNow(func() time.Time { return activeNow }),
+		WithTraceIDGenerator(func() string { return "trace-active" }),
+	)
+
+	result, err := service.Ingest(context.Background(), IngestInput{
+		SourceCode: "orders",
+		Method:     http.MethodPost,
+		Path:       "/api/v1/ingest/orders",
+		Headers:    http.Header{},
+		RemoteAddr: "127.0.0.1:4321",
+		Body:       []byte(`{"title":"active"}`),
+	})
+	if err != nil {
+		t.Fatalf("ingest outside quiet hours: %v", err)
+	}
+	if result.Status != "accepted" || len(store.enqueued) != 1 {
+		t.Fatalf("expected accepted queued message, result=%+v enqueued=%+v", result, store.enqueued)
+	}
+	if store.enqueued[0].Status != "accepted" || store.enqueued[0].SkipRoutePlan || store.enqueued[0].JobType != "route_plan" {
+		t.Fatalf("expected normal route_plan enqueue, got %+v", store.enqueued[0])
+	}
+}
+
 func TestIngestAcceptsValidHMACSignature(t *testing.T) {
 	body := []byte(`{"title":"paid"}`)
 	headers := signedHeaders("hmacSecret", http.MethodPost, "/api/v1/ingest/orders", body)
@@ -437,6 +519,57 @@ func TestNormalizeSourceInputRejectsInvalidIPRangeAllowlist(t *testing.T) {
 	}
 }
 
+func TestNormalizeSourceInputAcceptsQuietHoursWindows(t *testing.T) {
+	normalized, err := normalizeSourceInput(CreateSourceInput{
+		Code:                 "orders",
+		Name:                 "Orders",
+		Enabled:              true,
+		AuthMode:             AuthModeNone,
+		CompatMode:           "standard",
+		QuietHoursConfig:     json.RawMessage(`{"enabled":true,"windows":[{"start":"22:00","end":"08:00"},{"start":"12:30","end":"13:15"}]}`),
+		RateLimitConfig:      json.RawMessage(`{}`),
+		InboundDedupeConfig:  json.RawMessage(`{}`),
+		InboundDedupeEnabled: false,
+	})
+	if err != nil {
+		t.Fatalf("normalize source input with quiet hours: %v", err)
+	}
+	if string(normalized.QuietHoursConfig) != `{"enabled":true,"windows":[{"start":"22:00","end":"08:00"},{"start":"12:30","end":"13:15"}]}` {
+		t.Fatalf("unexpected quiet hours config: %s", normalized.QuietHoursConfig)
+	}
+}
+
+func TestNormalizeSourceInputRejectsInvalidQuietHoursWindows(t *testing.T) {
+	tests := []struct {
+		name   string
+		config string
+	}{
+		{name: "enabled without windows", config: `{"enabled":true,"windows":[]}`},
+		{name: "too many windows", config: `{"enabled":true,"windows":[{"start":"00:00","end":"01:00"},{"start":"02:00","end":"03:00"},{"start":"04:00","end":"05:00"},{"start":"06:00","end":"07:00"},{"start":"08:00","end":"09:00"},{"start":"10:00","end":"11:00"}]}`},
+		{name: "invalid time", config: `{"enabled":true,"windows":[{"start":"25:00","end":"08:00"}]}`},
+		{name: "same start and end", config: `{"enabled":true,"windows":[{"start":"22:00","end":"22:00"}]}`},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := normalizeSourceInput(CreateSourceInput{
+				Code:                 "orders",
+				Name:                 "Orders",
+				Enabled:              true,
+				AuthMode:             AuthModeNone,
+				CompatMode:           "standard",
+				QuietHoursConfig:     json.RawMessage(tt.config),
+				RateLimitConfig:      json.RawMessage(`{}`),
+				InboundDedupeConfig:  json.RawMessage(`{}`),
+				InboundDedupeEnabled: false,
+			})
+			if !errors.Is(err, ErrInvalidInput) {
+				t.Fatalf("expected invalid input for %s, got %v", tt.config, err)
+			}
+		})
+	}
+}
+
 func TestNormalizeSourceInputAlwaysUsesPayloadHashDedupeStrategy(t *testing.T) {
 	for _, strategy := range []DedupeStrategy{"", DedupeStrategyPayloadHash, DedupeStrategy("fields"), DedupeStrategy("expression")} {
 		t.Run(string(strategy), func(t *testing.T) {
@@ -589,6 +722,7 @@ func (m *memoryStore) UpdateSource(_ context.Context, id string, params UpdateSo
 		InboundDedupeStrategy:        params.InboundDedupeStrategy,
 		InboundDedupeConfig:          params.InboundDedupeConfig,
 		RateLimitConfig:              params.RateLimitConfig,
+		QuietHoursConfig:             params.QuietHoursConfig,
 		LatestPayloadSample:          params.LatestPayloadSample,
 		LatestPayloadSampleUpdatedAt: params.LatestPayloadSampleUpdatedAt,
 		CreatedAt:                    existing.CreatedAt,

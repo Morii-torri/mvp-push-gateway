@@ -23,6 +23,7 @@ describe('console label mappings', () => {
   it('maps inbound statuses without exposing raw enum values', () => {
     expect(getInboundStatusMeta('partial_sent').label).toBe('部分成功');
     expect(getInboundStatusMeta('no_route').label).toBe('未命中路由');
+    expect(getInboundStatusMeta('silenced').label).toBe('已静默');
   });
 
   it('maps provider, outbound, job and validation enums into Chinese display text', () => {

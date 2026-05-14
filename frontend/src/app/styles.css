@@ -1568,6 +1568,32 @@ body {
   gap: 14px;
 }
 
+.quiet-hours-panel {
+  display: grid;
+  gap: 12px;
+  margin-bottom: 18px;
+}
+
+.quiet-hours-heading,
+.quiet-hours-window-row {
+  display: grid;
+  gap: 10px;
+  align-items: center;
+}
+
+.quiet-hours-heading {
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.quiet-hours-window-list {
+  display: grid;
+  gap: 10px;
+}
+
+.quiet-hours-window-row {
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr) 36px;
+}
+
 .field-label {
   color: #667085;
   font-size: 12px;
@@ -1585,6 +1611,10 @@ body {
   .settings-grid,
   .source-access-option-grid,
   .source-access-value-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .quiet-hours-window-row {
     grid-template-columns: 1fr;
   }
 

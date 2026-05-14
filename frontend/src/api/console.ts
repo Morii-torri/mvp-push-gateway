@@ -22,6 +22,7 @@ export type SourceApiRecord = {
   inbound_dedupe_strategy: string;
   inbound_dedupe_config: JSONValue;
   rate_limit_config: JSONValue;
+  do_not_disturb_config: JSONValue;
   latest_payload_sample: JSONValue;
   latest_payload_sample_updated_at: string | null;
   created_at: string;
@@ -41,6 +42,7 @@ export type SourceInput = {
   inbound_dedupe_strategy: string;
   inbound_dedupe_config: JSONValue;
   rate_limit_config: JSONValue;
+  do_not_disturb_config: JSONValue;
 };
 
 export type IngestSourcePayloadResponse = {

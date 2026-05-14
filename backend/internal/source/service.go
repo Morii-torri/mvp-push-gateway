@@ -22,6 +22,7 @@ import (
 const (
 	DefaultMaxPayloadBytes int64 = 1 << 20
 	defaultDedupeTTL             = 24 * time.Hour
+	maxQuietHoursWindows         = 5
 )
 
 type AuthMode string
@@ -67,6 +68,7 @@ type Source struct {
 	InboundDedupeStrategy        DedupeStrategy
 	InboundDedupeConfig          json.RawMessage
 	RateLimitConfig              json.RawMessage
+	QuietHoursConfig             json.RawMessage
 	LatestPayloadSample          json.RawMessage
 	LatestPayloadSampleUpdatedAt *time.Time
 	CreatedAt                    time.Time
@@ -86,6 +88,7 @@ type CreateSourceInput struct {
 	InboundDedupeStrategy        DedupeStrategy
 	InboundDedupeConfig          json.RawMessage
 	RateLimitConfig              json.RawMessage
+	QuietHoursConfig             json.RawMessage
 	LatestPayloadSample          json.RawMessage
 	LatestPayloadSampleUpdatedAt *time.Time
 }
@@ -121,8 +124,22 @@ type EnqueueInboundParams struct {
 	DedupeEnabled bool
 	DedupeKey     string
 	DedupeExpires time.Time
+	Status        string
+	ErrorCode     string
+	ErrorMessage  string
+	SkipRoutePlan bool
 	JobType       string
 	JobPayload    json.RawMessage
+}
+
+type quietHoursConfig struct {
+	Enabled bool               `json:"enabled"`
+	Windows []quietHoursWindow `json:"windows"`
+}
+
+type quietHoursWindow struct {
+	Start string `json:"start"`
+	End   string `json:"end"`
 }
 
 type Store interface {
@@ -256,11 +273,43 @@ func (s *Service) Ingest(ctx context.Context, input IngestInput) (IngestResult, 
 	if err := s.store.UpdateLatestPayloadSample(ctx, configuredSource.ID, payload); err != nil {
 		return IngestResult{}, err
 	}
+
+	payloadHash := sha256Hex(input.Body)
+	traceID := s.traceID()
+	messageID := uuid.NewString()
+	now := s.now()
+	receivedAt := now.UTC()
+	headers, err := json.Marshal(input.Headers)
+	if err != nil {
+		return IngestResult{}, err
+	}
+	if sourceInQuietHours(configuredSource, now) {
+		if err := s.store.EnqueueInbound(ctx, EnqueueInboundParams{
+			MessageID:     messageID,
+			TraceID:       traceID,
+			SourceID:      configuredSource.ID,
+			Headers:       headers,
+			Payload:       payload,
+			PayloadHash:   payloadHash,
+			ReceivedAt:    receivedAt,
+			Status:        "silenced",
+			ErrorCode:     "MGP-DND-001",
+			ErrorMessage:  "消息免打扰时间段内静默",
+			SkipRoutePlan: true,
+		}); err != nil {
+			return IngestResult{}, err
+		}
+		return IngestResult{
+			TraceID: traceID,
+			Status:  "silenced",
+			Message: "silenced",
+		}, nil
+	}
+
 	if s.rateLimited(configuredSource) {
 		return IngestResult{}, ErrRateLimited
 	}
 
-	payloadHash := sha256Hex(input.Body)
 	dedupeKey := ""
 	dedupeTTL := defaultDedupeTTL
 	if configuredSource.InboundDedupeEnabled {
@@ -272,18 +321,11 @@ func (s *Service) Ingest(ctx context.Context, input IngestInput) (IngestResult, 
 		dedupeTTL = inboundDedupeTTL(configuredSource.InboundDedupeConfig)
 	}
 
-	traceID := s.traceID()
-	messageID := uuid.NewString()
-	receivedAt := s.now().UTC()
 	jobPayload, err := json.Marshal(map[string]string{
 		"message_id": messageID,
 		"source_id":  configuredSource.ID,
 		"trace_id":   traceID,
 	})
-	if err != nil {
-		return IngestResult{}, err
-	}
-	headers, err := json.Marshal(input.Headers)
 	if err != nil {
 		return IngestResult{}, err
 	}
@@ -299,6 +341,7 @@ func (s *Service) Ingest(ctx context.Context, input IngestInput) (IngestResult, 
 		DedupeEnabled: configuredSource.InboundDedupeEnabled,
 		DedupeKey:     dedupeKey,
 		DedupeExpires: receivedAt.Add(dedupeTTL),
+		Status:        "accepted",
 		JobType:       "route_plan",
 		JobPayload:    jobPayload,
 	}); err != nil {
@@ -350,6 +393,10 @@ func normalizeSourceInput(input CreateSourceInput) (CreateSourceParams, error) {
 	if err != nil {
 		return CreateSourceParams{}, err
 	}
+	quietHoursConfig, err := normalizeQuietHoursConfig(input.QuietHoursConfig)
+	if err != nil {
+		return CreateSourceParams{}, err
+	}
 	latestPayloadSample, err := normalizeOptionalJSON(input.LatestPayloadSample)
 	if err != nil {
 		return CreateSourceParams{}, err
@@ -358,6 +405,7 @@ func normalizeSourceInput(input CreateSourceInput) (CreateSourceParams, error) {
 	input.IPAllowlist = cleanStringSlice(input.IPAllowlist)
 	input.InboundDedupeConfig = dedupeConfig
 	input.RateLimitConfig = rateLimitConfig
+	input.QuietHoursConfig = quietHoursConfig
 	input.LatestPayloadSample = latestPayloadSample
 	return input, nil
 }
@@ -389,6 +437,62 @@ func normalizeJSONConfig(raw json.RawMessage) (json.RawMessage, error) {
 		return json.RawMessage(`{}`), nil
 	}
 	return normalizeOptionalJSON(raw)
+}
+
+func normalizeQuietHoursConfig(raw json.RawMessage) (json.RawMessage, error) {
+	if len(bytes.TrimSpace(raw)) == 0 {
+		return json.RawMessage(`{"enabled":false,"windows":[]}`), nil
+	}
+	config, err := decodeQuietHoursConfig(raw)
+	if err != nil {
+		return nil, err
+	}
+	if !config.Enabled {
+		config.Windows = []quietHoursWindow{}
+		return marshalQuietHoursConfig(config)
+	}
+	if len(config.Windows) == 0 || len(config.Windows) > maxQuietHoursWindows {
+		return nil, ErrInvalidInput
+	}
+	for index := range config.Windows {
+		start, err := parseClockMinute(config.Windows[index].Start)
+		if err != nil {
+			return nil, err
+		}
+		end, err := parseClockMinute(config.Windows[index].End)
+		if err != nil {
+			return nil, err
+		}
+		if start == end {
+			return nil, ErrInvalidInput
+		}
+		config.Windows[index].Start = formatClockMinute(start)
+		config.Windows[index].End = formatClockMinute(end)
+	}
+	return marshalQuietHoursConfig(config)
+}
+
+func decodeQuietHoursConfig(raw json.RawMessage) (quietHoursConfig, error) {
+	normalized, err := normalizeOptionalJSON(raw)
+	if err != nil {
+		return quietHoursConfig{}, err
+	}
+	var config quietHoursConfig
+	if err := json.Unmarshal(normalized, &config); err != nil {
+		return quietHoursConfig{}, ErrInvalidInput
+	}
+	if config.Windows == nil {
+		config.Windows = []quietHoursWindow{}
+	}
+	return config, nil
+}
+
+func marshalQuietHoursConfig(config quietHoursConfig) (json.RawMessage, error) {
+	raw, err := json.Marshal(config)
+	if err != nil {
+		return nil, ErrInvalidInput
+	}
+	return json.RawMessage(raw), nil
 }
 
 func normalizeOptionalJSON(raw json.RawMessage) (json.RawMessage, error) {
@@ -555,6 +659,61 @@ func (entry ipAllowlistEntry) contains(ip netip.Addr) bool {
 		return false
 	}
 	return entry.startIP.Compare(ip) <= 0 && entry.endIP.Compare(ip) >= 0
+}
+
+func sourceInQuietHours(configuredSource Source, at time.Time) bool {
+	config, err := decodeQuietHoursConfig(configuredSource.QuietHoursConfig)
+	if err != nil || !config.Enabled {
+		return false
+	}
+	currentMinute := at.Hour()*60 + at.Minute()
+	for _, window := range config.Windows {
+		if quietWindowContains(window, currentMinute) {
+			return true
+		}
+	}
+	return false
+}
+
+func quietWindowContains(window quietHoursWindow, currentMinute int) bool {
+	start, err := parseClockMinute(window.Start)
+	if err != nil {
+		return false
+	}
+	end, err := parseClockMinute(window.End)
+	if err != nil || start == end {
+		return false
+	}
+	if start < end {
+		return currentMinute >= start && currentMinute < end
+	}
+	return currentMinute >= start || currentMinute < end
+}
+
+func parseClockMinute(value string) (int, error) {
+	value = strings.TrimSpace(value)
+	if len(value) != 5 || value[2] != ':' {
+		return 0, ErrInvalidInput
+	}
+	hourTens := value[0] - '0'
+	hourOnes := value[1] - '0'
+	minuteTens := value[3] - '0'
+	minuteOnes := value[4] - '0'
+	if hourTens > 9 || hourOnes > 9 || minuteTens > 9 || minuteOnes > 9 {
+		return 0, ErrInvalidInput
+	}
+	hour := int(hourTens)*10 + int(hourOnes)
+	minute := int(minuteTens)*10 + int(minuteOnes)
+	if hour > 23 || minute > 59 {
+		return 0, ErrInvalidInput
+	}
+	return hour*60 + minute, nil
+}
+
+func formatClockMinute(value int) string {
+	hour := value / 60
+	minute := value % 60
+	return fmt.Sprintf("%02d:%02d", hour, minute)
 }
 
 func inboundDedupeKey(configuredSource Source, payloadHash string) (string, error) {

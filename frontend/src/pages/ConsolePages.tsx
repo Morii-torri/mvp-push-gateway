@@ -568,10 +568,19 @@ type SourceDraft = {
   inboundDedupeTtlSeconds: string;
   rateLimitEnabled: boolean;
   rateLimitPerMinute: string;
+  quietHoursEnabled: boolean;
+  quietHoursWindows: QuietHoursWindowDraft[];
+};
+
+type QuietHoursWindowDraft = {
+  start: string;
+  end: string;
 };
 
 const defaultInboundDedupeTtlSeconds = 86400;
 const defaultRateLimitPerMinute = 1000;
+const defaultQuietHoursWindow: QuietHoursWindowDraft = { start: '22:00', end: '08:00' };
+const maxQuietHoursWindows = 5;
 
 export function createSourceDraft(): SourceDraft {
   return {
@@ -586,12 +595,15 @@ export function createSourceDraft(): SourceDraft {
     inboundDedupeTtlSeconds: String(defaultInboundDedupeTtlSeconds),
     rateLimitEnabled: false,
     rateLimitPerMinute: String(defaultRateLimitPerMinute),
+    quietHoursEnabled: false,
+    quietHoursWindows: [{ ...defaultQuietHoursWindow }],
   };
 }
 
 function draftFromSource(source: SourceApiRecord): SourceDraft {
   const dedupeTTL = numberConfigValue(source.inbound_dedupe_config, ['ttl_seconds'], defaultInboundDedupeTtlSeconds);
   const rateLimitPerMinute = numberConfigValue(source.rate_limit_config, ['per_minute'], defaultRateLimitPerMinute);
+  const quietHours = sourceQuietHoursDraft(source.do_not_disturb_config);
   return {
     id: source.id,
     name: source.name,
@@ -605,6 +617,8 @@ function draftFromSource(source: SourceApiRecord): SourceDraft {
     inboundDedupeTtlSeconds: String(dedupeTTL),
     rateLimitEnabled: rateLimitConfigEnabled(source.rate_limit_config),
     rateLimitPerMinute: String(rateLimitPerMinute),
+    quietHoursEnabled: quietHours.enabled,
+    quietHoursWindows: quietHours.windows,
   };
 }
 
@@ -628,6 +642,7 @@ export function sourceInputFromDraft(draft: SourceDraft): SourceInput {
     inbound_dedupe_strategy: 'payload_hash',
     inbound_dedupe_config: draft.inboundDedupeEnabled ? { ttl_seconds: dedupeTTLSeconds } : {},
     rate_limit_config: draft.rateLimitEnabled ? { enabled: true, per_minute: rateLimitPerMinute } : { enabled: false },
+    do_not_disturb_config: sourceQuietHoursInput(draft),
   };
 }
 
@@ -682,12 +697,58 @@ function summarizeSourceRateLimit(config: JSONValue) {
   return '已开启';
 }
 
+function sourceQuietHoursDraft(config: JSONValue): { enabled: boolean; windows: QuietHoursWindowDraft[] } {
+  if (!isRecord(config) || config.enabled !== true) {
+    return { enabled: false, windows: [{ ...defaultQuietHoursWindow }] };
+  }
+  const windows = Array.isArray(config.windows)
+    ? config.windows
+        .filter((item): item is Record<string, JSONValue> => isRecord(item))
+        .map((item) => ({
+          start: typeof item.start === 'string' && isClockTime(item.start) ? item.start : defaultQuietHoursWindow.start,
+          end: typeof item.end === 'string' && isClockTime(item.end) ? item.end : defaultQuietHoursWindow.end,
+        }))
+        .slice(0, maxQuietHoursWindows)
+    : [];
+  return {
+    enabled: true,
+    windows: windows.length > 0 ? windows : [{ ...defaultQuietHoursWindow }],
+  };
+}
+
+function sourceQuietHoursInput(draft: SourceDraft): JSONValue {
+  if (!draft.quietHoursEnabled) {
+    return { enabled: false, windows: [] };
+  }
+  const windows = draft.quietHoursWindows.map((window, index) => {
+    if (!isClockTime(window.start) || !isClockTime(window.end)) {
+      throw new Error(`免打扰时间段 ${index + 1} 必须填写 HH:MM 格式时间`);
+    }
+    if (window.start === window.end) {
+      throw new Error(`免打扰时间段 ${index + 1} 的开始和结束时间不能相同`);
+    }
+    return { start: window.start, end: window.end };
+  });
+  if (windows.length < 1 || windows.length > maxQuietHoursWindows) {
+    throw new Error(`免打扰时间段数量必须是 1 到 ${maxQuietHoursWindows} 个`);
+  }
+  return { enabled: true, windows };
+}
+
 function parsePositiveInteger(value: string, label: string) {
   const parsed = Number(value);
   if (!Number.isInteger(parsed) || parsed <= 0) {
     throw new Error(`${label} 必须是大于 0 的整数`);
   }
   return parsed;
+}
+
+function isClockTime(value: string) {
+  if (!/^\d{2}:\d{2}$/.test(value)) {
+    return false;
+  }
+  const [hour, minute] = value.split(':').map(Number);
+  return hour >= 0 && hour <= 23 && minute >= 0 && minute <= 59;
 }
 
 export type PayloadFieldOption = {
@@ -1029,6 +1090,23 @@ export function SourceConfigForm({
   codeReadOnly?: boolean;
 }) {
   const update = (patch: Partial<SourceDraft>) => onChange({ ...value, ...patch });
+  const updateQuietWindow = (index: number, patch: Partial<QuietHoursWindowDraft>) => {
+    update({
+      quietHoursWindows: value.quietHoursWindows.map((window, windowIndex) =>
+        windowIndex === index ? { ...window, ...patch } : window,
+      ),
+    });
+  };
+  const addQuietWindow = () => {
+    if (value.quietHoursWindows.length >= maxQuietHoursWindows) {
+      return;
+    }
+    update({ quietHoursWindows: [...value.quietHoursWindows, { ...defaultQuietHoursWindow }] });
+  };
+  const removeQuietWindow = (index: number) => {
+    const nextWindows = value.quietHoursWindows.filter((_, windowIndex) => windowIndex !== index);
+    update({ quietHoursWindows: nextWindows.length ? nextWindows : [{ ...defaultQuietHoursWindow }] });
+  };
 
   return (
     <Form layout="vertical">
@@ -1137,6 +1215,67 @@ export function SourceConfigForm({
           ) : (
             <div />
           )}
+        </div>
+      ) : null}
+      <Divider orientation="left">消息免打扰</Divider>
+      <Form.Item
+        label="启用消息免打扰"
+        extra="在指定时间段内暂停推送，推送记录仍会正常保存"
+      >
+        <Switch
+          checked={value.quietHoursEnabled}
+          checkedChildren="开启"
+          unCheckedChildren="关闭"
+          onChange={(quietHoursEnabled) => update({ quietHoursEnabled })}
+        />
+      </Form.Item>
+      {value.quietHoursEnabled ? (
+        <div className="quiet-hours-panel">
+          <div className="quiet-hours-heading">
+            <Typography.Text strong>{`时间段设置 (${value.quietHoursWindows.length}/${maxQuietHoursWindows})`}</Typography.Text>
+            <Button
+              size="small"
+              icon={<PlusOutlined />}
+              disabled={value.quietHoursWindows.length >= maxQuietHoursWindows}
+              onClick={addQuietWindow}
+            >
+              新增
+            </Button>
+          </div>
+          <Typography.Text type="secondary">
+            在以下时间段内的推送将被静默，支持跨天设置（如 22:00 ~ 08:00）
+          </Typography.Text>
+          <div className="quiet-hours-window-list">
+            {value.quietHoursWindows.map((window, index) => (
+              <div className="quiet-hours-window-row" key={`quiet-hours-${index}`}>
+                <Input
+                  type="time"
+                  value={window.start}
+                  aria-label={`免打扰开始时间 ${index + 1}`}
+                  onChange={(event) => updateQuietWindow(index, { start: event.target.value })}
+                />
+                <Typography.Text>至</Typography.Text>
+                <Input
+                  type="time"
+                  value={window.end}
+                  aria-label={`免打扰结束时间 ${index + 1}`}
+                  onChange={(event) => updateQuietWindow(index, { end: event.target.value })}
+                />
+                <Button
+                  aria-label={`删除免打扰时间段 ${index + 1}`}
+                  icon={<DeleteOutlined />}
+                  disabled={value.quietHoursWindows.length <= 1}
+                  onClick={() => removeQuietWindow(index)}
+                />
+              </div>
+            ))}
+          </div>
+          <Alert
+            type="info"
+            showIcon
+            message="免打扰说明："
+            description="在设定的时间段内，推送到该接口的消息将不会被发送到任何渠道，但推送记录会正常保存，状态显示为「已静默」。适用于夜间休息、会议等不希望被消息打扰的场景。"
+          />
         </div>
       ) : null}
       <Form.Item label="状态">
@@ -1547,7 +1686,7 @@ export function SourcesPage({ lastUpdated, onRefresh }: ConsolePageProps) {
   return (
     <PageFrame
       title="来源接入"
-      description="管理下级系统来源、鉴权、IP 白名单、入站去重、入站限流和最近入站 Payload。"
+      description="管理下级系统来源、鉴权、IP 白名单、入站去重、入站限流、消息免打扰和最近入站 Payload。"
       lastUpdated={lastUpdated}
       onRefresh={onRefresh}
     >
@@ -3842,7 +3981,16 @@ function mapAuditLog(log: AuditLogApiRecord): AuditLogRow {
 }
 
 function normalizeInboundStatus(value: string): MessageLog['status'] {
-  const allowed: MessageLog['status'][] = ['accepted', 'deduped', 'planned', 'partial_sent', 'sent', 'failed', 'no_route'];
+  const allowed: MessageLog['status'][] = [
+    'accepted',
+    'deduped',
+    'silenced',
+    'planned',
+    'partial_sent',
+    'sent',
+    'failed',
+    'no_route',
+  ];
   return allowed.includes(value as MessageLog['status']) ? (value as MessageLog['status']) : 'accepted';
 }
 
@@ -5313,6 +5461,7 @@ export function MessageLogsPage({ lastUpdated, onRefresh }: ConsolePageProps) {
             { label: '全部状态', value: 'all' },
             { label: '已接收', value: 'accepted' },
             { label: '已去重', value: 'deduped' },
+            { label: '已静默', value: 'silenced' },
             { label: '已规划', value: 'planned' },
             { label: '部分发送', value: 'partial_sent' },
             { label: '发送成功', value: 'sent' },

@@ -16,6 +16,7 @@ CREATE TABLE inbound_sources (
         CHECK (inbound_dedupe_strategy = 'payload_hash'),
     inbound_dedupe_config jsonb NOT NULL DEFAULT '{}'::jsonb,
     rate_limit_config jsonb NOT NULL DEFAULT '{}'::jsonb,
+    do_not_disturb_config jsonb NOT NULL DEFAULT '{"enabled":false,"windows":[]}'::jsonb,
     latest_payload_sample jsonb,
     latest_payload_sample_updated_at timestamptz,
     created_at timestamptz NOT NULL DEFAULT now(),
@@ -254,7 +255,7 @@ CREATE TABLE message_records (
     payload jsonb NOT NULL DEFAULT '{}'::jsonb,
     payload_hash text NOT NULL,
     status text NOT NULL DEFAULT 'accepted'
-        CHECK (status IN ('accepted', 'deduped', 'planned', 'partial_sent', 'sent', 'failed', 'no_route')),
+        CHECK (status IN ('accepted', 'deduped', 'silenced', 'planned', 'partial_sent', 'sent', 'failed', 'no_route')),
     matched_flow_id uuid REFERENCES route_flows(id) ON DELETE SET NULL,
     matched_rule_ids uuid[] NOT NULL DEFAULT ARRAY[]::uuid[],
     error_code text,

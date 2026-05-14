@@ -30,6 +30,7 @@ type sourceResponse struct {
 	InboundDedupeStrategy        string          `json:"inbound_dedupe_strategy"`
 	InboundDedupeConfig          json.RawMessage `json:"inbound_dedupe_config"`
 	RateLimitConfig              json.RawMessage `json:"rate_limit_config"`
+	DoNotDisturbConfig           json.RawMessage `json:"do_not_disturb_config"`
 	LatestPayloadSample          json.RawMessage `json:"latest_payload_sample"`
 	LatestPayloadSampleUpdatedAt *string         `json:"latest_payload_sample_updated_at"`
 	CreatedAt                    string          `json:"created_at"`
@@ -49,6 +50,7 @@ type sourceRequest struct {
 	InboundDedupeStrategy        string          `json:"inbound_dedupe_strategy"`
 	InboundDedupeConfig          json.RawMessage `json:"inbound_dedupe_config"`
 	RateLimitConfig              json.RawMessage `json:"rate_limit_config"`
+	DoNotDisturbConfig           json.RawMessage `json:"do_not_disturb_config"`
 	LatestPayloadSample          json.RawMessage `json:"latest_payload_sample"`
 	LatestPayloadSampleUpdatedAt *string         `json:"latest_payload_sample_updated_at"`
 }
@@ -230,6 +232,7 @@ func (r sourceRequest) toCreateInput() (source.CreateSourceInput, error) {
 		InboundDedupeStrategy: source.DedupeStrategy(r.InboundDedupeStrategy),
 		InboundDedupeConfig:   r.InboundDedupeConfig,
 		RateLimitConfig:       r.RateLimitConfig,
+		QuietHoursConfig:      r.DoNotDisturbConfig,
 	}, nil
 }
 
@@ -253,6 +256,7 @@ func toSourceResponse(configuredSource source.Source) sourceResponse {
 		InboundDedupeStrategy:        string(configuredSource.InboundDedupeStrategy),
 		InboundDedupeConfig:          defaultRawJSON(configuredSource.InboundDedupeConfig),
 		RateLimitConfig:              defaultRawJSON(configuredSource.RateLimitConfig),
+		DoNotDisturbConfig:           defaultRawJSON(configuredSource.QuietHoursConfig),
 		LatestPayloadSample:          nullableRawJSON(configuredSource.LatestPayloadSample),
 		LatestPayloadSampleUpdatedAt: latestUpdatedAt,
 		CreatedAt:                    formatTime(configuredSource.CreatedAt),

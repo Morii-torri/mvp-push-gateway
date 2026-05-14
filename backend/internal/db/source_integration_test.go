@@ -96,6 +96,78 @@ func TestRepositoryDuplicateInboundWritesDedupedMessageWithoutSecondJob(t *testi
 	}
 }
 
+func TestRepositoryEnqueueSilencedInboundWritesMessageWithoutRoutePlanJob(t *testing.T) {
+	dsn := os.Getenv("MGP_TEST_DATABASE_URL")
+	if dsn == "" {
+		t.Skip("MGP_TEST_DATABASE_URL is not set")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	schemaName := createMigratedTestSchema(ctx, t, dsn)
+	defer dropTestSchema(schemaName)
+
+	poolConfig, err := pgxpool.ParseConfig(dsn)
+	if err != nil {
+		t.Fatalf("parse pool config: %v", err)
+	}
+	poolConfig.ConnConfig.RuntimeParams["search_path"] = schemaName
+
+	pool, err := pgxpool.NewWithConfig(ctx, poolConfig)
+	if err != nil {
+		t.Fatalf("open test pool: %v", err)
+	}
+	defer pool.Close()
+
+	sourceID := "00000000-0000-0000-0000-00000000a011"
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO inbound_sources (
+			id,
+			code,
+			name,
+			auth_mode
+		)
+		VALUES ($1, 'orders', 'Orders', 'token')
+	`, sourceID); err != nil {
+		t.Fatalf("insert source: %v", err)
+	}
+
+	silenced := enqueueParams(sourceID, "00000000-0000-0000-0000-00000000b011", "trace-silenced", time.Date(2026, 5, 14, 23, 15, 0, 0, time.UTC))
+	silenced.Status = "silenced"
+	silenced.ErrorCode = "MGP-DND-001"
+	silenced.ErrorMessage = "消息免打扰时间段内静默"
+	silenced.DedupeEnabled = false
+	silenced.SkipRoutePlan = true
+	silenced.JobType = ""
+	silenced.JobPayload = nil
+	if err := NewRepository(pool).EnqueueInbound(ctx, silenced); err != nil {
+		t.Fatalf("enqueue silenced inbound: %v", err)
+	}
+
+	var status string
+	var errorCode string
+	var errorMessage string
+	if err := pool.QueryRow(ctx, `
+		SELECT status, COALESCE(error_code, ''), COALESCE(error_message, '')
+		FROM message_records
+		WHERE trace_id = 'trace-silenced'
+	`).Scan(&status, &errorCode, &errorMessage); err != nil {
+		t.Fatalf("query silenced message: %v", err)
+	}
+	if status != "silenced" || errorCode != "MGP-DND-001" || errorMessage != "消息免打扰时间段内静默" {
+		t.Fatalf("unexpected silenced message fields: status=%q code=%q message=%q", status, errorCode, errorMessage)
+	}
+
+	var jobCount int
+	if err := pool.QueryRow(ctx, `SELECT count(*)::integer FROM jobs WHERE type = 'route_plan'`).Scan(&jobCount); err != nil {
+		t.Fatalf("query route plan jobs: %v", err)
+	}
+	if jobCount != 0 {
+		t.Fatalf("expected no route_plan jobs for silenced inbound, got %d", jobCount)
+	}
+}
+
 func TestRepositoryUpdateSourcePreservesLatestPayloadSample(t *testing.T) {
 	dsn := os.Getenv("MGP_TEST_DATABASE_URL")
 	if dsn == "" {

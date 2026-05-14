@@ -32,6 +32,7 @@ export type ProviderType =
 export type InboundStatus =
   | 'accepted'
   | 'deduped'
+  | 'silenced'
   | 'planned'
   | 'partial_sent'
   | 'sent'
@@ -106,6 +107,7 @@ const providerTypeLabels: Record<ProviderType, string> = {
 const inboundStatusMeta: Record<InboundStatus, TagMeta> = {
   accepted: { label: '已接收', color: 'processing' },
   deduped: { label: '已去重', color: 'default' },
+  silenced: { label: '已静默', color: 'warning' },
   planned: { label: '已规划', color: 'cyan' },
   partial_sent: { label: '部分成功', color: 'orange' },
   sent: { label: '全部成功', color: 'success' },
