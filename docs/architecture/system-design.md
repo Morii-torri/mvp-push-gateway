@@ -52,8 +52,8 @@ MVP Push Gateway 是一个综合消息推送网关。它面向内部系统、政
 - HMAC 是来源级可选能力，管理台可随机生成共享密钥。
 - `token_and_hmac` 表示 Token 和 HMAC 必须同时通过，不提供“Token 或 HMAC 任一通过”的模式。
 - IP 白名单是来源级一期能力，支持 CIDR 规范，可与 Token、HMAC 或无鉴权组合。
-- 入站兼容模式：标准 JSON、旧系统兼容、Alertmanager 兼容、通用 Webhook。
-- 入站去重策略：按完整 payload、按字段集合、按自定义表达式。
+- 入站格式固定为标准 JSON，不在管理台配置兼容模式。
+- 入站去重采用系统默认 Payload Hash 策略，不提供策略选择。
 - 最近 payload 样本，用于模板编辑和路由条件辅助。
 
 对不支持自定义 `Authorization` 请求头的来源，例如部分 Alertmanager Webhook 场景，可以把来源鉴权设为 `none`，但必须强烈建议配置 CIDR IP 白名单，并在 UI 上提示安全风险。

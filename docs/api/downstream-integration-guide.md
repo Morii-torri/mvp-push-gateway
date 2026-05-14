@@ -9,12 +9,12 @@ POST /api/v1/ingest/{source_code}
 Content-Type: application/json
 ```
 
-`source_code` 由平台管理员在“来源接入”中创建并提供。
+`source_code` 由平台管理员在“来源接入”中创建并提供，只包含字母和数字，创建后不可修改。
 
 示例：
 
 ```http
-POST /api/v1/ingest/order-system
+POST /api/v1/ingest/ordersystem
 Content-Type: application/json
 Authorization: Bearer <source_token>
 ```

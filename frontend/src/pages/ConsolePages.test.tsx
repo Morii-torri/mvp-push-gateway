@@ -22,6 +22,7 @@ import {
   buildOrgTreeData,
   createChildOrgDraft,
   createProviderDraft,
+  createSourceDraft,
   createRouteRuleDraft,
   createTemplateDraft,
   filterMessageLogsByQuery,
@@ -36,6 +37,7 @@ import {
   switchTemplateContentMode,
   switchTemplateMessageType,
   switchTemplateProviderType,
+  sourceInputFromDraft,
   templateVersionInputFromDraft,
 } from './ConsolePages';
 import type { ProviderCapabilityApiRecord } from '../api/console';
@@ -133,12 +135,115 @@ describe('critical console pages', () => {
     expect(sourcesMarkup).toContain('来源接入');
     expect(sourcesMarkup).toContain('鉴权方式');
     expect(sourcesMarkup).toContain('来源列表');
-    expect(sourcesMarkup).toContain('入站测试');
+    expect(sourcesMarkup).not.toContain('操作列可查看最近Payload，也可发起入站测试。');
     expect(sourcesMarkup).not.toContain('token_and_hmac');
     expect(providersMarkup).toContain('推送渠道');
     expect(providersMarkup).toContain('通用 Webhook');
     expect(providersMarkup).toContain('自定义 Token 平台');
     expect(providersMarkup).not.toContain('custom_token');
+  });
+
+  it('renders simplified source form controls for token, dedupe, rate limit, and immutable code', () => {
+    const enabledMarkup = renderPage(
+      <ConsolePages.SourceConfigForm
+        value={{
+          name: '',
+          code: 'orders',
+          enabled: true,
+          authMode: 'token',
+          authToken: 'sourceToken',
+          hmacSecret: 'hmacSecret',
+          ipAllowlistText: '',
+          inboundDedupeEnabled: true,
+          inboundDedupeTtlSeconds: '86400',
+          rateLimitEnabled: true,
+          rateLimitPerMinute: '1000',
+        } as any}
+        onChange={() => undefined}
+      />,
+    );
+
+    expect(enabledMarkup).toContain('<label class="ant-form-item-required" title="鉴权方式">鉴权方式</label>');
+    expect(enabledMarkup).toContain('Authorization: Bearer source_token');
+    expect(enabledMarkup).not.toContain('只接受 Authorization: Bearer source_token');
+    expect(enabledMarkup).not.toContain('不支持 X-MGP-Token');
+    expect(enabledMarkup).toContain('留空代表允许 any');
+    expect(enabledMarkup).toContain('source-access-option-grid');
+    expect(enabledMarkup).toContain('source-access-value-grid');
+    expect(enabledMarkup).toContain('去重保留时间');
+    expect(enabledMarkup).toContain('每分钟最多接收');
+    expect(enabledMarkup).not.toContain('入站格式');
+    expect(enabledMarkup).not.toContain('标准 JSON');
+    expect(enabledMarkup).not.toContain('standard_json');
+    expect(enabledMarkup).not.toContain('去重策略');
+    expect(enabledMarkup).not.toContain('去重高级 JSON');
+    expect(enabledMarkup).not.toContain('限流高级 JSON');
+    expect(enabledMarkup).not.toContain('最近Payload');
+
+    const disabledMarkup = renderPage(
+      <ConsolePages.SourceConfigForm
+        value={{
+          name: '',
+          code: 'orders',
+          enabled: true,
+          authMode: 'none',
+          authToken: '',
+          hmacSecret: '',
+          ipAllowlistText: '',
+          inboundDedupeEnabled: false,
+          inboundDedupeTtlSeconds: '86400',
+          rateLimitEnabled: false,
+          rateLimitPerMinute: '1000',
+        } as any}
+        onChange={() => undefined}
+      />,
+    );
+
+    expect(disabledMarkup).not.toContain('去重保留时间');
+    expect(disabledMarkup).not.toContain('每分钟最多接收');
+
+    const readOnlyCodeMarkup = renderPage(
+      <ConsolePages.SourceConfigForm
+        value={{
+          name: '订单来源',
+          code: 'orders',
+          enabled: true,
+          authMode: 'token',
+          authToken: 'sourceToken',
+          hmacSecret: '',
+          ipAllowlistText: '',
+          inboundDedupeEnabled: false,
+          inboundDedupeTtlSeconds: '86400',
+          rateLimitEnabled: false,
+          rateLimitPerMinute: '1000',
+        } as any}
+        codeReadOnly
+        onChange={() => undefined}
+      />,
+    );
+
+    expect(readOnlyCodeMarkup).toContain('来源编码创建后不可修改');
+    expect(readOnlyCodeMarkup).toContain('disabled=""');
+  });
+
+  it('builds source input with current defaults and no legacy compatibility reads', () => {
+    const draft = createSourceDraft();
+
+    expect(draft.ipAllowlistText).toBe('');
+
+    const input = sourceInputFromDraft({
+      ...draft,
+      name: '订单来源',
+      code: 'orders',
+      inboundDedupeEnabled: false,
+      rateLimitEnabled: false,
+    });
+
+    expect(input.ip_allowlist).toEqual([]);
+    expect(input.compat_mode).toBe('standard');
+    expect(input.inbound_dedupe_strategy).toBe('payload_hash');
+    expect(input.inbound_dedupe_config).toEqual({});
+    expect(input.rate_limit_config).toEqual({ enabled: false });
   });
 
   it('applies submitted query conditions across global list filters', () => {

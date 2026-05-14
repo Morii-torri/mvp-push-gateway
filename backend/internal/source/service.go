@@ -37,8 +37,6 @@ type DedupeStrategy string
 
 const (
 	DedupeStrategyPayloadHash DedupeStrategy = "payload_hash"
-	DedupeStrategyFields      DedupeStrategy = "fields"
-	DedupeStrategyExpression  DedupeStrategy = "expression"
 )
 
 var (
@@ -210,6 +208,13 @@ func (s *Service) UpdateSource(ctx context.Context, id string, input UpdateSourc
 	if err != nil {
 		return Source{}, err
 	}
+	existing, err := s.store.GetSource(ctx, id)
+	if err != nil {
+		return Source{}, err
+	}
+	if existing.Code != params.Code {
+		return Source{}, ErrInvalidInput
+	}
 	return s.store.UpdateSource(ctx, id, params)
 }
 
@@ -257,12 +262,14 @@ func (s *Service) Ingest(ctx context.Context, input IngestInput) (IngestResult, 
 
 	payloadHash := sha256Hex(input.Body)
 	dedupeKey := ""
+	dedupeTTL := defaultDedupeTTL
 	if configuredSource.InboundDedupeEnabled {
 		key, err := inboundDedupeKey(configuredSource, payloadHash)
 		if err != nil {
 			return IngestResult{}, err
 		}
 		dedupeKey = key
+		dedupeTTL = inboundDedupeTTL(configuredSource.InboundDedupeConfig)
 	}
 
 	traceID := s.traceID()
@@ -291,7 +298,7 @@ func (s *Service) Ingest(ctx context.Context, input IngestInput) (IngestResult, 
 		ReceivedAt:    receivedAt,
 		DedupeEnabled: configuredSource.InboundDedupeEnabled,
 		DedupeKey:     dedupeKey,
-		DedupeExpires: receivedAt.Add(defaultDedupeTTL),
+		DedupeExpires: receivedAt.Add(dedupeTTL),
 		JobType:       "route_plan",
 		JobPayload:    jobPayload,
 	}); err != nil {
@@ -328,12 +335,7 @@ func normalizeSourceInput(input CreateSourceInput) (CreateSourceParams, error) {
 	if input.CompatMode == "" {
 		input.CompatMode = "standard"
 	}
-	if input.InboundDedupeStrategy == "" {
-		input.InboundDedupeStrategy = DedupeStrategyPayloadHash
-	}
-	if !validDedupeStrategy(input.InboundDedupeStrategy) {
-		return CreateSourceParams{}, ErrInvalidInput
-	}
+	input.InboundDedupeStrategy = DedupeStrategyPayloadHash
 	for _, cidr := range input.IPAllowlist {
 		if _, err := netip.ParsePrefix(strings.TrimSpace(cidr)); err != nil {
 			return CreateSourceParams{}, ErrInvalidInput
@@ -363,15 +365,6 @@ func normalizeSourceInput(input CreateSourceInput) (CreateSourceParams, error) {
 func validAuthMode(authMode AuthMode) bool {
 	switch authMode {
 	case AuthModeToken, AuthModeHMAC, AuthModeTokenAndHMAC, AuthModeNone:
-		return true
-	default:
-		return false
-	}
-}
-
-func validDedupeStrategy(strategy DedupeStrategy) bool {
-	switch strategy {
-	case DedupeStrategyPayloadHash, DedupeStrategyFields, DedupeStrategyExpression:
 		return true
 	default:
 		return false
@@ -515,11 +508,27 @@ func inboundDedupeKey(configuredSource Source, payloadHash string) (string, erro
 	switch configuredSource.InboundDedupeStrategy {
 	case "", DedupeStrategyPayloadHash:
 		return payloadHash, nil
-	case DedupeStrategyFields, DedupeStrategyExpression:
-		return "", ErrInvalidDedupeConfig
 	default:
 		return "", ErrInvalidDedupeConfig
 	}
+}
+
+type inboundDedupeConfig struct {
+	TTLSeconds int `json:"ttl_seconds"`
+}
+
+func inboundDedupeTTL(raw json.RawMessage) time.Duration {
+	var config inboundDedupeConfig
+	if len(raw) == 0 {
+		return defaultDedupeTTL
+	}
+	if err := json.Unmarshal(raw, &config); err != nil {
+		return defaultDedupeTTL
+	}
+	if config.TTLSeconds <= 0 {
+		return defaultDedupeTTL
+	}
+	return time.Duration(config.TTLSeconds) * time.Second
 }
 
 type rateLimitConfig struct {

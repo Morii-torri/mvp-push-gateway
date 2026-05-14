@@ -111,14 +111,13 @@
 
 | 字段 | 中文 | 展示要求 |
 |---|---|---|
-| `source_code` / `code` | 来源编码 | 等宽文本 |
+| `source_code` / `code` | 来源编码 | 等宽文本；来源创建后不可修改 |
 | `name` | 来源名称 | 普通文本 |
 | `auth_mode` | 鉴权方式 | 标签 |
 | `ip_allowlist` | IP 白名单 | CIDR 列表 |
-| `compat_mode` | 兼容模式 | 中文枚举 |
 | `inbound_dedupe_enabled` | 入站去重 | 开关/标签 |
 | `rate_limit_config` | 入站限流 | 摘要 |
-| `latest_payload_sample` | 最近 Payload | 详情中展示 |
+| `latest_payload_sample` | 最近 Payload | 来源列表操作列点击“查看”后展示 |
 
 ### 来源鉴权方式
 

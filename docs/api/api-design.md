@@ -50,7 +50,7 @@
 Token 示例：
 
 ```http
-POST /api/v1/ingest/alertmanager-prod
+POST /api/v1/ingest/alertmanagerprod
 Content-Type: application/json
 Authorization: Bearer <source_token>
 ```
@@ -58,7 +58,7 @@ Authorization: Bearer <source_token>
 HMAC 示例：
 
 ```http
-POST /api/v1/ingest/order-system
+POST /api/v1/ingest/ordersystem
 Content-Type: application/json
 X-MGP-Timestamp: 1778138400
 X-MGP-Nonce: 6f7c2f4c9a
@@ -103,6 +103,8 @@ SHA256_HEX(raw_body)
 | `POST` | `/sources/{id}/generate-hmac-secret` |
 | `GET` | `/sources/{id}/latest-payload` |
 | `POST` | `/sources/{id}/parse-payload` |
+
+来源 `code` 是下级系统调用 `/ingest/{source_code}` 的外部接入码，创建后不可修改；`PUT /sources/{id}` 仅允许更新名称、启停、鉴权、CIDR、去重和限流等配置。
 
 ## 推送渠道
 

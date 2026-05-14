@@ -13,7 +13,7 @@ CREATE TABLE inbound_sources (
     compat_mode text NOT NULL DEFAULT 'standard',
     inbound_dedupe_enabled boolean NOT NULL DEFAULT false,
     inbound_dedupe_strategy text NOT NULL DEFAULT 'payload_hash'
-        CHECK (inbound_dedupe_strategy IN ('payload_hash', 'fields', 'expression')),
+        CHECK (inbound_dedupe_strategy = 'payload_hash'),
     inbound_dedupe_config jsonb NOT NULL DEFAULT '{}'::jsonb,
     rate_limit_config jsonb NOT NULL DEFAULT '{}'::jsonb,
     latest_payload_sample jsonb,

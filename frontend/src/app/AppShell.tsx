@@ -614,7 +614,7 @@ function ConsoleChrome() {
         confirmLoading={profileSaving}
         okText="保存"
         cancelText="取消"
-        destroyOnClose
+        destroyOnHidden
       >
         <Form form={profileForm} layout="vertical" preserve={false} initialValues={createProfileFormValues(admin)}>
           <Form.Item label="用户名" name="username">
@@ -640,7 +640,7 @@ function ConsoleChrome() {
         confirmLoading={passwordSaving}
         okText="保存"
         cancelText="取消"
-        destroyOnClose
+        destroyOnHidden
       >
         <Form form={passwordForm} layout="vertical" preserve={false}>
           <Form.Item label="当前密码" name="current_password" rules={[{ required: true, message: '请输入当前密码' }]}>

@@ -416,7 +416,7 @@ func TestWorkerMarksBusinessPlanningFailuresDone(t *testing.T) {
 		defer cancel()
 		repository := dbrepo.NewRepository(pool)
 		sourceService := source.NewService(repository, source.WithTraceIDGenerator(func() string { return "trace-no-route" }))
-		if _, err := sourceService.CreateSource(ctx, source.CreateSourceInput{Code: "noroute", Name: "No Route", Enabled: true, AuthMode: source.AuthModeNone, CompatMode: "standard_json"}); err != nil {
+		if _, err := sourceService.CreateSource(ctx, source.CreateSourceInput{Code: "noroute", Name: "No Route", Enabled: true, AuthMode: source.AuthModeNone, CompatMode: "standard"}); err != nil {
 			t.Fatalf("create source: %v", err)
 		}
 		if _, err := sourceService.Ingest(ctx, source.IngestInput{SourceCode: "noroute", Method: "POST", Path: "/api/v1/ingest/noroute", Body: []byte(`{"title":"x"}`)}); err != nil {
@@ -440,7 +440,7 @@ func TestWorkerMarksBusinessPlanningFailuresDone(t *testing.T) {
 		}
 		sourceService := source.NewService(repository, source.WithTraceIDGenerator(func() string { return "trace-template-error" }))
 		templateService := msgtemplate.NewService(repository)
-		inboundSource, err := sourceService.CreateSource(ctx, source.CreateSourceInput{Code: "tplerror", Name: "Template Error", Enabled: true, AuthMode: source.AuthModeNone, CompatMode: "standard_json"})
+		inboundSource, err := sourceService.CreateSource(ctx, source.CreateSourceInput{Code: "tplerror", Name: "Template Error", Enabled: true, AuthMode: source.AuthModeNone, CompatMode: "standard"})
 		if err != nil {
 			t.Fatalf("create source: %v", err)
 		}
@@ -497,7 +497,7 @@ func TestWorkerMarksBusinessPlanningFailuresDone(t *testing.T) {
 		}
 		sourceService := source.NewService(repository, source.WithTraceIDGenerator(func() string { return "trace-recipient-error" }))
 		templateService := msgtemplate.NewService(repository)
-		inboundSource, err := sourceService.CreateSource(ctx, source.CreateSourceInput{Code: "rcpterror", Name: "Recipient Error", Enabled: true, AuthMode: source.AuthModeNone, CompatMode: "standard_json"})
+		inboundSource, err := sourceService.CreateSource(ctx, source.CreateSourceInput{Code: "rcpterror", Name: "Recipient Error", Enabled: true, AuthMode: source.AuthModeNone, CompatMode: "standard"})
 		if err != nil {
 			t.Fatalf("create source: %v", err)
 		}
@@ -552,7 +552,7 @@ func TestWorkerMarksBusinessPlanningFailuresDone(t *testing.T) {
 		sourceService := source.NewService(repository, source.WithTraceIDGenerator(func() string { return "trace-provider-mismatch" }))
 		templateService := msgtemplate.NewService(repository)
 		routeService := route.NewService(repository)
-		inboundSource, err := sourceService.CreateSource(ctx, source.CreateSourceInput{Code: "providermismatch", Name: "Provider Mismatch", Enabled: true, AuthMode: source.AuthModeNone, CompatMode: "standard_json"})
+		inboundSource, err := sourceService.CreateSource(ctx, source.CreateSourceInput{Code: "providermismatch", Name: "Provider Mismatch", Enabled: true, AuthMode: source.AuthModeNone, CompatMode: "standard"})
 		if err != nil {
 			t.Fatalf("create source: %v", err)
 		}

@@ -22,17 +22,17 @@
 | 字段 | 类型 | 说明 |
 |---|---|---|
 | `id` | uuid pk | 来源 ID |
-| `code` | text unique | 来源编码 |
+| `code` | text unique | 来源编码，对下级系统暴露，创建后不可修改 |
 | `name` | text | 来源名称 |
 | `enabled` | boolean | 是否启用 |
 | `auth_mode` | text | `token` / `hmac` / `token_and_hmac` / `none`，新建来源默认 `token` |
 | `auth_token` | text null | 静态 token，第一版管理员可明文查看 |
 | `hmac_secret` | text null | HMAC secret，第一版管理员可明文查看 |
 | `ip_allowlist` | cidr[] null | IP 白名单 |
-| `compat_mode` | text | 标准或兼容模式 |
+| `compat_mode` | text | 内部保留字段；当前固定为标准 JSON，不在管理台配置 |
 | `inbound_dedupe_enabled` | boolean | 入站去重 |
-| `inbound_dedupe_strategy` | text | `payload_hash` / `fields` / `expression` |
-| `inbound_dedupe_config` | jsonb | 去重字段或表达式 |
+| `inbound_dedupe_strategy` | text | 固定为 `payload_hash` |
+| `inbound_dedupe_config` | jsonb | Payload Hash 去重保留时间，例如 `{"ttl_seconds":86400}` |
 | `rate_limit_config` | jsonb | 限流配置 |
 | `latest_payload_sample` | jsonb | 鉴权通过且 JSON 合法的最近入站 payload，不要求路由成功 |
 | `created_at` / `updated_at` | timestamptz | 时间 |

@@ -220,6 +220,42 @@ func TestIngestUpdatesLatestPayloadAndQueuesWithoutRoutes(t *testing.T) {
 	}
 }
 
+func TestIngestUsesPayloadHashDedupeTTLConfig(t *testing.T) {
+	now := time.Date(2026, 5, 8, 10, 0, 0, 0, time.UTC)
+	store := newMemoryStore(Source{
+		ID:                   "source-1",
+		Code:                 "orders",
+		Name:                 "Orders",
+		Enabled:              true,
+		AuthMode:             AuthModeNone,
+		InboundDedupeEnabled: true,
+		InboundDedupeConfig:  json.RawMessage(`{"ttl_seconds":60}`),
+	})
+	service := NewService(
+		store,
+		WithTraceIDGenerator(func() string { return "trace-dedupe-ttl" }),
+		WithNow(func() time.Time { return now }),
+	)
+
+	_, err := service.Ingest(context.Background(), IngestInput{
+		SourceCode: "orders",
+		Method:     http.MethodPost,
+		Path:       "/api/v1/ingest/orders",
+		Headers:    http.Header{},
+		RemoteAddr: "127.0.0.1:4321",
+		Body:       []byte(`{"title":"paid"}`),
+	})
+	if err != nil {
+		t.Fatalf("ingest with dedupe ttl config: %v", err)
+	}
+	if len(store.enqueued) != 1 {
+		t.Fatalf("expected one queued route_plan job, got %d", len(store.enqueued))
+	}
+	if expected := now.Add(60 * time.Second); !store.enqueued[0].DedupeExpires.Equal(expected) {
+		t.Fatalf("expected dedupe expiry %s, got %s", expected, store.enqueued[0].DedupeExpires)
+	}
+}
+
 func TestIngestInvalidJSONDoesNotUpdateLatestPayload(t *testing.T) {
 	store := newMemoryStore(Source{
 		ID:       "source-1",
@@ -306,6 +342,81 @@ func TestCreateSourceAcceptsAlphanumericCredentials(t *testing.T) {
 	}
 }
 
+func TestNormalizeSourceInputAlwaysUsesPayloadHashDedupeStrategy(t *testing.T) {
+	for _, strategy := range []DedupeStrategy{"", DedupeStrategyPayloadHash, DedupeStrategy("fields"), DedupeStrategy("expression")} {
+		t.Run(string(strategy), func(t *testing.T) {
+			normalized, err := normalizeSourceInput(CreateSourceInput{
+				Code:                  "ordersapi",
+				Name:                  "Orders",
+				AuthMode:              AuthModeToken,
+				AuthToken:             "sourceToken",
+				InboundDedupeStrategy: strategy,
+			})
+			if err != nil {
+				t.Fatalf("normalize source input with dedupe strategy %q: %v", strategy, err)
+			}
+			if normalized.InboundDedupeStrategy != DedupeStrategyPayloadHash {
+				t.Fatalf("expected payload_hash dedupe strategy, got %q", normalized.InboundDedupeStrategy)
+			}
+		})
+	}
+}
+
+func TestUpdateSourceRejectsCodeChanges(t *testing.T) {
+	store := newMemoryStore(Source{
+		ID:        "source-1",
+		Code:      "orders",
+		Name:      "Orders",
+		Enabled:   true,
+		AuthMode:  AuthModeToken,
+		AuthToken: "sourceToken",
+	})
+	service := NewService(store)
+
+	_, err := service.UpdateSource(context.Background(), "source-1", UpdateSourceInput{
+		Code:      "ordersnew",
+		Name:      "Orders",
+		Enabled:   true,
+		AuthMode:  AuthModeToken,
+		AuthToken: "sourceToken",
+	})
+	if !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("expected invalid input when source code changes, got %v", err)
+	}
+	if store.updateCalls != 0 {
+		t.Fatalf("expected update to be blocked before store call, got %d calls", store.updateCalls)
+	}
+}
+
+func TestUpdateSourceAllowsExistingCode(t *testing.T) {
+	store := newMemoryStore(Source{
+		ID:        "source-1",
+		Code:      "orders",
+		Name:      "Orders",
+		Enabled:   true,
+		AuthMode:  AuthModeToken,
+		AuthToken: "sourceToken",
+	})
+	service := NewService(store)
+
+	updated, err := service.UpdateSource(context.Background(), "source-1", UpdateSourceInput{
+		Code:      "orders",
+		Name:      "Orders API",
+		Enabled:   true,
+		AuthMode:  AuthModeToken,
+		AuthToken: "sourceToken",
+	})
+	if err != nil {
+		t.Fatalf("update source with existing code: %v", err)
+	}
+	if updated.Code != "orders" || updated.Name != "Orders API" {
+		t.Fatalf("unexpected updated source: %+v", updated)
+	}
+	if store.updateCalls != 1 {
+		t.Fatalf("expected one update call, got %d", store.updateCalls)
+	}
+}
+
 func signedHeaders(secret string, method string, path string, body []byte) http.Header {
 	timestamp := "1778138400"
 	nonce := "nonce-1"
@@ -327,6 +438,7 @@ type memoryStore struct {
 	latestPayload        json.RawMessage
 	latestPayloadUpdates int
 	enqueued             []EnqueueInboundParams
+	updateCalls          int
 }
 
 func newMemoryStore(sources ...Source) *memoryStore {
@@ -345,8 +457,13 @@ func (m *memoryStore) CreateSource(context.Context, CreateSourceParams) (Source,
 	panic("not used")
 }
 
-func (m *memoryStore) GetSource(context.Context, string) (Source, error) {
-	panic("not used")
+func (m *memoryStore) GetSource(_ context.Context, id string) (Source, error) {
+	for _, configuredSource := range m.sources {
+		if configuredSource.ID == id {
+			return configuredSource, nil
+		}
+	}
+	return Source{}, ErrNotFound
 }
 
 func (m *memoryStore) GetSourceByCode(_ context.Context, code string) (Source, error) {
@@ -357,8 +474,34 @@ func (m *memoryStore) GetSourceByCode(_ context.Context, code string) (Source, e
 	return source, nil
 }
 
-func (m *memoryStore) UpdateSource(context.Context, string, UpdateSourceParams) (Source, error) {
-	panic("not used")
+func (m *memoryStore) UpdateSource(_ context.Context, id string, params UpdateSourceParams) (Source, error) {
+	m.updateCalls++
+	existing, err := m.GetSource(context.Background(), id)
+	if err != nil {
+		return Source{}, err
+	}
+	updated := Source{
+		ID:                           existing.ID,
+		Code:                         params.Code,
+		Name:                         params.Name,
+		Enabled:                      params.Enabled,
+		AuthMode:                     params.AuthMode,
+		AuthToken:                    params.AuthToken,
+		HMACSecret:                   params.HMACSecret,
+		IPAllowlist:                  params.IPAllowlist,
+		CompatMode:                   params.CompatMode,
+		InboundDedupeEnabled:         params.InboundDedupeEnabled,
+		InboundDedupeStrategy:        params.InboundDedupeStrategy,
+		InboundDedupeConfig:          params.InboundDedupeConfig,
+		RateLimitConfig:              params.RateLimitConfig,
+		LatestPayloadSample:          params.LatestPayloadSample,
+		LatestPayloadSampleUpdatedAt: params.LatestPayloadSampleUpdatedAt,
+		CreatedAt:                    existing.CreatedAt,
+		UpdatedAt:                    existing.UpdatedAt,
+	}
+	delete(m.sources, existing.Code)
+	m.sources[updated.Code] = updated
+	return updated, nil
 }
 
 func (m *memoryStore) DeleteSource(context.Context, string) error {

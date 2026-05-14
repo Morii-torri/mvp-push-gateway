@@ -259,7 +259,7 @@ function CreateDrawer({
       width={width}
       open={open}
       onClose={onClose}
-      destroyOnClose
+      destroyOnHidden
       extra={
         <Space>
           <Button onClick={onClose}>取消</Button>
@@ -560,14 +560,16 @@ type SourceDraft = {
   authToken: string;
   hmacSecret: string;
   ipAllowlistText: string;
-  compatMode: string;
   inboundDedupeEnabled: boolean;
-  inboundDedupeStrategy: string;
-  inboundDedupeConfigText: string;
-  rateLimitConfigText: string;
+  inboundDedupeTtlSeconds: string;
+  rateLimitEnabled: boolean;
+  rateLimitPerMinute: string;
 };
 
-function createSourceDraft(): SourceDraft {
+const defaultInboundDedupeTtlSeconds = 86400;
+const defaultRateLimitPerMinute = 1000;
+
+export function createSourceDraft(): SourceDraft {
   return {
     name: '',
     code: 'newsource',
@@ -575,16 +577,17 @@ function createSourceDraft(): SourceDraft {
     authMode: 'token',
     authToken: randomSecret('src'),
     hmacSecret: randomSecret('hmac'),
-    ipAllowlistText: '10.0.0.0/24',
-    compatMode: 'standard_json',
+    ipAllowlistText: '',
     inboundDedupeEnabled: true,
-    inboundDedupeStrategy: 'payload_hash',
-    inboundDedupeConfigText: '{\n  "ttl_seconds": 86400\n}',
-    rateLimitConfigText: '{\n  "minute_limit": 1000,\n  "burst": 100\n}',
+    inboundDedupeTtlSeconds: String(defaultInboundDedupeTtlSeconds),
+    rateLimitEnabled: false,
+    rateLimitPerMinute: String(defaultRateLimitPerMinute),
   };
 }
 
 function draftFromSource(source: SourceApiRecord): SourceDraft {
+  const dedupeTTL = numberConfigValue(source.inbound_dedupe_config, ['ttl_seconds'], defaultInboundDedupeTtlSeconds);
+  const rateLimitPerMinute = numberConfigValue(source.rate_limit_config, ['per_minute'], defaultRateLimitPerMinute);
   return {
     id: source.id,
     name: source.name,
@@ -594,15 +597,20 @@ function draftFromSource(source: SourceApiRecord): SourceDraft {
     authToken: source.auth_token,
     hmacSecret: source.hmac_secret,
     ipAllowlistText: listToTextarea(source.ip_allowlist),
-    compatMode: source.compat_mode,
     inboundDedupeEnabled: source.inbound_dedupe_enabled,
-    inboundDedupeStrategy: source.inbound_dedupe_strategy,
-    inboundDedupeConfigText: stringifyJSON(source.inbound_dedupe_config),
-    rateLimitConfigText: stringifyJSON(source.rate_limit_config),
+    inboundDedupeTtlSeconds: String(dedupeTTL),
+    rateLimitEnabled: rateLimitConfigEnabled(source.rate_limit_config),
+    rateLimitPerMinute: String(rateLimitPerMinute),
   };
 }
 
-function sourceInputFromDraft(draft: SourceDraft): SourceInput {
+export function sourceInputFromDraft(draft: SourceDraft): SourceInput {
+  const dedupeTTLSeconds = draft.inboundDedupeEnabled
+    ? parsePositiveInteger(draft.inboundDedupeTtlSeconds, '去重保留时间')
+    : defaultInboundDedupeTtlSeconds;
+  const rateLimitPerMinute = draft.rateLimitEnabled
+    ? parsePositiveInteger(draft.rateLimitPerMinute, '每分钟最多接收')
+    : defaultRateLimitPerMinute;
   return {
     code: draft.code.trim(),
     name: draft.name.trim(),
@@ -611,11 +619,11 @@ function sourceInputFromDraft(draft: SourceDraft): SourceInput {
     auth_token: draft.authToken.trim(),
     hmac_secret: draft.hmacSecret.trim(),
     ip_allowlist: textareaToList(draft.ipAllowlistText),
-    compat_mode: draft.compatMode.trim() || 'standard_json',
+    compat_mode: 'standard',
     inbound_dedupe_enabled: draft.inboundDedupeEnabled,
-    inbound_dedupe_strategy: draft.inboundDedupeStrategy.trim() || 'payload_hash',
-    inbound_dedupe_config: parseJSONField(draft.inboundDedupeConfigText, '入站去重高级 JSON'),
-    rate_limit_config: parseJSONField(draft.rateLimitConfigText, '入站限流高级 JSON'),
+    inbound_dedupe_strategy: 'payload_hash',
+    inbound_dedupe_config: draft.inboundDedupeEnabled ? { ttl_seconds: dedupeTTLSeconds } : {},
+    rate_limit_config: draft.rateLimitEnabled ? { enabled: true, per_minute: rateLimitPerMinute } : { enabled: false },
   };
 }
 
@@ -627,13 +635,55 @@ function mapSourceRow(source: SourceApiRecord): SourceRow {
     authMode: source.auth_mode,
     enabled: source.enabled,
     ipAllowlist: source.ip_allowlist ?? [],
-    compatMode: source.compat_mode || '标准 JSON',
+    compatMode: '标准 JSON',
     inboundDedupeEnabled: source.inbound_dedupe_enabled,
-    rateLimit: source.rate_limit_config ? stringifyJSON(source.rate_limit_config, '-') : '-',
+    rateLimit: summarizeSourceRateLimit(source.rate_limit_config),
     latestPayload: source.latest_payload_sample ? stringifyJSON(source.latest_payload_sample, '暂无') : '暂无',
     lastInboundAt: formatApiTime(source.latest_payload_sample_updated_at),
     raw: source,
   };
+}
+
+function numberConfigValue(config: JSONValue, keys: string[], fallback: number) {
+  if (!isRecord(config)) {
+    return fallback;
+  }
+  for (const key of keys) {
+    const value = config[key];
+    if (typeof value === 'number' && Number.isFinite(value) && value > 0) {
+      return Math.trunc(value);
+    }
+  }
+  return fallback;
+}
+
+function rateLimitConfigEnabled(config: JSONValue) {
+  if (!isRecord(config)) {
+    return false;
+  }
+  if (config.enabled === true) {
+    return true;
+  }
+  return numberConfigValue(config, ['per_minute'], 0) > 0;
+}
+
+function summarizeSourceRateLimit(config: JSONValue) {
+  if (!rateLimitConfigEnabled(config)) {
+    return '未开启';
+  }
+  const perMinute = numberConfigValue(config, ['per_minute'], 0);
+  if (perMinute > 0) {
+    return `每分钟 ${perMinute} 次`;
+  }
+  return '已开启';
+}
+
+function parsePositiveInteger(value: string, label: string) {
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed <= 0) {
+    throw new Error(`${label} 必须是大于 0 的整数`);
+  }
+  return parsed;
 }
 
 export type PayloadFieldOption = {
@@ -932,12 +982,14 @@ export function filterSettingsByQuery(rows: SettingApiRecord[], query: SettingLi
 }
 
 
-function SourceConfigForm({
+export function SourceConfigForm({
   value,
   onChange,
+  codeReadOnly = false,
 }: {
   value: SourceDraft;
   onChange: (value: SourceDraft) => void;
+  codeReadOnly?: boolean;
 }) {
   const update = (patch: Partial<SourceDraft>) => onChange({ ...value, ...patch });
 
@@ -946,14 +998,19 @@ function SourceConfigForm({
       <Form.Item label="来源名称" required>
         <Input value={value.name} placeholder="请输入来源名称" onChange={(event) => update({ name: event.target.value })} />
       </Form.Item>
-      <Form.Item label="来源编码" required extra="仅允许字母和数字，输入中的其他字符会自动移除。">
+      <Form.Item
+        label="来源编码"
+        required
+        extra={codeReadOnly ? '来源编码创建后不可修改。' : '仅允许字母和数字，输入中的其他字符会自动移除。'}
+      >
         <Input
           value={value.code}
           placeholder="请输入来源编码"
+          disabled={codeReadOnly}
           onChange={(event) => update({ code: sanitizeAlphanumeric(event.target.value) })}
         />
       </Form.Item>
-      <Form.Item label="鉴权方式">
+      <Form.Item label="鉴权方式" required>
         <Select
           value={value.authMode}
           onChange={(authMode) => update({ authMode })}
@@ -971,7 +1028,7 @@ function SourceConfigForm({
       {value.authMode === 'token' || value.authMode === 'token_and_hmac' ? (
         <Form.Item
           label="来源 Token"
-          extra="调用方通过 Authorization: Bearer <source_token> 传入。"
+          extra="Authorization: Bearer source_token"
           className="drawer-form-gap"
         >
           <Space.Compact className="full-width">
@@ -988,23 +1045,59 @@ function SourceConfigForm({
           </Space.Compact>
         </Form.Item>
       ) : null}
-      <Form.Item label="CIDR IP 白名单" className="drawer-form-gap">
+      <Form.Item label="CIDR IP 白名单" className="drawer-form-gap" extra="留空代表允许 any。">
         <Input.TextArea value={value.ipAllowlistText} onChange={(event) => update({ ipAllowlistText: event.target.value })} rows={3} />
       </Form.Item>
-      <Form.Item label="兼容模式">
-        <Input value={value.compatMode} onChange={(event) => update({ compatMode: event.target.value })} />
-      </Form.Item>
-      <Form.Item label="入站去重">
-        <Switch
-          checked={value.inboundDedupeEnabled}
-          checkedChildren="开启"
-          unCheckedChildren="关闭"
-          onChange={(inboundDedupeEnabled) => update({ inboundDedupeEnabled })}
-        />
-      </Form.Item>
-      <Form.Item label="去重策略">
-        <Input value={value.inboundDedupeStrategy} onChange={(event) => update({ inboundDedupeStrategy: event.target.value })} />
-      </Form.Item>
+      <div className="source-access-option-grid">
+        <Form.Item label="入站去重">
+          <Switch
+            checked={value.inboundDedupeEnabled}
+            checkedChildren="开启"
+            unCheckedChildren="关闭"
+            onChange={(inboundDedupeEnabled) => update({ inboundDedupeEnabled })}
+          />
+        </Form.Item>
+        <Form.Item label="入站限流">
+          <Switch
+            checked={value.rateLimitEnabled}
+            checkedChildren="开启"
+            unCheckedChildren="关闭"
+            onChange={(rateLimitEnabled) => update({ rateLimitEnabled })}
+          />
+        </Form.Item>
+      </div>
+      {value.inboundDedupeEnabled || value.rateLimitEnabled ? (
+        <div className="source-access-value-grid">
+          {value.inboundDedupeEnabled ? (
+            <Form.Item label="去重保留时间（秒）">
+              <InputNumber
+                min={1}
+                precision={0}
+                className="full-width"
+                value={value.inboundDedupeTtlSeconds === '' ? null : Number(value.inboundDedupeTtlSeconds)}
+                onChange={(nextValue) =>
+                  update({ inboundDedupeTtlSeconds: nextValue === null ? '' : String(nextValue) })
+                }
+              />
+            </Form.Item>
+          ) : (
+            <div />
+          )}
+          {value.rateLimitEnabled ? (
+            <Form.Item label="每分钟最多接收">
+              <InputNumber
+                min={1}
+                precision={0}
+                className="full-width"
+                value={value.rateLimitPerMinute === '' ? null : Number(value.rateLimitPerMinute)}
+                onChange={(nextValue) => update({ rateLimitPerMinute: nextValue === null ? '' : String(nextValue) })}
+              />
+            </Form.Item>
+          ) : (
+            <div />
+          )}
+        </div>
+      ) : null}
       <Form.Item label="状态">
         <Switch
           checked={value.enabled}
@@ -1013,33 +1106,6 @@ function SourceConfigForm({
           onChange={(enabled) => update({ enabled })}
         />
       </Form.Item>
-      <Tabs
-        size="small"
-        items={[
-          {
-            key: 'dedupe-json',
-            label: '去重高级 JSON',
-            children: (
-              <Input.TextArea
-                rows={6}
-                value={value.inboundDedupeConfigText}
-                onChange={(event) => update({ inboundDedupeConfigText: event.target.value })}
-              />
-            ),
-          },
-          {
-            key: 'rate-json',
-            label: '限流高级 JSON',
-            children: (
-              <Input.TextArea
-                rows={6}
-                value={value.rateLimitConfigText}
-                onChange={(event) => update({ rateLimitConfigText: event.target.value })}
-              />
-            ),
-          },
-        ]}
-      />
     </Form>
   );
 }
@@ -1279,7 +1345,7 @@ export function SourcesPage({ lastUpdated, onRefresh }: ConsolePageProps) {
   const [sourceRows, setSourceRows] = useState<SourceRow[]>([]);
   const [loadState, setLoadState] = useState<ApiLoadState>(emptyLoadState);
   const [sourceDraft, setSourceDraft] = useState<SourceDraft>(() => createSourceDraft());
-  const [selectedSource, setSelectedSource] = useState<SourceRow | null>(null);
+  const [payloadViewSource, setPayloadViewSource] = useState<SourceRow | null>(null);
   const sourceQuery = useAppliedFilters<SourceListQuery>({
     keyword: '',
     code: '',
@@ -1324,7 +1390,6 @@ export function SourcesPage({ lastUpdated, onRefresh }: ConsolePageProps) {
       }
       closeDrawer();
       setEditingSourceId(null);
-      setSelectedSource(null);
       message.success('来源配置已保存');
       await loadSources();
     } catch (error) {
@@ -1399,7 +1464,6 @@ export function SourcesPage({ lastUpdated, onRefresh }: ConsolePageProps) {
       dataIndex: 'ipAllowlist',
       render: (items: string[]) => items.map((item) => <Tag key={item}>{item}</Tag>),
     },
-    { title: '兼容模式', dataIndex: 'compatMode' },
     {
       title: '入站去重',
       dataIndex: 'inboundDedupeEnabled',
@@ -1418,11 +1482,13 @@ export function SourcesPage({ lastUpdated, onRefresh }: ConsolePageProps) {
       fixed: 'right',
       render: (_, record) => (
         <Space>
+          <Button type="link" onClick={() => setPayloadViewSource(record)}>
+            查看
+          </Button>
           <Button
             type="link"
             onClick={() => {
               setEditingSourceId(record.id);
-              setSelectedSource(record);
               setSourceDraft(draftFromSource(record.raw));
               openDrawer(`编辑来源：${record.name}`);
             }}
@@ -1440,14 +1506,13 @@ export function SourcesPage({ lastUpdated, onRefresh }: ConsolePageProps) {
   return (
     <PageFrame
       title="来源接入"
-      description="管理下级系统来源、鉴权、CIDR 白名单、兼容模式和最近入站 Payload。"
+      description="管理下级系统来源、鉴权、CIDR 白名单、入站去重、入站限流和最近入站 Payload。"
       lastUpdated={lastUpdated}
       onRefresh={onRefresh}
     >
       <QueryBar
         onCreate={() => {
           setEditingSourceId(null);
-          setSelectedSource(null);
           setSourceDraft(createSourceDraft());
           openDrawer('新增来源');
         }}
@@ -1504,7 +1569,6 @@ export function SourcesPage({ lastUpdated, onRefresh }: ConsolePageProps) {
         onPageChange={sourcePage.onPageChange}
         fill
         scrollY={520}
-        extra={<Alert type="info" showIcon message="最近 Payload 位于来源详情抽屉的描述预处理区；操作列可发起入站测试。" />}
       >
         <Table
           rowKey="id"
@@ -1518,33 +1582,35 @@ export function SourcesPage({ lastUpdated, onRefresh }: ConsolePageProps) {
       </ListContainer>
 
       <CreateDrawer title={drawer.title} open={drawer.open} onClose={closeDrawer} onSave={saveSource}>
-        <Tabs
-          items={[
-            {
-              key: 'base',
-              label: '基础信息',
-              children: <SourceConfigForm value={sourceDraft} onChange={setSourceDraft} />,
-            },
-            {
-              key: 'payload',
-              label: '描述预处理',
-              children: (
-                <Space direction="vertical" size={16} className="full-width">
-                  <Alert type="info" showIcon message="这里展示最近鉴权通过且 JSON 合法的入站 Payload 样例。" />
-                  <Descriptions column={1} bordered size="small">
-                    <Descriptions.Item label="最近 Payload">
-                      {selectedSource?.latestPayload ?? '暂无真实 Payload 样例'}
-                    </Descriptions.Item>
-                    <Descriptions.Item label="接收时间">{selectedSource?.lastInboundAt ?? '-'}</Descriptions.Item>
-                    <Descriptions.Item label="鉴权结果">{selectedSource ? '通过' : '-'}</Descriptions.Item>
-                  </Descriptions>
-                  <pre className="code-block">{selectedSource?.latestPayload ?? 'null'}</pre>
-                </Space>
-              ),
-            },
-          ]}
+        <SourceConfigForm
+          value={sourceDraft}
+          onChange={setSourceDraft}
+          codeReadOnly={Boolean(editingSourceId)}
         />
       </CreateDrawer>
+      <Modal
+        title={payloadViewSource ? `最近Payload：${payloadViewSource.name}` : '最近Payload'}
+        open={Boolean(payloadViewSource)}
+        onCancel={() => setPayloadViewSource(null)}
+        footer={
+          <Button type="primary" onClick={() => setPayloadViewSource(null)}>
+            关闭
+          </Button>
+        }
+        width={760}
+      >
+        <Space direction="vertical" size={16} className="full-width">
+          <Alert type="info" showIcon message="展示最近鉴权通过且 JSON 合法的入站 Payload 样例。" />
+          <Descriptions column={1} bordered size="small">
+            <Descriptions.Item label="来源编码">
+              <Typography.Text code>{payloadViewSource?.code ?? '-'}</Typography.Text>
+            </Descriptions.Item>
+            <Descriptions.Item label="接收时间">{payloadViewSource?.lastInboundAt ?? '-'}</Descriptions.Item>
+            <Descriptions.Item label="鉴权结果">{payloadViewSource ? '通过' : '-'}</Descriptions.Item>
+          </Descriptions>
+          <pre className="code-block">{payloadViewSource?.latestPayload ?? 'null'}</pre>
+        </Space>
+      </Modal>
       <Modal
         title={inboundTestSource ? `入站测试：${inboundTestSource.name}` : '入站测试'}
         open={Boolean(inboundTestSource)}
@@ -1562,7 +1628,7 @@ export function SourcesPage({ lastUpdated, onRefresh }: ConsolePageProps) {
           <Alert
             type="info"
             showIcon
-            message="该操作只调用本平台入站接口，用于触发本地路由规划和发送动作组；是否调用推送渠道取决于已激活路由。"
+            message="该操作只调用本平台入站接口；提交成功仅表示已接收入队，不代表推送渠道已发送成功。"
           />
           <Descriptions column={1} bordered size="small">
             <Descriptions.Item label="入站接口">
@@ -1846,7 +1912,7 @@ export function ProvidersPage({ lastUpdated, onRefresh }: ConsolePageProps) {
         width={760}
         open={capabilityOpen}
         onClose={() => setCapabilityOpen(false)}
-        destroyOnClose
+        destroyOnHidden
       >
         {selected ? (
           <>
@@ -4351,7 +4417,7 @@ export function OrganizationPage({ lastUpdated, onRefresh }: ConsolePageProps) {
           />
         </Form>
       </CreateDrawer>
-      <Drawer title="人员详情" width={620} open={detailOpen} onClose={() => setDetailOpen(false)} destroyOnClose>
+      <Drawer title="人员详情" width={620} open={detailOpen} onClose={() => setDetailOpen(false)} destroyOnHidden>
         {selected ? (
           <Space direction="vertical" className="full-width" size={16}>
             <Descriptions column={1} size="small" bordered>
@@ -5240,7 +5306,7 @@ export function MessageLogsPage({ lastUpdated, onRefresh }: ConsolePageProps) {
         width={620}
         open={Boolean(selected)}
         onClose={() => setSelected(null)}
-        destroyOnClose
+        destroyOnHidden
       >
         {selected ? (
           <Space direction="vertical" size={16} className="full-width">
@@ -5570,7 +5636,7 @@ export function AuditPage({ lastUpdated, onRefresh }: ConsolePageProps) {
         width={520}
         open={Boolean(selected)}
         onClose={() => setSelected(null)}
-        destroyOnClose
+        destroyOnHidden
       >
         {selected ? (
           <Space direction="vertical" className="full-width">
