@@ -175,6 +175,61 @@ func TestRepositoryUpdateSourcePreservesLatestPayloadSample(t *testing.T) {
 	}
 }
 
+func TestRepositoryCreateSourceStoresCIDRSingleIPAndIPRangeAllowlist(t *testing.T) {
+	dsn := os.Getenv("MGP_TEST_DATABASE_URL")
+	if dsn == "" {
+		t.Skip("MGP_TEST_DATABASE_URL is not set")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	schemaName := createMigratedTestSchema(ctx, t, dsn)
+	defer dropTestSchema(schemaName)
+
+	poolConfig, err := pgxpool.ParseConfig(dsn)
+	if err != nil {
+		t.Fatalf("parse pool config: %v", err)
+	}
+	poolConfig.ConnConfig.RuntimeParams["search_path"] = schemaName
+
+	pool, err := pgxpool.NewWithConfig(ctx, poolConfig)
+	if err != nil {
+		t.Fatalf("open test pool: %v", err)
+	}
+	defer pool.Close()
+
+	created, err := NewRepository(pool).CreateSource(ctx, source.CreateSourceParams{
+		Code:      "orders",
+		Name:      "Orders",
+		Enabled:   true,
+		AuthMode:  source.AuthModeToken,
+		AuthToken: "sourceToken",
+		IPAllowlist: []string{
+			"192.168.66.0/24",
+			"172.16.30.0/24",
+			"127.0.0.1",
+			"172.169.10.11-172.169.10.13",
+		},
+		CompatMode:            "standard",
+		InboundDedupeStrategy: source.DedupeStrategyPayloadHash,
+		InboundDedupeConfig:   json.RawMessage(`{}`),
+		RateLimitConfig:       json.RawMessage(`{}`),
+	})
+	if err != nil {
+		t.Fatalf("create source with mixed ip allowlist: %v", err)
+	}
+	expected := []string{"192.168.66.0/24", "172.16.30.0/24", "127.0.0.1", "172.169.10.11-172.169.10.13"}
+	if len(created.IPAllowlist) != len(expected) {
+		t.Fatalf("expected allowlist %v, got %v", expected, created.IPAllowlist)
+	}
+	for index, value := range expected {
+		if created.IPAllowlist[index] != value {
+			t.Fatalf("expected allowlist[%d]=%q, got %q", index, value, created.IPAllowlist[index])
+		}
+	}
+}
+
 func enqueueParams(sourceID string, messageID string, traceID string, receivedAt time.Time) source.EnqueueInboundParams {
 	jobPayload, _ := json.Marshal(map[string]string{
 		"message_id": messageID,

@@ -28,7 +28,7 @@
 | `auth_mode` | text | `token` / `hmac` / `token_and_hmac` / `none`，新建来源默认 `token` |
 | `auth_token` | text null | 静态 token，第一版管理员可明文查看 |
 | `hmac_secret` | text null | HMAC secret，第一版管理员可明文查看 |
-| `ip_allowlist` | cidr[] null | IP 白名单 |
+| `ip_allowlist` | text[] | IP 白名单，支持 CIDR、单 IP、IP 段 |
 | `compat_mode` | text | 内部保留字段；当前固定为标准 JSON，不在管理台配置 |
 | `inbound_dedupe_enabled` | boolean | 入站去重 |
 | `inbound_dedupe_strategy` | text | 固定为 `payload_hash` |
@@ -42,8 +42,8 @@
 - Token 只从 `Authorization: Bearer <source_token>` 读取，不支持 `X-MGP-Token`。
 - HMAC 为来源级可选能力，管理台可以随机生成共享密钥，第一版存入 `hmac_secret` 并允许管理员明文查看。
 - `token_and_hmac` 要求 Token 和 HMAC 同时通过，不存在 `token_or_hmac` 模式。
-- `ip_allowlist` 支持 PostgreSQL `cidr[]`，一期进入来源配置表单。
-- `auth_mode=none` 主要用于无法携带鉴权头的来源；配置时应强烈建议同时填写 CIDR 白名单。
+- `ip_allowlist` 支持 CIDR、单 IP 和 `起始IP-结束IP` 范围，多个条目可用逗号或换行分隔。
+- `auth_mode=none` 主要用于无法携带鉴权头的来源；配置时应强烈建议同时填写 IP 白名单。
 - 生产环境支持 `auth_mode=token`，不强制要求 HMAC。
 - `latest_payload_sample` 只由鉴权通过且 JSON 合法的入站请求更新；无路由、无模板、模板不匹配和接收人缺失不影响样本保存。
 

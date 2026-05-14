@@ -9,7 +9,7 @@ CREATE TABLE inbound_sources (
         CHECK (auth_mode IN ('token', 'hmac', 'token_and_hmac', 'none')),
     auth_token text,
     hmac_secret text,
-    ip_allowlist cidr[] NOT NULL DEFAULT ARRAY[]::cidr[],
+    ip_allowlist text[] NOT NULL DEFAULT ARRAY[]::text[],
     compat_mode text NOT NULL DEFAULT 'standard',
     inbound_dedupe_enabled boolean NOT NULL DEFAULT false,
     inbound_dedupe_strategy text NOT NULL DEFAULT 'payload_hash'

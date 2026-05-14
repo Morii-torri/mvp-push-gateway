@@ -336,8 +336,8 @@ func normalizeSourceInput(input CreateSourceInput) (CreateSourceParams, error) {
 		input.CompatMode = "standard"
 	}
 	input.InboundDedupeStrategy = DedupeStrategyPayloadHash
-	for _, cidr := range input.IPAllowlist {
-		if _, err := netip.ParsePrefix(strings.TrimSpace(cidr)); err != nil {
+	for _, entry := range input.IPAllowlist {
+		if _, err := parseIPAllowlistEntry(entry); err != nil {
 			return CreateSourceParams{}, ErrInvalidInput
 		}
 	}
@@ -492,16 +492,69 @@ func clientAllowed(allowlist []string, remoteAddr string) bool {
 	if err != nil {
 		return false
 	}
-	for _, cidr := range allowlist {
-		prefix, err := netip.ParsePrefix(strings.TrimSpace(cidr))
+	for _, rawEntry := range allowlist {
+		entry, err := parseIPAllowlistEntry(rawEntry)
 		if err != nil {
 			return false
 		}
-		if prefix.Contains(clientIP) {
+		if entry.contains(clientIP) {
 			return true
 		}
 	}
 	return false
+}
+
+type ipAllowlistEntry struct {
+	prefix  netip.Prefix
+	startIP netip.Addr
+	endIP   netip.Addr
+}
+
+func parseIPAllowlistEntry(raw string) (ipAllowlistEntry, error) {
+	entry := strings.TrimSpace(raw)
+	if entry == "" {
+		return ipAllowlistEntry{}, ErrInvalidInput
+	}
+	if strings.Contains(entry, "-") {
+		if strings.Count(entry, "-") != 1 {
+			return ipAllowlistEntry{}, ErrInvalidInput
+		}
+		parts := strings.Split(entry, "-")
+		startIP, err := netip.ParseAddr(strings.TrimSpace(parts[0]))
+		if err != nil {
+			return ipAllowlistEntry{}, err
+		}
+		endIP, err := netip.ParseAddr(strings.TrimSpace(parts[1]))
+		if err != nil {
+			return ipAllowlistEntry{}, err
+		}
+		startIP = startIP.Unmap()
+		endIP = endIP.Unmap()
+		if startIP.Is4() != endIP.Is4() || startIP.Compare(endIP) > 0 {
+			return ipAllowlistEntry{}, ErrInvalidInput
+		}
+		return ipAllowlistEntry{startIP: startIP, endIP: endIP}, nil
+	}
+	if prefix, err := netip.ParsePrefix(entry); err == nil {
+		return ipAllowlistEntry{prefix: prefix.Masked()}, nil
+	}
+	ip, err := netip.ParseAddr(entry)
+	if err != nil {
+		return ipAllowlistEntry{}, err
+	}
+	ip = ip.Unmap()
+	return ipAllowlistEntry{startIP: ip, endIP: ip}, nil
+}
+
+func (entry ipAllowlistEntry) contains(ip netip.Addr) bool {
+	ip = ip.Unmap()
+	if entry.prefix.IsValid() {
+		return entry.prefix.Contains(ip)
+	}
+	if !entry.startIP.IsValid() || !entry.endIP.IsValid() || entry.startIP.Is4() != ip.Is4() {
+		return false
+	}
+	return entry.startIP.Compare(ip) <= 0 && entry.endIP.Compare(ip) >= 0
 }
 
 func inboundDedupeKey(configuredSource Source, payloadHash string) (string, error) {

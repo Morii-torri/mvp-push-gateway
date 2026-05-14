@@ -77,7 +77,7 @@ func (r Repository) CreateSource(ctx context.Context, params source.CreateSource
 		)
 		VALUES (
 			$1, $2, $3, $4, $5, NULLIF($6, ''), NULLIF($7, ''),
-			ARRAY(SELECT unnest($8::text[])::cidr),
+			$8::text[],
 			$9, $10, $11, $12, $13, $14, $15
 		)
 		RETURNING
@@ -149,7 +149,7 @@ func (r Repository) UpdateSource(ctx context.Context, id string, params source.U
 			auth_mode = $5,
 			auth_token = NULLIF($6, ''),
 			hmac_secret = NULLIF($7, ''),
-			ip_allowlist = ARRAY(SELECT unnest($8::text[])::cidr),
+			ip_allowlist = $8::text[],
 			compat_mode = $9,
 			inbound_dedupe_enabled = $10,
 			inbound_dedupe_strategy = $11,

@@ -168,6 +168,7 @@ describe('critical console pages', () => {
     expect(enabledMarkup).not.toContain('只接受 Authorization: Bearer source_token');
     expect(enabledMarkup).not.toContain('不支持 X-MGP-Token');
     expect(enabledMarkup).toContain('留空代表允许 any');
+    expect(enabledMarkup).toContain('示例：192.168.66.0/24, 172.16.30.0/24, 127.0.0.1, 172.169.10.11-172.169.10.13');
     expect(enabledMarkup).toContain('source-access-option-grid');
     expect(enabledMarkup).toContain('source-access-value-grid');
     expect(enabledMarkup).toContain('去重保留时间');
@@ -244,6 +245,19 @@ describe('critical console pages', () => {
     expect(input.inbound_dedupe_strategy).toBe('payload_hash');
     expect(input.inbound_dedupe_config).toEqual({});
     expect(input.rate_limit_config).toEqual({ enabled: false });
+
+    const mixedAllowlistInput = sourceInputFromDraft({
+      ...draft,
+      name: '订单来源',
+      code: 'orders',
+      ipAllowlistText: '192.168.66.0/24,172.16.30.0/24,127.0.0.1\n172.169.10.11-172.169.10.13',
+    });
+    expect(mixedAllowlistInput.ip_allowlist).toEqual([
+      '192.168.66.0/24',
+      '172.16.30.0/24',
+      '127.0.0.1',
+      '172.169.10.11-172.169.10.13',
+    ]);
   });
 
   it('applies submitted query conditions across global list filters', () => {

@@ -182,6 +182,68 @@ func TestIngestRejectsCIDRDeniedClientIP(t *testing.T) {
 	}
 }
 
+func TestIngestAllowsCIDRSingleIPAndIPRangeAllowlist(t *testing.T) {
+	store := newMemoryStore(Source{
+		ID:       "source-1",
+		Code:     "orders",
+		Name:     "Orders",
+		Enabled:  true,
+		AuthMode: AuthModeNone,
+		IPAllowlist: []string{
+			"192.168.66.0/24",
+			"172.16.30.0/24",
+			"127.0.0.1",
+			"172.169.10.11-172.169.10.13",
+		},
+	})
+	service := NewService(store, WithTraceIDGenerator(func() string { return "trace-ip-allowlist" }))
+
+	for _, remoteAddr := range []string{
+		"192.168.66.20:4321",
+		"172.16.30.99:4321",
+		"127.0.0.1:4321",
+		"172.169.10.12:4321",
+	} {
+		t.Run(remoteAddr, func(t *testing.T) {
+			_, err := service.Ingest(context.Background(), IngestInput{
+				SourceCode: "orders",
+				Method:     http.MethodPost,
+				Path:       "/api/v1/ingest/orders",
+				Headers:    http.Header{},
+				RemoteAddr: remoteAddr,
+				Body:       []byte(`{"title":"paid"}`),
+			})
+			if err != nil {
+				t.Fatalf("ingest with allowed client ip %s: %v", remoteAddr, err)
+			}
+		})
+	}
+}
+
+func TestIngestRejectsClientIPOutsideExplicitRange(t *testing.T) {
+	store := newMemoryStore(Source{
+		ID:          "source-1",
+		Code:        "orders",
+		Name:        "Orders",
+		Enabled:     true,
+		AuthMode:    AuthModeNone,
+		IPAllowlist: []string{"172.169.10.11-172.169.10.13"},
+	})
+	service := NewService(store)
+
+	_, err := service.Ingest(context.Background(), IngestInput{
+		SourceCode: "orders",
+		Method:     http.MethodPost,
+		Path:       "/api/v1/ingest/orders",
+		Headers:    http.Header{},
+		RemoteAddr: "172.169.10.14:4321",
+		Body:       []byte(`{"title":"paid"}`),
+	})
+	if !errors.Is(err, ErrIPNotAllowed) {
+		t.Fatalf("expected range rejection, got %v", err)
+	}
+}
+
 func TestIngestUpdatesLatestPayloadAndQueuesWithoutRoutes(t *testing.T) {
 	store := newMemoryStore(Source{
 		ID:       "source-1",
@@ -339,6 +401,39 @@ func TestCreateSourceAcceptsAlphanumericCredentials(t *testing.T) {
 	}
 	if created.Code != "ordersapi" || created.AuthToken != "sourceToken" || created.HMACSecret != "hmacSecret" {
 		t.Fatalf("unexpected created source: %+v", created)
+	}
+}
+
+func TestNormalizeSourceInputAcceptsCIDRSingleIPAndIPRangeAllowlist(t *testing.T) {
+	normalized, err := normalizeSourceInput(CreateSourceInput{
+		Code:      "ordersapi",
+		Name:      "Orders",
+		AuthMode:  AuthModeToken,
+		AuthToken: "sourceToken",
+		IPAllowlist: []string{
+			"192.168.66.0/24",
+			"172.16.30.0/24",
+			"127.0.0.1",
+			"172.169.10.11-172.169.10.13",
+		},
+	})
+	if err != nil {
+		t.Fatalf("normalize source input with mixed ip allowlist: %v", err)
+	}
+	if len(normalized.IPAllowlist) != 4 {
+		t.Fatalf("expected four allowlist entries, got %+v", normalized.IPAllowlist)
+	}
+}
+
+func TestNormalizeSourceInputRejectsInvalidIPRangeAllowlist(t *testing.T) {
+	_, err := normalizeSourceInput(CreateSourceInput{
+		Code:        "ordersapi",
+		Name:        "Orders",
+		AuthMode:    AuthModeNone,
+		IPAllowlist: []string{"172.169.10.13-172.169.10.11"},
+	})
+	if !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("expected invalid input for descending ip range, got %v", err)
 	}
 }
 

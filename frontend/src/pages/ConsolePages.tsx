@@ -1023,7 +1023,7 @@ export function SourceConfigForm({
         />
       </Form.Item>
       {value.authMode === 'none' ? (
-        <Alert type="warning" showIcon message="无鉴权存在风险，建议配置 CIDR 白名单。" />
+        <Alert type="warning" showIcon message="无鉴权存在风险，建议配置 IP 白名单。" />
       ) : null}
       {value.authMode === 'token' || value.authMode === 'token_and_hmac' ? (
         <Form.Item
@@ -1045,7 +1045,11 @@ export function SourceConfigForm({
           </Space.Compact>
         </Form.Item>
       ) : null}
-      <Form.Item label="CIDR IP 白名单" className="drawer-form-gap" extra="留空代表允许 any。">
+      <Form.Item
+        label="IP 白名单"
+        className="drawer-form-gap"
+        extra="多个条目可用逗号或换行分隔；支持 CIDR、单 IP、IP 段。留空代表允许 any。示例：192.168.66.0/24, 172.16.30.0/24, 127.0.0.1, 172.169.10.11-172.169.10.13"
+      >
         <Input.TextArea value={value.ipAllowlistText} onChange={(event) => update({ ipAllowlistText: event.target.value })} rows={3} />
       </Form.Item>
       <div className="source-access-option-grid">
@@ -1506,7 +1510,7 @@ export function SourcesPage({ lastUpdated, onRefresh }: ConsolePageProps) {
   return (
     <PageFrame
       title="来源接入"
-      description="管理下级系统来源、鉴权、CIDR 白名单、入站去重、入站限流和最近入站 Payload。"
+      description="管理下级系统来源、鉴权、IP 白名单、入站去重、入站限流和最近入站 Payload。"
       lastUpdated={lastUpdated}
       onRefresh={onRefresh}
     >

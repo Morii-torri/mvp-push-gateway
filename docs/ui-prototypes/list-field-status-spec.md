@@ -114,7 +114,7 @@
 | `source_code` / `code` | 来源编码 | 等宽文本；来源创建后不可修改 |
 | `name` | 来源名称 | 普通文本 |
 | `auth_mode` | 鉴权方式 | 标签 |
-| `ip_allowlist` | IP 白名单 | CIDR 列表 |
+| `ip_allowlist` | IP 白名单 | CIDR、单 IP、IP 段列表 |
 | `inbound_dedupe_enabled` | 入站去重 | 开关/标签 |
 | `rate_limit_config` | 入站限流 | 摘要 |
 | `latest_payload_sample` | 最近 Payload | 来源列表操作列点击“查看”后展示 |
@@ -126,7 +126,7 @@
 | `token` | Token | 蓝色 | 默认值，生产环境支持 |
 | `hmac` | HMAC | 绿色 | 使用共享密钥签名 |
 | `token_and_hmac` | Token + HMAC 双校验 | 紫色 | Token 和 HMAC 必须同时通过 |
-| `none` | 无鉴权 | 黄色 | 风险状态，必须提示建议配置 CIDR 白名单 |
+| `none` | 无鉴权 | 黄色 | 风险状态，必须提示建议配置 IP 白名单 |
 
 ## 推送渠道字段
 
