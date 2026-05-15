@@ -759,7 +759,7 @@ func BuildRequest(channel Channel, input BuildRequestInput) (BuiltRequest, error
 
 func BuildDeliveryRequest(channel Channel, input BuildDeliveryRequestInput) (BuiltRequest, error) {
 	recipientValue := input.LegacyRecipientValue
-	if recipientValue == nil {
+	if isEmptyValue(recipientValue) {
 		recipientValue = recipientValueFromResolved(channel.ProviderType, input.ResolvedRecipients)
 	}
 	return buildRequest(channel, BuildRequestInput{

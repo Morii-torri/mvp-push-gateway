@@ -686,6 +686,32 @@ func TestBuildDeliveryRequestUsesBuiltInProviderDefaultsWithoutLegacyURL(t *test
 	}
 }
 
+func TestBuildDeliveryRequestFallsBackToResolvedRecipientsWhenLegacyRecipientIsEmpty(t *testing.T) {
+	request, err := BuildDeliveryRequest(Channel{
+		ProviderType: ProviderWxPusher,
+		AuthConfig:   json.RawMessage(`{"app_token":"wx-app-token"}`),
+	}, BuildDeliveryRequestInput{
+		LegacyRecipientValue: "",
+		RenderedMessage: RenderedMessage{
+			ProviderType: ProviderWxPusher,
+			MessageType:  "html",
+			Content:      json.RawMessage(`{"content":"<b>Finished</b>","topicIds":[101,102]}`),
+		},
+		ResolvedRecipients: []ResolvedRecipient{
+			{PlatformIDs: map[string]string{"wxpusher_uid": "UID_1"}},
+			{PlatformIDs: map[string]string{"wxpusher_uid": "UID_2"}},
+		},
+	})
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+
+	body := decodeRequestBody(t, request)
+	requireStringListField(t, body, "uids", []string{"UID_1", "UID_2"})
+	requireNumberListField(t, body, "topicIds", []float64{101, 102})
+	requireBodyField(t, body, "contentType", float64(2))
+}
+
 func TestBuildDeliveryRequestUsesRenderedMessageRecipientsAndTargetContext(t *testing.T) {
 	request, err := BuildDeliveryRequest(Channel{
 		ID:           "channel-wecom",
