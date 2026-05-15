@@ -202,6 +202,26 @@ func (r Repository) PublishTemplateVersion(ctx context.Context, templateID strin
 		return msgtemplate.TemplateVersion{}, fmt.Errorf("update current template version: %w", err)
 	}
 
+	if _, err := tx.Exec(ctx, `
+		UPDATE route_action_targets
+		SET template_version_id = $2
+		WHERE template_version_id IN (
+			SELECT id FROM template_versions WHERE template_id = $1
+		)
+	`, templateID, version.ID); err != nil {
+		return msgtemplate.TemplateVersion{}, fmt.Errorf("update route action target template versions: %w", err)
+	}
+
+	if _, err := tx.Exec(ctx, `
+		UPDATE route_actions
+		SET template_version_id = $2
+		WHERE template_version_id IN (
+			SELECT id FROM template_versions WHERE template_id = $1
+		)
+	`, templateID, version.ID); err != nil {
+		return msgtemplate.TemplateVersion{}, fmt.Errorf("update route action template versions: %w", err)
+	}
+
 	if err := tx.Commit(ctx); err != nil {
 		return msgtemplate.TemplateVersion{}, fmt.Errorf("commit publish template version transaction: %w", err)
 	}

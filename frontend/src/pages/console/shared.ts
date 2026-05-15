@@ -31,11 +31,13 @@ export const providerTypeOptions: Array<{ label: string; value: ProviderKind }> 
   { label: '自定义 Token 平台', value: 'custom_token' },
 ];
 
+export const recipientIdentityProviderOptions = providerTypeOptions.filter((item) => item.value !== 'pushplus');
+
 const fallbackMessageTypesByProvider: Record<ProviderKind, string[]> = {
   webhook: ['json', 'text', 'markdown'],
   self: ['json', 'text'],
-  pushplus: ['json'],
-  wxpusher: ['text', 'markdown', 'html'],
+  pushplus: ['html'],
+  wxpusher: ['html'],
   serverchan: ['text', 'markdown'],
   ntfy: ['notice'],
   gotify: ['notice'],

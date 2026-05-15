@@ -90,6 +90,7 @@ import {
   type RouteFlowInput,
   type RouteRuleApiRecord,
   type RouteRuleInput,
+  type RouteVersionApiRecord,
   type SettingApiRecord,
   type SourceApiRecord,
   type SourceInput,
@@ -192,18 +193,25 @@ import {
   type TemplateFeedback,
 } from './console/templateEditor';
 import { MessageLogAttemptBlocks } from './console/messageLogDetail';
-import { providerTypeOptions } from './console/shared';
+import { providerTypeOptions, recipientIdentityProviderOptions } from './console/shared';
 
 export {
   ProviderConfigForm,
   ProviderTestPanel,
   channelInputFromProvider,
   createProviderDraft,
+  providerTestPayload,
   providerTestRequestPreview,
   providerTestSendPreview,
   switchProviderType,
 } from './console/providerConfig';
-export { RouteRuleForm, createRouteRuleDraft, mapRouteRule, routeTargetTemplateOptions } from './console/routeRuleForm';
+export {
+  RouteRuleForm,
+  createRouteRuleDraft,
+  mapRouteRule,
+  routeRuleDraftToRow,
+  routeTargetTemplateOptions,
+} from './console/routeRuleForm';
 export {
   TemplateEditorForm,
   createTemplateDraft,
@@ -385,6 +393,14 @@ function matchesAnyQueryText(keyword: string, ...values: unknown[]) {
 
 function matchesEnabledStatus(enabled: boolean, status: string) {
   return status === 'all' || (status === 'enabled' ? enabled : !enabled);
+}
+
+function providerDeadLetterEnabled(record: ProviderRow) {
+  const policy = parseJSONOrEmpty(record.deadLetterPolicyJson);
+  if (!isRecord(policy) || Object.keys(policy).length === 0) {
+    return false;
+  }
+  return policy.enabled !== false;
 }
 
 function matchesExactOrAll(value: unknown, expected: string) {
@@ -1304,7 +1320,7 @@ export function SourceConfigForm({
 
 
 
-function IdentityEditor({
+export function IdentityEditor({
   identities,
   onChange,
   readOnly = false,
@@ -1318,11 +1334,12 @@ function IdentityEditor({
     onChange?.(identities.map((item, itemIndex) => (itemIndex === index ? { ...item, ...patch } : item)));
   };
   const addIdentity = () => {
+    const platform = providerLabelFromValue('sms');
     onChange?.([
       ...identities,
       {
-        platform: '短信',
-        fieldName: 'mobile',
+        platform,
+        fieldName: defaultIdentityKindForPlatform(platform),
         value: '',
         verified: false,
       },
@@ -1341,16 +1358,10 @@ function IdentityEditor({
         ) : (
           <Select
             value={value}
-            options={providerTypeOptions.map((item) => ({ label: item.label, value: item.label }))}
-            onChange={(platform) => updateIdentity(index, { platform })}
+            options={recipientIdentityProviderOptions.map((item) => ({ label: item.label, value: item.label }))}
+            onChange={(platform) => updateIdentity(index, { platform, fieldName: defaultIdentityKindForPlatform(platform) })}
           />
         ),
-    },
-    {
-      title: '身份类型',
-      dataIndex: 'fieldName',
-      render: (value, _record, index) =>
-        readOnly ? value : <Input value={value} onChange={(event) => updateIdentity(index, { fieldName: event.target.value })} />,
     },
     {
       title: '身份值',
@@ -1387,11 +1398,14 @@ function IdentityEditor({
   }
   return (
     <Space direction="vertical" className="full-width">
-      {!readOnly ? (
-        <Button size="small" onClick={addIdentity}>
-          新增身份字段
-        </Button>
-      ) : null}
+      <div className="identity-editor-header">
+        <Typography.Title level={5}>平台身份字段</Typography.Title>
+        {!readOnly ? (
+          <Button type="primary" size="small" icon={<PlusOutlined />} className="identity-add-button" onClick={addIdentity}>
+            新增身份字段
+          </Button>
+        ) : null}
+      </div>
       <Table
         rowKey="id"
         size="small"
@@ -1860,6 +1874,7 @@ export function ProvidersPage({ lastUpdated, onRefresh }: ConsolePageProps) {
   const [providerDraft, setProviderDraft] = useState<ProviderRow>(() => createProviderDraft('gov_cloud', 1));
   const [providerTestDraft, setProviderTestDraft] = useState<ProviderRow>(() => createProviderDraft('webhook', 1));
   const [editingProviderId, setEditingProviderId] = useState<string | null>(null);
+  const [pendingProviderEnabledIds, setPendingProviderEnabledIds] = useState<Set<string>>(() => new Set());
   const providerQuery = useAppliedFilters<ProviderListQuery>({
     name: '',
     providerType: 'all',
@@ -1936,6 +1951,23 @@ export function ProvidersPage({ lastUpdated, onRefresh }: ConsolePageProps) {
     setProviderTestDraft(providerWithCapability(record, providerCapabilityView(record.providerType, providerCapabilities)));
     setProviderTestOpen(true);
   };
+  const toggleProviderEnabled = async (record: ProviderRow, enabled: boolean) => {
+    setPendingProviderEnabledIds((current) => new Set(current).add(record.id));
+    try {
+      await consoleApi.updateChannel(record.id, channelInputFromProvider({ ...record, enabled }));
+      setProviderRows((current) => current.map((item) => (item.id === record.id ? { ...item, enabled } : item)));
+      setSelected((current) => (current?.id === record.id ? { ...current, enabled } : current));
+      message.success(enabled ? '推送渠道已启用' : '推送渠道已停用');
+    } catch (error) {
+      message.error(userFacingError(error));
+    } finally {
+      setPendingProviderEnabledIds((current) => {
+        const next = new Set(current);
+        next.delete(record.id);
+        return next;
+      });
+    }
+  };
   const columns: TableProps<ProviderRow>['columns'] = [
     {
       title: '推送渠道类型',
@@ -1943,16 +1975,29 @@ export function ProvidersPage({ lastUpdated, onRefresh }: ConsolePageProps) {
       render: (value: ProviderRow['providerType']) => <Tag color="blue">{getProviderTypeLabel(value)}</Tag>,
     },
     { title: '推送渠道名称', dataIndex: 'name' },
-    {
-      title: '状态',
-      dataIndex: 'enabled',
-      render: (enabled: boolean) => <StatusTag meta={getEnabledMeta(enabled)} />,
-    },
     { title: '主动限流', dataIndex: 'rateLimit' },
-    { title: '发送模式', render: () => '顺序发送' },
     { title: '超时时间', dataIndex: 'timeout' },
     { title: '允许重试次数', render: (_, record) => record.retryAttempts },
-    { title: '死信策略', render: () => '全局默认' },
+    {
+      title: '死信策略',
+      render: (_, record) => {
+        const enabled = providerDeadLetterEnabled(record);
+        return <Tag color={enabled ? 'success' : 'default'}>{enabled ? '开启' : '关闭'}</Tag>;
+      },
+    },
+    {
+      title: '启停',
+      dataIndex: 'enabled',
+      render: (enabled: boolean, record) => (
+        <Switch
+          checked={enabled}
+          loading={pendingProviderEnabledIds.has(record.id)}
+          onChange={(checked) => void toggleProviderEnabled(record, checked)}
+          checkedChildren="启用"
+          unCheckedChildren="停用"
+        />
+      ),
+    },
     {
       title: '操作',
       render: (_, record) => (
@@ -2085,7 +2130,7 @@ export function ProvidersPage({ lastUpdated, onRefresh }: ConsolePageProps) {
               columns={columns}
               dataSource={providerPage.rows}
               loading={loadState.loading}
-              scroll={{ x: 1200 }}
+              scroll={{ x: 1100 }}
             />
           </ListContainer>
         </div>
@@ -2152,11 +2197,19 @@ function RouteGroupForm({
   value,
   onChange,
   sourceRows,
+  routeVersionRows,
 }: {
   value: RouteGroupDraft;
   onChange: (value: RouteGroupDraft) => void;
   sourceRows: SourceRow[];
+  routeVersionRows: RouteVersionApiRecord[];
 }) {
+  const routeVersionOptions = routeVersionRows
+    .filter((version) => version.published_at)
+    .map((version) => ({
+      label: routeVersionOptionLabel(version),
+      value: version.id,
+    }));
   return (
     <Form layout="vertical">
       <Form.Item label="路由大组名称" required>
@@ -2176,13 +2229,16 @@ function RouteGroupForm({
         />
       </Form.Item>
       <Form.Item label="当前版本">
-        <Input
+        <Select
           value={value.currentVersion}
-          onChange={(event) => onChange({ ...value, currentVersion: event.target.value })}
+          disabled={routeVersionOptions.length === 0}
+          options={
+            routeVersionOptions.length
+              ? routeVersionOptions
+              : [{ label: '未发布', value: value.currentVersion || '未发布' }]
+          }
+          onChange={(currentVersion) => onChange({ ...value, currentVersion })}
         />
-      </Form.Item>
-      <Form.Item label="执行语义">
-        <Input value="按顺序匹配，第一条命中即发送并停止" readOnly />
       </Form.Item>
       <Form.Item label="状态">
         <Switch
@@ -2227,6 +2283,13 @@ function cloneRouteCanvasSnapshot(snapshot: RouteCanvasSnapshot): RouteCanvasSna
   };
 }
 
+function routeCanvasCoversRules(snapshot: RouteCanvasSnapshot, rules: RouteRuleRow[]): boolean {
+  const nodeIds = new Set(snapshot.nodes.map((node) => node.id));
+  return rules.every((rule) =>
+    [`${rule.id}-condition`, `${rule.id}-recipient`, `${rule.id}-send-group`].every((nodeId) => nodeIds.has(nodeId)),
+  );
+}
+
 function mapRouteGroup(flow: RouteFlowApiRecord, sourceRows: SourceRow[], rules: RouteRule[] = []): RouteGroup {
   const source = sourceRows.find((item) => item.id === flow.source_id);
   return {
@@ -2242,9 +2305,15 @@ function mapRouteGroup(flow: RouteFlowApiRecord, sourceRows: SourceRow[], rules:
   };
 }
 
+function routeVersionOptionLabel(version: RouteVersionApiRecord): string {
+  const versionInfo = typeof version.version_info === 'string' ? version.version_info.trim() : '';
+  const publishedAt = version.published_at ? formatApiTime(version.published_at) : '草稿';
+  return versionInfo ? `v${version.version_no} / ${versionInfo}` : `v${version.version_no} / ${publishedAt}`;
+}
+
 
 export function RoutesPage({ lastUpdated, onRefresh }: ConsolePageProps) {
-  const { message } = App.useApp();
+  const { message, modal } = App.useApp();
   const { drawer: groupDrawer, openDrawer: openGroupDrawer, closeDrawer: closeGroupDrawer } = useCreateDrawer('新增路由大组');
   const { drawer: ruleDrawer, openDrawer: openRuleDrawer, closeDrawer: closeRuleDrawer } = useCreateDrawer('新增路由规则');
   const [mode, setMode] = useState<'canvas' | 'table'>('canvas');
@@ -2254,7 +2323,10 @@ export function RoutesPage({ lastUpdated, onRefresh }: ConsolePageProps) {
   const [templateRows, setTemplateRows] = useState<Array<TemplateRecord & { raw?: TemplateApiRecord }>>([]);
   const [matchGroupRows, setMatchGroupRows] = useState<MatchGroup[]>([]);
   const [recipientGroupRows, setRecipientGroupRows] = useState<RecipientGroupApiRecord[]>([]);
+  const [userRows, setUserRows] = useState<UserApiRecord[]>([]);
   const [groupRows, setGroupRows] = useState<RouteGroup[]>([]);
+  const [routeVersionRows, setRouteVersionRows] = useState<RouteVersionApiRecord[]>([]);
+  const [routeVersionLabelById, setRouteVersionLabelById] = useState<Record<string, string>>({});
   const [rawFlows, setRawFlows] = useState<RouteFlowApiRecord[]>([]);
   const [selectedGroup, setSelectedGroup] = useState<RouteGroup | null>(null);
   const [editingGroupId, setEditingGroupId] = useState<string | null>(null);
@@ -2288,7 +2360,7 @@ export function RoutesPage({ lastUpdated, onRefresh }: ConsolePageProps) {
   const loadRouteData = useCallback(async () => {
     setLoadState({ loading: true, error: '' });
     try {
-      const [sourceResult, channelResult, templateResult, flowResult, matchGroupResult, recipientGroupResult] =
+      const [sourceResult, channelResult, templateResult, flowResult, matchGroupResult, recipientGroupResult, userResult] =
         await Promise.allSettled([
           consoleApi.listSources(),
           consoleApi.listChannels(),
@@ -2296,6 +2368,7 @@ export function RoutesPage({ lastUpdated, onRefresh }: ConsolePageProps) {
           consoleApi.listRouteFlows(),
           consoleApi.listMatchGroups(),
           consoleApi.listRecipientGroups(),
+          consoleApi.listUsers(),
         ]);
       const nextSources =
         sourceResult.status === 'fulfilled' ? sourceResult.value.sources.map(mapSourceRow) : [];
@@ -2307,18 +2380,32 @@ export function RoutesPage({ lastUpdated, onRefresh }: ConsolePageProps) {
           : [];
       const nextFlows =
         flowResult.status === 'fulfilled' ? flowResult.value.flows : [];
+      const routeVersionResults = await Promise.allSettled(
+        nextFlows.map((flow) => consoleApi.listRouteVersions(flow.id)),
+      );
+      const nextRouteVersionLabelById: Record<string, string> = {};
+      routeVersionResults.forEach((result) => {
+        if (result.status !== 'fulfilled') {
+          return;
+        }
+        result.value.versions.forEach((version) => {
+          nextRouteVersionLabelById[version.id] = routeVersionOptionLabel(version);
+        });
+      });
       const nextMatchGroups =
         matchGroupResult.status === 'fulfilled'
           ? matchGroupResult.value.match_groups.map(mapMatchGroup)
           : [];
       const nextRecipientGroups =
         recipientGroupResult.status === 'fulfilled' ? recipientGroupResult.value.groups : [];
+      const nextUsers = userResult.status === 'fulfilled' ? userResult.value.users : [];
       const nextGroupRows = nextFlows.map((flow) => mapRouteGroup(flow, nextSources));
       setSourceRows(nextSources);
       setChannelRows(nextChannels);
       setTemplateRows(nextTemplates);
       setRawFlows(nextFlows);
       setGroupRows(nextGroupRows);
+      setRouteVersionLabelById(nextRouteVersionLabelById);
       setSelectedGroup((current) => {
         if (!current) {
           return current;
@@ -2328,8 +2415,9 @@ export function RoutesPage({ lastUpdated, onRefresh }: ConsolePageProps) {
       });
       setMatchGroupRows(nextMatchGroups);
       setRecipientGroupRows(nextRecipientGroups);
+      setUserRows(nextUsers);
       setGroupDraft((current) => ({ ...current, sourceCode: current.sourceCode || nextSources[0]?.code || '' }));
-      const rejected = [sourceResult, channelResult, templateResult, flowResult, recipientGroupResult].find(
+      const rejected = [sourceResult, channelResult, templateResult, flowResult, recipientGroupResult, userResult].find(
         (item) => item.status === 'rejected',
       );
       setLoadState({
@@ -2358,8 +2446,8 @@ export function RoutesPage({ lastUpdated, onRefresh }: ConsolePageProps) {
     selectedElement?.type === 'node' ? flowNodes.find((node) => node.id === selectedElement.id) : undefined;
   const selectedEdge =
     selectedElement?.type === 'edge' ? flowEdges.find((edge) => edge.id === selectedElement.id) : undefined;
-  const loadCanvasForGroup = (group: RouteGroup) => {
-    const snapshot = canvasSnapshots[group.id] ?? buildInitialRouteFlow(group, ruleRows);
+  const loadCanvasForGroup = (group: RouteGroup, scopedRules: RouteRuleRow[] = ruleRows) => {
+    const snapshot = canvasSnapshots[group.id] ?? buildInitialRouteFlow(group, scopedRules);
     const initial = cloneRouteCanvasSnapshot(snapshot);
     setFlowNodes(initial.nodes);
     setFlowEdges(initial.edges);
@@ -2375,18 +2463,18 @@ export function RoutesPage({ lastUpdated, onRefresh }: ConsolePageProps) {
     const nextGroup = { ...group, ruleIds: rows.map((rule) => rule.id), totalHitCount: rows.reduce((sum, rule) => sum + rule.hitCount, 0) };
     setGroupRows((current) => current.map((item) => (item.id === group.id ? nextGroup : item)));
     setSelectedGroup(nextGroup);
-    return nextGroup;
+    return { group: nextGroup, rules: rows };
   };
   const openGroup = async (group: RouteGroup) => {
     setSelectedGroup(group);
     setMode('canvas');
     routeRuleQuery.resetFilters();
     try {
-      const nextGroup = await reloadRulesForGroup(group);
+      const { group: nextGroup, rules: nextRules } = await reloadRulesForGroup(group);
       const canvas = await consoleApi.getRouteCanvas(group.id).catch(() => null);
       if (canvas?.canvas_snapshot && typeof canvas.canvas_snapshot === 'object') {
         const snapshot = canvas.canvas_snapshot as unknown as RouteCanvasSnapshot;
-        if (Array.isArray(snapshot.nodes) && Array.isArray(snapshot.edges)) {
+        if (Array.isArray(snapshot.nodes) && Array.isArray(snapshot.edges) && routeCanvasCoversRules(snapshot, nextRules)) {
           setCanvasSnapshots((current) => ({ ...current, [group.id]: snapshot }));
           const initial = cloneRouteCanvasSnapshot(snapshot);
           setFlowNodes(initial.nodes);
@@ -2395,7 +2483,7 @@ export function RoutesPage({ lastUpdated, onRefresh }: ConsolePageProps) {
           return;
         }
       }
-      loadCanvasForGroup(nextGroup);
+      loadCanvasForGroup(nextGroup, nextRules);
     } catch (error) {
       message.error(userFacingError(error));
       loadCanvasForGroup(group);
@@ -2409,16 +2497,18 @@ export function RoutesPage({ lastUpdated, onRefresh }: ConsolePageProps) {
   };
   const openCreateGroup = () => {
     setEditingGroupId(null);
+    setRouteVersionRows([]);
     setGroupDraft({
       name: '新路由大组',
       sourceCode: sourceRows[0]?.code ?? '',
       enabled: true,
-      currentVersion: '未发布',
+      currentVersion: '',
     });
     openGroupDrawer('新增路由大组');
   };
   const openEditGroup = (group: RouteGroup) => {
     setEditingGroupId(group.id);
+    setRouteVersionRows([]);
     setGroupDraft({
       name: group.name,
       sourceCode: group.sourceCode,
@@ -2426,6 +2516,10 @@ export function RoutesPage({ lastUpdated, onRefresh }: ConsolePageProps) {
       currentVersion: group.currentVersion,
     });
     openGroupDrawer(`编辑路由大组：${group.name}`);
+    void consoleApi
+      .listRouteVersions(group.id)
+      .then((response) => setRouteVersionRows(response.versions))
+      .catch((error) => message.error(userFacingError(error)));
   };
   const closeGroupEditor = () => {
     closeGroupDrawer();
@@ -2471,6 +2565,10 @@ export function RoutesPage({ lastUpdated, onRefresh }: ConsolePageProps) {
     try {
       if (editingGroupId) {
         await consoleApi.updateRouteFlow(editingGroupId, input);
+        const originalVersion = rawFlows.find((flow) => flow.id === editingGroupId)?.current_version_id ?? '';
+        if (groupDraft.currentVersion && groupDraft.currentVersion !== originalVersion && groupDraft.currentVersion !== '未发布') {
+          await consoleApi.activateRouteVersion(editingGroupId, groupDraft.currentVersion);
+        }
       } else {
         await consoleApi.createRouteFlow(input);
       }
@@ -2524,6 +2622,22 @@ export function RoutesPage({ lastUpdated, onRefresh }: ConsolePageProps) {
     }
     setSelectedElement(null);
   }, []);
+  const openCanvasNodeConfig = useCallback(
+    (node: RouteFlowNode) => {
+      setSelectedElement({ type: 'node', id: node.id });
+      const linkedRule = groupRules.find((rule) =>
+        [`${rule.id}-condition`, `${rule.id}-recipient`, `${rule.id}-send-group`].includes(node.id),
+      );
+      if (linkedRule) {
+        openEditRule(linkedRule);
+        return;
+      }
+      if (node.id === 'source-start' && selectedGroup) {
+        openEditGroup(selectedGroup);
+      }
+    },
+    [groupRules, selectedGroup],
+  );
   const onDragStart = (event: DragEvent<HTMLButtonElement>, kind: RouteNodeKind) => {
     event.dataTransfer.setData('application/reactflow', kind);
     event.dataTransfer.effectAllowed = 'move';
@@ -2700,20 +2814,50 @@ export function RoutesPage({ lastUpdated, onRefresh }: ConsolePageProps) {
       message.error(userFacingError(error));
     }
   };
-  const publishAndActivateRoute = async () => {
+  const publishAndActivateRoute = () => {
     if (!selectedGroup) return;
-    try {
-      const published = await consoleApi.publishRouteFlow(selectedGroup.id);
-      const version = isRecord(published.version as JSONValue) ? (published.version as Record<string, JSONValue>) : {};
-      const versionId = typeof version.id === 'string' ? version.id : '';
-      if (versionId) {
-        await consoleApi.activateRouteVersion(selectedGroup.id, versionId);
-      }
-      message.success(versionId ? '路由版本已发布并激活' : '路由版本已发布');
-      await loadRouteData();
-    } catch (error) {
-      message.error(userFacingError(error));
-    }
+    const groupID = selectedGroup.id;
+    let versionInfo = '';
+    modal.confirm({
+      title: '发布并激活路由版本',
+      content: (
+        <Form layout="vertical" className="route-publish-confirm-form">
+          <Form.Item label="当前版本信息" required>
+            <Input.TextArea
+              rows={3}
+              maxLength={80}
+              showCount
+              placeholder="例如：WxPusher 接收人策略调整"
+              onChange={(event) => {
+                versionInfo = event.target.value;
+              }}
+            />
+          </Form.Item>
+        </Form>
+      ),
+      okText: '发布并激活',
+      cancelText: '取消',
+      onOk: async () => {
+        const normalizedInfo = versionInfo.trim();
+        if (!normalizedInfo) {
+          message.error('请填写当前版本信息');
+          return Promise.reject(new Error('version info required'));
+        }
+        try {
+          const published = await consoleApi.publishRouteFlow(groupID, normalizedInfo);
+          const version = isRecord(published.version as JSONValue) ? (published.version as Record<string, JSONValue>) : {};
+          const versionId = typeof version.id === 'string' ? version.id : '';
+          if (versionId) {
+            await consoleApi.activateRouteVersion(groupID, versionId);
+          }
+          message.success(versionId ? '路由版本已发布并激活' : '路由版本已发布');
+          await loadRouteData();
+        } catch (error) {
+          message.error(userFacingError(error));
+          throw error;
+        }
+      },
+    });
   };
   const groupColumns: TableProps<RouteGroup>['columns'] = [
     { title: '路由大组名称', dataIndex: 'name', width: 220 },
@@ -2733,7 +2877,12 @@ export function RoutesPage({ lastUpdated, onRefresh }: ConsolePageProps) {
       width: 100,
       render: (enabled: boolean) => <StatusTag meta={getEnabledMeta(enabled)} />,
     },
-    { title: '当前版本', dataIndex: 'currentVersion', width: 120 },
+    {
+      title: '当前版本',
+      dataIndex: 'currentVersion',
+      width: 180,
+      render: (value: string) => routeVersionLabelById[value] ?? value,
+    },
     { title: '规则数', width: 100, render: (_, record) => record.ruleIds.length },
     {
       title: '总命中次数',
@@ -2905,7 +3054,12 @@ export function RoutesPage({ lastUpdated, onRefresh }: ConsolePageProps) {
           />
         </ListContainer>
         <CreateDrawer title={groupDrawer.title} open={groupDrawer.open} onClose={closeGroupEditor} onSave={saveGroup}>
-          <RouteGroupForm value={groupDraft} onChange={setGroupDraft} sourceRows={sourceRows} />
+          <RouteGroupForm
+            value={groupDraft}
+            onChange={setGroupDraft}
+            sourceRows={sourceRows}
+            routeVersionRows={routeVersionRows}
+          />
         </CreateDrawer>
       </PageFrame>
     );
@@ -2945,22 +3099,17 @@ export function RoutesPage({ lastUpdated, onRefresh }: ConsolePageProps) {
           <Descriptions.Item label="来源编码">
             <Typography.Text code>{selectedGroup.sourceCode}</Typography.Text>
           </Descriptions.Item>
-          <Descriptions.Item label="当前版本">{selectedGroup.currentVersion}</Descriptions.Item>
+          <Descriptions.Item label="当前版本">
+            {routeVersionLabelById[selectedGroup.currentVersion] ?? selectedGroup.currentVersion}
+          </Descriptions.Item>
           <Descriptions.Item label="规则数">{selectedGroup.ruleIds.length}</Descriptions.Item>
           <Descriptions.Item label="总命中">{formatHitCount(selectedGroup.totalHitCount)}</Descriptions.Item>
           <Descriptions.Item label="更新时间">{selectedGroup.updatedAt}</Descriptions.Item>
           <Descriptions.Item label="状态">
             <StatusTag meta={getEnabledMeta(selectedGroup.enabled)} />
           </Descriptions.Item>
-          <Descriptions.Item label="执行语义">按顺序匹配，命中即停止</Descriptions.Item>
         </Descriptions>
       </section>
-      <Alert
-        type="info"
-        showIcon
-        className="semantic-alert"
-        message={`当前编排固定来源：${selectedGroup.sourceName} / ${selectedGroup.sourceCode}。规则按顺序执行，第一条命中即发送并停止继续匹配；命中次数不会因排序、编辑或发布新版本清零。`}
-      />
 
       {mode === 'canvas' ? (
         <div className="route-canvas-layout">
@@ -3011,6 +3160,7 @@ export function RoutesPage({ lastUpdated, onRefresh }: ConsolePageProps) {
                   onEdgesChange={onFlowEdgesChange}
                   onConnect={onConnect}
                   onSelectionChange={onSelectionChange}
+                  onNodeClick={(_event, node) => openCanvasNodeConfig(node)}
                   fitView
                   deleteKeyCode={['Backspace', 'Delete']}
                 >
@@ -3020,75 +3170,6 @@ export function RoutesPage({ lastUpdated, onRefresh }: ConsolePageProps) {
                 </ReactFlow>
               </ReactFlowProvider>
             </div>
-          </section>
-
-          <section className="property-panel">
-            <Typography.Title level={4}>配置面板</Typography.Title>
-            {selectedNode ? (
-              <Space direction="vertical" size={12} className="full-width">
-                <Form layout="vertical">
-                  <Form.Item label="节点标题">
-                    <Input
-                      value={selectedNode.data.title}
-                      onChange={(event) => updateSelectedNode({ title: event.target.value })}
-                    />
-                  </Form.Item>
-                  <Form.Item label="说明">
-                    <Input.TextArea
-                      rows={3}
-                      value={selectedNode.data.description}
-                      onChange={(event) => updateSelectedNode({ description: event.target.value })}
-                    />
-                  </Form.Item>
-                  {selectedNode.data.kind === 'condition' ? (
-                    <Form.Item label="条件表达式">
-                      <Input.TextArea
-                        rows={3}
-                        value={selectedNode.data.condition ?? selectedNode.data.description}
-                        onChange={(event) =>
-                          updateSelectedNode({ condition: event.target.value, description: event.target.value })
-                        }
-                      />
-                    </Form.Item>
-                  ) : null}
-                </Form>
-                <Descriptions column={1} size="small" bordered>
-                  <Descriptions.Item label="节点类型">
-                    {(routeNodeDefaults[selectedNode.data.kind] ?? routeNodeDefaults.send_group).title}
-                  </Descriptions.Item>
-                  <Descriptions.Item label="当前版本">{selectedGroup.currentVersion}</Descriptions.Item>
-                </Descriptions>
-              </Space>
-            ) : selectedEdge ? (
-              <Space direction="vertical" size={12} className="full-width">
-                <Form layout="vertical">
-                  <Form.Item label="连线标签 / 分支语义">
-                    <Input
-                      value={String(selectedEdge.label ?? '')}
-                      onChange={(event) => updateSelectedEdge({ label: event.target.value })}
-                    />
-                  </Form.Item>
-                </Form>
-                <Descriptions column={1} size="small" bordered>
-                  <Descriptions.Item label="起点">{selectedEdge.source}</Descriptions.Item>
-                  <Descriptions.Item label="终点">{selectedEdge.target}</Descriptions.Item>
-                </Descriptions>
-              </Space>
-            ) : (
-              <Alert type="info" showIcon message="选择节点或连线后可编辑配置。" />
-            )}
-            <Divider />
-            <Space direction="vertical" className="full-width">
-              <Button block onClick={validateRoute}>
-                校验
-              </Button>
-              <Button block icon={<PlayCircleOutlined />} onClick={openRouteSimulation}>
-                模拟运行
-              </Button>
-              <Button block type="primary" onClick={saveCanvas}>
-                保存
-              </Button>
-            </Space>
           </section>
         </div>
       ) : (
@@ -3174,6 +3255,7 @@ export function RoutesPage({ lastUpdated, onRefresh }: ConsolePageProps) {
           onChange={setRuleDraft}
           matchGroupRows={matchGroupRows}
           recipientGroupRows={recipientGroupRows}
+          userRows={userRows}
           templateRows={templateRows}
           channelRows={channelRows}
           payloadFieldOptions={routePayloadFieldOptions}
@@ -3220,21 +3302,16 @@ export function RoutesPage({ lastUpdated, onRefresh }: ConsolePageProps) {
 export function TemplateRowActions({
   record,
   onEdit,
-  onValidate,
   onDelete,
 }: {
   record: TemplateRecord & { raw?: TemplateApiRecord };
   onEdit: (record: TemplateRecord & { raw?: TemplateApiRecord }) => void;
-  onValidate: (record: TemplateRecord & { raw?: TemplateApiRecord }) => void;
   onDelete: (record: TemplateRecord & { raw?: TemplateApiRecord }) => void;
 }) {
   return (
     <Space>
       <Button type="link" onClick={() => onEdit(record)}>
         编辑
-      </Button>
-      <Button type="link" onClick={() => onValidate(record)}>
-        校验
       </Button>
       <Button type="link" danger onClick={() => onDelete(record)}>
         删除
@@ -3243,13 +3320,22 @@ export function TemplateRowActions({
   );
 }
 
+export function templateVersionSamplePayload(
+  version: TemplateVersionApiRecord,
+  payloadPreview?: JSONValue | null,
+): JSONValue {
+  return payloadPreview ?? version.sample_payload ?? {};
+}
+
 export function TemplateVersionHistoryContent({
   currentVersionId,
+  payloadPreview,
   versions,
   loading,
   onRestore,
 }: {
   currentVersionId: string;
+  payloadPreview?: JSONValue | null;
   versions: TemplateVersionApiRecord[];
   loading: boolean;
   onRestore: (version: TemplateVersionApiRecord) => void;
@@ -3270,16 +3356,6 @@ export function TemplateVersionHistoryContent({
       title: '推送渠道类型',
       dataIndex: 'target_provider_type',
       render: (value: string) => getProviderTypeLabel(value as TemplateRecord['targetProviderType']),
-    },
-    {
-      title: '消息类型',
-      dataIndex: 'message_type',
-      render: (value: string) => getMessageTypeLabel(value),
-    },
-    {
-      title: '校验状态',
-      dataIndex: 'validation_status',
-      render: (value: TemplateRecord['validationStatus']) => <StatusTag meta={getValidationStatusMeta(value || 'draft')} />,
     },
     {
       title: '使用变量',
@@ -3312,7 +3388,7 @@ export function TemplateVersionHistoryContent({
         showIcon
         className="semantic-alert"
         message="历史版本不可修改；恢复会复制所选版本内容并发布为新版本。"
-        description="已发布路由策略引用的旧模板版本不会自动变更，需在路由策略中重新选择并发布。"
+        description="路由策略会按模板当前版本解析；恢复发布为新版本后，后续路由执行会使用新的当前版本。"
       />
       <Table
         rowKey="id"
@@ -3331,7 +3407,7 @@ export function TemplateVersionHistoryContent({
               </div>
               <div>
                 <Typography.Text type="secondary">样例 Payload</Typography.Text>
-                <pre className="code-block">{stringifyJSON(version.sample_payload, '{}')}</pre>
+                <pre className="code-block">{stringifyJSON(templateVersionSamplePayload(version, payloadPreview), '{}')}</pre>
               </div>
             </div>
           ),
@@ -3345,6 +3421,7 @@ export function TemplateVersionHistoryDrawer({
   open,
   templateName,
   currentVersionId,
+  payloadPreview,
   versions,
   loading,
   onClose,
@@ -3353,6 +3430,7 @@ export function TemplateVersionHistoryDrawer({
   open: boolean;
   templateName: string;
   currentVersionId: string;
+  payloadPreview?: JSONValue | null;
   versions: TemplateVersionApiRecord[];
   loading: boolean;
   onClose: () => void;
@@ -3368,6 +3446,7 @@ export function TemplateVersionHistoryDrawer({
     >
       <TemplateVersionHistoryContent
         currentVersionId={currentVersionId}
+        payloadPreview={payloadPreview}
         versions={versions}
         loading={loading}
         onRestore={onRestore}
@@ -3594,7 +3673,7 @@ export function TemplatesPage({ lastUpdated, onRefresh }: ConsolePageProps) {
     }
     modal.confirm({
       title: `恢复模板版本：v${version.version_no}`,
-      content: '将复制该历史版本的模板内容并发布为新版本，不会修改历史版本。已发布路由策略引用的旧模板版本不会自动变更，需在路由策略中重新选择并发布。',
+      content: '将复制该历史版本的模板内容并发布为新版本，不会修改历史版本。路由策略会按模板当前版本解析，恢复发布后后续执行会使用新的当前版本。',
       okText: '发布为新版本',
       cancelText: '取消',
       okButtonProps: { danger: true },
@@ -3650,7 +3729,6 @@ export function TemplatesPage({ lastUpdated, onRefresh }: ConsolePageProps) {
         <TemplateRowActions
           record={record}
           onEdit={openTemplateModal}
-          onValidate={(nextRecord) => void validateTemplateRow(nextRecord)}
           onDelete={confirmDeleteTemplate}
         />
       ),
@@ -3671,6 +3749,8 @@ export function TemplatesPage({ lastUpdated, onRefresh }: ConsolePageProps) {
     { title: '当前值', dataIndex: 'sample', className: 'template-variable-sample' },
   ];
   const selectedTemplateSource = sourceRows.find((source) => source.id === templateDraft.sourceId);
+  const versionHistorySource = sourceRows.find((source) => source.id === versionHistoryTemplate?.raw?.source_id);
+  const versionHistoryPayloadPreview = versionHistorySource ? payloadSampleFromSource(versionHistorySource) : null;
   const selectedPayloadFields = payloadFieldOptionsFromLatestSamples(selectedTemplateSource ? [selectedTemplateSource] : []).filter(
     (field) => !isRecipientPayloadPath(field.path),
   );
@@ -3799,7 +3879,6 @@ export function TemplatesPage({ lastUpdated, onRefresh }: ConsolePageProps) {
                 onChange={setTemplateDraft}
                 sourceRows={sourceRows}
                 capabilities={providerCapabilities}
-                showEnabledSwitch={Boolean(templateDraft.id)}
               />
               {templateFeedback.errors.length ? (
                 <Alert
@@ -3828,7 +3907,7 @@ export function TemplatesPage({ lastUpdated, onRefresh }: ConsolePageProps) {
                   {
                     key: 'received',
                     label: '接收效果',
-                    children: <div className="template-received-preview">{userFacingPreview || '暂无可预览内容'}</div>,
+                    children: <div className="template-received-preview">{userFacingPreview}</div>,
                   },
                 ]}
               />
@@ -3840,6 +3919,7 @@ export function TemplatesPage({ lastUpdated, onRefresh }: ConsolePageProps) {
         open={Boolean(versionHistoryTemplate)}
         templateName={versionHistoryTemplate?.name ?? ''}
         currentVersionId={versionHistoryTemplate?.raw?.current_version_id ?? ''}
+        payloadPreview={versionHistoryPayloadPreview}
         versions={templateVersions}
         loading={templateVersionsLoading}
         onClose={() => {
@@ -4082,7 +4162,7 @@ function mapUserIdentityDraft(identity: UserIdentityApiRecord): UserIdentityDraf
 
 function userInputFromDraft(draft: UserDraft, orgRows: OrgUnitApiRecord[]): UserInput {
   const org = orgRows.find((item) => item.id === draft.primaryOrgId);
-  const parsedAttributes = parseJSONField(draft.attributesJson, '人员属性高级 JSON');
+  const parsedAttributes = parseJSONField(draft.attributesJson, '人员属性');
   const attributes = isRecord(parsedAttributes) ? parsedAttributes : { raw_value: parsedAttributes };
   return {
     display_name: draft.name.trim(),
@@ -4101,7 +4181,7 @@ function userIdentityInputFromDraft(userId: string, identity: UserIdentityDraft)
   return {
     user_id: userId,
     provider_type: providerValueFromLabel(identity.platform),
-    identity_kind: identity.fieldName,
+    identity_kind: identity.fieldName || defaultIdentityKindForPlatform(identity.platform),
     identity_value: identity.value,
     verified: identity.verified ?? true,
   };
@@ -4127,6 +4207,73 @@ function providerLabelFromValue(value: string): string {
 function providerValueFromLabel(label: string): string {
   const known = providerTypeOptions.find((item) => item.label === label || item.value === label);
   return known?.value ?? label;
+}
+
+function defaultIdentityKindForPlatform(platform: string): string {
+  const providerType = providerValueFromLabel(platform);
+  if (providerType === 'email') {
+    return 'email';
+  }
+  if (providerType === 'sms' || providerType === 'aliyun_sms' || providerType === 'tencent_sms' || providerType === 'baidu_sms') {
+    return 'mobile';
+  }
+  if (providerType === 'wxpusher') {
+    return 'wxpusher_uid';
+  }
+  if (providerType === 'bark') {
+    return 'bark_device_key';
+  }
+  if (providerType === 'gov_cloud') {
+    return 'gov_userid';
+  }
+  if (providerType === 'wecom' || providerType === 'wecom_app' || providerType === 'wecom_robot') {
+    return 'wecom_userid';
+  }
+  if (providerType === 'dingtalk' || providerType === 'dingtalk_work') {
+    return 'dingtalk_userid';
+  }
+  if (providerType === 'dingtalk_robot') {
+    return 'mobile';
+  }
+  if (providerType === 'feishu' || providerType === 'feishu_robot') {
+    return 'feishu_open_id';
+  }
+  return 'identity';
+}
+
+export function UserProfileForm({
+  value,
+  orgOptions,
+  onChange,
+}: {
+  value: UserDraft;
+  orgOptions: Array<{ label: string; value: string }>;
+  onChange: (value: UserDraft) => void;
+}) {
+  return (
+    <Form layout="vertical">
+      <Form.Item label="姓名">
+        <Input value={value.name} onChange={(event) => onChange({ ...value, name: event.target.value })} />
+      </Form.Item>
+      <Form.Item label="所属组织">
+        <Select
+          value={value.primaryOrgId}
+          options={orgOptions}
+          onChange={(primaryOrgId) => onChange({ ...value, primaryOrgId })}
+        />
+      </Form.Item>
+      <Form.Item label="手机号">
+        <Input value={value.mobile} onChange={(event) => onChange({ ...value, mobile: event.target.value })} />
+      </Form.Item>
+      <Form.Item label="邮箱">
+        <Input value={value.email} onChange={(event) => onChange({ ...value, email: event.target.value })} />
+      </Form.Item>
+      <IdentityEditor
+        identities={value.identities}
+        onChange={(identities) => onChange({ ...value, identities })}
+      />
+    </Form>
+  );
 }
 
 function mapMatchGroup(group: MatchGroupApiRecord): MatchGroupRow {
@@ -4296,6 +4443,7 @@ export function OrganizationPage({ lastUpdated, onRefresh }: ConsolePageProps) {
   const [loadState, setLoadState] = useState<ApiLoadState>(emptyLoadState);
   const [selected, setSelected] = useState<UserContactRow | null>(null);
   const [userDraft, setUserDraft] = useState<UserDraft>(() => createUserDraft(1));
+  const [pendingUserStatusIds, setPendingUserStatusIds] = useState<Set<string>>(() => new Set());
   const [editingOrg, setEditingOrg] = useState<OrgUnitApiRecord | null>(null);
   const [orgDraft, setOrgDraft] = useState<OrgUnitDraft>(() => createOrgUnitDraft());
   const [editingRecipientGroup, setEditingRecipientGroup] = useState<RecipientGroupApiRecord | null>(null);
@@ -4418,8 +4566,8 @@ export function OrganizationPage({ lastUpdated, onRefresh }: ConsolePageProps) {
         message.error('请填写人员姓名');
         return;
       }
-      if (userDraft.identities.some((identity) => !identity.fieldName.trim() || !identity.value.trim())) {
-        message.error('请补全平台身份类型和身份值');
+      if (userDraft.identities.some((identity) => !identity.value.trim())) {
+        message.error('请补全平台身份值');
         return;
       }
       const result = selected
@@ -4465,6 +4613,34 @@ export function OrganizationPage({ lastUpdated, onRefresh }: ConsolePageProps) {
         }
       },
     });
+  };
+
+  const toggleUserStatus = async (record: UserContactRow, status: boolean) => {
+    setPendingUserStatusIds((current) => new Set(current).add(record.id));
+    try {
+      await consoleApi.updateUser(record.id, userInputFromDraft({ ...draftFromUser(record), status }, orgRows));
+      setRows((current) =>
+        current.map((item) =>
+          item.id === record.id
+            ? { ...item, status, apiUser: { ...item.apiUser, enabled: status } }
+            : item,
+        ),
+      );
+      setSelected((current) =>
+        current?.id === record.id
+          ? { ...current, status, apiUser: { ...current.apiUser, enabled: status } }
+          : current,
+      );
+      message.success(status ? '人员已启用' : '人员已停用');
+    } catch (error) {
+      message.error(userFacingError(error));
+    } finally {
+      setPendingUserStatusIds((current) => {
+        const next = new Set(current);
+        next.delete(record.id);
+        return next;
+      });
+    }
   };
 
   const saveRecipientGroup = async () => {
@@ -4541,17 +4717,25 @@ export function OrganizationPage({ lastUpdated, onRefresh }: ConsolePageProps) {
     { title: '手机号', dataIndex: 'mobile' },
     { title: '邮箱', dataIndex: 'email' },
     {
-      title: '状态',
+      title: '启停',
       dataIndex: 'status',
-      render: (enabled: boolean) => <StatusTag meta={getEnabledMeta(enabled)} />,
+      render: (enabled: boolean, record) => (
+        <Switch
+          checked={enabled}
+          loading={pendingUserStatusIds.has(record.id)}
+          onChange={(checked) => void toggleUserStatus(record, checked)}
+          checkedChildren="启用"
+          unCheckedChildren="停用"
+        />
+      ),
     },
     {
-      title: '平台身份字段（身份类型 / 验证状态）',
+      title: '平台身份字段（验证状态）',
       dataIndex: 'identities',
       render: (items: UserIdentityDraft[]) =>
         items.map((item) => (
           <Tag key={`${item.platform}-${item.fieldName}`}>
-            {item.platform} {item.fieldName} / {item.verified ? '已验证' : '未验证'}
+            {item.platform} / {item.verified ? '已验证' : '未验证'}
           </Tag>
         )),
     },
@@ -4856,44 +5040,7 @@ export function OrganizationPage({ lastUpdated, onRefresh }: ConsolePageProps) {
         </Form>
       </CreateDrawer>
       <CreateDrawer title={userDrawer.title} open={userDrawer.open} onClose={closeUserDrawer} onSave={saveUser} width={760}>
-        <Form layout="vertical">
-          <Form.Item label="姓名">
-            <Input value={userDraft.name} onChange={(event) => setUserDraft({ ...userDraft, name: event.target.value })} />
-          </Form.Item>
-          <Form.Item label="所属组织">
-            <Select
-              value={userDraft.primaryOrgId}
-              options={orgOptions}
-              onChange={(primaryOrgId) => setUserDraft({ ...userDraft, primaryOrgId })}
-            />
-          </Form.Item>
-          <Form.Item label="手机号">
-            <Input value={userDraft.mobile} onChange={(event) => setUserDraft({ ...userDraft, mobile: event.target.value })} />
-          </Form.Item>
-          <Form.Item label="邮箱">
-            <Input value={userDraft.email} onChange={(event) => setUserDraft({ ...userDraft, email: event.target.value })} />
-          </Form.Item>
-          <Form.Item label="状态">
-            <Switch
-              checked={userDraft.status}
-              checkedChildren="启用"
-              unCheckedChildren="停用"
-              onChange={(status) => setUserDraft({ ...userDraft, status })}
-            />
-          </Form.Item>
-          <Form.Item label="人员属性高级 JSON" extra="可补充后端 attributes 字段中的扩展属性，手机号、邮箱和所属组织会由上方中文控件覆盖。">
-            <Input.TextArea
-              rows={5}
-              value={userDraft.attributesJson}
-              onChange={(event) => setUserDraft({ ...userDraft, attributesJson: event.target.value })}
-            />
-          </Form.Item>
-          <Typography.Title level={5}>平台身份字段</Typography.Title>
-          <IdentityEditor
-            identities={userDraft.identities}
-            onChange={(identities) => setUserDraft({ ...userDraft, identities })}
-          />
-        </Form>
+        <UserProfileForm value={userDraft} orgOptions={orgOptions} onChange={setUserDraft} />
       </CreateDrawer>
       <Drawer title="人员详情" width={620} open={detailOpen} onClose={() => setDetailOpen(false)} destroyOnHidden>
         {selected ? (
@@ -4904,7 +5051,6 @@ export function OrganizationPage({ lastUpdated, onRefresh }: ConsolePageProps) {
               <Descriptions.Item label="手机号">{selected.mobile}</Descriptions.Item>
               <Descriptions.Item label="邮箱">{selected.email}</Descriptions.Item>
             </Descriptions>
-            <Typography.Title level={5}>平台身份字段</Typography.Title>
             <IdentityEditor identities={selected.identities} readOnly />
           </Space>
         ) : null}

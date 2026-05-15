@@ -159,11 +159,7 @@ function isMultilineTemplateField(field: TemplateContentField): boolean {
 }
 
 function templateContentFieldLabel(field: TemplateContentField): string {
-  const label = field.label.trim() || field.key;
-  if (field.required || /[（(]\s*可选\s*[）)]/.test(label)) {
-    return label;
-  }
-  return `${label}（可选）`;
+  return field.key;
 }
 
 function titleContentUrlFields(): TemplateContentField[] {
@@ -194,8 +190,16 @@ function noticeFields(): TemplateContentField[] {
 function pushPlusContentFields(): TemplateContentField[] {
   return [
     contentField('content', 'content', 'string', '', '{{ payload.content }}'),
-    contentField('title', 'title（可选）', 'string', '', '{{ payload.title }}', false),
-    contentField('topic', 'topic（可选）', 'string', '', '{{ payload.topic }}', false),
+    contentField('title', 'title', 'string', '', '{{ payload.title }}', false),
+    contentField('topic', 'topic', 'string', '', '{{ payload.topic }}', false),
+  ];
+}
+
+function wxPusherHTMLFields(): TemplateContentField[] {
+  return [
+    contentField('content', 'content', 'html', '', '{{ payload.content }}'),
+    contentField('summary', 'summary', 'string', '', '{{ payload.title }}', false),
+    contentField('url', 'url', 'string', '', '{{ payload.url }}', false),
   ];
 }
 
@@ -259,23 +263,15 @@ const fallbackTemplateSchemas: Record<ProviderKind, Record<string, { label: stri
     },
   },
   pushplus: {
-    json: {
-      label: 'JSON',
+    html: {
+      label: 'HTML',
       fields: pushPlusContentFields(),
     },
   },
   wxpusher: {
-    text: {
-      label: '文本',
-      fields: titleContentUrlFields(),
-    },
-    markdown: {
-      label: 'Markdown',
-      fields: markdownNoticeFields(),
-    },
     html: {
       label: 'HTML',
-      fields: titleContentUrlFields(),
+      fields: wxPusherHTMLFields(),
     },
   },
   serverchan: {
@@ -890,7 +886,7 @@ function fieldValuesFromTemplateBody(
 export function templateContentFieldSummary(schema: JSONValue | undefined, templateBody: string): string {
   const fields = extractTemplateFieldsFromSchema(schema);
   if (fields.length) {
-    return fields.map((field) => field.label).join('、');
+    return fields.map((field) => field.key).join('、');
   }
   const parsed = parseTemplateBodyRecord(templateBody);
   const keys = parsed ? Object.keys(parsed).filter((key) => !isRecipientLikeField(key)) : [];
@@ -1137,10 +1133,32 @@ function firstRenderedString(record: Record<string, JSONValue>, keys: string[]):
   return '';
 }
 
+function hasPreviewContent(value: JSONValue): boolean {
+  if (value === undefined || value === null || value === '') {
+    return false;
+  }
+  if (typeof value === 'string') {
+    return value.trim() !== '';
+  }
+  if (typeof value === 'number' || typeof value === 'boolean') {
+    return true;
+  }
+  if (Array.isArray(value)) {
+    return value.some(hasPreviewContent);
+  }
+  if (isRecord(value)) {
+    return Object.values(value).some(hasPreviewContent);
+  }
+  return false;
+}
+
 export function templateUserFacingPreview(draft: TemplateDraft): string {
   const rendered = templateRenderedPreviewValue(draft);
   if (!isRecord(rendered)) {
     return typeof rendered === 'string' ? rendered : stringifyJSON(rendered);
+  }
+  if (!hasPreviewContent(rendered)) {
+    return '';
   }
   const title = firstRenderedString(rendered, ['title', 'subject']);
   const body =
@@ -1214,13 +1232,11 @@ export function TemplateEditorForm({
   onChange,
   sourceRows,
   capabilities = [],
-  showEnabledSwitch = false,
 }: {
   value: TemplateDraft;
   onChange: (value: TemplateDraft) => void;
   sourceRows: TemplateSourceRow[];
   capabilities?: ProviderCapabilityApiRecord[];
-  showEnabledSwitch?: boolean;
 }) {
   const view = templateCapabilityView(value.targetProviderType, value.messageType, capabilities);
   const update = (patch: Partial<TemplateDraft>) => onChange({ ...value, ...patch });
@@ -1244,22 +1260,10 @@ export function TemplateEditorForm({
 
   return (
     <Form layout="vertical">
-      <div className={`template-name-row${showEnabledSwitch ? '' : ' template-name-row--without-status'}`}>
+      <div className="template-name-row template-name-row--without-status">
         <Form.Item label="模板名称" required>
           <Input value={value.name} onChange={(event) => update({ name: event.target.value })} />
         </Form.Item>
-        {showEnabledSwitch ? (
-          <Form.Item label="启停">
-            <Segmented
-              value={value.enabled ? 'enabled' : 'disabled'}
-              options={[
-                { label: '启用', value: 'enabled' },
-                { label: '停用', value: 'disabled' },
-              ]}
-              onChange={(enabled) => update({ enabled: enabled === 'enabled' })}
-            />
-          </Form.Item>
-        ) : null}
         <Form.Item label="内容编辑模式">
           <Segmented
             block
@@ -1303,22 +1307,17 @@ export function TemplateEditorForm({
               const multiline = isMultilineTemplateField(field);
               return (
                 <div className="template-content-field" key={field.key}>
-                  <div className="template-content-field__heading">
-                    <span className="template-content-field__name">{templateContentFieldLabel(field)}</span>
-                  </div>
                   <div className="template-content-field__controls">
-                    <Form.Item label="模板表达式">
+                    <Form.Item label={templateContentFieldLabel(field)} required={field.required}>
                       {multiline ? (
                         <Input.TextArea
                           value={fieldValue.expression}
-                          placeholder={field.placeholder}
                           autoSize={{ minRows: 2, maxRows: 8 }}
                           onChange={(event) => updateFieldValue(field, { expression: event.target.value })}
                         />
                       ) : (
                         <Input
                           value={fieldValue.expression}
-                          placeholder={field.placeholder}
                           onChange={(event) => updateFieldValue(field, { expression: event.target.value })}
                         />
                       )}

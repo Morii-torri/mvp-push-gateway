@@ -18,32 +18,26 @@ func pushPlusRequestConfig(auth, send, content map[string]any) (requestConfig, e
 }
 
 func wxPusherRequestConfig(auth, send, content map[string]any, recipient any) (requestConfig, error) {
-	mode := firstString(stringConfig(send, "mode"), "standard")
-	endpoint := "https://wxpusher.zjiecode.com/api/send/message"
 	body := map[string]any{
-		"content":     appendURL(messageBody(content), stringConfig(content, "url")),
-		"summary":     messageTitle(content),
-		"contentType": wxPusherContentType(send, content),
+		"appToken":      firstString(stringConfig(auth, "app_token", "appToken"), stringConfig(send, "app_token", "appToken")),
+		"content":       messageBody(content),
+		"contentType":   2,
+		"verifyPayType": 0,
 	}
-	recipients := recipientStrings(recipient)
-	if mode == "simple" {
-		endpoint = "https://wxpusher.zjiecode.com/api/send/message/simple-push"
-		body["spt"] = firstString(stringConfig(auth, "spt"), stringConfig(send, "spt"))
-		if sptList := listConfig(auth, "spt_list", "sptList"); len(sptList) > 0 {
-			body["sptList"] = sptList
-		}
-	} else {
-		body["appToken"] = firstString(stringConfig(auth, "app_token", "appToken"), stringConfig(send, "app_token", "appToken"))
-		if len(recipients) > 0 {
-			body["uids"] = recipients
-		} else if uids := listConfig(send, "uids"); len(uids) > 0 {
-			body["uids"] = uids
-		}
-		if topicIDs := rawListConfig(send, "topic_ids", "topicIds"); len(topicIDs) > 0 {
-			body["topicIds"] = topicIDs
-		}
+	copyStringField(body, "summary", content, "summary")
+	copyStringField(body, "url", content, "url")
+	if value, ok := firstValueOK(content, "verifyPayType", "verify_pay_type"); ok {
+		body["verifyPayType"] = value
+	} else if value, ok := firstValueOK(send, "verifyPayType", "verify_pay_type"); ok {
+		body["verifyPayType"] = value
 	}
-	return jsonRequest("POST", firstString(stringConfig(send, "url"), endpoint), body)
+	if uids := firstNonEmptyStringList(recipientStrings(recipient), listConfig(content, "uids"), listConfig(send, "uids")); len(uids) > 0 {
+		body["uids"] = uids
+	}
+	if topicIDs := firstNonEmptyRawList(rawListConfig(content, "topicIds", "topic_ids"), rawListConfig(send, "topic_ids", "topicIds")); len(topicIDs) > 0 {
+		body["topicIds"] = topicIDs
+	}
+	return jsonRequest("POST", "https://wxpusher.zjiecode.com/api/send/message", body)
 }
 
 func serverChanRequestConfig(auth, send, content map[string]any) (requestConfig, error) {
@@ -131,16 +125,20 @@ func pushPlusTemplate(format string) string {
 	}
 }
 
-func wxPusherContentType(send, content map[string]any) any {
-	if value, ok := firstValueOK(send, "content_type", "contentType"); ok {
-		return value
+func firstNonEmptyStringList(values ...[]string) []string {
+	for _, value := range values {
+		if len(value) > 0 {
+			return value
+		}
 	}
-	switch strings.ToLower(firstString(stringConfig(content, "format"), stringConfig(send, "format"))) {
-	case "text", "txt":
-		return 1
-	case "html":
-		return 2
-	default:
-		return 3
+	return nil
+}
+
+func firstNonEmptyRawList(values ...[]any) []any {
+	for _, value := range values {
+		if len(value) > 0 {
+			return value
+		}
 	}
+	return nil
 }

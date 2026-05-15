@@ -65,8 +65,8 @@ func TestDefaultCapabilitiesExposeFirstBatchBuiltInProviders(t *testing.T) {
 	}{
 		{ProviderWebhook, "json", ""},
 		{ProviderSelf, "json", "system_user_id"},
-		{ProviderPushPlus, "json", ""},
-		{ProviderWxPusher, "notice", "wxpusher_uid"},
+		{ProviderPushPlus, "html", ""},
+		{ProviderWxPusher, "html", "wxpusher_uid"},
 		{ProviderServerChan, "notice", ""},
 		{ProviderEmail, "email", "email"},
 		{ProviderAliyunSMS, "sms_template", "mobile"},
@@ -97,7 +97,7 @@ func TestDefaultCapabilitiesExposeFirstBatchBuiltInProviders(t *testing.T) {
 }
 
 func TestPushPlusCapabilityUsesSendJsonContentFields(t *testing.T) {
-	capability := findCapability(t, ProviderPushPlus, "json")
+	capability := findCapability(t, ProviderPushPlus, "html")
 
 	assertJSONField(t, capability.SendAPI, "url", "https://www.pushplus.plus/send")
 	assertJSONField(t, capability.SendAPI, "content_type", "application/json")
@@ -117,6 +117,46 @@ func TestPushPlusCapabilityUsesSendJsonContentFields(t *testing.T) {
 	assertJSONField(t, capability.ChannelConfigSchema, "properties.topic", nil)
 	assertJSONField(t, capability.ChannelConfigSchema, "properties.template", nil)
 	assertJSONField(t, capability.ChannelConfigSchema, "properties.channel", nil)
+}
+
+func TestWxPusherCapabilityUsesStandardPostHTMLFields(t *testing.T) {
+	capability := findCapability(t, ProviderWxPusher, "html")
+
+	assertJSONField(t, capability.SendAPI, "url", "https://wxpusher.zjiecode.com/api/send/message")
+	assertJSONField(t, capability.SendAPI, "content_type", "application/json")
+	assertJSONField(t, capability.SendAPI, "simple_url", nil)
+	assertJSONField(t, capability.CredentialSchema, "properties.app_token.format", "password")
+	assertJSONField(t, capability.CredentialSchema, "properties.spt", nil)
+	assertJSONField(t, capability.ChannelConfigSchema, "properties.topic_ids.items.type", "integer")
+	assertJSONField(t, capability.ChannelConfigSchema, "properties.mode", nil)
+	assertJSONField(t, capability.ChannelConfigSchema, "properties.content_type", nil)
+	assertJSONField(t, capability.MessageSchema, "properties.content.type", "string")
+	assertJSONField(t, capability.MessageSchema, "properties.summary.type", "string")
+	assertJSONField(t, capability.MessageSchema, "properties.url.type", "string")
+	assertJSONField(t, capability.MessageSchema, "properties.title", nil)
+	assertJSONField(t, capability.MessageSchema, "properties.body", nil)
+	assertJSONField(t, capability.MessageSchema, "properties.format", nil)
+	assertJSONField(t, capability.SuccessRule, "field", "code")
+	assertJSONField(t, capability.SuccessRule, "equals", float64(1000))
+
+	var credentialSchema struct {
+		Required []string `json:"required"`
+	}
+	if err := json.Unmarshal(capability.CredentialSchema, &credentialSchema); err != nil {
+		t.Fatalf("decode wxpusher credential schema: %v", err)
+	}
+	if len(credentialSchema.Required) != 1 || credentialSchema.Required[0] != "app_token" {
+		t.Fatalf("expected only app_token credential to be required, got %+v", credentialSchema.Required)
+	}
+	var messageSchema struct {
+		Required []string `json:"required"`
+	}
+	if err := json.Unmarshal(capability.MessageSchema, &messageSchema); err != nil {
+		t.Fatalf("decode wxpusher message schema: %v", err)
+	}
+	if len(messageSchema.Required) != 1 || messageSchema.Required[0] != "content" {
+		t.Fatalf("expected only content to be required, got %+v", messageSchema.Required)
+	}
 }
 
 func TestDefaultCapabilitiesExposeP2Providers(t *testing.T) {
@@ -326,19 +366,21 @@ func TestBuildDeliveryRequestUsesBuiltInProviderDefaultsWithoutLegacyURL(t *test
 			channel: Channel{
 				ProviderType: ProviderWxPusher,
 				AuthConfig:   json.RawMessage(`{"app_token":"wx-app-token"}`),
-				SendConfig:   json.RawMessage(`{"topic_ids":[101],"content_type":3}`),
+				SendConfig:   json.RawMessage(`{"topic_ids":[101]}`),
 			},
-			message:    json.RawMessage(`{"title":"Deploy","body":"Finished","format":"markdown"}`),
+			message:    json.RawMessage(`{"summary":"Deploy","content":"<b>Finished</b>","contentType":3,"url":"https://example.test/detail"}`),
 			recipients: []ResolvedRecipient{{PlatformIDs: map[string]string{"wxpusher_uid": "UID_1"}}},
 			assert: func(t *testing.T, request BuiltRequest) {
 				requireRequest(t, request, "POST", "https://wxpusher.zjiecode.com/api/send/message")
 				body := decodeRequestBody(t, request)
 				requireBodyField(t, body, "appToken", "wx-app-token")
 				requireBodyField(t, body, "summary", "Deploy")
-				requireBodyField(t, body, "content", "Finished")
-				requireBodyField(t, body, "contentType", float64(3))
+				requireBodyField(t, body, "content", "<b>Finished</b>")
+				requireBodyField(t, body, "contentType", float64(2))
+				requireBodyField(t, body, "url", "https://example.test/detail")
 				requireStringListField(t, body, "uids", []string{"UID_1"})
 				requireNumberListField(t, body, "topicIds", []float64{101})
+				requireNoBodyField(t, body, "spt")
 			},
 		},
 		{

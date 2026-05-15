@@ -195,6 +195,122 @@ func TestWorkerPlansLegacyActionIntoDeliveryAttemptAndSendJob(t *testing.T) {
 	}
 }
 
+func TestWorkerResolvesTemplateRouteTargetToCurrentTemplateVersion(t *testing.T) {
+	pool := openMigratedPool(t)
+	defer pool.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	repository := dbrepo.NewRepository(pool)
+	if err := repository.SeedProviderCapabilities(ctx, provider.DefaultCapabilities()); err != nil {
+		t.Fatalf("seed provider capabilities: %v", err)
+	}
+
+	sourceService := source.NewService(repository, source.WithTraceIDGenerator(func() string { return "trace-template-current" }))
+	templateService := msgtemplate.NewService(repository)
+	routeService := route.NewService(repository)
+
+	inboundSource, err := sourceService.CreateSource(ctx, source.CreateSourceInput{
+		Code:       "currenttpl",
+		Name:       "Current Template",
+		Enabled:    true,
+		AuthMode:   source.AuthModeNone,
+		CompatMode: "standard",
+	})
+	if err != nil {
+		t.Fatalf("create source: %v", err)
+	}
+	channel, err := repository.CreateChannel(ctx, provider.CreateChannelParams{
+		ProviderType:     provider.ProviderWebhook,
+		Name:             "Webhook",
+		Enabled:          true,
+		SendConfig:       json.RawMessage(`{"method":"POST","url":"https://example.test/send","recipient":{"location":"none"}}`),
+		RateLimitConfig:  json.RawMessage(`{}`),
+		ConcurrencyLimit: 1,
+		TimeoutMS:        1000,
+		RetryPolicy:      json.RawMessage(`{"max_attempts":2}`),
+		DeadLetterPolicy: json.RawMessage(`{}`),
+	})
+	if err != nil {
+		t.Fatalf("create channel: %v", err)
+	}
+	template, err := templateService.CreateTemplate(ctx, msgtemplate.TemplateInput{Name: "Versioned Template", SourceID: inboundSource.ID, Enabled: true})
+	if err != nil {
+		t.Fatalf("create template: %v", err)
+	}
+	v1, err := templateService.Publish(ctx, template.ID, msgtemplate.VersionInput{
+		MessageType:        "json",
+		TargetProviderType: string(provider.ProviderWebhook),
+		TemplateBody:       `{"title":"{{ payload.title }} v1"}`,
+		MessageBodySchema:  json.RawMessage(`{"type":"object"}`),
+		SamplePayload:      json.RawMessage(`{"title":"critical"}`),
+	})
+	if err != nil {
+		t.Fatalf("publish template v1: %v", err)
+	}
+	flow, err := routeService.CreateFlow(ctx, route.CreateFlowInput{SourceID: inboundSource.ID, Name: "Flow", Enabled: true, Mode: route.ModeTable})
+	if err != nil {
+		t.Fatalf("create route flow: %v", err)
+	}
+	if _, err := routeService.SaveRules(ctx, flow.ID, route.SaveRulesInput{Rules: []route.RuleInput{{
+		RuleKey:       "00000000-0000-0000-0000-000000024001",
+		SortOrder:     10,
+		Name:          "Always",
+		ConditionTree: json.RawMessage(`{"operator":"always"}`),
+		Enabled:       true,
+		Action: route.ActionInput{
+			TemplateVersionID: v1.ID,
+			ChannelIDs:        []string{channel.ID},
+			RecipientStrategy: json.RawMessage(`{}`),
+			SendDedupeConfig:  json.RawMessage(`{}`),
+		},
+	}}}); err != nil {
+		t.Fatalf("save route rules: %v", err)
+	}
+	if _, err := routeService.Publish(ctx, flow.ID); err != nil {
+		t.Fatalf("publish route: %v", err)
+	}
+	v2, err := templateService.Publish(ctx, template.ID, msgtemplate.VersionInput{
+		MessageType:        "json",
+		TargetProviderType: string(provider.ProviderWebhook),
+		TemplateBody:       `{"title":"{{ payload.title }} v2"}`,
+		MessageBodySchema:  json.RawMessage(`{"type":"object"}`),
+		SamplePayload:      json.RawMessage(`{"title":"critical"}`),
+	})
+	if err != nil {
+		t.Fatalf("publish template v2: %v", err)
+	}
+	if _, err := sourceService.Ingest(ctx, source.IngestInput{SourceCode: "currenttpl", Method: "POST", Path: "/api/v1/ingest/currenttpl", Body: []byte(`{"title":"critical"}`)}); err != nil {
+		t.Fatalf("ingest inbound: %v", err)
+	}
+	worker := planning.NewWorker(repository, planning.WithWorkerID("planner-template-current"))
+	if _, err := worker.ProcessBatch(ctx, 1); err != nil {
+		t.Fatalf("process planning batch: %v", err)
+	}
+
+	var attemptTemplateVersionID string
+	var jobPayload json.RawMessage
+	if err := pool.QueryRow(ctx, `
+		SELECT attempt.template_version_id::text, job.payload
+		FROM delivery_attempts AS attempt
+		JOIN message_records AS message ON message.id = attempt.message_id
+		JOIN jobs AS job ON (job.payload->>'delivery_attempt_id')::uuid = attempt.id
+		WHERE message.trace_id = 'trace-template-current'
+			AND job.type = 'send_message'
+	`).Scan(&attemptTemplateVersionID, &jobPayload); err != nil {
+		t.Fatalf("query planned attempt: %v", err)
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal(jobPayload, &decoded); err != nil {
+		t.Fatalf("decode send job payload: %v", err)
+	}
+	body, ok := decoded["body"].(map[string]any)
+	if attemptTemplateVersionID != v2.ID || !ok || body["title"] != "critical v2" {
+		t.Fatalf("expected current template version %s and v2 body, got version=%s payload=%+v", v2.ID, attemptTemplateVersionID, decoded)
+	}
+}
+
 func TestWorkerFansOutActionTargetsIntoDeliveryAttemptsAndSendJobs(t *testing.T) {
 	pool := openMigratedPool(t)
 	defer pool.Close()

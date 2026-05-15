@@ -7,7 +7,7 @@ func pushPlusCapability() Capability {
 		ProviderType:         ProviderPushPlus,
 		DisplayName:          "PushPlus",
 		Category:             "personal_gateway",
-		MessageType:          "json",
+		MessageType:          "html",
 		MessageSchema:        pushPlusContentSchema(),
 		CredentialSchema:     rawJSON(`{"type":"object","required":["token"],"properties":{"token":{"type":"string","format":"password"}}}`),
 		ChannelConfigSchema:  rawJSON(`{"type":"object","properties":{}}`),
@@ -40,10 +40,10 @@ func wxPusherCapability() Capability {
 		ProviderType:         ProviderWxPusher,
 		DisplayName:          "WxPusher",
 		Category:             "personal_gateway",
-		MessageType:          "notice",
-		MessageSchema:        noticeContentSchema(),
-		CredentialSchema:     rawJSON(`{"type":"object","properties":{"app_token":{"type":"string","format":"password"},"spt":{"type":"string","format":"password"}}}`),
-		ChannelConfigSchema:  rawJSON(`{"type":"object","properties":{"mode":{"type":"string","enum":["standard","simple"],"default":"standard"},"topic_ids":{"type":"array","items":{"type":"integer"}},"content_type":{"type":"integer","enum":[1,2,3],"default":3}}}`),
+		MessageType:          "html",
+		MessageSchema:        wxPusherContentSchema(),
+		CredentialSchema:     rawJSON(`{"type":"object","required":["app_token"],"properties":{"app_token":{"type":"string","format":"password","title":"WxPusher AppToken"}}}`),
+		ChannelConfigSchema:  rawJSON(`{"type":"object","properties":{"topic_ids":{"type":"array","title":"Topic ID 列表","input_type":"textarea","items":{"type":"integer"}}}}`),
 		RecipientRequired:    false,
 		AllowNoRecipient:     true,
 		RecipientRequirement: "system_or_channel",
@@ -55,16 +55,20 @@ func wxPusherCapability() Capability {
 		TokenLocation:        PlacementBody,
 		TokenFieldName:       "appToken",
 		TokenStrategy:        rawJSON(`{"strategy":"static_token","cacheable":false,"placement":{"location":"body","field_name":"appToken"}}`),
-		SendAPI:              rawJSON(`{"method":"POST","url":"https://wxpusher.zjiecode.com/api/send/message","simple_url":"https://wxpusher.zjiecode.com/api/send/message/simple-push","content_type":"application/json","live_test_status":"implemented_but_not_live_tested","notes":"No live WxPusher account is configured in this environment."}`),
-		SuccessRule:          rawJSON(`{"type":"json_field","status_codes":[200],"field":"success","equals":true}`),
+		SendAPI:              rawJSON(`{"method":"POST","url":"https://wxpusher.zjiecode.com/api/send/message","content_type":"application/json","live_test_status":"implemented_but_not_live_tested","notes":"Standard POST API only. No live WxPusher account is configured in this environment."}`),
+		SuccessRule:          rawJSON(`{"type":"json_field","status_codes":[200],"field":"code","equals":1000}`),
 		RetryRule:            rawJSON(`{"status_codes":[408,429,500,502,503,504],"network_errors":true,"non_retryable_json_codes":[1000,1001]}`),
 		DefaultRateLimit:     rawJSON(`{"qps":2,"burst":5}`),
 		DefaultConcurrency:   2,
 		DefaultTimeoutMS:     5000,
 		DefaultRetryPolicy:   rawJSON(`{"max_attempts":3,"delay_ms":1000,"backoff":"linear"}`),
-		RequestExamples:      rawJSON(`{"appToken":"wxpusher-app-token","content":"Disk 95%","summary":"Disk alert","contentType":3,"uids":["UID_xxx"],"topicIds":[101]}`),
+		RequestExamples:      rawJSON(`{"appToken":"wxpusher-app-token","content":"<h1>Disk 95%</h1>","summary":"Disk alert","contentType":2,"uids":["UID_xxx"],"topicIds":[101],"url":"https://example.test/detail","verifyPayType":0}`),
 		CustomBodyAllowed:    false,
 	})
+}
+
+func wxPusherContentSchema() json.RawMessage {
+	return rawJSON(`{"type":"object","required":["content"],"properties":{"content":{"type":"string","title":"content","template_expression":"{{ payload.content }}"},"summary":{"type":"string","title":"summary","template_expression":"{{ payload.title }}"},"url":{"type":"string","title":"url","template_expression":"{{ payload.url }}"}}}`)
 }
 
 func serverChanCapability() Capability {

@@ -8,12 +8,20 @@ import Switch from 'antd/es/switch';
 import Typography from 'antd/es/typography';
 
 import type { MatchGroup, RouteGroup, RouteRule, TemplateRecord } from '../../data/demoData';
-import type { JSONValue, RecipientGroupApiRecord, RouteRuleApiRecord, RouteRuleInput, TemplateApiRecord } from '../../api/console';
+import type {
+  JSONValue,
+  RecipientGroupApiRecord,
+  RouteRuleApiRecord,
+  RouteRuleInput,
+  TemplateApiRecord,
+  UserApiRecord,
+} from '../../api/console';
 import { getProviderTypeLabel } from '../../utils/labels';
 import {
   buildRouteConditionTree,
   summarizeRouteConditionTree,
   type RouteConditionDraft,
+  type RouteConditionGroupOperator,
   type RouteConditionOperator,
 } from '../../utils/routeFlow';
 import type { ProviderRow } from './providerConfig';
@@ -21,9 +29,11 @@ import { cleanStringList, formatApiTime, randomUUIDValue, stringifyJSON } from '
 
 export type RouteRuleDraft = {
   name: string;
+  conditionGroupOperator: RouteConditionGroupOperator;
   conditions: RouteConditionDraft[];
   targets: RouteActionTargetDraft[];
   recipientMode: RouteRecipientMode;
+  recipientUserIds: string[];
   recipientGroupIds: string[];
   payloadRecipientPath: string;
   enabled: boolean;
@@ -62,9 +72,11 @@ export function createRouteRuleDraft(
 ): RouteRuleDraft {
   return {
     name: '新路由规则',
+    conditionGroupOperator: 'and',
     conditions: [createDefaultConditionDraft()],
     targets: [createDefaultRouteTarget(channelRows, templateRows)],
     recipientMode: 'system',
+    recipientUserIds: [],
     recipientGroupIds: [],
     payloadRecipientPath: 'payload.receivers',
     enabled: true,
@@ -76,6 +88,7 @@ export function RouteRuleForm({
   onChange,
   matchGroupRows,
   recipientGroupRows,
+  userRows,
   templateRows,
   channelRows,
   payloadFieldOptions,
@@ -84,6 +97,7 @@ export function RouteRuleForm({
   onChange: (value: RouteRuleDraft) => void;
   matchGroupRows: MatchGroup[];
   recipientGroupRows: RecipientGroupApiRecord[];
+  userRows?: UserApiRecord[];
   templateRows: Array<TemplateRecord & { raw?: TemplateApiRecord }>;
   channelRows: ProviderRow[];
   payloadFieldOptions?: Array<{ label: string; value: string; type: string }>;
@@ -124,6 +138,9 @@ export function RouteRuleForm({
   const recipientGroupOptions = recipientGroupRows
     .filter((group) => group.enabled)
     .map((group) => ({ label: group.name, value: group.id }));
+  const userOptions = (userRows ?? [])
+    .filter((user) => user.enabled)
+    .map((user) => ({ label: user.display_name || user.id, value: user.id }));
   const updateTarget = (index: number, patch: Partial<RouteActionTargetDraft>) => {
     onChange({
       ...value,
@@ -149,8 +166,19 @@ export function RouteRuleForm({
       </Form.Item>
       <div className="condition-editor">
         <Space className="full-width" align="center" style={{ justifyContent: 'space-between' }}>
-          <Typography.Title level={5}>结构化匹配条件</Typography.Title>
-          <Button size="small" onClick={addCondition}>新增条件</Button>
+          <Typography.Title level={5}>条件组</Typography.Title>
+          <Space>
+            <Select
+              className="condition-logic-select"
+              value={value.conditionGroupOperator}
+              options={[
+                { label: 'AND', value: 'and' },
+                { label: 'OR', value: 'or' },
+              ]}
+              onChange={(conditionGroupOperator) => onChange({ ...value, conditionGroupOperator })}
+            />
+            <Button type="primary" className="route-inline-add-button" onClick={addCondition}>新增条件</Button>
+          </Space>
         </Space>
         {value.conditions.map((condition, index) => {
           const isMatchGroupOperator =
@@ -171,11 +199,6 @@ export function RouteRuleForm({
                   matchGroupIds: condition.matchGroupIds.filter((item) => validValues.has(item)),
                 });
               }}
-            />
-            <Input
-              value={condition.fieldPath}
-              placeholder="或输入 payload.xxx"
-              onChange={(event) => updateCondition(index, { fieldPath: event.target.value })}
             />
             <Select
               value={condition.operator}
@@ -214,7 +237,7 @@ export function RouteRuleForm({
       <div className="send-action-group drawer-form-gap">
         <Space className="full-width" align="center" style={{ justifyContent: 'space-between' }}>
           <Typography.Title level={5}>发送动作组</Typography.Title>
-          <Button size="small" onClick={addTarget}>新增发送目标</Button>
+          <Button type="primary" className="route-inline-add-button" onClick={addTarget}>新增发送目标</Button>
         </Space>
         {value.targets.map((target, index) => {
           const selectedTemplate = templateRows.find((template) => templateVersionId(template) === target.templateVersionId);
@@ -261,9 +284,11 @@ export function RouteRuleForm({
         {value.targets.length === 0 ? (
           <Alert type="warning" showIcon message="请新增至少一个发送目标。" />
         ) : null}
-        <Alert type="info" showIcon message="每个发送目标需要选择一个推送渠道实例和一个兼容模板；跨渠道发送请新增多行。" />
       </div>
-      <div className="two-column-form">
+      <div className="route-recipient-group drawer-form-gap">
+        <Space className="full-width" align="center" style={{ justifyContent: 'space-between' }}>
+          <Typography.Title level={5}>接收策略</Typography.Title>
+        </Space>
         <Form.Item label="接收策略">
           <Select
             value={value.recipientMode}
@@ -275,34 +300,41 @@ export function RouteRuleForm({
             onChange={(recipientMode) => onChange({ ...value, recipientMode })}
           />
         </Form.Item>
-        <Form.Item label="Payload 接收人路径">
-          <Input
-            value={value.payloadRecipientPath}
-            disabled={value.recipientMode !== 'payload'}
-            placeholder="payload.receivers"
-            onChange={(event) => onChange({ ...value, payloadRecipientPath: event.target.value })}
-          />
-        </Form.Item>
+        {value.recipientMode === 'payload' ? (
+          <Form.Item label="Payload 接收人字段">
+            <Select
+              showSearch
+              optionFilterProp="label"
+              value={value.payloadRecipientPath || undefined}
+              options={fieldOptions}
+              placeholder="选择最近 Payload 中的接收人字段"
+              onChange={(payloadRecipientPath) => onChange({ ...value, payloadRecipientPath })}
+            />
+          </Form.Item>
+        ) : null}
+        {value.recipientMode === 'system' ? (
+          <div className="two-column-form">
+            <Form.Item label="接收人">
+              <Select
+                mode="multiple"
+                value={value.recipientUserIds}
+                options={userOptions}
+                placeholder="选择人员"
+                onChange={(recipientUserIds) => onChange({ ...value, recipientUserIds })}
+              />
+            </Form.Item>
+            <Form.Item label="接收人组">
+              <Select
+                mode="multiple"
+                value={value.recipientGroupIds}
+                options={recipientGroupOptions}
+                placeholder="选择接收人组"
+                onChange={(recipientGroupIds) => onChange({ ...value, recipientGroupIds })}
+              />
+            </Form.Item>
+          </div>
+        ) : null}
       </div>
-      {value.recipientMode === 'system' ? (
-        <Form.Item label="接收人组">
-          <Select
-            mode="multiple"
-            value={value.recipientGroupIds}
-            options={recipientGroupOptions}
-            placeholder="选择系统维护的接收人组；为空时由后端按平台要求校验"
-            onChange={(recipientGroupIds) => onChange({ ...value, recipientGroupIds })}
-          />
-        </Form.Item>
-      ) : null}
-      <Form.Item label="启停">
-        <Switch
-          checked={value.enabled}
-          checkedChildren="启用"
-          unCheckedChildren="停用"
-          onChange={(enabled) => onChange({ ...value, enabled })}
-        />
-      </Form.Item>
     </Form>
   );
 }
@@ -441,9 +473,13 @@ function conditionTreeRecord(value: JSONValue): Record<string, JSONValue> | null
 
 export function routeRuleDraftFromRow(row: RouteRuleRow): RouteRuleDraft {
   const recipient = conditionTreeRecord(row.recipientStrategyConfig);
+  const conditionTree = conditionTreeRecord(row.conditionTree);
   const rawMode = recipient?.mode;
   const mode: RouteRecipientMode =
     rawMode === 'payload' ? 'payload' : rawMode === 'none' ? 'none' : 'system';
+  const recipientUserIds = Array.isArray(recipient?.user_ids)
+    ? recipient.user_ids.map(String)
+    : [];
   const recipientGroupIds = Array.isArray(recipient?.recipient_group_ids)
     ? recipient.recipient_group_ids.map(String)
     : Array.isArray(recipient?.group_ids)
@@ -451,9 +487,11 @@ export function routeRuleDraftFromRow(row: RouteRuleRow): RouteRuleDraft {
       : [];
   return {
     name: row.name,
+    conditionGroupOperator: conditionTree?.operator === 'or' ? 'or' : 'and',
     conditions: routeConditionDraftsFromTree(row.conditionTree ?? {}),
     targets: row.targets.map((target) => ({ ...target })),
     recipientMode: mode,
+    recipientUserIds,
     recipientGroupIds,
     payloadRecipientPath: typeof recipient?.payload_recipient_path === 'string' ? recipient.payload_recipient_path : 'payload.receivers',
     enabled: row.enabled,
@@ -469,7 +507,7 @@ export function routeRuleDraftToRow(
   templateRows: Array<TemplateRecord & { raw?: TemplateApiRecord }>,
   channelRows: ProviderRow[],
 ) {
-  const conditionTree = buildRouteConditionTree(draft.conditions);
+  const conditionTree = buildRouteConditionTree(draft.conditions, draft.conditionGroupOperator);
   const matchGroupNames = Object.fromEntries(matchGroupRows.map((group) => [group.id, group.name]));
   const sendGroupSummary = summarizeRouteTargets(draft.targets, channelRows, templateRows);
   const targetLabels = routeTargetLabels(draft.targets, channelRows, templateRows);
@@ -491,7 +529,7 @@ export function routeRuleDraftToRow(
     targetProviders: targetLabels,
     targets: draft.targets.map((target) => ({ ...target })),
     sendGroupSummary,
-    dedupe: '按 Trace ID',
+    dedupe: '是',
     sendDedupeConfig: { strategy: 'trace_id' },
     failurePolicy: existingRule?.failurePolicy ?? { policy: 'continue' },
     conditionTree,
@@ -507,7 +545,11 @@ function routeRecipientStrategyFromDraft(draft: RouteRuleDraft): JSONValue {
   if (draft.recipientMode === 'payload') {
     return { mode: 'payload', payload_recipient_path: draft.payloadRecipientPath.trim() };
   }
-  return { mode: 'system', recipient_group_ids: cleanStringList(draft.recipientGroupIds) };
+  return {
+    mode: 'system',
+    user_ids: cleanStringList(draft.recipientUserIds),
+    recipient_group_ids: cleanStringList(draft.recipientGroupIds),
+  };
 }
 
 function routeRecipientModeLabel(mode: RouteRecipientMode) {
@@ -639,7 +681,7 @@ export function mapRouteRule(
     targetProviders: targetLabels,
     targets,
     sendGroupSummary,
-    dedupe: summarizeJSON(rule.action.send_dedupe_config, '发送前去重'),
+    dedupe: summarizeRouteDedupe(rule.action.send_dedupe_config),
     hitCount: rule.hit_count,
     enabled: rule.enabled,
     lastHitAt: formatApiTime(rule.last_hit_at),
@@ -649,6 +691,17 @@ export function mapRouteRule(
     failurePolicy: rule.action.failure_policy,
     raw: rule,
   };
+}
+
+function summarizeRouteDedupe(value: JSONValue): string {
+  if (!value || typeof value !== 'object') {
+    return '否';
+  }
+  const record = value as Record<string, JSONValue>;
+  if (record.enabled === false) {
+    return '否';
+  }
+  return Object.keys(record).length > 0 ? '是' : '否';
 }
 
 export function routeRuleToInput(rule: RouteRuleRow, index: number): RouteRuleInput {

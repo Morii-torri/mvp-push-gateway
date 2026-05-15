@@ -39,6 +39,8 @@ type ProviderConfigField = {
   label: string;
   target: ProviderFieldTarget;
   inputType: ProviderFieldInputType;
+  valueType?: string;
+  itemType?: string;
   required: boolean;
   placeholder: string;
   advanced: boolean;
@@ -78,6 +80,7 @@ type ProviderPreset = {
   testBody: string;
   testTitle?: string;
   testTopic?: string;
+  testUrl?: string;
 };
 
 type ProviderRuntimeConfig = ProviderPreset & {
@@ -107,6 +110,7 @@ type ProviderRuntimeConfig = ProviderPreset & {
   deadLetterPolicyJson: string;
   testTitle: string;
   testTopic: string;
+  testUrl: string;
 };
 
 export type ProviderRow = ProviderRecord & ProviderRuntimeConfig;
@@ -181,13 +185,13 @@ const providerPresets: Record<ProviderKind, ProviderPreset> = {
     testBody: 'PushPlus 测试消息',
   },
   wxpusher: {
-    tokenEndpoint: '固定 AppToken / SPT',
-    tokenRequest: 'appToken 或 SPT',
+    tokenEndpoint: '固定 AppToken',
+    tokenRequest: 'appToken',
     tokenResponsePath: '-',
     tokenPlacement: 'body.appToken',
-    sendEndpoint: '内置 WxPusher adapter',
-    recipientMapping: 'uids / topicIds；可从 wxpusher_uid 身份字段解析',
-    bodyMapping: 'adapter 根据 title/content/contentType/uids/topicIds 生成请求体',
+    sendEndpoint: 'POST https://wxpusher.zjiecode.com/api/send/message',
+    recipientMapping: 'UIDs / topicIds；UID 来自 wxpusher_uid 身份字段或测试输入',
+    bodyMapping: 'adapter 根据 content/summary/url 生成标准 POST JSON，contentType 固定为 2（HTML）',
     qps: 10,
     minuteLimit: 600,
     burst: 20,
@@ -197,7 +201,10 @@ const providerPresets: Record<ProviderKind, ProviderPreset> = {
     retryInterval: '3s / 10s',
     deadLetterPolicy: '全局默认：重试耗尽或上级错误进入死信',
     testRecipient: 'UID_xxx',
-    testBody: 'WxPusher 测试消息',
+    testBody: '<h1>WxPusher 测试消息</h1>',
+    testTitle: 'WxPusher 测试摘要',
+    testTopic: '',
+    testUrl: 'https://wxpusher.zjiecode.com',
   },
   serverchan: {
     tokenEndpoint: '固定 SendKey',
@@ -689,6 +696,8 @@ function fieldFromSchemaRecord(value: JSONValue, fallbackTarget: ProviderFieldTa
     label: firstString(value.label, value.title, value.description) || providerFieldLabel(key),
     target,
     inputType: providerFieldInputType(firstString(value.input_type, value.inputType, value.widget, value.type)),
+    valueType: firstString(value.type),
+    itemType: isRecord(value.items) ? firstString(value.items.type) : '',
     required: Boolean(value.required),
     placeholder: firstString(value.placeholder, value.example),
     advanced: Boolean(value.advanced),
@@ -823,7 +832,9 @@ function fallbackProviderFields(providerType: ProviderKind): ProviderConfigField
     required = false,
     placeholder = '',
     defaultValue?: ProviderFieldValue,
-  ): ProviderConfigField => ({ key, label, target, inputType, required, placeholder, advanced: false, defaultValue });
+    valueType = '',
+    itemType = '',
+  ): ProviderConfigField => ({ key, label, target, inputType, valueType, itemType, required, placeholder, advanced: false, defaultValue });
 
   if (providerType === 'email') {
     return [
@@ -917,10 +928,7 @@ function fallbackProviderFields(providerType: ProviderKind): ProviderConfigField
   if (providerType === 'wxpusher') {
     return [
       field('app_token', 'WxPusher AppToken', 'auth_config', 'password', true),
-      field('spt', 'WxPusher SPT', 'auth_config', 'password'),
-      field('mode', '推送模式', 'send_config', 'text', false, 'standard'),
-      field('uid_list', 'UID 列表', 'send_config', 'textarea'),
-      field('topic_ids', 'Topic ID 列表', 'send_config', 'textarea'),
+      field('topic_ids', 'Topic ID 列表', 'send_config', 'textarea', false, '101,102|103', undefined, 'array', 'integer'),
     ];
   }
   if (providerType === 'serverchan') {
@@ -1099,6 +1107,9 @@ function configRecordsFromFieldValues(
 }
 
 function providerFieldValueToJSON(value: ProviderFieldValue, field: ProviderConfigField): JSONValue {
+  if (providerFieldUsesDelimitedList(field)) {
+    return delimitedFieldValueToList(value, field);
+  }
   if (field.inputType === 'number') {
     return typeof value === 'number' ? value : Number(value);
   }
@@ -1113,6 +1124,54 @@ function providerFieldValueToJSON(value: ProviderFieldValue, field: ProviderConf
     }
   }
   return value;
+}
+
+function providerFieldUsesDelimitedList(field: ProviderConfigField): boolean {
+  if (field.valueType === 'array') {
+    return true;
+  }
+  return ['topic_ids', 'device_keys', 'mentioned_list', 'tags', 'keywords'].includes(field.key);
+}
+
+function delimitedFieldValueToList(value: ProviderFieldValue, field: ProviderConfigField): JSONValue[] {
+  if (Array.isArray(value)) {
+    return value as JSONValue[];
+  }
+  const text = String(value).trim();
+  if (!text) {
+    return [];
+  }
+  if (text.startsWith('[') && text.endsWith(']')) {
+    try {
+      const parsed = JSON.parse(text) as JSONValue;
+      if (Array.isArray(parsed)) {
+        return coerceDelimitedItems(parsed.map((item) => String(item)), field);
+      }
+    } catch {
+      // Fall through to delimiter parsing.
+    }
+  }
+  return coerceDelimitedItems(text.split(/[|,，]/), field);
+}
+
+function coerceDelimitedItems(items: string[], field: ProviderConfigField): JSONValue[] {
+  return items
+    .map((item) => item.trim())
+    .filter(Boolean)
+    .map((item) => {
+      if (field.itemType === 'integer' || field.itemType === 'number') {
+        const numeric = Number(item);
+        return Number.isFinite(numeric) ? numeric : item;
+      }
+      return item;
+    });
+}
+
+function providerFieldExtra(field: ProviderConfigField): string | undefined {
+  if (providerFieldUsesDelimitedList(field)) {
+    return '多个值用英文逗号 , 或竖线 | 分隔。';
+  }
+  return field.advanced ? '该字段来自高级能力 schema，可按平台要求填写。' : undefined;
 }
 
 export function parseJSONOrEmpty(value: string): JSONValue {
@@ -1221,6 +1280,26 @@ function providerTestBodyValue(value: ProviderRow): JSONValue {
     }
     return body;
   }
+  if (value.providerType === 'wxpusher') {
+    const body: Record<string, JSONValue> = {
+      content: value.testBody.trim(),
+      contentType: 2,
+      verifyPayType: 0,
+    };
+    const summary = value.testTitle.trim();
+    const url = value.testUrl.trim();
+    const topicIds = parseNumericList(value.testTopic);
+    if (summary) {
+      body.summary = summary;
+    }
+    if (url) {
+      body.url = url;
+    }
+    if (topicIds.length > 0) {
+      body.topicIds = topicIds;
+    }
+    return body;
+  }
   const trimmed = value.testBody.trim();
   if (!trimmed) {
     return {};
@@ -1233,17 +1312,55 @@ function providerTestBodyValue(value: ProviderRow): JSONValue {
 }
 
 function normalizedProviderTestRecipient(value: ProviderRow): string {
-  if (value.providerType === 'pushplus') {
+  if (value.providerType === 'pushplus' || value.providerType === 'wxpusher') {
     return '';
   }
   const recipient = value.testRecipient.trim();
   return recipient && recipient !== '-' ? recipient : '';
 }
 
-function providerTestPayload(value: ProviderRow, send: boolean, liveSendConfirmed = false): JSONValue {
+function splitListText(value: string): string[] {
+  const trimmed = value.trim();
+  if (!trimmed || trimmed === '-') {
+    return [];
+  }
+  if (trimmed.startsWith('[') && trimmed.endsWith(']')) {
+    try {
+      const parsed = JSON.parse(trimmed) as JSONValue;
+      if (Array.isArray(parsed)) {
+        return parsed
+          .filter((item): item is string | number => typeof item === 'string' || typeof item === 'number')
+          .map((item) => String(item).trim())
+          .filter(Boolean);
+      }
+    } catch {
+      // Fall through to delimiter splitting.
+    }
+  }
+  return trimmed
+    .split(/[\s,，|;；]+/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function parseNumericList(value: string): number[] {
+  return splitListText(value)
+    .map((item) => Number(item))
+    .filter((item) => Number.isFinite(item));
+}
+
+function providerTestRecipients(value: ProviderRow, recipient: string): JSONValue[] {
+  if (value.providerType === 'wxpusher') {
+    return splitListText(value.testRecipient).map((uid) => ({ platform_ids: { wxpusher_uid: uid } }));
+  }
+  return recipient ? [{ value: recipient }] : [];
+}
+
+export function providerTestPayload(value: ProviderRow, send: boolean, liveSendConfirmed = false): JSONValue {
   const body = providerTestBodyValue(value);
   const recipient = normalizedProviderTestRecipient(value);
-  const messageType = value.providerType === 'pushplus' ? 'json' : value.messageTypes[0] ?? 'text';
+  const messageType = value.providerType === 'pushplus' ? 'html' : value.providerType === 'wxpusher' ? 'html' : value.messageTypes[0] ?? 'text';
+  const resolvedRecipients = providerTestRecipients(value, recipient);
   return {
     send,
     live_send_confirmed: liveSendConfirmed,
@@ -1255,7 +1372,7 @@ function providerTestPayload(value: ProviderRow, send: boolean, liveSendConfirme
       message_type: messageType,
       content: body,
     },
-    resolved_recipients: recipient ? [{ value: recipient }] : [],
+    resolved_recipients: resolvedRecipients,
     target_context: {
       channel_id: value.id,
       channel_name: value.name,
@@ -1404,6 +1521,7 @@ function providerWithPreset(
     deadLetterAlert: '全局默认阈值',
     testTitle: preset.testTitle ?? '',
     testTopic: preset.testTopic ?? '',
+    testUrl: preset.testUrl ?? '',
     authConfigJson: '{\n  "credential_ref": ""\n}',
     tokenConfigJson: '{\n  "token_endpoint": "' + preset.tokenEndpoint.replace(/"/g, '\\"') + '"\n}',
     sendConfigJson: '{\n  "send_endpoint": "' + preset.sendEndpoint.replace(/"/g, '\\"') + '"\n}',
@@ -1553,6 +1671,15 @@ function renderProviderFieldInput(
   value: ProviderFieldValue | undefined,
   onChange: (field: ProviderConfigField, value: ProviderFieldValue) => void,
 ): ReactNode {
+  if (providerFieldUsesDelimitedList(field)) {
+    return (
+      <Input
+        value={typeof value === 'string' ? value : value === undefined ? '' : String(value)}
+        placeholder={field.placeholder}
+        onChange={(event) => onChange(field, event.target.value)}
+      />
+    );
+  }
   if (field.inputType === 'number') {
     return (
       <InputNumber
@@ -1638,7 +1765,7 @@ export function ProviderConfigForm({
                     key={providerFieldValueKey(field)}
                     label={field.label}
                     required={field.required}
-                    extra={field.advanced ? '该字段来自高级能力 schema，可按平台要求填写。' : undefined}
+                    extra={providerFieldExtra(field)}
                   >
                     {renderProviderFieldInput(field, value.fieldValues[providerFieldValueKey(field)], updateFieldValue)}
                   </Form.Item>
@@ -1649,14 +1776,6 @@ export function ProviderConfigForm({
                   rows={3}
                   value={value.description}
                   onChange={(event) => update({ description: event.target.value })}
-                />
-              </Form.Item>
-              <Form.Item label="启停">
-                <Switch
-                  checked={value.enabled}
-                  onChange={(enabled) => update({ enabled })}
-                  checkedChildren="启用"
-                  unCheckedChildren="停用"
                 />
               </Form.Item>
             </Form>
@@ -1836,10 +1955,19 @@ export function ProviderTestPanel({
   const [testResult, setTestResult] = useState<JSONValue | null>(null);
   const [testResultMode, setTestResultMode] = useState<'simulate' | 'send' | null>(null);
   const pushPlusTest = value.providerType === 'pushplus';
+  const wxPusherTest = value.providerType === 'wxpusher';
   const update = (patch: Partial<ProviderRow>) => onChange({ ...value, ...patch });
   const validateTestPayload = () => {
     if (pushPlusTest && !value.testBody.trim()) {
       message.error('请填写 content');
+      return false;
+    }
+    if (wxPusherTest && !value.testBody.trim()) {
+      message.error('请填写 content');
+      return false;
+    }
+    if (wxPusherTest && splitListText(value.testRecipient).length === 0 && parseNumericList(value.testTopic).length === 0) {
+      message.error('请填写 UIDs 或 Topic IDs');
       return false;
     }
     return true;
@@ -1887,6 +2015,28 @@ export function ProviderTestPanel({
           </Form.Item>
           <Form.Item label="topic（可选）">
             <Input value={value.testTopic} onChange={(event) => update({ testTopic: event.target.value })} />
+          </Form.Item>
+        </div>
+      ) : wxPusherTest ? (
+        <div className="two-column-form provider-test-form">
+          <Form.Item label="content" required className="form-item-full">
+            <Input.TextArea
+              rows={5}
+              value={value.testBody}
+              onChange={(event) => update({ testBody: event.target.value })}
+            />
+          </Form.Item>
+          <Form.Item label="summary（可选）">
+            <Input value={value.testTitle} onChange={(event) => update({ testTitle: event.target.value })} />
+          </Form.Item>
+          <Form.Item label="UIDs（多个 UID）">
+            <Input value={value.testRecipient} onChange={(event) => update({ testRecipient: event.target.value })} />
+          </Form.Item>
+          <Form.Item label="Topic IDs（可选）">
+            <Input value={value.testTopic} onChange={(event) => update({ testTopic: event.target.value })} />
+          </Form.Item>
+          <Form.Item label="url（可选）">
+            <Input value={value.testUrl} onChange={(event) => update({ testUrl: event.target.value })} />
           </Form.Item>
         </div>
       ) : (

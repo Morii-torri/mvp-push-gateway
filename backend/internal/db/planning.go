@@ -185,29 +185,30 @@ func (r Repository) loadMatchGroupValues(ctx context.Context, rules []route.Rule
 func (r Repository) GetTemplateVersion(ctx context.Context, id string) (msgtemplate.TemplateVersion, error) {
 	version, err := scanTemplateVersion(r.pool.QueryRow(ctx, `
 		SELECT
-			version.id,
-			version.template_id,
-			version.version_no,
-			version.message_type,
-			version.target_provider_type,
-			version.template_engine,
-			version.template_syntax_version,
-			version.template_body,
-			version.message_body_schema,
-			version.sample_payload,
-			version.compiled_preview,
-			version.used_variables,
-			version.allowed_filters,
-			version.validation_status,
-			version.validation_errors,
-			version.published_at,
-			version.created_at,
-			version.updated_at
-		FROM template_versions AS version
-		JOIN templates AS template ON template.id = version.template_id
-		WHERE version.id = $1
-			AND version.published_at IS NOT NULL
-			AND version.validation_status = 'valid'
+			current_version.id,
+			current_version.template_id,
+			current_version.version_no,
+			current_version.message_type,
+			current_version.target_provider_type,
+			current_version.template_engine,
+			current_version.template_syntax_version,
+			current_version.template_body,
+			current_version.message_body_schema,
+			current_version.sample_payload,
+			current_version.compiled_preview,
+			current_version.used_variables,
+			current_version.allowed_filters,
+			current_version.validation_status,
+			current_version.validation_errors,
+			current_version.published_at,
+			current_version.created_at,
+			current_version.updated_at
+		FROM template_versions AS referenced_version
+		JOIN templates AS template ON template.id = referenced_version.template_id
+		JOIN template_versions AS current_version ON current_version.id = template.current_version_id
+		WHERE referenced_version.id = $1
+			AND current_version.published_at IS NOT NULL
+			AND current_version.validation_status = 'valid'
 			AND template.enabled = true
 	`, id))
 	if err != nil {

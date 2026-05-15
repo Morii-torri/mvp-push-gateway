@@ -1047,13 +1047,12 @@ body {
 
 .route-canvas-layout {
   display: grid;
-  grid-template-columns: 190px minmax(640px, 1fr) 300px;
+  grid-template-columns: 190px minmax(720px, 1fr);
   gap: 14px;
   align-items: stretch;
 }
 
 .node-library,
-.property-panel,
 .canvas-surface {
   min-width: 0;
   background: #ffffff;
@@ -1062,10 +1061,6 @@ body {
 }
 
 .node-library,
-.property-panel {
-  padding: 16px;
-}
-
 .node-card {
   display: grid;
   gap: 5px;
@@ -1125,14 +1120,14 @@ body {
   position: relative;
   display: grid;
   grid-template-rows: auto minmax(0, 1fr);
-  min-height: 640px;
+  min-height: 720px;
   padding: 16px;
   overflow: hidden;
   background: #fbfdff;
 }
 
 .react-flow-shell {
-  height: 560px;
+  height: 640px;
   overflow: hidden;
   border: 1px solid #d7e3f4;
   border-radius: 8px;
@@ -1326,13 +1321,16 @@ body {
 }
 
 .condition-editor {
+  display: grid;
+  gap: 12px;
   padding: 14px;
   background: #f8fbff;
   border: 1px solid #dce7f5;
   border-radius: 6px;
 }
 
-.send-action-group {
+.send-action-group,
+.route-recipient-group {
   display: grid;
   gap: 12px;
   padding: 14px;
@@ -1354,9 +1352,19 @@ body {
 
 .condition-row {
   display: grid;
-  grid-template-columns: 1fr 96px 130px 1fr;
+  grid-template-columns: minmax(180px, 1.25fr) 130px minmax(160px, 1fr) auto;
   gap: 10px;
   margin-bottom: 10px;
+  align-items: center;
+}
+
+.condition-logic-select {
+  width: 86px;
+}
+
+.route-inline-add-button {
+  min-height: 36px;
+  padding-inline: 14px;
 }
 
 .template-workspace {
@@ -1600,7 +1608,7 @@ body {
 .template-content-field__controls {
   display: block;
   min-width: 0;
-  padding-left: 24px;
+  padding-left: 0;
 }
 
 .template-content-field__controls .ant-form-item {
@@ -1622,6 +1630,22 @@ body {
 
 .template-name-row--without-status {
   grid-template-columns: minmax(0, 1fr) minmax(178px, 240px);
+}
+
+.identity-editor-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.identity-editor-header .ant-typography {
+  margin: 0;
+}
+
+.identity-add-button.ant-btn-sm {
+  min-height: 30px;
+  padding-inline: 12px;
 }
 
 .two-column-form {

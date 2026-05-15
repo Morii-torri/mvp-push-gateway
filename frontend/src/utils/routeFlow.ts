@@ -16,6 +16,8 @@ export type RouteConditionDraft = {
   matchGroupIds: string[];
 };
 
+export type RouteConditionGroupOperator = 'and' | 'or';
+
 export type RouteConditionTree = {
   operator: string;
   path?: string;
@@ -186,7 +188,10 @@ export function buildInitialRouteFlow<T extends RouteRuleFlowSummary>(
   return { nodes, edges };
 }
 
-export function buildRouteConditionTree(drafts: RouteConditionDraft[]): RouteConditionTree {
+export function buildRouteConditionTree(
+  drafts: RouteConditionDraft[],
+  groupOperator: RouteConditionGroupOperator = 'and',
+): RouteConditionTree {
   const conditions = drafts
     .map(conditionDraftToTree)
     .filter((condition): condition is RouteConditionTree => Boolean(condition));
@@ -197,7 +202,7 @@ export function buildRouteConditionTree(drafts: RouteConditionDraft[]): RouteCon
   if (conditions.length === 1) {
     return conditions[0];
   }
-  return { operator: 'and', conditions };
+  return { operator: groupOperator, conditions };
 }
 
 export function summarizeRouteConditionTree(value: unknown, options: ConditionSummaryOptions = {}): string {

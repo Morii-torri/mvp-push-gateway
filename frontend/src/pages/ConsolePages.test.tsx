@@ -37,6 +37,7 @@ import {
   mapRouteRule,
   mapTemplateRow,
   routeTargetTemplateOptions,
+  routeRuleDraftToRow,
   switchProviderType,
   switchTemplateContentMode,
   switchTemplateMessageType,
@@ -45,13 +46,16 @@ import {
   templateDraftWithSourcePayload,
   templateRecordWithRestoredVersion,
   templateRenderedPreview,
+  templateVersionSamplePayload,
   templateUserFacingPreview,
   templateVersionInputFromDraft,
   providerTestRequestPreview,
   providerTestSendPreview,
+  providerTestPayload,
 } from './ConsolePages';
 import type { OrgUnitApiRecord, ProviderCapabilityApiRecord, TemplateApiRecord, TemplateVersionApiRecord } from '../api/console';
 import { getProviderTypeLabel } from '../utils/labels';
+import { recipientIdentityProviderOptions } from './console/shared';
 
 const lastUpdated = new Date('2026-05-11T09:30:00+08:00');
 
@@ -153,7 +157,14 @@ describe('critical console pages', () => {
     expect(providersMarkup).toContain('推送渠道');
     expect(providersMarkup).toContain('通用 Webhook');
     expect(providersMarkup).toContain('自定义 Token 平台');
+    expect(providersMarkup).not.toContain('发送模式');
     expect(providersMarkup).not.toContain('custom_token');
+    const deadLetterIndex = providersMarkup.indexOf('死信策略');
+    const enabledIndex = providersMarkup.indexOf('启停');
+    const actionIndex = providersMarkup.indexOf('操作');
+    expect(deadLetterIndex).toBeGreaterThan(-1);
+    expect(enabledIndex).toBeGreaterThan(deadLetterIndex);
+    expect(actionIndex).toBeGreaterThan(enabledIndex);
   });
 
   it('renders simplified source form controls for token, dedupe, rate limit, and immutable code', () => {
@@ -428,7 +439,7 @@ describe('critical console pages', () => {
     expect(markup).not.toContain('请求 Header');
   });
 
-  it('uses PushPlus token-only provider fields and JSON content template fallback', () => {
+  it('uses PushPlus token-only provider fields and HTML content template fallback', () => {
     const providerDraft = createProviderDraft('pushplus', 1);
     const providerMarkup = renderPage(
       <ProviderConfigForm
@@ -457,6 +468,7 @@ describe('critical console pages', () => {
     expect(providerMarkup).not.toContain('模拟请求');
     expect(providerMarkup).not.toContain('真实发送');
     expect(providerMarkup).not.toContain('测试接收人');
+    expect(providerMarkup).not.toContain('启停');
 
     const providerInput = channelInputFromProvider({ ...providerDraft, fieldValues: { 'auth_config.token': 'push-token' } });
     expect(providerInput.auth_config).toEqual({ token: 'push-token' });
@@ -482,19 +494,145 @@ describe('critical console pages', () => {
     const templateInput = templateVersionInputFromDraft(templateDraft);
     const templateBody = JSON.parse(templateInput.template_body) as Record<string, string>;
 
-    expect(templateInput.message_type).toBe('json');
+    expect(templateInput.message_type).toBe('html');
     expect(Object.keys(templateBody).sort()).toEqual(['content', 'title', 'topic']);
     expect(templateMarkup).toContain('content');
-    expect(templateMarkup).toContain('title（可选）');
-    expect(templateMarkup).toContain('topic（可选）');
+    expect(templateMarkup).toContain('title');
+    expect(templateMarkup).toContain('topic');
+    expect(templateMarkup).not.toContain('title（可选）');
+    expect(templateMarkup).not.toContain('topic（可选）');
+    expect(templateMarkup).not.toContain('模板表达式');
     expect(templateMarkup).not.toContain('消息类型');
     expect(templateMarkup).not.toContain('跳转链接');
     expect(templateMarkup).not.toContain('内容格式');
   });
 
-  it('uses simple provider fields and notice template fallbacks for WxPusher and ServerChan', () => {
+  it('uses WxPusher standard POST fields and HTML content template fallback', () => {
+    const providerDraft = createProviderDraft('wxpusher', 1);
+    const providerMarkup = renderPage(
+      <ProviderConfigForm
+        value={providerDraft}
+        onChange={() => undefined}
+        capabilities={[]}
+      />,
+    );
+
+    expect(providerMarkup).toContain('WxPusher AppToken');
+    expect(providerMarkup).toContain('Topic ID 列表');
+    expect(providerMarkup).toContain('多个值用英文逗号 , 或竖线 | 分隔');
+    expect(providerMarkup.slice(providerMarkup.indexOf('Topic ID 列表'), providerMarkup.indexOf('描述'))).not.toContain('<textarea');
+    expect(providerMarkup).not.toContain('WxPusher SPT');
+    expect(providerMarkup).not.toContain('推送模式');
+    expect(providerMarkup).not.toContain('内容类型');
+    expect(providerMarkup).not.toContain('UID 列表');
+    expect(providerMarkup).not.toContain('Body 映射模板');
+    expect(providerMarkup).not.toContain('请求 Header JSON');
+    expect(channelInputFromProvider({ ...providerDraft, fieldValues: { 'auth_config.app_token': 'AT_xxx' } }).auth_config).toEqual({
+      app_token: 'AT_xxx',
+    });
+    expect(
+      channelInputFromProvider({
+        ...providerDraft,
+        fieldValues: {
+          'auth_config.app_token': 'AT_xxx',
+          'send_config.topic_ids': '101, 102|103',
+        },
+      }).send_config,
+    ).toEqual({ topic_ids: [101, 102, 103] });
+
+    const templateDraft = createTemplateDraft([], [], 'wxpusher', 'html');
+    const templateMarkup = renderPage(
+      <TemplateEditorForm
+        value={templateDraft}
+        onChange={() => undefined}
+        sourceRows={[]}
+        capabilities={[]}
+      />,
+    );
+    const templateInput = templateVersionInputFromDraft(templateDraft);
+    const templateBody = JSON.parse(templateInput.template_body) as Record<string, string>;
+    expect(templateInput.message_type).toBe('html');
+    expect(Object.keys(templateBody).sort()).toEqual(['content', 'summary', 'url']);
+    expect(templateMarkup).toContain('content');
+    expect(templateMarkup).toContain('summary');
+    expect(templateMarkup).toContain('url');
+    expect(templateMarkup).not.toContain('HTML 内容');
+    expect(templateMarkup).not.toContain('标题摘要（可选）');
+    expect(templateMarkup).not.toContain('原文链接（可选）');
+    expect(templateMarkup).not.toContain('模板表达式');
+    expect(templateMarkup).not.toContain('内容格式');
+  });
+
+  it('renders WxPusher test panel with explicit UID and topic fields', () => {
+    const markup = renderPage(
+      <ProviderTestPanel value={createProviderDraft('wxpusher', 1)} onChange={() => undefined} />,
+    );
+
+    expect(markup).toContain('content');
+    expect(markup).toContain('summary（可选）');
+    expect(markup).toContain('UIDs（多个 UID）');
+    expect(markup).toContain('Topic IDs（可选）');
+    expect(markup).toContain('url（可选）');
+    expect(markup).toContain('模拟请求');
+    expect(markup).toContain('真实发送');
+    expect(markup).not.toContain('测试接收人');
+  });
+
+  it('builds WxPusher test payload with UID identities and topic ids', () => {
+    const draft = {
+      ...createProviderDraft('wxpusher', 1),
+      testBody: '<b>WxPusher 测试消息</b>',
+      testTitle: '摘要',
+      testRecipient: 'UID_1,UID_2',
+      testTopic: '101|102',
+      testUrl: 'https://example.test/detail',
+    };
+
+    const payload = providerTestPayload(draft, true, true) as {
+      recipient: string;
+      body: Record<string, unknown>;
+      rendered_message: { provider_type: string; message_type: string; content: Record<string, unknown> };
+      resolved_recipients: Array<{ platform_ids: Record<string, string> }>;
+    };
+
+    expect(payload.recipient).toBe('');
+    expect(payload.body).toEqual({
+      content: '<b>WxPusher 测试消息</b>',
+      contentType: 2,
+      verifyPayType: 0,
+      summary: '摘要',
+      url: 'https://example.test/detail',
+      topicIds: [101, 102],
+    });
+    expect(payload.rendered_message).toEqual({
+      provider_type: 'wxpusher',
+      message_type: 'html',
+      content: payload.body,
+    });
+    expect(payload.resolved_recipients).toEqual([
+      { platform_ids: { wxpusher_uid: 'UID_1' } },
+      { platform_ids: { wxpusher_uid: 'UID_2' } },
+    ]);
+  });
+
+  it('keeps generic provider test recipient information in the test payload', () => {
+    const draft = {
+      ...createProviderDraft('wecom_app', 1),
+      testBody: '{"content":"测试消息"}',
+      testRecipient: 'userid_001',
+    };
+
+    const payload = providerTestPayload(draft, false) as {
+      recipient: string;
+      resolved_recipients: Array<{ value: string }>;
+    };
+
+    expect(payload.recipient).toBe('userid_001');
+    expect(payload.resolved_recipients).toEqual([{ value: 'userid_001' }]);
+  });
+
+  it('uses simple provider fields and notice template fallbacks for ServerChan', () => {
     const providers = [
-      ['wxpusher', 'WxPusher AppToken', ['UID 列表', 'Topic ID 列表']],
       ['serverchan', 'Server酱 SendKey', ['版本', '推送渠道']],
     ] as const;
 
@@ -553,7 +691,7 @@ describe('critical console pages', () => {
       );
       const input = templateVersionInputFromDraft(createTemplateDraft([], [], providerType, 'notice'));
       expect(markup).toContain(getProviderTypeLabel(providerType));
-      expect(markup).toContain('正文内容');
+      expect(markup).toContain('body');
       expect(input.message_type).toBe('notice');
       expect(input.template_body).toContain('"body"');
     }
@@ -610,7 +748,7 @@ describe('critical console pages', () => {
       );
       const input = templateVersionInputFromDraft(createTemplateDraft([], [], providerType, 'markdown'));
       expect(markup).toContain(label);
-      expect(markup).toContain('Markdown 内容');
+      expect(markup).toContain('markdown');
       expect(markup).not.toContain(providerType);
       expect(input.template_body).toContain('"markdown"');
     }
@@ -626,7 +764,7 @@ describe('critical console pages', () => {
       );
       const input = templateVersionInputFromDraft(createTemplateDraft([], [], providerType, 'card'));
       expect(markup).toContain(label);
-      expect(markup).toContain('卡片标题');
+      expect(markup).toContain('title');
       expect(markup).not.toContain(providerType);
       expect(input.template_body).toContain('"title"');
       expect(input.template_body).toContain('"url"');
@@ -776,6 +914,61 @@ describe('critical console pages', () => {
         { id: 'target-1', channelId: 'channel-wecom', templateVersionId: 'version-wecom', enabled: true },
         { id: 'target-2', channelId: 'channel-email', templateVersionId: 'version-email', enabled: true },
       ],
+      recipientUserIds: ['user-1'],
+      recipientGroupIds: ['group-1'],
+    };
+    const markup = renderPage(
+      <RouteRuleForm
+        value={draft}
+        onChange={() => undefined}
+        matchGroupRows={[]}
+        recipientGroupRows={[
+          {
+            id: 'group-1',
+            name: '值班组',
+            user_ids: [],
+            org_ids: [],
+            excluded_user_ids: [],
+            excluded_org_ids: [],
+            enabled: true,
+            created_at: '2026-05-15T08:00:00Z',
+            updated_at: '2026-05-15T08:00:00Z',
+          },
+        ]}
+        userRows={[
+          {
+            id: 'user-1',
+            display_name: '张三',
+            primary_org_id: '',
+            enabled: true,
+            attributes: {},
+            created_at: '2026-05-15T08:00:00Z',
+            updated_at: '2026-05-15T08:00:00Z',
+          },
+        ]}
+        templateRows={templateRows}
+        channelRows={channelRows}
+        payloadFieldOptions={[{ label: '标题', value: 'payload.title', type: 'string' }]}
+      />,
+    );
+
+    expect(markup).toContain('条件组');
+    expect(markup).not.toContain('结构化匹配条件');
+    expect(markup).not.toContain('或输入 payload.xxx');
+    expect(markup).toContain('发送动作组');
+    expect(markup).toContain('新增发送目标');
+    expect(markup).not.toContain('每个发送目标需要选择一个推送渠道实例和一个兼容模板');
+    expect(markup).toContain('接收人');
+    expect(markup).toContain('接收人组');
+    expect(markup).not.toContain('启停');
+    expect(markup.match(/删除/g)?.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it('renders payload recipient path only for payload recipient strategy', () => {
+    const draft = {
+      ...createRouteRuleDraft([], []),
+      recipientMode: 'payload' as const,
+      payloadRecipientPath: 'payload.receivers',
     };
     const markup = renderPage(
       <RouteRuleForm
@@ -783,14 +976,15 @@ describe('critical console pages', () => {
         onChange={() => undefined}
         matchGroupRows={[]}
         recipientGroupRows={[]}
-        templateRows={templateRows}
-        channelRows={channelRows}
+        userRows={[]}
+        templateRows={[]}
+        channelRows={[]}
+        payloadFieldOptions={[{ label: '接收人', value: 'payload.receivers', type: 'array' }]}
       />,
     );
 
-    expect(markup).toContain('发送动作组');
-    expect(markup).toContain('新增发送目标');
-    expect(markup.match(/删除/g)?.length).toBeGreaterThanOrEqual(2);
+    expect(markup).toContain('Payload 接收人字段');
+    expect(markup).not.toContain('Payload 接收人路径');
   });
 
   it('filters route target templates by the selected platform provider type', () => {
@@ -925,6 +1119,43 @@ describe('critical console pages', () => {
 
     expect(newRow.sendGroupSummary).toBe('企业微信实例 -> 企微模板');
     expect(legacyRow.sendGroupSummary).toBe('邮件实例 -> 邮件模板');
+    expect(newRow.dedupe).toBe('是');
+  });
+
+  it('serializes system recipient users and groups together for route planning', () => {
+    const group = {
+      id: 'flow-1',
+      name: '路由组',
+      sourceName: '来源 A',
+      sourceCode: 'source-a',
+      enabled: true,
+      currentVersion: 'v1',
+      ruleIds: [],
+      totalHitCount: 0,
+      updatedAt: '2026-05-12 09:00:00',
+    };
+    const draft = {
+      ...createRouteRuleDraft([], []),
+      targets: [{ id: 'target-1', channelId: 'channel-1', templateVersionId: 'version-1', enabled: true }],
+      recipientMode: 'system' as const,
+      recipientUserIds: ['user-1'],
+      recipientGroupIds: ['group-1'],
+    };
+    const row = routeRuleDraftToRow(
+      draft,
+      group,
+      null,
+      1,
+      [],
+      [{ id: 'tpl-1', name: '模板', version: 'v1', raw: { current_version_id: 'version-1' } }] as any,
+      [{ id: 'channel-1', name: '渠道', providerType: 'webhook' }] as any,
+    );
+
+    expect(row.recipientStrategyConfig).toEqual({
+      mode: 'system',
+      user_ids: ['user-1'],
+      recipient_group_ids: ['group-1'],
+    });
   });
 
   it('renders template page list mappings with localized provider and validation labels', () => {
@@ -968,6 +1199,11 @@ describe('critical console pages', () => {
     expect(markup).toContain('模拟请求');
     expect(markup).toContain('真实发送');
     expect(markup).not.toContain('测试接收人');
+
+    const payload = providerTestPayload({ ...draft, testBody: '<p>PushPlus 测试消息</p>' }, false) as {
+      rendered_message: { message_type: string };
+    };
+    expect(payload.rendered_message.message_type).toBe('html');
   });
 
   it('summarizes provider test result as final URL headers and body only', () => {
@@ -1048,8 +1284,9 @@ describe('critical console pages', () => {
     expect(markup).not.toContain('消息类型');
     expect(markup).toContain('内容编辑模式');
     expect(markup).toContain('企业微信应用兼容');
-    expect(markup).toContain('正文内容');
-    expect(markup).toContain('模板表达式');
+    expect(markup).toContain('content');
+    expect(markup).not.toContain('正文内容');
+    expect(markup).not.toContain('模板表达式');
     expect(markup).not.toContain('template-field-state');
     expect(markup).not.toContain('必填');
     expect(markup).not.toContain('能力名称');
@@ -1066,6 +1303,21 @@ describe('critical console pages', () => {
     expect(contentModeIndex).toBeLessThan(sourceIndex);
   });
 
+  it('does not render an enabled switch when editing templates', () => {
+    const draft = { ...createTemplateDraft([], templateCapabilities), id: 'tpl-1', enabled: false };
+    const markup = renderPage(
+      <TemplateEditorForm
+        value={draft}
+        onChange={() => undefined}
+        sourceRows={[]}
+        capabilities={templateCapabilities}
+      />,
+    );
+
+    expect(markup).toContain('模板名称');
+    expect(markup).not.toContain('启停');
+  });
+
   it('renders delete as a template row action', () => {
     const row = {
       id: 'tpl-1',
@@ -1073,7 +1325,7 @@ describe('critical console pages', () => {
       source: '告警来源 / alerts',
       messageType: 'text',
       targetProviderType: 'wecom' as const,
-      targetField: '正文内容',
+      targetField: 'content',
       content: '{"content":"{{ payload.content }}"}',
       validationStatus: 'valid' as const,
       version: 'v1',
@@ -1085,51 +1337,58 @@ describe('critical console pages', () => {
       <TemplateRowActions
         record={row}
         onEdit={() => undefined}
-        onValidate={() => undefined}
         onDelete={() => undefined}
       />,
     );
 
     expect(markup).toContain('编辑');
-    expect(markup).toContain('校验');
+    expect(markup).not.toContain('校验');
     expect(markup).toContain('删除');
   });
 
   it('renders template version history with restore action and immutable version content', () => {
+    const historyVersion = {
+      id: 'version-2',
+      template_id: 'tpl-1',
+      version_no: 2,
+      message_type: 'json',
+      target_provider_type: 'pushplus',
+      template_engine: 'pongo2',
+      template_syntax_version: 'jinja-like-v1',
+      template_body: '{"content":"{{ payload.content }}"}',
+      message_body_schema: {},
+      sample_payload: { content: '历史内容' },
+      compiled_preview: {},
+      used_variables: ['payload.content'],
+      allowed_filters: [],
+      validation_status: 'valid',
+      validation_errors: [],
+      published_at: '2026-05-15T08:00:00Z',
+      created_at: '2026-05-15T08:00:00Z',
+      updated_at: '2026-05-15T08:00:00Z',
+    } satisfies TemplateVersionApiRecord;
+    const latestPayload = { content: '最新 Payload 内容' };
     const markup = renderPage(
       <TemplateVersionHistoryContent
         currentVersionId="version-3"
-        versions={[
-          {
-            id: 'version-2',
-            template_id: 'tpl-1',
-            version_no: 2,
-            message_type: 'json',
-            target_provider_type: 'pushplus',
-            template_engine: 'pongo2',
-            template_syntax_version: 'jinja-like-v1',
-            template_body: '{"content":"{{ payload.content }}"}',
-            message_body_schema: {},
-            sample_payload: { content: '历史内容' },
-            compiled_preview: {},
-            used_variables: ['payload.content'],
-            allowed_filters: [],
-            validation_status: 'valid',
-            validation_errors: [],
-            published_at: '2026-05-15T08:00:00Z',
-            created_at: '2026-05-15T08:00:00Z',
-            updated_at: '2026-05-15T08:00:00Z',
-          },
-        ]}
+        payloadPreview={latestPayload}
+        versions={[historyVersion]}
         loading={false}
         onRestore={() => undefined}
       />,
     );
 
     expect(markup).toContain('历史版本不可修改');
+    expect(markup).toContain('路由策略会按模板当前版本解析');
+    expect(markup).not.toContain('已发布路由策略引用的旧模板版本不会自动变更');
     expect(markup).toContain('v2');
     expect(markup).toContain('PushPlus');
+    expect(markup).not.toContain('消息类型');
+    expect(markup).not.toContain('校验状态');
     expect(markup).toContain('payload.content');
+    expect(templateVersionSamplePayload(historyVersion, latestPayload)).toEqual(latestPayload);
+    expect(templateVersionSamplePayload(historyVersion, null)).toEqual({ content: '历史内容' });
+    expect(markup).not.toContain('历史内容');
     expect(markup).toContain('基于此版本恢复');
   });
 
@@ -1198,7 +1457,7 @@ describe('critical console pages', () => {
     );
 
     const textareaCount = markup.match(/<textarea/g)?.length ?? 0;
-    expect(markup).toContain('正文内容');
+    expect(markup).toContain('content');
     expect(textareaCount).toBeGreaterThanOrEqual(2);
   });
 
@@ -1322,10 +1581,10 @@ describe('critical console pages', () => {
       />,
     );
 
-    expect(markdownMarkup).toContain('Markdown 内容');
+    expect(markdownMarkup).toContain('markdown');
     expect(markdownMarkup).not.toContain('邮件主题');
-    expect(emailMarkup).toContain('邮件主题');
-    expect(emailMarkup).toContain('HTML 正文');
+    expect(emailMarkup).toContain('subject');
+    expect(emailMarkup).toContain('html');
     expect(emailMarkup).not.toContain('Markdown 内容');
   });
 
@@ -1348,6 +1607,8 @@ describe('critical console pages', () => {
     expect(input.template_body).toContain('"content"');
     expect(body.content).toBe('');
     expect(markup).not.toContain('默认值');
+    expect(markup).not.toContain('placeholder="{{ payload.content }}"');
+    expect(templateUserFacingPreview(draft)).toBe('');
   });
 
   it('applies the global fallback to payload variables inside template expressions', () => {
@@ -1417,7 +1678,7 @@ describe('critical console pages', () => {
 
     expect(row.targetProviderType).toBe('email');
     expect(row.messageType).toBe('html');
-    expect(row.targetField).toBe('邮件主题、HTML 正文');
+    expect(row.targetField).toBe('subject、html');
     expect(row.targetField).not.toBe('tpl-version-1');
   });
 
@@ -1471,12 +1732,70 @@ describe('critical console pages', () => {
     const markup = renderPage(
       <OrganizationPage lastUpdated={lastUpdated} onRefresh={() => undefined} />,
     );
+    const userSection = markup.slice(markup.indexOf('人员列表'), markup.indexOf('接收人组列表'));
 
     expect(markup).toContain('人员列表');
     expect(markup).toContain('新增人员');
     expect(markup).toContain('平台身份字段');
-    expect(markup).toContain('身份类型');
+    expect(markup).not.toContain('身份类型');
+    expect(markup).not.toContain('人员属性高级 JSON');
     expect(markup).toContain('验证状态');
+    expect(userSection).toContain('scope="col">启停</th>');
+    expect(userSection).not.toContain('scope="col">状态</th>');
+  });
+
+  it('renders user profile form without a status switch', () => {
+    const UserProfileForm = (ConsolePages as typeof ConsolePages & {
+      UserProfileForm?: (props: { value: Record<string, unknown>; orgOptions: Array<{ label: string; value: string }>; onChange: (value: Record<string, unknown>) => void }) => ReactElement;
+    }).UserProfileForm;
+
+    expect(UserProfileForm).toBeTypeOf('function');
+    if (!UserProfileForm) {
+      throw new Error('UserProfileForm is not exported');
+    }
+
+    const markup = renderPage(
+      <UserProfileForm
+        value={{
+          name: '张三',
+          primaryOrgId: 'org-1',
+          mobile: '13800000000',
+          email: 'zhangsan@example.com',
+          status: false,
+          identities: [],
+          attributesJson: '{}',
+        }}
+        orgOptions={[{ label: '数据中心', value: 'org-1' }]}
+        onChange={() => undefined}
+      />,
+    );
+
+    expect(markup).toContain('姓名');
+    expect(markup).not.toContain('title="状态"');
+    expect(markup).not.toContain('role="switch"');
+  });
+
+  it('renders the identity editor with a right aligned primary add button and no identity-kind input', () => {
+    const IdentityEditor = (ConsolePages as typeof ConsolePages & {
+      IdentityEditor?: (props: { identities: []; onChange: (identities: []) => void }) => ReactElement;
+    }).IdentityEditor;
+
+    expect(IdentityEditor).toBeTypeOf('function');
+    if (!IdentityEditor) {
+      throw new Error('IdentityEditor is not exported');
+    }
+
+    const markup = renderPage(<IdentityEditor identities={[]} onChange={() => undefined} />);
+
+    expect(markup).toContain('平台身份字段');
+    expect(markup).toContain('新增身份字段');
+    expect(markup).toContain('ant-btn-primary');
+    expect(markup).toContain('identity-add-button');
+    expect(markup).not.toContain('身份类型');
+  });
+
+  it('does not offer PushPlus as a personnel platform identity', () => {
+    expect(recipientIdentityProviderOptions.map((item) => item.value)).not.toContain('pushplus');
   });
 
   it('renders message log detail attempts as separate send target blocks', () => {

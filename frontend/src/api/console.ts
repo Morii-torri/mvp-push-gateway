@@ -221,6 +221,20 @@ export type RouteFlowInput = {
   mode: 'canvas' | 'table';
 };
 
+export type RouteVersionApiRecord = {
+  id: string;
+  flow_id: string;
+  version_no: number;
+  canvas_snapshot: JSONValue;
+  compiled_rules: JSONValue;
+  validation_status: string;
+  validation_errors: JSONValue;
+  version_info?: string;
+  published_at: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
 export type RouteActionTargetApiRecord = {
   id: string;
   channel_id: string;
@@ -559,6 +573,9 @@ export const consoleApi = {
   updateRouteFlow(id: string, input: RouteFlowInput, fetcher?: ApiFetcher) {
     return apiRequest<{ flow: RouteFlowApiRecord }>(`/route-flows/${id}`, { method: 'PUT', body: input, fetcher });
   },
+  listRouteVersions(id: string, fetcher?: ApiFetcher) {
+    return apiRequest<{ versions: RouteVersionApiRecord[] }>(`/route-flows/${id}/versions`, { fetcher });
+  },
   getRouteRules(id: string, fetcher?: ApiFetcher) {
     return apiRequest<{ version_id: string; rules: RouteRuleApiRecord[] }>(`/route-flows/${id}/rules`, { fetcher });
   },
@@ -592,8 +609,14 @@ export const consoleApi = {
       fetcher,
     });
   },
-  publishRouteFlow(id: string, fetcher?: ApiFetcher) {
-    return apiRequest<{ version: JSONValue }>(`/route-flows/${id}/publish`, { method: 'POST', fetcher });
+  publishRouteFlow(id: string, versionInfoOrFetcher?: string | ApiFetcher, fetcher?: ApiFetcher) {
+    const versionInfo = typeof versionInfoOrFetcher === 'string' ? versionInfoOrFetcher : undefined;
+    const requestFetcher = typeof versionInfoOrFetcher === 'function' ? versionInfoOrFetcher : fetcher;
+    return apiRequest<{ version: JSONValue }>(`/route-flows/${id}/publish`, {
+      method: 'POST',
+      body: versionInfo === undefined ? undefined : { version_info: versionInfo },
+      fetcher: requestFetcher,
+    });
   },
   activateRouteVersion(flowId: string, versionId: string, fetcher?: ApiFetcher) {
     return apiRequest<{ flow: RouteFlowApiRecord }>(`/route-flows/${flowId}/versions/${versionId}/activate`, {

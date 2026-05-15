@@ -194,6 +194,7 @@ type SimulateInput struct {
 type PublishParams struct {
 	FlowID           string
 	DraftVersionID   string
+	VersionInfo      string
 	CompiledRules    json.RawMessage
 	ValidationStatus string
 	ValidationErrors json.RawMessage
@@ -385,7 +386,7 @@ func (s *Service) Validate(ctx context.Context, flowID string) (ValidationResult
 	}, nil
 }
 
-func (s *Service) Publish(ctx context.Context, flowID string) (Version, error) {
+func (s *Service) Publish(ctx context.Context, flowID string, versionInfo ...string) (Version, error) {
 	draft, err := s.getDraft(ctx, flowID)
 	if err != nil {
 		return Version{}, err
@@ -394,7 +395,11 @@ func (s *Service) Publish(ctx context.Context, flowID string) (Version, error) {
 	if len(validationErrors) > 0 {
 		return Version{}, ErrInvalidConfig
 	}
-	compiledRules, err := compileRules(draft, s.now())
+	normalizedVersionInfo := ""
+	if len(versionInfo) > 0 {
+		normalizedVersionInfo = strings.TrimSpace(versionInfo[0])
+	}
+	compiledRules, err := compileRules(draft, s.now(), normalizedVersionInfo)
 	if err != nil {
 		return Version{}, ErrInvalidConfig
 	}
@@ -402,6 +407,7 @@ func (s *Service) Publish(ctx context.Context, flowID string) (Version, error) {
 	return s.store.Publish(ctx, PublishParams{
 		FlowID:           flowID,
 		DraftVersionID:   draft.Version.ID,
+		VersionInfo:      normalizedVersionInfo,
 		CompiledRules:    compiledRules,
 		ValidationStatus: "valid",
 		ValidationErrors: validationJSON,
@@ -671,7 +677,7 @@ type compiledActionTarget struct {
 	SortOrder         int    `json:"sort_order"`
 }
 
-func compileRules(draft Draft, compiledAt time.Time) (json.RawMessage, error) {
+func compileRules(draft Draft, compiledAt time.Time, versionInfo string) (json.RawMessage, error) {
 	type compiledAction struct {
 		Targets           []compiledActionTarget `json:"targets"`
 		TemplateVersionID string                 `json:"template_version_id"`
@@ -726,6 +732,7 @@ func compileRules(draft Draft, compiledAt time.Time) (json.RawMessage, error) {
 		"execution_mode":   "first_match_stop",
 		"compiler_version": "route-compiler-v1",
 		"compiled_at":      compiledAt.UTC().Format(time.RFC3339),
+		"version_info":     strings.TrimSpace(versionInfo),
 		"rules":            rules,
 	}
 	return json.Marshal(compiled)

@@ -49,6 +49,7 @@ type routeVersionResponse struct {
 	CompiledRules    json.RawMessage `json:"compiled_rules"`
 	ValidationStatus string          `json:"validation_status"`
 	ValidationErrors json.RawMessage `json:"validation_errors"`
+	VersionInfo      string          `json:"version_info"`
 	PublishedAt      *string         `json:"published_at"`
 	CreatedAt        string          `json:"created_at"`
 	UpdatedAt        string          `json:"updated_at"`
@@ -56,6 +57,10 @@ type routeVersionResponse struct {
 
 type routeCanvasRequest struct {
 	CanvasSnapshot json.RawMessage `json:"canvas_snapshot"`
+}
+
+type routePublishRequest struct {
+	VersionInfo string `json:"version_info"`
 }
 
 type routeRulesRequest struct {
@@ -434,14 +439,21 @@ func (h *Handler) routeValidateHandler(w http.ResponseWriter, r *http.Request, f
 }
 
 func (h *Handler) routePublishHandler(w http.ResponseWriter, r *http.Request, flowID string, adminUser auth.Admin) {
-	version, err := h.routes.Publish(r.Context(), flowID)
+	var request routePublishRequest
+	if r.Body != nil && r.Body != http.NoBody && r.ContentLength != 0 {
+		if err := decodeJSON(r, &request); err != nil {
+			writeAPIError(w, http.StatusBadRequest, "MGP-REQ-001", "请求 JSON 不合法")
+			return
+		}
+	}
+	version, err := h.routes.Publish(r.Context(), flowID, request.VersionInfo)
 	if err != nil {
 		status, code, message := routeErrorStatus(err)
 		writeAPIError(w, status, code, message)
 		return
 	}
 	response := routeVersionResponseWrapper{Version: toRouteVersionResponse(version)}
-	h.recordAudit(r, adminUser, "publish", "route_flow", flowID, nil, response)
+	h.recordAudit(r, adminUser, "publish", "route_flow", flowID, request, response)
 	writeJSON(w, http.StatusOK, response)
 }
 
@@ -486,10 +498,22 @@ func toRouteVersionResponse(version route.Version) routeVersionResponse {
 		CompiledRules:    nullableRawJSON(version.CompiledRules),
 		ValidationStatus: version.ValidationStatus,
 		ValidationErrors: nullableRawJSON(version.ValidationErrors),
+		VersionInfo:      routeVersionInfo(version.CompiledRules),
 		PublishedAt:      formatOptionalTime(version.PublishedAt),
 		CreatedAt:        formatTime(version.CreatedAt),
 		UpdatedAt:        formatTime(version.UpdatedAt),
 	}
+}
+
+func routeVersionInfo(compiledRules json.RawMessage) string {
+	var value struct {
+		VersionInfo string `json:"version_info"`
+	}
+	if len(compiledRules) == 0 {
+		return ""
+	}
+	_ = json.Unmarshal(compiledRules, &value)
+	return strings.TrimSpace(value.VersionInfo)
 }
 
 func toRouteRulesResponse(ruleSet route.RuleSet) routeRulesResponse {

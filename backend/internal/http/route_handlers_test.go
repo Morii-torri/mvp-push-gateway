@@ -380,7 +380,7 @@ func (f *fakeRouteService) Validate(context.Context, string) (route.ValidationRe
 	return f.validateResult, nil
 }
 
-func (f *fakeRouteService) Publish(context.Context, string) (route.Version, error) {
+func (f *fakeRouteService) Publish(context.Context, string, ...string) (route.Version, error) {
 	if f.publishErr != nil {
 		return route.Version{}, f.publishErr
 	}

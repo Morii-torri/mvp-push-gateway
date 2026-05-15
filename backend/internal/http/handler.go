@@ -121,7 +121,7 @@ type routeService interface {
 	SaveRules(context.Context, string, route.SaveRulesInput) (route.RuleSet, error)
 	ReorderRules(context.Context, string, route.ReorderRulesInput) (route.RuleSet, error)
 	Validate(context.Context, string) (route.ValidationResult, error)
-	Publish(context.Context, string) (route.Version, error)
+	Publish(context.Context, string, ...string) (route.Version, error)
 	Simulate(context.Context, string, route.SimulateInput) (route.SimulationResult, error)
 }
 

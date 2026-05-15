@@ -331,7 +331,9 @@ func validateTestSendPrerequisites(channel Channel, input BuildDeliveryRequestIn
 	if strings.TrimSpace(built.URL) == "" {
 		return fmt.Errorf("%w: 缺少发送 URL，请检查推送渠道发送配置", ErrInvalidInput)
 	}
-	if testSendRequiresRecipient(channel.ProviderType) && !hasUsableRecipient(channel.ProviderType, input.ResolvedRecipients) {
+	if testSendRequiresRecipient(channel.ProviderType) &&
+		!hasUsableRecipient(channel.ProviderType, input.ResolvedRecipients) &&
+		!builtRequestHasProviderTarget(channel.ProviderType, built) {
 		return fmt.Errorf("%w: 缺少测试接收人，请在路由策略接收人配置或测试接收人中提供必要身份", ErrInvalidInput)
 	}
 	if missing := missingCredentialFields(channel, input.Token); len(missing) > 0 {
@@ -390,7 +392,7 @@ func missingCredentialFields(channel Channel, token string) []string {
 	case ProviderPushPlus:
 		requireAny("PushPlus token", auth["token"], send["token"], token)
 	case ProviderWxPusher:
-		requireAny("WxPusher app_token/SPT", auth["app_token"], auth["spt"], send["app_token"], token)
+		requireAny("WxPusher appToken", auth["app_token"], auth["appToken"], send["app_token"], send["appToken"], token)
 	case ProviderServerChan:
 		requireAny("Server酱 send_key", auth["send_key"], send["send_key"])
 	case ProviderEmail:
@@ -446,6 +448,14 @@ func missingCredentialFields(channel Channel, token string) []string {
 		requireAny("PushMe push_key", auth["push_key"], send["push_key"], token)
 	}
 	return missing
+}
+
+func builtRequestHasProviderTarget(providerType ProviderType, built BuiltRequest) bool {
+	if providerType != ProviderWxPusher {
+		return false
+	}
+	body := rawObject(built.Body)
+	return len(listConfig(body, "uids")) > 0 || len(rawListConfig(body, "topicIds", "topic_ids")) > 0
 }
 
 func rawObject(raw json.RawMessage) map[string]any {
