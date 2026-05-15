@@ -3,7 +3,6 @@ import Form from 'antd/es/form';
 import Input from 'antd/es/input';
 import Segmented from 'antd/es/segmented';
 import Select from 'antd/es/select';
-import Switch from 'antd/es/switch';
 
 import type {
   JSONValue,
@@ -107,18 +106,24 @@ const messageTypeLabels: Record<string, string> = {
   json: 'JSON',
 };
 
+const templateGlobalDefaultValue = '-';
+const templatePlaceholderPattern = /\{\{\s*([\s\S]*?)\s*\}\}/g;
+const templatePayloadPathPattern = /\bpayload(?:\.[A-Za-z_][A-Za-z0-9_]*)+\b/;
+const templateDefaultFilterPattern = /\|\s*default\s*(?:[:(])/i;
+
 function contentField(
   key: string,
   label: string,
   type = 'string',
   defaultValue = '',
   defaultExpression = `{{ payload.${key} }}`,
+  required = true,
 ): TemplateContentField {
   return {
     key,
     label,
     type,
-    required: true,
+    required,
     placeholder: defaultExpression,
     defaultExpression,
     defaultValue,
@@ -153,6 +158,14 @@ function isMultilineTemplateField(field: TemplateContentField): boolean {
   );
 }
 
+function templateContentFieldLabel(field: TemplateContentField): string {
+  const label = field.label.trim() || field.key;
+  if (field.required || /[（(]\s*可选\s*[）)]/.test(label)) {
+    return label;
+  }
+  return `${label}（可选）`;
+}
+
 function titleContentUrlFields(): TemplateContentField[] {
   return [
     contentField('title', '标题', 'string', '通知', '{{ payload.title }}'),
@@ -175,6 +188,14 @@ function noticeFields(): TemplateContentField[] {
     contentField('body', '正文内容', 'string', '', '{{ payload.content }}'),
     contentField('url', '跳转链接', 'string', '', '{{ payload.url }}'),
     contentField('format', '内容格式', 'string', 'markdown', 'markdown'),
+  ];
+}
+
+function pushPlusContentFields(): TemplateContentField[] {
+  return [
+    contentField('content', 'content', 'string', '', '{{ payload.content }}'),
+    contentField('title', 'title（可选）', 'string', '', '{{ payload.title }}', false),
+    contentField('topic', 'topic（可选）', 'string', '', '{{ payload.topic }}', false),
   ];
 }
 
@@ -238,17 +259,9 @@ const fallbackTemplateSchemas: Record<ProviderKind, Record<string, { label: stri
     },
   },
   pushplus: {
-    text: {
-      label: '文本',
-      fields: titleContentUrlFields(),
-    },
-    markdown: {
-      label: 'Markdown',
-      fields: markdownNoticeFields(),
-    },
-    html: {
-      label: 'HTML',
-      fields: titleContentUrlFields(),
+    json: {
+      label: 'JSON',
+      fields: pushPlusContentFields(),
     },
   },
   wxpusher: {
@@ -527,10 +540,6 @@ export function getMessageTypeLabel(value: string): string {
   return messageTypeLabels[value] ?? value;
 }
 
-function templateMessageTypeOptions(types: string[]): Array<{ label: string; value: string }> {
-  return types.map((value) => ({ value, label: `${getMessageTypeLabel(value)} / ${value}` }));
-}
-
 function schemaForMessage(schema: JSONValue | undefined, messageType: string): JSONValue | undefined {
   if (!schema || !isRecord(schema)) {
     return schema;
@@ -745,7 +754,7 @@ function defaultTemplateFieldValues(
 ): TemplateFieldValues {
   return fields.reduce<TemplateFieldValues>((values, field) => {
     values[field.key] = currentValues[field.key] ?? {
-      expression: field.defaultExpression,
+      expression: '',
       defaultValue: '',
     };
     return values;
@@ -799,22 +808,31 @@ export function samplePayloadTextFromSource(source: TemplateSourceRow | undefine
 
 function templateBodyObjectFromFieldValues(values: TemplateFieldValues): Record<string, string> {
   return Object.entries(values).reduce<Record<string, string>>((body, [key, value]) => {
-    body[key] = templateExpressionWithDefault(key, value);
+    body[key] = templateExpressionWithDefault(value);
     return body;
   }, {});
 }
 
-function templateExpressionWithDefault(key: string, value: TemplateFieldDraft): string {
-  const expression = value.expression.trim() || `{{ payload.${payloadKeyForContentField(key)} }}`;
-  const defaultValue = value.defaultValue.trim();
-  if (!defaultValue || expression.includes('| default(')) {
-    return expression;
+function templateExpressionWithDefault(value: TemplateFieldDraft): string {
+  const expression = value.expression.trim();
+  if (!expression) {
+    return '';
   }
-  const matched = expression.match(/^\{\{\s*([\s\S]*?)\s*\}\}$/);
-  if (!matched) {
-    return expression;
-  }
-  return `{{ ${matched[1].trim()} | default('${escapeTemplateDefault(defaultValue)}') }}`;
+  return applyGlobalTemplateDefault(expression);
+}
+
+function applyGlobalTemplateDefault(expression: string): string {
+  return expression.replace(templatePlaceholderPattern, (_, rawExpression: string) => {
+    const trimmedExpression = rawExpression.trim();
+    if (
+      !trimmedExpression ||
+      !templatePayloadPathPattern.test(trimmedExpression) ||
+      templateDefaultFilterPattern.test(trimmedExpression)
+    ) {
+      return `{{ ${trimmedExpression} }}`;
+    }
+    return `{{ ${trimmedExpression} | default('${escapeTemplateDefault(templateGlobalDefaultValue)}') }}`;
+  });
 }
 
 function escapeTemplateDefault(value: string): string {
@@ -1088,7 +1106,9 @@ function defaultFilterValue(filter: string): string {
 
 function renderTemplateExpression(expression: string, payload: JSONValue): string {
   const [pathExpression, ...filters] = expression.split('|').map((part) => part.trim());
-  const fallback = filters.map(defaultFilterValue).find((value) => value !== '') ?? '';
+  const fallback =
+    filters.map(defaultFilterValue).find((value) => value !== '') ??
+    (templatePayloadPathPattern.test(pathExpression) ? templateGlobalDefaultValue : '');
   return templateValueToText(valueAtPayloadPath(payload, pathExpression), fallback);
 }
 
@@ -1194,18 +1214,20 @@ export function TemplateEditorForm({
   onChange,
   sourceRows,
   capabilities = [],
+  showEnabledSwitch = false,
 }: {
   value: TemplateDraft;
   onChange: (value: TemplateDraft) => void;
   sourceRows: TemplateSourceRow[];
   capabilities?: ProviderCapabilityApiRecord[];
+  showEnabledSwitch?: boolean;
 }) {
   const view = templateCapabilityView(value.targetProviderType, value.messageType, capabilities);
   const update = (patch: Partial<TemplateDraft>) => onChange({ ...value, ...patch });
   const updateFieldValue = (field: TemplateContentField, patch: Partial<TemplateFieldDraft>) => {
     const currentValue = value.fieldValues[field.key] ?? {
-      expression: field.defaultExpression,
-      defaultValue: field.defaultValue,
+      expression: '',
+      defaultValue: '',
     };
     const fieldValues = {
       ...value.fieldValues,
@@ -1222,16 +1244,31 @@ export function TemplateEditorForm({
 
   return (
     <Form layout="vertical">
-      <div className="template-name-row">
+      <div className={`template-name-row${showEnabledSwitch ? '' : ' template-name-row--without-status'}`}>
         <Form.Item label="模板名称" required>
           <Input value={value.name} onChange={(event) => update({ name: event.target.value })} />
         </Form.Item>
-        <Form.Item label="启停">
-          <Switch
-            checked={value.enabled}
-            onChange={(enabled) => update({ enabled })}
-            checkedChildren="启用"
-            unCheckedChildren="停用"
+        {showEnabledSwitch ? (
+          <Form.Item label="启停">
+            <Segmented
+              value={value.enabled ? 'enabled' : 'disabled'}
+              options={[
+                { label: '启用', value: 'enabled' },
+                { label: '停用', value: 'disabled' },
+              ]}
+              onChange={(enabled) => update({ enabled: enabled === 'enabled' })}
+            />
+          </Form.Item>
+        ) : null}
+        <Form.Item label="内容编辑模式">
+          <Segmented
+            block
+            value={value.contentMode}
+            options={[
+              { label: '字段表单', value: 'fields' },
+              { label: '自定义 JSON', value: 'custom_json' },
+            ]}
+            onChange={(contentMode) => onChange(switchTemplateContentMode(value, contentMode as TemplateContentMode))}
           />
         </Form.Item>
       </div>
@@ -1254,68 +1291,39 @@ export function TemplateEditorForm({
           />
         </Form.Item>
       </div>
-      <div className="two-column-form">
-        <Form.Item label="消息类型" required>
-          <Select
-            value={view.messageType}
-            options={templateMessageTypeOptions(view.messageTypes)}
-            onChange={(messageType) => onChange(switchTemplateMessageType(value, messageType, capabilities))}
-          />
-        </Form.Item>
-        <Form.Item label="内容编辑模式">
-          <Segmented
-            block
-            value={value.contentMode}
-            options={[
-              { label: '字段表单', value: 'fields' },
-              { label: '自定义 JSON', value: 'custom_json' },
-            ]}
-            onChange={(contentMode) => onChange(switchTemplateContentMode(value, contentMode as TemplateContentMode))}
-          />
-        </Form.Item>
-      </div>
       {value.contentMode === 'fields' ? (
         <>
           <Divider orientation="left">消息内容字段</Divider>
           <div className="template-content-fields">
             {view.fields.map((field) => {
               const fieldValue = value.fieldValues[field.key] ?? {
-                expression: field.defaultExpression,
+                expression: '',
                 defaultValue: '',
               };
               const multiline = isMultilineTemplateField(field);
               return (
                 <div className="template-content-field" key={field.key}>
-                  <Form.Item label={`${field.label}${field.required ? ' *' : ''}`}>
-                    {multiline ? (
-                      <Input.TextArea
-                        value={fieldValue.expression}
-                        placeholder={field.placeholder}
-                        autoSize={{ minRows: 2, maxRows: 8 }}
-                        onChange={(event) => updateFieldValue(field, { expression: event.target.value })}
-                      />
-                    ) : (
-                      <Input
-                        value={fieldValue.expression}
-                        placeholder={field.placeholder}
-                        onChange={(event) => updateFieldValue(field, { expression: event.target.value })}
-                      />
-                    )}
-                  </Form.Item>
-                  <Form.Item label="默认值">
-                    {multiline ? (
-                      <Input.TextArea
-                        value={fieldValue.defaultValue}
-                        autoSize={{ minRows: 2, maxRows: 6 }}
-                        onChange={(event) => updateFieldValue(field, { defaultValue: event.target.value })}
-                      />
-                    ) : (
-                      <Input
-                        value={fieldValue.defaultValue}
-                        onChange={(event) => updateFieldValue(field, { defaultValue: event.target.value })}
-                      />
-                    )}
-                  </Form.Item>
+                  <div className="template-content-field__heading">
+                    <span className="template-content-field__name">{templateContentFieldLabel(field)}</span>
+                  </div>
+                  <div className="template-content-field__controls">
+                    <Form.Item label="模板表达式">
+                      {multiline ? (
+                        <Input.TextArea
+                          value={fieldValue.expression}
+                          placeholder={field.placeholder}
+                          autoSize={{ minRows: 2, maxRows: 8 }}
+                          onChange={(event) => updateFieldValue(field, { expression: event.target.value })}
+                        />
+                      ) : (
+                        <Input
+                          value={fieldValue.expression}
+                          placeholder={field.placeholder}
+                          onChange={(event) => updateFieldValue(field, { expression: event.target.value })}
+                        />
+                      )}
+                    </Form.Item>
+                  </div>
                 </div>
               );
             })}

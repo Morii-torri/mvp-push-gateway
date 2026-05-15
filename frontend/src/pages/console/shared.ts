@@ -34,7 +34,7 @@ export const providerTypeOptions: Array<{ label: string; value: ProviderKind }> 
 const fallbackMessageTypesByProvider: Record<ProviderKind, string[]> = {
   webhook: ['json', 'text', 'markdown'],
   self: ['json', 'text'],
-  pushplus: ['text', 'markdown', 'html'],
+  pushplus: ['json'],
   wxpusher: ['text', 'markdown', 'html'],
   serverchan: ['text', 'markdown'],
   ntfy: ['notice'],

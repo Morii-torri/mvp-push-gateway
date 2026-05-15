@@ -237,6 +237,36 @@ describe('console api wrappers', () => {
     ]);
   });
 
+  it('lists and restores template versions through backend endpoints', async () => {
+    tokenStore.set('admin-token');
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, _init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith('/restore')) {
+        return json({ version: { id: 'version-3', version_no: 3 } });
+      }
+      return json({ versions: [{ id: 'version-2', version_no: 2, template_body: '{}' }] });
+    });
+
+    await consoleApi.listTemplateVersions('tpl-1', fetchMock);
+    await consoleApi.restoreTemplateVersion('tpl-1', 'version-2', fetchMock);
+
+    expect(fetchMock.mock.calls.map(([input, init]) => [String(input), init?.method])).toEqual([
+      ['/api/v1/templates/tpl-1/versions', 'GET'],
+      ['/api/v1/templates/tpl-1/versions/version-2/restore', 'POST'],
+    ]);
+  });
+
+  it('deletes templates through backend endpoint', async () => {
+    tokenStore.set('admin-token');
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => json({ ok: true }));
+
+    await consoleApi.deleteTemplate('tpl-1', fetchMock);
+
+    expect(fetchMock.mock.calls.map(([input, init]) => [String(input), init?.method, init?.body])).toEqual([
+      ['/api/v1/templates/tpl-1', 'DELETE', undefined],
+    ]);
+  });
+
   it('covers organization users identities recipient groups match items and settings CRUD endpoints', async () => {
     tokenStore.set('admin-token');
     const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) =>

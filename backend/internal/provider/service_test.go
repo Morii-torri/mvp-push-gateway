@@ -65,7 +65,7 @@ func TestDefaultCapabilitiesExposeFirstBatchBuiltInProviders(t *testing.T) {
 	}{
 		{ProviderWebhook, "json", ""},
 		{ProviderSelf, "json", "system_user_id"},
-		{ProviderPushPlus, "notice", ""},
+		{ProviderPushPlus, "json", ""},
 		{ProviderWxPusher, "notice", "wxpusher_uid"},
 		{ProviderServerChan, "notice", ""},
 		{ProviderEmail, "email", "email"},
@@ -94,6 +94,29 @@ func TestDefaultCapabilitiesExposeFirstBatchBuiltInProviders(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestPushPlusCapabilityUsesSendJsonContentFields(t *testing.T) {
+	capability := findCapability(t, ProviderPushPlus, "json")
+
+	assertJSONField(t, capability.SendAPI, "url", "https://www.pushplus.plus/send")
+	assertJSONField(t, capability.SendAPI, "content_type", "application/json")
+	assertJSONField(t, capability.MessageSchema, "properties.content.type", "string")
+	assertJSONField(t, capability.MessageSchema, "properties.title.type", "string")
+	assertJSONField(t, capability.MessageSchema, "properties.topic.type", "string")
+
+	var messageSchema struct {
+		Required []string `json:"required"`
+	}
+	if err := json.Unmarshal(capability.MessageSchema, &messageSchema); err != nil {
+		t.Fatalf("decode pushplus message schema: %v", err)
+	}
+	if len(messageSchema.Required) != 1 || messageSchema.Required[0] != "content" {
+		t.Fatalf("expected only content to be required, got %+v", messageSchema.Required)
+	}
+	assertJSONField(t, capability.ChannelConfigSchema, "properties.topic", nil)
+	assertJSONField(t, capability.ChannelConfigSchema, "properties.template", nil)
+	assertJSONField(t, capability.ChannelConfigSchema, "properties.channel", nil)
 }
 
 func TestDefaultCapabilitiesExposeP2Providers(t *testing.T) {
@@ -284,17 +307,18 @@ func TestBuildDeliveryRequestUsesBuiltInProviderDefaultsWithoutLegacyURL(t *test
 			channel: Channel{
 				ProviderType: ProviderPushPlus,
 				AuthConfig:   json.RawMessage(`{"token":"push-token"}`),
-				SendConfig:   json.RawMessage(`{"topic":"ops","template":"markdown"}`),
+				SendConfig:   json.RawMessage(`{"topic":"legacy-send-topic","template":"markdown"}`),
 			},
-			message: json.RawMessage(`{"title":"Disk alert","body":"Disk 95%","format":"markdown","url":"https://example.test/detail"}`),
+			message: json.RawMessage(`{"title":"Disk alert","content":"Disk 95%","topic":"ops","format":"markdown","url":"https://example.test/detail"}`),
 			assert: func(t *testing.T, request BuiltRequest) {
 				requireRequest(t, request, "POST", "https://www.pushplus.plus/send")
 				body := decodeRequestBody(t, request)
 				requireBodyField(t, body, "token", "push-token")
 				requireBodyField(t, body, "title", "Disk alert")
-				requireBodyField(t, body, "content", "Disk 95%\n\nhttps://example.test/detail")
-				requireBodyField(t, body, "template", "markdown")
+				requireBodyField(t, body, "content", "Disk 95%")
 				requireBodyField(t, body, "topic", "ops")
+				requireNoBodyField(t, body, "template")
+				requireNoBodyField(t, body, "channel")
 			},
 		},
 		{
@@ -959,6 +983,14 @@ func requireBodyField(t *testing.T, body map[string]any, field string, expected 
 
 	if body[field] != expected {
 		t.Fatalf("expected body[%s]=%#v, got %#v in %+v", field, expected, body[field], body)
+	}
+}
+
+func requireNoBodyField(t *testing.T, body map[string]any, field string) {
+	t.Helper()
+
+	if _, ok := body[field]; ok {
+		t.Fatalf("expected body to omit %s, got %+v", field, body)
 	}
 }
 

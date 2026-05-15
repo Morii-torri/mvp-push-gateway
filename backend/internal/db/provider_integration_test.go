@@ -72,12 +72,29 @@ func TestProviderCapabilitySeedIsIdempotent(t *testing.T) {
 		t.Fatalf("second seed provider capabilities: %v", err)
 	}
 
+	stale := capabilities[0]
+	stale.ID = ""
+	stale.MessageType = "legacy_stale"
+	if err := repository.SeedProviderCapabilities(ctx, append(append([]provider.Capability{}, capabilities...), stale)); err != nil {
+		t.Fatalf("seed provider capabilities with stale row: %v", err)
+	}
+	if err := repository.SeedProviderCapabilities(ctx, capabilities); err != nil {
+		t.Fatalf("seed provider capabilities after stale row removed from defaults: %v", err)
+	}
+
 	var count int
 	if err := pool.QueryRow(ctx, `SELECT count(*)::integer FROM provider_capabilities`).Scan(&count); err != nil {
 		t.Fatalf("count provider capabilities: %v", err)
 	}
 	if count != len(capabilities) {
 		t.Fatalf("expected %d provider capabilities after repeated seed, got %d", len(capabilities), count)
+	}
+	var staleCount int
+	if err := pool.QueryRow(ctx, `SELECT count(*)::integer FROM provider_capabilities WHERE provider_type = $1 AND message_type = $2`, stale.ProviderType, stale.MessageType).Scan(&staleCount); err != nil {
+		t.Fatalf("count stale provider capability: %v", err)
+	}
+	if staleCount != 0 {
+		t.Fatalf("expected stale capability %s/%s to be pruned, got %d", stale.ProviderType, stale.MessageType, staleCount)
 	}
 
 	listed, err := repository.ListProviderCapabilities(ctx)

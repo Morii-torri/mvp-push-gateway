@@ -38,24 +38,18 @@ func TestValidateBlocksInvalidSyntax(t *testing.T) {
 	}
 }
 
-func TestValidateBlocksMissingPayloadField(t *testing.T) {
-	result := NewService(nil).Validate(VersionInput{
+func TestPreviewUsesGlobalFallbackForMissingPayloadField(t *testing.T) {
+	result, err := NewService(nil).Preview(VersionInput{
 		MessageType:        "text",
 		TargetProviderType: "wecom",
 		TemplateBody:       `标题：{{ payload.title }} IP：{{ payload.alert.ip }}`,
 		SamplePayload:      json.RawMessage(`{"title":"告警"}`),
 	})
-	if result.Status != "invalid" {
-		t.Fatalf("expected missing field to be blocked, got %+v", result)
+	if err != nil {
+		t.Fatalf("preview template with missing payload field: %v result=%+v", err, result)
 	}
-	var hasMissingField bool
-	for _, err := range result.Errors {
-		if err.Code == "MGP-TPL-003" && err.Path == "payload.alert.ip" {
-			hasMissingField = true
-		}
-	}
-	if !hasMissingField {
-		t.Fatalf("expected missing field error for payload.alert.ip, got %+v", result.Errors)
+	if result.Status != "valid" || result.Preview != "标题：告警 IP：-" {
+		t.Fatalf("expected global fallback preview, got %+v", result)
 	}
 }
 
@@ -146,6 +140,38 @@ func TestPublishValidProviderAwareJSONTemplate(t *testing.T) {
 	}
 }
 
+func TestRestoreTemplateVersionPublishesCopiedHistoricalVersion(t *testing.T) {
+	store := &recordingTemplateStore{
+		version: TemplateVersion{
+			ID:                 "version-old",
+			TemplateID:         "template-1",
+			VersionNo:          2,
+			MessageType:        "json",
+			TargetProviderType: "pushplus",
+			TemplateBody:       `{"content":"{{ payload.content | default('-') }}"}`,
+			MessageBodySchema:  json.RawMessage(`{"type":"object"}`),
+			SamplePayload:      json.RawMessage(`{"content":"历史内容"}`),
+		},
+	}
+	version, err := NewService(store).RestoreTemplateVersion(context.Background(), "template-1", "version-old")
+	if err != nil {
+		t.Fatalf("restore template version: %v", err)
+	}
+	if version.ID != "version-1" {
+		t.Fatalf("expected restored publish result, got %+v", version)
+	}
+	if store.requestedTemplateID != "template-1" || store.requestedVersionID != "version-old" {
+		t.Fatalf("expected historical version lookup, got template=%s version=%s", store.requestedTemplateID, store.requestedVersionID)
+	}
+	if store.publishParams.MessageType != "json" ||
+		store.publishParams.TargetProviderType != "pushplus" ||
+		store.publishParams.TemplateBody != `{"content":"{{ payload.content | default('-') }}"}` ||
+		string(store.publishParams.MessageBodySchema) != `{"type":"object"}` ||
+		string(store.publishParams.SamplePayload) != `{"content":"历史内容"}` {
+		t.Fatalf("restore did not copy historical version into publish params: %+v", store.publishParams)
+	}
+}
+
 func assertValidationError(t *testing.T, errors []ValidationError, code string, path string) {
 	t.Helper()
 	for _, err := range errors {
@@ -157,7 +183,10 @@ func assertValidationError(t *testing.T, errors []ValidationError, code string, 
 }
 
 type recordingTemplateStore struct {
-	publishParams PublishTemplateVersionParams
+	publishParams       PublishTemplateVersionParams
+	version             TemplateVersion
+	requestedTemplateID string
+	requestedVersionID  string
 }
 
 func (s *recordingTemplateStore) ListTemplates(context.Context) ([]Template, error) {
@@ -178,6 +207,16 @@ func (s *recordingTemplateStore) UpdateTemplate(context.Context, string, UpdateT
 
 func (s *recordingTemplateStore) DeleteTemplate(context.Context, string) error {
 	return nil
+}
+
+func (s *recordingTemplateStore) ListTemplateVersions(context.Context, string) ([]TemplateVersion, error) {
+	return nil, nil
+}
+
+func (s *recordingTemplateStore) GetTemplateVersionForRestore(_ context.Context, templateID string, versionID string) (TemplateVersion, error) {
+	s.requestedTemplateID = templateID
+	s.requestedVersionID = versionID
+	return s.version, nil
 }
 
 func (s *recordingTemplateStore) PublishTemplateVersion(_ context.Context, templateID string, params PublishTemplateVersionParams) (TemplateVersion, error) {

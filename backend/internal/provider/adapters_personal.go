@@ -6,17 +6,15 @@ import (
 )
 
 func pushPlusRequestConfig(auth, send, content map[string]any) (requestConfig, error) {
-	bodyText := appendURL(messageBody(content), stringConfig(content, "url"))
-	template := firstString(stringConfig(send, "template"), pushPlusTemplate(stringConfig(content, "format")), "markdown")
 	body := map[string]any{
-		"token":    firstString(stringConfig(auth, "token"), stringConfig(send, "token")),
-		"title":    messageTitle(content),
-		"content":  bodyText,
-		"template": template,
+		"token":   firstString(stringConfig(auth, "token"), stringConfig(send, "token")),
+		"content": messageBody(content),
 	}
-	copyStringField(body, "topic", send, "topic")
-	copyStringField(body, "channel", send, "channel")
-	return jsonRequest("POST", firstString(stringConfig(send, "url"), "https://www.pushplus.plus/send"), body)
+	copyStringField(body, "title", content, "title", "subject")
+	if topic := firstString(stringConfig(content, "topic"), stringConfig(send, "topic")); topic != "" {
+		body["topic"] = topic
+	}
+	return jsonRequest("POST", "https://www.pushplus.plus/send", body)
 }
 
 func wxPusherRequestConfig(auth, send, content map[string]any, recipient any) (requestConfig, error) {

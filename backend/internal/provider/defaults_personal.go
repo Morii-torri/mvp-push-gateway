@@ -1,14 +1,16 @@
 package provider
 
+import "encoding/json"
+
 func pushPlusCapability() Capability {
 	return capability(capabilitySpec{
 		ProviderType:         ProviderPushPlus,
 		DisplayName:          "PushPlus",
 		Category:             "personal_gateway",
-		MessageType:          "notice",
-		MessageSchema:        noticeContentSchema(),
+		MessageType:          "json",
+		MessageSchema:        pushPlusContentSchema(),
 		CredentialSchema:     rawJSON(`{"type":"object","required":["token"],"properties":{"token":{"type":"string","format":"password"}}}`),
-		ChannelConfigSchema:  rawJSON(`{"type":"object","properties":{"topic":{"type":"string"},"channel":{"type":"string"},"template":{"type":"string","enum":["txt","markdown","html","json"],"default":"markdown"}}}`),
+		ChannelConfigSchema:  rawJSON(`{"type":"object","properties":{}}`),
 		RecipientRequired:    false,
 		AllowNoRecipient:     true,
 		RecipientRequirement: "none",
@@ -24,9 +26,13 @@ func pushPlusCapability() Capability {
 		DefaultConcurrency:   2,
 		DefaultTimeoutMS:     5000,
 		DefaultRetryPolicy:   rawJSON(`{"max_attempts":3,"delay_ms":1000,"backoff":"linear"}`),
-		RequestExamples:      rawJSON(`{"token":"pushplus-token","title":"Disk alert","content":"Disk 95%","template":"markdown","topic":"ops"}`),
+		RequestExamples:      rawJSON(`{"token":"pushplus-token","title":"Disk alert","content":"Disk 95%","topic":"ops"}`),
 		CustomBodyAllowed:    false,
 	})
+}
+
+func pushPlusContentSchema() json.RawMessage {
+	return rawJSON(`{"type":"object","required":["content"],"properties":{"content":{"type":"string","title":"content","default":"{{ payload.content }}"},"title":{"type":"string","title":"title","default":"{{ payload.title }}"},"topic":{"type":"string","title":"topic","default":"{{ payload.topic }}"}}}`)
 }
 
 func wxPusherCapability() Capability {

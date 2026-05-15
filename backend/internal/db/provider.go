@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -18,7 +19,12 @@ func (r Repository) SeedProviderCapabilities(ctx context.Context, capabilities [
 	}
 	defer tx.Rollback(ctx)
 
+	seededMessageTypes := map[provider.ProviderType]map[string]struct{}{}
 	for _, capability := range capabilities {
+		if seededMessageTypes[capability.ProviderType] == nil {
+			seededMessageTypes[capability.ProviderType] = map[string]struct{}{}
+		}
+		seededMessageTypes[capability.ProviderType][capability.MessageType] = struct{}{}
 		if capability.ID == "" {
 			capability.ID = uuid.NewString()
 		}
@@ -136,6 +142,22 @@ func (r Repository) SeedProviderCapabilities(ctx context.Context, capabilities [
 			defaultJSON(capability.DefaultRetryPolicy),
 		); err != nil {
 			return fmt.Errorf("upsert provider capability %s/%s: %w", capability.ProviderType, capability.MessageType, err)
+		}
+	}
+
+	for providerType, messageTypes := range seededMessageTypes {
+		args := []any{providerType}
+		placeholders := make([]string, 0, len(messageTypes))
+		for messageType := range messageTypes {
+			args = append(args, messageType)
+			placeholders = append(placeholders, fmt.Sprintf("$%d", len(args)))
+		}
+		if _, err := tx.Exec(ctx, fmt.Sprintf(`
+			DELETE FROM provider_capabilities
+			WHERE provider_type = $1
+				AND message_type NOT IN (%s)
+		`, strings.Join(placeholders, ", ")), args...); err != nil {
+			return fmt.Errorf("prune stale provider capabilities for %s: %w", providerType, err)
 		}
 	}
 

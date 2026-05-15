@@ -103,6 +103,8 @@ type Store interface {
 	GetTemplate(ctx context.Context, id string) (Template, error)
 	UpdateTemplate(ctx context.Context, id string, params UpdateTemplateParams) (Template, error)
 	DeleteTemplate(ctx context.Context, id string) error
+	ListTemplateVersions(ctx context.Context, templateID string) ([]TemplateVersion, error)
+	GetTemplateVersionForRestore(ctx context.Context, templateID string, versionID string) (TemplateVersion, error)
 	PublishTemplateVersion(ctx context.Context, templateID string, params PublishTemplateVersionParams) (TemplateVersion, error)
 }
 
@@ -169,6 +171,13 @@ func (s *Service) DeleteTemplate(ctx context.Context, id string) error {
 	return s.store.DeleteTemplate(ctx, id)
 }
 
+func (s *Service) ListTemplateVersions(ctx context.Context, templateID string) ([]TemplateVersion, error) {
+	if strings.TrimSpace(templateID) == "" {
+		return nil, ErrInvalidInput
+	}
+	return s.store.ListTemplateVersions(ctx, templateID)
+}
+
 func (s *Service) Parse(input VersionInput) (ValidationResult, error) {
 	input = normalizeVersionInput(input)
 	result := ValidationResult{Status: "valid", Variables: ParseVariables(input.TemplateBody)}
@@ -221,20 +230,6 @@ func (s *Service) Validate(input VersionInput) ValidationResult {
 		return result
 	}
 
-	defaultedPaths := defaultedPayloadPaths(input.TemplateBody)
-	for _, variable := range result.Variables {
-		if defaultedPaths[variable.Path] {
-			continue
-		}
-		if !hasPayloadPath(payloadMap, variable.Path) {
-			result.Status = "invalid"
-			result.Errors = append(result.Errors, ValidationError{
-				Code:    "MGP-TPL-003",
-				Message: "模板变量在 sample_payload 中不存在",
-				Path:    variable.Path,
-			})
-		}
-	}
 	schema, schemaFound, err := effectiveMessageSchema(input)
 	if err != nil {
 		result.Status = "invalid"
@@ -244,16 +239,6 @@ func (s *Service) Validate(input VersionInput) ValidationResult {
 			Path:    "message_body_schema",
 		})
 		return result
-	}
-	for _, required := range requiredPayloadFields(schema) {
-		if !hasPayloadPath(payloadMap, required) {
-			result.Status = "invalid"
-			result.Errors = append(result.Errors, ValidationError{
-				Code:    "MGP-TPL-004",
-				Message: "消息体 schema 需要的 payload 字段不存在",
-				Path:    required,
-			})
-		}
 	}
 	if schemaFound {
 		if err := validateTemplateBodySchema(&result, input.TemplateBody, schema); err != nil {
@@ -299,6 +284,23 @@ func (s *Service) Publish(ctx context.Context, templateID string, input VersionI
 		UsedVariables:    variablePaths(result.Variables),
 		ValidationStatus: "valid",
 		ValidationErrors: errorsJSON,
+	})
+}
+
+func (s *Service) RestoreTemplateVersion(ctx context.Context, templateID string, versionID string) (TemplateVersion, error) {
+	if strings.TrimSpace(templateID) == "" || strings.TrimSpace(versionID) == "" {
+		return TemplateVersion{}, ErrInvalidInput
+	}
+	version, err := s.store.GetTemplateVersionForRestore(ctx, templateID, versionID)
+	if err != nil {
+		return TemplateVersion{}, err
+	}
+	return s.Publish(ctx, templateID, VersionInput{
+		MessageType:        version.MessageType,
+		TargetProviderType: version.TargetProviderType,
+		TemplateBody:       version.TemplateBody,
+		MessageBodySchema:  version.MessageBodySchema,
+		SamplePayload:      version.SamplePayload,
 	})
 }
 
@@ -455,19 +457,6 @@ func defaultFilterReplacement(value string) string {
 	return `| default:"` + value + `"`
 }
 
-func defaultedPayloadPaths(templateBody string) map[string]bool {
-	paths := map[string]bool{}
-	for _, match := range payloadVariablePattern.FindAllStringSubmatch(templateBody, -1) {
-		if len(match) < 2 || !defaultFilterPattern.MatchString(match[1]) {
-			continue
-		}
-		if path := payloadPathPattern.FindString(match[1]); path != "" {
-			paths[path] = true
-		}
-	}
-	return paths
-}
-
 func effectiveMessageSchema(input VersionInput) (json.RawMessage, bool, error) {
 	if hasExplicitMessageSchema(input.MessageBodySchema) {
 		if !json.Valid(input.MessageBodySchema) {
@@ -601,42 +590,6 @@ func decodeTemplateBodyJSONObject(templateBody string) (map[string]any, bool) {
 		return nil, true
 	}
 	return object, true
-}
-
-func hasPayloadPath(payload map[string]any, path string) bool {
-	parts := strings.Split(path, ".")
-	if len(parts) < 2 || parts[0] != "payload" {
-		return false
-	}
-	var current any = payload
-	for _, part := range parts[1:] {
-		obj, ok := current.(map[string]any)
-		if !ok {
-			return false
-		}
-		current, ok = obj[part]
-		if !ok {
-			return false
-		}
-	}
-	return true
-}
-
-func requiredPayloadFields(raw json.RawMessage) []string {
-	var schema struct {
-		RequiredPayloadFields []string `json:"required_payload_fields"`
-	}
-	if err := json.Unmarshal(normalizeJSON(raw), &schema); err != nil {
-		return nil
-	}
-	fields := make([]string, 0, len(schema.RequiredPayloadFields))
-	for _, field := range schema.RequiredPayloadFields {
-		field = strings.TrimSpace(field)
-		if field != "" {
-			fields = append(fields, field)
-		}
-	}
-	return fields
 }
 
 func variablePaths(variables []VariableRef) []string {

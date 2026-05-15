@@ -1,6 +1,5 @@
 import type { ReactNode } from 'react';
 import { useState } from 'react';
-import Alert from 'antd/es/alert';
 import App from 'antd/es/app';
 import Button from 'antd/es/button';
 import Descriptions from 'antd/es/descriptions';
@@ -26,7 +25,6 @@ import { getProviderTypeLabel } from '../../utils/labels';
 import {
   fallbackMessageTypes,
   isRecord,
-  parseJSONField,
   providerTypeOptions,
   stringifyJSON,
   userFacingError,
@@ -78,6 +76,8 @@ type ProviderPreset = {
   deadLetterPolicy: string;
   testRecipient: string;
   testBody: string;
+  testTitle?: string;
+  testTopic?: string;
 };
 
 type ProviderRuntimeConfig = ProviderPreset & {
@@ -87,6 +87,8 @@ type ProviderRuntimeConfig = ProviderPreset & {
   configFields: ProviderConfigField[];
   fieldValues: ProviderFieldValues;
   rateLimitEnabled: boolean;
+  retryAttempts: number;
+  retryIntervalMs: number;
   workerClaimLimit: number;
   slowPlatformIsolation: boolean;
   cacheKey: string;
@@ -103,9 +105,22 @@ type ProviderRuntimeConfig = ProviderPreset & {
   rateLimitConfigJson: string;
   retryPolicyJson: string;
   deadLetterPolicyJson: string;
+  testTitle: string;
+  testTopic: string;
 };
 
 export type ProviderRow = ProviderRecord & ProviderRuntimeConfig;
+
+export type ProviderTestRequestPreview = {
+  url: string;
+  headers: JSONValue;
+  body: JSONValue;
+};
+
+export type ProviderTestSendPreview = {
+  request: ProviderTestRequestPreview;
+  response: JSONValue;
+};
 
 const providerPresets: Record<ProviderKind, ProviderPreset> = {
   webhook: {
@@ -123,7 +138,7 @@ const providerPresets: Record<ProviderKind, ProviderPreset> = {
     timeoutMs: 3000,
     retryPolicy: '3 次指数退避',
     retryInterval: '1s / 3s / 9s',
-    deadLetterPolicy: '重试耗尽进入死信',
+    deadLetterPolicy: '全局默认：重试耗尽或上级错误进入死信',
     testRecipient: '-',
     testBody: 'Webhook 测试消息',
   },
@@ -142,18 +157,18 @@ const providerPresets: Record<ProviderKind, ProviderPreset> = {
     timeoutMs: 3000,
     retryPolicy: '3 次指数退避',
     retryInterval: '1s / 3s / 9s',
-    deadLetterPolicy: '重试耗尽进入死信',
+    deadLetterPolicy: '全局默认：重试耗尽或上级错误进入死信',
     testRecipient: '-',
     testBody: '本平台级联测试消息',
   },
   pushplus: {
-    tokenEndpoint: '固定 PushPlus Token',
+    tokenEndpoint: '固定用户 Token',
     tokenRequest: 'token',
     tokenResponsePath: '-',
     tokenPlacement: 'body.token',
-    sendEndpoint: '内置 PushPlus adapter',
-    recipientMapping: '无需接收人；topic/to 可由渠道配置决定',
-    bodyMapping: 'adapter 根据 title/content/template/topic 生成请求体',
+    sendEndpoint: 'POST https://www.pushplus.plus/send',
+    recipientMapping: '无需接收人；topic 由消息模板字段提供',
+    bodyMapping: 'adapter 根据 content/title/topic 生成 JSON 请求体',
     qps: 10,
     minuteLimit: 600,
     burst: 20,
@@ -161,7 +176,7 @@ const providerPresets: Record<ProviderKind, ProviderPreset> = {
     timeoutMs: 5000,
     retryPolicy: '2 次固定间隔',
     retryInterval: '3s / 10s',
-    deadLetterPolicy: '人工复核',
+    deadLetterPolicy: '全局默认：重试耗尽或上级错误进入死信',
     testRecipient: '-',
     testBody: 'PushPlus 测试消息',
   },
@@ -180,7 +195,7 @@ const providerPresets: Record<ProviderKind, ProviderPreset> = {
     timeoutMs: 5000,
     retryPolicy: '2 次固定间隔',
     retryInterval: '3s / 10s',
-    deadLetterPolicy: '人工复核',
+    deadLetterPolicy: '全局默认：重试耗尽或上级错误进入死信',
     testRecipient: 'UID_xxx',
     testBody: 'WxPusher 测试消息',
   },
@@ -199,7 +214,7 @@ const providerPresets: Record<ProviderKind, ProviderPreset> = {
     timeoutMs: 5000,
     retryPolicy: '2 次固定间隔',
     retryInterval: '5s / 15s',
-    deadLetterPolicy: '人工复核',
+    deadLetterPolicy: '全局默认：重试耗尽或上级错误进入死信',
     testRecipient: '-',
     testBody: 'Server酱测试消息',
   },
@@ -218,7 +233,7 @@ const providerPresets: Record<ProviderKind, ProviderPreset> = {
     timeoutMs: 5000,
     retryPolicy: '3 次线性重试',
     retryInterval: '1s / 2s / 3s',
-    deadLetterPolicy: '重试耗尽进入死信',
+    deadLetterPolicy: '全局默认：重试耗尽或上级错误进入死信',
     testRecipient: '-',
     testBody: 'ntfy 测试消息',
   },
@@ -237,7 +252,7 @@ const providerPresets: Record<ProviderKind, ProviderPreset> = {
     timeoutMs: 5000,
     retryPolicy: '3 次线性重试',
     retryInterval: '1s / 2s / 3s',
-    deadLetterPolicy: '重试耗尽进入死信',
+    deadLetterPolicy: '全局默认：重试耗尽或上级错误进入死信',
     testRecipient: '-',
     testBody: 'Gotify 测试消息',
   },
@@ -256,7 +271,7 @@ const providerPresets: Record<ProviderKind, ProviderPreset> = {
     timeoutMs: 5000,
     retryPolicy: '3 次线性重试',
     retryInterval: '1s / 2s / 3s',
-    deadLetterPolicy: '重试耗尽进入死信',
+    deadLetterPolicy: '全局默认：重试耗尽或上级错误进入死信',
     testRecipient: 'bark-device-key',
     testBody: 'Bark 测试消息',
   },
@@ -275,7 +290,7 @@ const providerPresets: Record<ProviderKind, ProviderPreset> = {
     timeoutMs: 5000,
     retryPolicy: '3 次线性重试',
     retryInterval: '1s / 2s / 3s',
-    deadLetterPolicy: '重试耗尽进入死信',
+    deadLetterPolicy: '全局默认：重试耗尽或上级错误进入死信',
     testRecipient: '-',
     testBody: 'PushMe 测试消息',
   },
@@ -294,7 +309,7 @@ const providerPresets: Record<ProviderKind, ProviderPreset> = {
     timeoutMs: 5000,
     retryPolicy: '2 次固定间隔',
     retryInterval: '5s / 15s',
-    deadLetterPolicy: '人工复核',
+    deadLetterPolicy: '全局默认：重试耗尽或上级错误进入死信',
     testRecipient: 'zhangwei@example.gov.cn',
     testBody: '邮件测试消息',
   },
@@ -313,7 +328,7 @@ const providerPresets: Record<ProviderKind, ProviderPreset> = {
     timeoutMs: 5000,
     retryPolicy: '1 次重试',
     retryInterval: '10s',
-    deadLetterPolicy: '人工复核',
+    deadLetterPolicy: '全局默认：重试耗尽或上级错误进入死信',
     testRecipient: '13800005678',
     testBody: '阿里云短信测试消息',
   },
@@ -332,7 +347,7 @@ const providerPresets: Record<ProviderKind, ProviderPreset> = {
     timeoutMs: 5000,
     retryPolicy: '1 次重试',
     retryInterval: '10s',
-    deadLetterPolicy: '人工复核',
+    deadLetterPolicy: '全局默认：重试耗尽或上级错误进入死信',
     testRecipient: '13800005678',
     testBody: '腾讯云短信测试消息',
   },
@@ -351,7 +366,7 @@ const providerPresets: Record<ProviderKind, ProviderPreset> = {
     timeoutMs: 5000,
     retryPolicy: '1 次重试',
     retryInterval: '10s',
-    deadLetterPolicy: '人工复核',
+    deadLetterPolicy: '全局默认：重试耗尽或上级错误进入死信',
     testRecipient: '13800005678',
     testBody: '百度智能云短信测试消息',
   },
@@ -370,7 +385,7 @@ const providerPresets: Record<ProviderKind, ProviderPreset> = {
     timeoutMs: 3000,
     retryPolicy: '2 次固定间隔',
     retryInterval: '2s / 5s',
-    deadLetterPolicy: '平台错误进入死信',
+    deadLetterPolicy: '全局默认：重试耗尽或上级错误进入死信',
     testRecipient: 'zhangwei',
     testBody: '企业微信群机器人测试消息',
   },
@@ -389,7 +404,7 @@ const providerPresets: Record<ProviderKind, ProviderPreset> = {
     timeoutMs: 3000,
     retryPolicy: '2 次固定间隔',
     retryInterval: '2s / 2s',
-    deadLetterPolicy: '平台错误进入死信',
+    deadLetterPolicy: '全局默认：重试耗尽或上级错误进入死信',
     testRecipient: 'zhangwei',
     testBody: '企业微信应用测试消息',
   },
@@ -408,7 +423,7 @@ const providerPresets: Record<ProviderKind, ProviderPreset> = {
     timeoutMs: 3000,
     retryPolicy: '2 次固定间隔',
     retryInterval: '2s / 2s',
-    deadLetterPolicy: '平台错误进入死信',
+    deadLetterPolicy: '全局默认：重试耗尽或上级错误进入死信',
     testRecipient: 'zhangwei',
     testBody: '企业微信兼容测试消息',
   },
@@ -427,7 +442,7 @@ const providerPresets: Record<ProviderKind, ProviderPreset> = {
     timeoutMs: 3000,
     retryPolicy: '2 次固定间隔',
     retryInterval: '2s / 5s',
-    deadLetterPolicy: '平台错误进入死信',
+    deadLetterPolicy: '全局默认：重试耗尽或上级错误进入死信',
     testRecipient: '13800005678',
     testBody: '钉钉机器人测试消息',
   },
@@ -446,7 +461,7 @@ const providerPresets: Record<ProviderKind, ProviderPreset> = {
     timeoutMs: 3000,
     retryPolicy: '3 次指数退避',
     retryInterval: '1s / 3s / 9s',
-    deadLetterPolicy: '平台错误进入死信',
+    deadLetterPolicy: '全局默认：重试耗尽或上级错误进入死信',
     testRecipient: 'manager001',
     testBody: '钉钉工作消息测试',
   },
@@ -465,7 +480,7 @@ const providerPresets: Record<ProviderKind, ProviderPreset> = {
     timeoutMs: 3000,
     retryPolicy: '3 次指数退避',
     retryInterval: '1s / 3s / 9s',
-    deadLetterPolicy: '平台错误进入死信',
+    deadLetterPolicy: '全局默认：重试耗尽或上级错误进入死信',
     testRecipient: 'manager001',
     testBody: '钉钉兼容测试消息',
   },
@@ -484,7 +499,7 @@ const providerPresets: Record<ProviderKind, ProviderPreset> = {
     timeoutMs: 3000,
     retryPolicy: '2 次固定间隔',
     retryInterval: '2s / 5s',
-    deadLetterPolicy: '平台错误进入死信',
+    deadLetterPolicy: '全局默认：重试耗尽或上级错误进入死信',
     testRecipient: 'ou_12a8',
     testBody: '飞书机器人测试消息',
   },
@@ -503,7 +518,7 @@ const providerPresets: Record<ProviderKind, ProviderPreset> = {
     timeoutMs: 3000,
     retryPolicy: '3 次指数退避',
     retryInterval: '1s / 2s / 4s',
-    deadLetterPolicy: '超时进入死信',
+    deadLetterPolicy: '全局默认：重试耗尽或上级错误进入死信',
     testRecipient: 'ou_12a8',
     testBody: '飞书兼容测试消息',
   },
@@ -514,7 +529,7 @@ const providerPresets: Record<ProviderKind, ProviderPreset> = {
     tokenPlacement: 'Query.access_token = ${token}',
     sendEndpoint: 'POST /request/message/send',
     recipientMapping: 'touser/toparty/totag；touser 来自 receivers.gov_userid',
-    bodyMapping: 'adapter 根据 description 生成随申办文本消息；开发环境不可访问，先实现不联调',
+    bodyMapping: 'adapter 根据 description 生成随申办文本消息；开发环境不可访问，先实现请求构建',
     qps: 80,
     minuteLimit: 4800,
     burst: 160,
@@ -522,7 +537,7 @@ const providerPresets: Record<ProviderKind, ProviderPreset> = {
     timeoutMs: 3000,
     retryPolicy: '3 次指数退避',
     retryInterval: '1s / 3s / 9s',
-    deadLetterPolicy: '重试耗尽进入死信',
+    deadLetterPolicy: '全局默认：重试耗尽或上级错误进入死信',
     testRecipient: 'gov-user-1',
     testBody: '随申办政务云测试消息',
   },
@@ -541,7 +556,7 @@ const providerPresets: Record<ProviderKind, ProviderPreset> = {
     timeoutMs: 5000,
     retryPolicy: '1 次重试',
     retryInterval: '10s',
-    deadLetterPolicy: '人工复核',
+    deadLetterPolicy: '全局默认：重试耗尽或上级错误进入死信',
     testRecipient: '13800005678',
     testBody: '短信兼容测试消息',
   },
@@ -560,7 +575,7 @@ const providerPresets: Record<ProviderKind, ProviderPreset> = {
     timeoutMs: 3000,
     retryPolicy: '3 次指数退避',
     retryInterval: '1s / 3s / 9s',
-    deadLetterPolicy: '重试耗尽进入死信',
+    deadLetterPolicy: '全局默认：重试耗尽或上级错误进入死信',
     testRecipient: 'test_user',
     testBody: '自定义平台测试消息',
   },
@@ -867,7 +882,7 @@ function fallbackProviderFields(providerType: ProviderKind): ProviderConfigField
         'send_config',
         'text',
         true,
-        '开发环境不可访问，先实现不联调',
+        '开发环境不可访问，先实现请求构建',
         'https://www.ywxt.sh.cegn.cn/api-gateway/uranus/uranus/cgi-bin/',
       ),
       field('corpsecret', 'corpsecret', 'auth_config', 'password', true),
@@ -896,10 +911,7 @@ function fallbackProviderFields(providerType: ProviderKind): ProviderConfigField
   }
   if (providerType === 'pushplus') {
     return [
-      field('token', 'PushPlus Token', 'auth_config', 'password', true),
-      field('topic', 'topic', 'send_config'),
-      field('channel', 'channel', 'send_config'),
-      field('template', '消息模板', 'send_config', 'text', false, 'markdown'),
+      field('token', 'Token', 'auth_config', 'password', true),
     ];
   }
   if (providerType === 'wxpusher') {
@@ -1103,10 +1115,6 @@ function providerFieldValueToJSON(value: ProviderFieldValue, field: ProviderConf
   return value;
 }
 
-function mergeAdvancedConfig(base: Record<string, JSONValue>, advanced: JSONValue): JSONValue {
-  return isRecord(advanced) ? { ...base, ...advanced } : advanced;
-}
-
 export function parseJSONOrEmpty(value: string): JSONValue {
   try {
     return JSON.parse(value || '{}') as JSONValue;
@@ -1123,7 +1131,6 @@ export function providerWithCapability(value: ProviderRow, view: ProviderCapabil
     parseJSONOrEmpty(value.sendConfigJson),
   );
   const timeoutMs = capabilityDefaultTimeout(view, value.timeoutMs);
-  const concurrency = capabilityDefaultConcurrency(view, value.concurrency);
   return {
     ...value,
     providerDisplayName: view.displayName,
@@ -1135,7 +1142,7 @@ export function providerWithCapability(value: ProviderRow, view: ProviderCapabil
     capability: `${view.displayName}；支持消息类型 ${view.supportedMessageTypes.join('、')}；${view.category}`,
     timeoutMs,
     timeout: `${timeoutMs} ms`,
-    concurrency,
+    concurrency: 1,
     rateLimitConfigJson: stringifyJSON(capabilityDefaultRateLimit(view, parseJSONOrEmpty(value.rateLimitConfigJson))),
     retryPolicyJson: stringifyJSON(capabilityDefaultRetryPolicy(view, parseJSONOrEmpty(value.retryPolicyJson))),
   };
@@ -1148,15 +1155,6 @@ function capabilityDefaultTimeout(view: ProviderCapabilityView, fallback: number
   }
   const defaults = view.capabilityRecords.find((record) => record.defaults !== undefined && isRecord(record.defaults))?.defaults ?? null;
   return isRecord(defaults) && typeof defaults.timeout_ms === 'number' ? defaults.timeout_ms : fallback;
-}
-
-function capabilityDefaultConcurrency(view: ProviderCapabilityView, fallback: number): number {
-  const direct = view.capabilityRecords.find((record) => typeof record.default_concurrency_limit === 'number')?.default_concurrency_limit;
-  if (typeof direct === 'number') {
-    return direct;
-  }
-  const defaults = view.capabilityRecords.find((record) => record.defaults !== undefined && isRecord(record.defaults))?.defaults ?? null;
-  return isRecord(defaults) && typeof defaults.concurrency_limit === 'number' ? defaults.concurrency_limit : fallback;
 }
 
 function capabilityDefaultRateLimit(view: ProviderCapabilityView, fallback: JSONValue): JSONValue {
@@ -1177,6 +1175,189 @@ function capabilityDefaultRetryPolicy(view: ProviderCapabilityView, fallback: JS
   return isRecord(defaults) && defaults.retry_policy !== undefined ? defaults.retry_policy : fallback;
 }
 
+function retryAttemptsFromText(value: string): number {
+  const matched = value.match(/\d+/);
+  return matched ? Math.max(0, Number(matched[0])) : 3;
+}
+
+function retryIntervalMsFromText(value: string): number {
+  const matched = value.match(/(\d+(?:\.\d+)?)\s*(ms|毫秒|s|秒)?/i);
+  if (!matched) {
+    return 1000;
+  }
+  const amount = Number(matched[1]);
+  const unit = (matched[2] ?? 'ms').toLowerCase();
+  return unit === 's' || unit === '秒' ? Math.max(1, Math.round(amount * 1000)) : Math.max(1, Math.round(amount));
+}
+
+function retryAttemptsFromJSON(value: JSONValue, fallback: number): number {
+  return isRecord(value) && typeof value.max_attempts === 'number' && value.max_attempts >= 0 ? value.max_attempts : fallback;
+}
+
+function retryIntervalMsFromJSON(value: JSONValue, fallback: number): number {
+  if (isRecord(value)) {
+    if (typeof value.delay_ms === 'number' && value.delay_ms >= 0) {
+      return value.delay_ms;
+    }
+    if (typeof value.delay_seconds === 'number' && value.delay_seconds >= 0) {
+      return Math.round(value.delay_seconds * 1000);
+    }
+  }
+  return fallback;
+}
+
+function providerTestBodyValue(value: ProviderRow): JSONValue {
+  if (value.providerType === 'pushplus') {
+    const body: Record<string, JSONValue> = {
+      content: value.testBody.trim(),
+    };
+    const title = value.testTitle.trim();
+    const topic = value.testTopic.trim();
+    if (title) {
+      body.title = title;
+    }
+    if (topic) {
+      body.topic = topic;
+    }
+    return body;
+  }
+  const trimmed = value.testBody.trim();
+  if (!trimmed) {
+    return {};
+  }
+  try {
+    return JSON.parse(trimmed) as JSONValue;
+  } catch {
+    return { content: value.testBody };
+  }
+}
+
+function normalizedProviderTestRecipient(value: ProviderRow): string {
+  if (value.providerType === 'pushplus') {
+    return '';
+  }
+  const recipient = value.testRecipient.trim();
+  return recipient && recipient !== '-' ? recipient : '';
+}
+
+function providerTestPayload(value: ProviderRow, send: boolean, liveSendConfirmed = false): JSONValue {
+  const body = providerTestBodyValue(value);
+  const recipient = normalizedProviderTestRecipient(value);
+  const messageType = value.providerType === 'pushplus' ? 'json' : value.messageTypes[0] ?? 'text';
+  return {
+    send,
+    live_send_confirmed: liveSendConfirmed,
+    token: '',
+    recipient,
+    body,
+    rendered_message: {
+      provider_type: value.providerType,
+      message_type: messageType,
+      content: body,
+    },
+    resolved_recipients: recipient ? [{ value: recipient }] : [],
+    target_context: {
+      channel_id: value.id,
+      channel_name: value.name,
+      provider_type: value.providerType,
+      message_type: messageType,
+    },
+  };
+}
+
+function requestRecordFromTestResult(result: JSONValue): Record<string, JSONValue> {
+  if (!isRecord(result)) {
+    return {};
+  }
+  if (isRecord(result.request)) {
+    return result.request;
+  }
+  if (isRecord(result.request_snapshot) && isRecord(result.request_snapshot.final_request)) {
+    return result.request_snapshot.final_request;
+  }
+  if (isRecord(result.final_request)) {
+    return result.final_request;
+  }
+  return {};
+}
+
+function responseValueFromTestResult(result: JSONValue): JSONValue {
+  if (!isRecord(result)) {
+    return {};
+  }
+  if (result.response_snapshot !== undefined) {
+    return result.response_snapshot;
+  }
+  if (result.response !== undefined) {
+    return result.response;
+  }
+  return {};
+}
+
+function urlWithQuery(url: string, query: JSONValue): string {
+  if (!isRecord(query) || Object.keys(query).length === 0) {
+    return url;
+  }
+  const params = new URLSearchParams();
+  for (const [key, value] of Object.entries(query)) {
+    if (value === undefined || value === null || typeof value === 'object') {
+      continue;
+    }
+    params.set(key, String(value));
+  }
+  const queryText = params.toString();
+  if (!queryText) {
+    return url;
+  }
+  return `${url}${url.includes('?') ? '&' : '?'}${queryText}`;
+}
+
+export function providerTestRequestPreview(result: JSONValue): ProviderTestRequestPreview {
+  const request = requestRecordFromTestResult(result);
+  const method = typeof request.method === 'string' && request.method.trim() ? request.method.trim().toUpperCase() : 'POST';
+  const url = typeof request.url === 'string' ? request.url : '';
+  return {
+    url: [method, urlWithQuery(url, request.query)].filter(Boolean).join(' '),
+    headers: isRecord(request.headers) ? request.headers : {},
+    body: request.body ?? {},
+  };
+}
+
+export function providerTestSendPreview(result: JSONValue): ProviderTestSendPreview {
+  return {
+    request: providerTestRequestPreview(result),
+    response: responseValueFromTestResult(result),
+  };
+}
+
+function providerTestResponseStatus(response: JSONValue): string {
+  if (!isRecord(response) || typeof response.status_code !== 'number') {
+    return '-';
+  }
+  return `HTTP ${response.status_code}`;
+}
+
+function providerTestResponseBody(response: JSONValue): JSONValue {
+  if (isRecord(response) && response.body !== undefined) {
+    return response.body;
+  }
+  return response;
+}
+
+function providerTestResponseHeaders(response: JSONValue): JSONValue {
+  if (isRecord(response) && response.headers !== undefined) {
+    return response.headers;
+  }
+  return {};
+}
+
+function providerTestResponseError(response: JSONValue): string {
+  if (isRecord(response) && typeof response.error === 'string' && response.error.trim()) {
+    return response.error.trim();
+  }
+  return '';
+}
+
 function providerWithPreset(
   record: ProviderRecord,
   providerType: ProviderKind = record.providerType,
@@ -1185,6 +1366,8 @@ function providerWithPreset(
   const preset = providerPresets[providerType];
   const endpoint = parseSendEndpoint(preset.sendEndpoint);
   const view = providerCapabilityView(providerType, capabilities);
+  const retryAttempts = retryAttemptsFromText(preset.retryPolicy);
+  const retryIntervalMs = retryIntervalMsFromText(preset.retryInterval);
   return providerWithCapability({
     ...record,
     ...preset,
@@ -1200,33 +1383,38 @@ function providerWithPreset(
     requestUrl: endpoint.requestUrl,
     tokenPlacement: preset.tokenPlacement,
     rateLimit: `每秒 ${preset.qps} 条 / 每分钟 ${preset.minuteLimit} 条`,
-    concurrency: preset.concurrency,
+    concurrency: 1,
     timeout: `${preset.timeoutMs} ms`,
-    retryPolicy: preset.retryPolicy,
-    deadLetterPolicy: preset.deadLetterPolicy,
+    retryPolicy: `${retryAttempts} 次`,
+    retryInterval: `${retryIntervalMs} ms`,
+    deadLetterPolicy: '全局默认：重试耗尽或上级错误进入死信',
     capability: `${getProviderTypeLabel(providerType)}默认能力；接收人映射 ${preset.recipientMapping}`,
     rateLimitEnabled: true,
-    workerClaimLimit: Math.max(1, Math.floor(preset.concurrency / 4)),
+    retryAttempts,
+    retryIntervalMs,
+    workerClaimLimit: 10,
     slowPlatformIsolation: true,
     cacheKey: '${provider_instance_id}:${credential_hash}',
     refreshStrategy: '过期前 5 分钟刷新，失败后按重试策略处理',
     requestHeaders: '{"Content-Type":"application/json"}',
     requestQuery: '{}',
     idempotencyKey: '${message_id}:${provider_instance_id}',
-    deadLetterRetentionDays: 30,
+    deadLetterRetentionDays: 7,
     deadLetterReplay: true,
-    deadLetterAlert: '5 分钟内死信 >= 10 条',
+    deadLetterAlert: '全局默认阈值',
+    testTitle: preset.testTitle ?? '',
+    testTopic: preset.testTopic ?? '',
     authConfigJson: '{\n  "credential_ref": ""\n}',
     tokenConfigJson: '{\n  "token_endpoint": "' + preset.tokenEndpoint.replace(/"/g, '\\"') + '"\n}',
     sendConfigJson: '{\n  "send_endpoint": "' + preset.sendEndpoint.replace(/"/g, '\\"') + '"\n}',
     rateLimitConfigJson: JSON.stringify(
-      { enabled: true, qps: preset.qps, minute_limit: preset.minuteLimit, burst: preset.burst },
+      { enabled: true, qps: preset.qps, minute_limit: preset.minuteLimit },
       null,
       2,
     ),
-    retryPolicyJson: JSON.stringify({ policy: preset.retryPolicy, interval: preset.retryInterval }, null, 2),
+    retryPolicyJson: JSON.stringify({ max_attempts: retryAttempts, delay_ms: retryIntervalMs }, null, 2),
     deadLetterPolicyJson: JSON.stringify(
-      { policy: preset.deadLetterPolicy, retention_days: 30, replay: true },
+      { policy: 'retry_exhausted_or_upstream_error', retention_days: 7, replay: true },
       null,
       2,
     ),
@@ -1244,7 +1432,7 @@ export function createProviderDraft(
       name: `新增推送渠道 ${index}`,
       providerType,
       enabled: true,
-      description: '用于政务消息统一发送。',
+      description: '',
       messageTypes: ['文本'],
       recipientFields: '',
       tokenStrategy: '',
@@ -1256,7 +1444,7 @@ export function createProviderDraft(
       timeout: '',
       retryPolicy: '',
       deadLetterPolicy: '',
-      lastTestResult: '未执行测试发送',
+      lastTestResult: '未执行测试',
       capability: '',
     },
     providerType,
@@ -1299,24 +1487,34 @@ export function mapChannelRow(channel: ChannelApiRecord, capabilities: ProviderC
       timeout: `${channel.timeout_ms} ms`,
       retryPolicy: '见高级 JSON',
       deadLetterPolicy: '见高级 JSON',
-      lastTestResult: '未执行测试发送',
+      lastTestResult: '未执行测试',
       capability: `${getProviderTypeLabel(channel.provider_type)} 推送渠道实例`,
     },
     channel.provider_type,
     capabilities,
   );
   const fieldValues = fieldValuesFromConfigs(base.configFields, channel.auth_config, channel.token_config, channel.send_config);
+  const retryAttempts = retryAttemptsFromJSON(channel.retry_policy, base.retryAttempts);
+  const retryIntervalMs = retryIntervalMsFromJSON(channel.retry_policy, base.retryIntervalMs);
+  const deadLetterPolicy = isRecord(channel.dead_letter_policy) ? channel.dead_letter_policy : {};
   return {
     ...base,
-    concurrency: channel.concurrency_limit,
+    concurrency: 1,
     timeoutMs: channel.timeout_ms,
     timeout: `${channel.timeout_ms} ms`,
+    retryPolicy: `${retryAttempts} 次`,
+    retryInterval: `${retryIntervalMs} ms`,
+    deadLetterPolicy: '全局默认：重试耗尽或上级错误进入死信',
     authConfigJson: stringifyJSON(channel.auth_config),
     tokenConfigJson: stringifyJSON(channel.token_config),
     sendConfigJson: stringifyJSON(channel.send_config),
     rateLimitConfigJson: stringifyJSON(channel.rate_limit_config),
     retryPolicyJson: stringifyJSON(channel.retry_policy),
     deadLetterPolicyJson: stringifyJSON(channel.dead_letter_policy),
+    retryAttempts,
+    retryIntervalMs,
+    deadLetterRetentionDays: typeof deadLetterPolicy.retention_days === 'number' ? deadLetterPolicy.retention_days : 7,
+    deadLetterReplay: typeof deadLetterPolicy.replay === 'boolean' ? deadLetterPolicy.replay : base.deadLetterReplay,
     fieldValues,
   };
 }
@@ -1327,14 +1525,26 @@ export function channelInputFromProvider(value: ProviderRow): ChannelInput {
     provider_type: value.providerType,
     name: value.name.trim(),
     enabled: value.enabled,
-    auth_config: mergeAdvancedConfig(basicConfig.auth_config, parseJSONField(value.authConfigJson, '认证配置高级 JSON')),
-    token_config: mergeAdvancedConfig(basicConfig.token_config, parseJSONField(value.tokenConfigJson, '令牌配置高级 JSON')),
-    send_config: mergeAdvancedConfig(basicConfig.send_config, parseJSONField(value.sendConfigJson, '发送配置高级 JSON')),
-    rate_limit_config: parseJSONField(value.rateLimitConfigJson, '限流配置高级 JSON'),
-    concurrency_limit: value.concurrency,
+    auth_config: basicConfig.auth_config,
+    token_config: basicConfig.token_config,
+    send_config: basicConfig.send_config,
+    rate_limit_config: {
+      enabled: value.rateLimitEnabled,
+      qps: value.qps,
+      minute_limit: value.minuteLimit,
+    },
+    concurrency_limit: 1,
     timeout_ms: value.timeoutMs,
-    retry_policy: parseJSONField(value.retryPolicyJson, '重试策略高级 JSON'),
-    dead_letter_policy: parseJSONField(value.deadLetterPolicyJson, '死信策略高级 JSON'),
+    retry_policy: {
+      max_attempts: value.retryAttempts,
+      delay_ms: value.retryIntervalMs,
+      idempotency_key: value.idempotencyKey,
+    },
+    dead_letter_policy: {
+      policy: 'retry_exhausted_or_upstream_error',
+      retention_days: 7,
+      replay: value.deadLetterReplay,
+    },
   };
 }
 
@@ -1391,9 +1601,6 @@ export function ProviderConfigForm({
   onChange: (value: ProviderRow) => void;
   capabilities?: ProviderCapabilityApiRecord[];
 }) {
-  const { message, modal } = App.useApp();
-  const [advancedOpen, setAdvancedOpen] = useState(false);
-  const [testResult, setTestResult] = useState<JSONValue | null>(null);
   const customMapping = value.customBodyAllowed || value.providerType === 'custom_token' || value.providerType === 'webhook';
   const update = (patch: Partial<ProviderRow>) => onChange({ ...value, ...patch });
   const updateFieldValue = (field: ProviderConfigField, nextValue: ProviderFieldValue) => {
@@ -1404,77 +1611,10 @@ export function ProviderConfigForm({
       },
     });
   };
-  const testBodyValue = (): JSONValue => {
-    const trimmed = value.testBody.trim();
-    if (!trimmed) {
-      return {};
-    }
-    try {
-      return JSON.parse(trimmed) as JSONValue;
-    } catch {
-      return { content: value.testBody };
-    }
-  };
-  const normalizedTestRecipient = () => {
-    const recipient = value.testRecipient.trim();
-    return recipient && recipient !== '-' ? recipient : '';
-  };
-  const testPayload = (send: boolean, liveSendConfirmed = false): JSONValue => {
-    const body = testBodyValue();
-    const recipient = normalizedTestRecipient();
-    const messageType = value.messageTypes[0] ?? 'text';
-    return {
-    send,
-    live_send_confirmed: liveSendConfirmed,
-    token: '',
-    recipient,
-    body,
-    rendered_message: {
-      provider_type: value.providerType,
-      message_type: messageType,
-      content: body,
-    },
-    resolved_recipients: recipient ? [{ value: recipient }] : [],
-    target_context: {
-      channel_id: value.id,
-      channel_name: value.name,
-      provider_type: value.providerType,
-      message_type: messageType,
-    },
-  };
-  };
-  const dryRunRequest = async () => {
-    try {
-      const result = await consoleApi.testSendChannel(value.id, testPayload(false));
-      setTestResult(result.result);
-      message.success(`dry-run 请求已生成：${stringifyJSON(result.result, '{}').slice(0, 80)}`);
-    } catch (error) {
-      message.error(userFacingError(error));
-    }
-  };
-  const liveSend = async () => {
-    try {
-      const result = await consoleApi.testSendChannel(value.id, testPayload(true, true));
-      setTestResult(result.result);
-      message.success(`真实发送请求已完成：${stringifyJSON(result.result, '{}').slice(0, 80)}`);
-    } catch (error) {
-      message.error(userFacingError(error));
-    }
-  };
-  const confirmLiveSend = () => {
-    modal.confirm({
-      title: '确认调用真实推送渠道',
-      content: '真实发送会调用当前推送渠道配置的上游地址，可能产生真实消息、费用、限流或审计记录。请确认凭证、接收人、网络白名单和必要配置都已准备完成。',
-      okText: '确认真实发送',
-      cancelText: '取消',
-      okButtonProps: { danger: true },
-      onOk: liveSend,
-    });
-  };
 
   return (
     <Tabs
-      className="dense-tabs"
+      className="dense-tabs provider-config-tabs"
       items={[
         {
           key: 'base',
@@ -1491,13 +1631,6 @@ export function ProviderConfigForm({
                   options={providerTypeOptions}
                 />
               </Form.Item>
-              <div className="provider-capability-summary">
-                <Descriptions column={1} size="small" bordered>
-                  <Descriptions.Item label="能力名称">{value.providerDisplayName}</Descriptions.Item>
-                  <Descriptions.Item label="能力分类">{value.providerCategory}</Descriptions.Item>
-                  <Descriptions.Item label="支持消息类型">{value.messageTypes.join('、')}</Descriptions.Item>
-                </Descriptions>
-              </div>
               <Divider orientation="left">基础配置字段</Divider>
               <div className="two-column-form provider-field-grid">
                 {value.configFields.map((field) => (
@@ -1511,14 +1644,6 @@ export function ProviderConfigForm({
                   </Form.Item>
                 ))}
               </div>
-              {!customMapping ? (
-                <Alert
-                  type="info"
-                  showIcon
-                  className="semantic-alert"
-                  message="该平台为内置适配器，基础字段会写入后端配置；URL、Header 和 Body 映射由 adapter 负责生成。"
-                />
-              ) : null}
               <Form.Item label="描述">
                 <Input.TextArea
                   rows={3}
@@ -1537,124 +1662,104 @@ export function ProviderConfigForm({
             </Form>
           ),
         },
-        {
-          key: 'token',
-          label: '令牌获取',
-          children: (
-            <Form layout="vertical" className="two-column-form">
-              {!customMapping ? (
-                <Alert
-                  type="info"
-                  showIcon
-                  className="semantic-alert"
-                  message="该平台为内置适配器，令牌获取结构使用预置默认值；只需要维护实际凭证和运行参数。"
-                />
-              ) : null}
-              {customMapping ? (
-                <>
-                  <Form.Item label="令牌获取方式">
-                    <Input
-                      value={value.tokenEndpoint}
-                      onChange={(event) => update({ tokenEndpoint: event.target.value, tokenStrategy: event.target.value })}
-                    />
-                  </Form.Item>
-                  <Form.Item label="请求参数 / 凭证">
-                    <Input.TextArea
-                      rows={3}
-                      value={value.tokenRequest}
-                      onChange={(event) => update({ tokenRequest: event.target.value })}
-                    />
-                  </Form.Item>
-                  <Form.Item label="返回 token 字段路径">
-                    <Input
-                      value={value.tokenResponsePath}
-                      onChange={(event) => update({ tokenResponsePath: event.target.value })}
-                    />
-                  </Form.Item>
-                  <Form.Item label="Token 放置">
-                    <Input
-                      value={value.tokenPlacement}
-                      onChange={(event) => update({ tokenPlacement: event.target.value })}
-                    />
-                  </Form.Item>
-                  <Form.Item label="刷新策略">
-                    <Input
-                      value={value.refreshStrategy}
-                      onChange={(event) => update({ refreshStrategy: event.target.value })}
-                    />
-                  </Form.Item>
-                  <Form.Item label="缓存键">
-                    <Input value={value.cacheKey} onChange={(event) => update({ cacheKey: event.target.value })} />
-                  </Form.Item>
-                </>
-              ) : null}
-            </Form>
-          ),
-        },
-        {
-          key: 'mapping',
-          label: '请求映射',
-          children: (
-            <Form layout="vertical">
-              {!customMapping ? (
-                <Alert
-                  type="info"
-                  showIcon
-                  className="semantic-alert"
-                  message="该平台为内置适配器，已预置常用请求结构；只需要填写凭证、限流、超时重试等运行参数。"
-                />
-              ) : null}
-              {customMapping ? (
-                <>
-                  <div className="two-column-form">
-                    <Form.Item label="发送接口">
+        ...(customMapping
+          ? [
+              {
+                key: 'token',
+                label: '令牌获取',
+                children: (
+                  <Form layout="vertical" className="two-column-form">
+                    <Form.Item label="令牌获取方式">
                       <Input
-                        value={value.sendEndpoint}
-                        onChange={(event) => {
-                          const endpoint = parseSendEndpoint(event.target.value);
-                          update({ sendEndpoint: event.target.value, ...endpoint });
-                        }}
+                        value={value.tokenEndpoint}
+                        onChange={(event) => update({ tokenEndpoint: event.target.value, tokenStrategy: event.target.value })}
                       />
                     </Form.Item>
-                    <Form.Item label="接收人映射">
-                      <Input
-                        value={value.recipientMapping}
-                        onChange={(event) => update({ recipientMapping: event.target.value, recipientFields: event.target.value })}
-                      />
-                    </Form.Item>
-                    <Form.Item label="请求 Header">
+                    <Form.Item label="请求参数 / 凭证">
                       <Input.TextArea
                         rows={3}
-                        value={value.requestHeaders}
-                        onChange={(event) => update({ requestHeaders: event.target.value })}
+                        value={value.tokenRequest}
+                        onChange={(event) => update({ tokenRequest: event.target.value })}
                       />
                     </Form.Item>
-                    <Form.Item label="请求 Query">
+                    <Form.Item label="返回 token 字段路径">
+                      <Input
+                        value={value.tokenResponsePath}
+                        onChange={(event) => update({ tokenResponsePath: event.target.value })}
+                      />
+                    </Form.Item>
+                    <Form.Item label="Token 放置">
+                      <Input
+                        value={value.tokenPlacement}
+                        onChange={(event) => update({ tokenPlacement: event.target.value })}
+                      />
+                    </Form.Item>
+                    <Form.Item label="刷新策略">
+                      <Input
+                        value={value.refreshStrategy}
+                        onChange={(event) => update({ refreshStrategy: event.target.value })}
+                      />
+                    </Form.Item>
+                    <Form.Item label="缓存键">
+                      <Input value={value.cacheKey} onChange={(event) => update({ cacheKey: event.target.value })} />
+                    </Form.Item>
+                  </Form>
+                ),
+              },
+              {
+                key: 'mapping',
+                label: '请求映射',
+                children: (
+                  <Form layout="vertical">
+                    <div className="two-column-form">
+                      <Form.Item label="发送接口">
+                        <Input
+                          value={value.sendEndpoint}
+                          onChange={(event) => {
+                            const endpoint = parseSendEndpoint(event.target.value);
+                            update({ sendEndpoint: event.target.value, ...endpoint });
+                          }}
+                        />
+                      </Form.Item>
+                      <Form.Item label="接收人映射">
+                        <Input
+                          value={value.recipientMapping}
+                          onChange={(event) => update({ recipientMapping: event.target.value, recipientFields: event.target.value })}
+                        />
+                      </Form.Item>
+                      <Form.Item label="请求 Header">
+                        <Input.TextArea
+                          rows={3}
+                          value={value.requestHeaders}
+                          onChange={(event) => update({ requestHeaders: event.target.value })}
+                        />
+                      </Form.Item>
+                      <Form.Item label="请求 Query">
+                        <Input.TextArea
+                          rows={3}
+                          value={value.requestQuery}
+                          onChange={(event) => update({ requestQuery: event.target.value })}
+                        />
+                      </Form.Item>
+                    </div>
+                    <Form.Item label="Body 映射模板">
                       <Input.TextArea
-                        rows={3}
-                        value={value.requestQuery}
-                        onChange={(event) => update({ requestQuery: event.target.value })}
+                        rows={6}
+                        value={value.bodyMapping}
+                        onChange={(event) => update({ bodyMapping: event.target.value })}
                       />
                     </Form.Item>
-                  </div>
-                  <Form.Item label="Body 映射模板">
-                    <Input.TextArea
-                      rows={6}
-                      value={value.bodyMapping}
-                      onChange={(event) => update({ bodyMapping: event.target.value })}
-                    />
-                  </Form.Item>
-                </>
-              ) : null}
-            </Form>
-          ),
-        },
+                  </Form>
+                ),
+              },
+            ]
+          : []),
         {
-          key: 'rate',
-          label: '限流配置',
+          key: 'more-settings',
+          label: '更多设置',
           children: (
             <Form layout="vertical" className="two-column-form">
-              <Form.Item label="主动限流">
+              <Form.Item label="主动限流" className="form-item-full">
                 <Switch
                   checked={value.rateLimitEnabled}
                   onChange={(rateLimitEnabled) => update({ rateLimitEnabled })}
@@ -1680,58 +1785,7 @@ export function ProviderConfigForm({
                   }
                 />
               </Form.Item>
-              <Form.Item label="突发容量">
-                <InputNumber
-                  min={1}
-                  value={value.burst}
-                  className="full-width"
-                  onChange={(burst) => update({ burst: burst ?? 1 })}
-                />
-              </Form.Item>
-            </Form>
-          ),
-        },
-        {
-          key: 'concurrency',
-          label: '并发上限',
-          children: (
-            <Form layout="vertical" className="two-column-form">
-              <Form.Item label="推送渠道实例并发上限">
-                <InputNumber
-                  min={1}
-                  value={value.concurrency}
-                  className="full-width"
-                  onChange={(concurrency) => update({ concurrency: concurrency ?? 1 })}
-                />
-              </Form.Item>
-              <Form.Item label="单 worker 抢占上限">
-                <InputNumber
-                  min={1}
-                  value={value.workerClaimLimit}
-                  className="full-width"
-                  onChange={(workerClaimLimit) => update({ workerClaimLimit: workerClaimLimit ?? 1 })}
-                />
-              </Form.Item>
-              <Form.Item label="慢平台隔离">
-                <Switch
-                  checked={value.slowPlatformIsolation}
-                  onChange={(slowPlatformIsolation) => update({ slowPlatformIsolation })}
-                  checkedChildren="开启"
-                  unCheckedChildren="关闭"
-                />
-              </Form.Item>
-              <Form.Item label="队列键">
-                <Input defaultValue="${provider_instance_id}" disabled />
-              </Form.Item>
-            </Form>
-          ),
-        },
-        {
-          key: 'retry',
-          label: '超时与重试',
-          children: (
-            <Form layout="vertical" className="two-column-form">
-              <Form.Item label="请求超时毫秒">
+              <Form.Item label="超时设置（毫秒）">
                 <InputNumber
                   min={100}
                   value={value.timeoutMs}
@@ -1739,42 +1793,23 @@ export function ProviderConfigForm({
                   onChange={(timeoutMs) => update({ timeoutMs: timeoutMs ?? 100, timeout: `${timeoutMs ?? 100} ms` })}
                 />
               </Form.Item>
-              <Form.Item label="重试策略">
-                <Input value={value.retryPolicy} onChange={(event) => update({ retryPolicy: event.target.value })} />
-              </Form.Item>
-              <Form.Item label="重试间隔">
-                <Input value={value.retryInterval} onChange={(event) => update({ retryInterval: event.target.value })} />
-              </Form.Item>
-              <Form.Item label="幂等键">
-                <Input value={value.idempotencyKey} onChange={(event) => update({ idempotencyKey: event.target.value })} />
-              </Form.Item>
-            </Form>
-          ),
-        },
-        {
-          key: 'dead-letter',
-          label: '死信策略',
-          children: (
-            <Form layout="vertical" className="two-column-form">
-              <Form.Item label="进入死信条件">
-                <Select
-                  value={value.deadLetterPolicy}
-                  onChange={(deadLetterPolicy) => update({ deadLetterPolicy })}
-                  options={['重试耗尽进入死信', '平台错误进入死信', '超时进入死信', '人工复核'].map((value) => ({
-                    label: value,
-                    value,
-                  }))}
-                />
-              </Form.Item>
-              <Form.Item label="死信保留天数">
+              <Form.Item label="允许重试次数">
                 <InputNumber
-                  min={1}
-                  value={value.deadLetterRetentionDays}
+                  min={0}
+                  value={value.retryAttempts}
                   className="full-width"
-                  onChange={(deadLetterRetentionDays) => update({ deadLetterRetentionDays: deadLetterRetentionDays ?? 1 })}
+                  onChange={(retryAttempts) => update({ retryAttempts: retryAttempts ?? 0, retryPolicy: `${retryAttempts ?? 0} 次` })}
                 />
               </Form.Item>
-              <Form.Item label="允许重放">
+              <Form.Item label="重试间隔（毫秒）">
+                <InputNumber
+                  min={0}
+                  value={value.retryIntervalMs}
+                  className="full-width"
+                  onChange={(retryIntervalMs) => update({ retryIntervalMs: retryIntervalMs ?? 0, retryInterval: `${retryIntervalMs ?? 0} ms` })}
+                />
+              </Form.Item>
+              <Form.Item label="死信重放" className="form-item-full">
                 <Switch
                   checked={value.deadLetterReplay}
                   onChange={(deadLetterReplay) => update({ deadLetterReplay })}
@@ -1782,125 +1817,162 @@ export function ProviderConfigForm({
                   unCheckedChildren="关闭"
                 />
               </Form.Item>
-              <Form.Item label="告警阈值">
-                <Input value={value.deadLetterAlert} onChange={(event) => update({ deadLetterAlert: event.target.value })} />
-              </Form.Item>
-            </Form>
-          ),
-        },
-        {
-          key: 'test',
-          label: '测试发送',
-          forceRender: true,
-          children: (
-            <Form layout="vertical">
-              <Alert
-                type="info"
-                showIcon
-                className="semantic-alert"
-                message="dry-run 只生成请求快照，不调用真实推送渠道。"
-                description="默认操作会展示 URL、method、header、query、body、target_context、rendered_message 和 resolved_recipients。"
-              />
-              <Form.Item label="测试接收人">
-                <Input value={value.testRecipient} onChange={(event) => update({ testRecipient: event.target.value })} />
-              </Form.Item>
-              <Form.Item label="测试消息体">
-                <Input.TextArea
-                  rows={5}
-                  value={value.testBody}
-                  onChange={(event) => update({ testBody: event.target.value })}
-                />
-              </Form.Item>
-              <Form.Item label="测试动作">
-                <Space>
-                  <Button type="primary" onClick={() => void dryRunRequest()}>
-                    生成 dry-run 请求
-                  </Button>
-                  <Button danger onClick={confirmLiveSend}>
-                    真实发送
-                  </Button>
-                </Space>
-              </Form.Item>
-              <Alert
-                type="warning"
-                showIcon
-                className="semantic-alert"
-                message="真实发送会调用真实推送渠道"
-                description="仅在账号、凭证、测试接收人、网络白名单和必要配置确认完成后使用；系统会再次弹窗确认。"
-              />
-              {testResult ? (
-                <Form.Item label="dry-run / 真实发送结果">
-                  <pre className="code-block">{stringifyJSON(testResult, '{}')}</pre>
-                </Form.Item>
-              ) : null}
-            </Form>
-          ),
-        },
-        {
-          key: 'advanced-json',
-          label: '高级 JSON 配置',
-          children: (
-            <Form layout="vertical">
-              <Alert
-                type="info"
-                showIcon
-                className="semantic-alert"
-                message="基础字段会先合并到配置 JSON；这里填写的高级 JSON 会覆盖同名键。"
-              />
-              <Button onClick={() => setAdvancedOpen((open) => !open)}>
-                {advancedOpen ? '收起高级 JSON 配置' : '展开高级 JSON 配置'}
-              </Button>
-              {advancedOpen ? (
-                <div className="advanced-json-fields">
-                  <Form.Item label="认证配置 JSON">
-                    <Input.TextArea
-                      rows={5}
-                      value={value.authConfigJson}
-                      onChange={(event) => update({ authConfigJson: event.target.value })}
-                    />
-                  </Form.Item>
-                  <Form.Item label="令牌配置 JSON">
-                    <Input.TextArea
-                      rows={5}
-                      value={value.tokenConfigJson}
-                      onChange={(event) => update({ tokenConfigJson: event.target.value })}
-                    />
-                  </Form.Item>
-                  <Form.Item label="发送配置 JSON">
-                    <Input.TextArea
-                      rows={5}
-                      value={value.sendConfigJson}
-                      onChange={(event) => update({ sendConfigJson: event.target.value })}
-                    />
-                  </Form.Item>
-                  <Form.Item label="限流配置 JSON">
-                    <Input.TextArea
-                      rows={5}
-                      value={value.rateLimitConfigJson}
-                      onChange={(event) => update({ rateLimitConfigJson: event.target.value })}
-                    />
-                  </Form.Item>
-                  <Form.Item label="重试策略 JSON">
-                    <Input.TextArea
-                      rows={5}
-                      value={value.retryPolicyJson}
-                      onChange={(event) => update({ retryPolicyJson: event.target.value })}
-                    />
-                  </Form.Item>
-                  <Form.Item label="死信策略 JSON">
-                    <Input.TextArea
-                      rows={5}
-                      value={value.deadLetterPolicyJson}
-                      onChange={(event) => update({ deadLetterPolicyJson: event.target.value })}
-                    />
-                  </Form.Item>
-                </div>
-              ) : null}
             </Form>
           ),
         },
       ]}
     />
+  );
+}
+
+export function ProviderTestPanel({
+  value,
+  onChange,
+}: {
+  value: ProviderRow;
+  onChange: (value: ProviderRow) => void;
+}) {
+  const { message, modal } = App.useApp();
+  const [testResult, setTestResult] = useState<JSONValue | null>(null);
+  const [testResultMode, setTestResultMode] = useState<'simulate' | 'send' | null>(null);
+  const pushPlusTest = value.providerType === 'pushplus';
+  const update = (patch: Partial<ProviderRow>) => onChange({ ...value, ...patch });
+  const validateTestPayload = () => {
+    if (pushPlusTest && !value.testBody.trim()) {
+      message.error('请填写 content');
+      return false;
+    }
+    return true;
+  };
+  const runTest = async (send: boolean, liveSendConfirmed = false) => {
+    if (!validateTestPayload()) {
+      return;
+    }
+    try {
+      const result = await consoleApi.testSendChannel(value.id, providerTestPayload(value, send, liveSendConfirmed));
+      setTestResult(result.result);
+      setTestResultMode(send ? 'send' : 'simulate');
+      const preview = providerTestRequestPreview(result.result);
+      message.success(`${send ? '真实发送请求已完成' : '模拟请求已生成'}：${preview.url}`);
+    } catch (error) {
+      message.error(userFacingError(error));
+    }
+  };
+  const confirmLiveSend = () => {
+    modal.confirm({
+      title: '确认执行真实发送',
+      content: '确认后将按当前配置执行一次发送测试。',
+      okText: '确认真实发送',
+      cancelText: '取消',
+      okButtonProps: { danger: true },
+      onOk: () => runTest(true, true),
+    });
+  };
+  const preview = testResult ? providerTestRequestPreview(testResult) : null;
+  const sendPreview = testResult && testResultMode === 'send' ? providerTestSendPreview(testResult) : null;
+
+  return (
+    <Form layout="vertical">
+      {pushPlusTest ? (
+        <div className="two-column-form provider-test-form">
+          <Form.Item label="content" required className="form-item-full">
+            <Input.TextArea
+              rows={5}
+              value={value.testBody}
+              onChange={(event) => update({ testBody: event.target.value })}
+            />
+          </Form.Item>
+          <Form.Item label="title（可选）">
+            <Input value={value.testTitle} onChange={(event) => update({ testTitle: event.target.value })} />
+          </Form.Item>
+          <Form.Item label="topic（可选）">
+            <Input value={value.testTopic} onChange={(event) => update({ testTopic: event.target.value })} />
+          </Form.Item>
+        </div>
+      ) : (
+        <>
+          <Form.Item label="测试接收人">
+            <Input value={value.testRecipient} onChange={(event) => update({ testRecipient: event.target.value })} />
+          </Form.Item>
+          <Form.Item label="测试消息体">
+            <Input.TextArea
+              rows={5}
+              value={value.testBody}
+              onChange={(event) => update({ testBody: event.target.value })}
+            />
+          </Form.Item>
+        </>
+      )}
+      <Form.Item label="测试动作">
+        <Space>
+          <Button type="primary" onClick={() => void runTest(false)}>
+            模拟请求
+          </Button>
+          <Button danger onClick={confirmLiveSend}>
+            真实发送
+          </Button>
+        </Space>
+      </Form.Item>
+      {sendPreview ? (
+        <Form.Item label="真实发送结果">
+          <div className="provider-test-result-grid provider-test-live-result-grid">
+            <div className="provider-test-live-panel">
+              <div className="provider-test-live-panel__header">
+                <Typography.Text strong>完整发送</Typography.Text>
+              </div>
+              <div className="provider-test-endpoint-line">
+                <Typography.Text type="secondary">URL</Typography.Text>
+                <pre className="code-block provider-test-inline-code">{sendPreview.request.url || '-'}</pre>
+              </div>
+              <div className="provider-test-result-subgrid">
+                <div className="provider-test-result-block">
+                  <Typography.Text type="secondary">Header</Typography.Text>
+                  <pre className="code-block">{stringifyJSON(sendPreview.request.headers, '{}')}</pre>
+                </div>
+                <div className="provider-test-result-block">
+                  <Typography.Text type="secondary">Body</Typography.Text>
+                  <pre className="code-block">{stringifyJSON(sendPreview.request.body, '{}')}</pre>
+                </div>
+              </div>
+            </div>
+            <div className="provider-test-live-panel provider-test-live-panel--response">
+              <div className="provider-test-live-panel__header">
+                <Typography.Text strong>返回</Typography.Text>
+                <span className="provider-test-status-pill">{providerTestResponseStatus(sendPreview.response)}</span>
+              </div>
+              {providerTestResponseError(sendPreview.response) ? (
+                <div className="provider-test-response-error">{providerTestResponseError(sendPreview.response)}</div>
+              ) : null}
+              <div className="provider-test-result-block">
+                <Typography.Text type="secondary">Body</Typography.Text>
+                <pre className="code-block">{stringifyJSON(providerTestResponseBody(sendPreview.response), '{}')}</pre>
+              </div>
+              <details className="provider-test-response-headers">
+                <summary>响应 Header</summary>
+                <pre className="code-block">{stringifyJSON(providerTestResponseHeaders(sendPreview.response), '{}')}</pre>
+              </details>
+            </div>
+          </div>
+        </Form.Item>
+      ) : preview ? (
+        <Form.Item label="最终请求">
+          <div className="provider-test-result-grid">
+            <div className="provider-test-result-block">
+              <Typography.Text type="secondary">URL</Typography.Text>
+              <pre className="code-block">{preview.url || '-'}</pre>
+            </div>
+            <div className="provider-test-result-block">
+              <Typography.Text type="secondary">Header</Typography.Text>
+              <pre className="code-block">{stringifyJSON(preview.headers, '{}')}</pre>
+            </div>
+            <div className="provider-test-result-block">
+              <Typography.Text type="secondary">Body</Typography.Text>
+              <pre className="code-block">{stringifyJSON(preview.body, '{}')}</pre>
+            </div>
+          </div>
+        </Form.Item>
+      ) : null}
+    </Form>
   );
 }
 
@@ -1940,18 +2012,15 @@ export function ProviderCapabilityTabs({ provider }: { provider: ProviderRow }) 
               <Descriptions.Item label="主动限流">{provider.rateLimitEnabled ? '开启' : '关闭'}</Descriptions.Item>
               <Descriptions.Item label="QPS">{provider.qps}</Descriptions.Item>
               <Descriptions.Item label="每分钟">{provider.minuteLimit}</Descriptions.Item>
-              <Descriptions.Item label="突发容量">{provider.burst}</Descriptions.Item>
             </Descriptions>
           ),
         },
         {
-          key: 'concurrency',
-          label: '并发上限',
+          key: 'dispatch',
+          label: '发送模式',
           children: (
             <Descriptions column={1} size="small" bordered>
-              <Descriptions.Item label="实例并发">{provider.concurrency}</Descriptions.Item>
-              <Descriptions.Item label="单 worker 抢占">{provider.workerClaimLimit}</Descriptions.Item>
-              <Descriptions.Item label="慢平台隔离">{provider.slowPlatformIsolation ? '开启' : '关闭'}</Descriptions.Item>
+              <Descriptions.Item label="执行方式">顺序发送</Descriptions.Item>
             </Descriptions>
           ),
         },
@@ -1961,8 +2030,8 @@ export function ProviderCapabilityTabs({ provider }: { provider: ProviderRow }) 
           children: (
             <Descriptions column={1} size="small" bordered>
               <Descriptions.Item label="超时">{provider.timeoutMs} ms</Descriptions.Item>
-              <Descriptions.Item label="重试">{provider.retryPolicy}</Descriptions.Item>
-              <Descriptions.Item label="间隔">{provider.retryInterval}</Descriptions.Item>
+              <Descriptions.Item label="允许重试次数">{provider.retryAttempts}</Descriptions.Item>
+              <Descriptions.Item label="重试间隔（毫秒）">{provider.retryIntervalMs}</Descriptions.Item>
             </Descriptions>
           ),
         },
@@ -1971,16 +2040,11 @@ export function ProviderCapabilityTabs({ provider }: { provider: ProviderRow }) 
           label: '死信策略',
           children: (
             <Descriptions column={1} size="small" bordered>
-              <Descriptions.Item label="进入条件">{provider.deadLetterPolicy}</Descriptions.Item>
-              <Descriptions.Item label="保留天数">{provider.deadLetterRetentionDays}</Descriptions.Item>
-              <Descriptions.Item label="允许重放">{provider.deadLetterReplay ? '开启' : '关闭'}</Descriptions.Item>
+              <Descriptions.Item label="进入条件">重试耗尽或上级错误</Descriptions.Item>
+              <Descriptions.Item label="保留天数">7</Descriptions.Item>
+              <Descriptions.Item label="死信重放">{provider.deadLetterReplay ? '开启' : '关闭'}</Descriptions.Item>
             </Descriptions>
           ),
-        },
-        {
-          key: 'test',
-          label: '测试发送',
-          children: <Typography.Text>默认测试接收人：{provider.testRecipient}</Typography.Text>,
         },
       ]}
     />

@@ -99,10 +99,12 @@ type templateService interface {
 	GetTemplate(context.Context, string) (msgtemplate.Template, error)
 	UpdateTemplate(context.Context, string, msgtemplate.TemplateInput) (msgtemplate.Template, error)
 	DeleteTemplate(context.Context, string) error
+	ListTemplateVersions(context.Context, string) ([]msgtemplate.TemplateVersion, error)
 	Parse(msgtemplate.VersionInput) (msgtemplate.ValidationResult, error)
 	Preview(msgtemplate.VersionInput) (msgtemplate.ValidationResult, error)
 	Validate(msgtemplate.VersionInput) msgtemplate.ValidationResult
 	Publish(context.Context, string, msgtemplate.VersionInput) (msgtemplate.TemplateVersion, error)
+	RestoreTemplateVersion(context.Context, string, string) (msgtemplate.TemplateVersion, error)
 }
 
 type routeService interface {

@@ -95,6 +95,7 @@ import {
   type SourceInput,
   type TemplateApiRecord,
   type TemplateInput,
+  type TemplateVersionApiRecord,
   type TemplateVersionInput,
   type UserApiRecord,
   type UserIdentityApiRecord,
@@ -145,11 +146,14 @@ import {
 import {
   ProviderCapabilityTabs,
   ProviderConfigForm,
+  ProviderTestPanel,
   channelInputFromProvider,
   createProviderDraft,
   mapChannelRow,
   parseJSONOrEmpty,
   providerCapabilityView,
+  providerTestRequestPreview,
+  providerTestSendPreview,
   providerWithCapability,
   switchProviderType,
   type ProviderRow,
@@ -190,7 +194,15 @@ import {
 import { MessageLogAttemptBlocks } from './console/messageLogDetail';
 import { providerTypeOptions } from './console/shared';
 
-export { ProviderConfigForm, createProviderDraft, switchProviderType } from './console/providerConfig';
+export {
+  ProviderConfigForm,
+  ProviderTestPanel,
+  channelInputFromProvider,
+  createProviderDraft,
+  providerTestRequestPreview,
+  providerTestSendPreview,
+  switchProviderType,
+} from './console/providerConfig';
 export { RouteRuleForm, createRouteRuleDraft, mapRouteRule, routeTargetTemplateOptions } from './console/routeRuleForm';
 export {
   TemplateEditorForm,
@@ -1846,6 +1858,7 @@ export function ProvidersPage({ lastUpdated, onRefresh }: ConsolePageProps) {
   const [loadState, setLoadState] = useState<ApiLoadState>(emptyLoadState);
   const [selected, setSelected] = useState<ProviderRow | null>(null);
   const [providerDraft, setProviderDraft] = useState<ProviderRow>(() => createProviderDraft('gov_cloud', 1));
+  const [providerTestDraft, setProviderTestDraft] = useState<ProviderRow>(() => createProviderDraft('webhook', 1));
   const [editingProviderId, setEditingProviderId] = useState<string | null>(null);
   const providerQuery = useAppliedFilters<ProviderListQuery>({
     name: '',
@@ -1853,6 +1866,7 @@ export function ProvidersPage({ lastUpdated, onRefresh }: ConsolePageProps) {
     status: 'all',
   });
   const [capabilityOpen, setCapabilityOpen] = useState(false);
+  const [providerTestOpen, setProviderTestOpen] = useState(false);
 
   const loadProviders = useCallback(async () => {
     setLoadState({ loading: true, error: '' });
@@ -1918,17 +1932,9 @@ export function ProvidersPage({ lastUpdated, onRefresh }: ConsolePageProps) {
       message.error(userFacingError(error));
     }
   };
-  const buildTestRequest = async (record: ProviderRow) => {
-    try {
-      const result = await consoleApi.buildChannelRequest(record.id, {
-        message_type: record.messageTypes[0] ?? 'text',
-        recipient: record.testRecipient,
-        body: record.testBody,
-      });
-      message.success(`测试请求已由后端生成：${stringifyJSON(result.request, '{}').slice(0, 80)}`);
-    } catch (error) {
-      message.warning(`${userFacingError(error)}；请在编辑页“测试发送”中使用 dry-run 检查配置。`);
-    }
+  const openProviderTest = (record: ProviderRow) => {
+    setProviderTestDraft(providerWithCapability(record, providerCapabilityView(record.providerType, providerCapabilities)));
+    setProviderTestOpen(true);
   };
   const columns: TableProps<ProviderRow>['columns'] = [
     {
@@ -1943,10 +1949,10 @@ export function ProvidersPage({ lastUpdated, onRefresh }: ConsolePageProps) {
       render: (enabled: boolean) => <StatusTag meta={getEnabledMeta(enabled)} />,
     },
     { title: '主动限流', dataIndex: 'rateLimit' },
-    { title: '并发上限', dataIndex: 'concurrency' },
+    { title: '发送模式', render: () => '顺序发送' },
     { title: '超时时间', dataIndex: 'timeout' },
-    { title: '重试策略', dataIndex: 'retryPolicy' },
-    { title: '死信策略', dataIndex: 'deadLetterPolicy' },
+    { title: '允许重试次数', render: (_, record) => record.retryAttempts },
+    { title: '死信策略', render: () => '全局默认' },
     {
       title: '操作',
       render: (_, record) => (
@@ -1963,8 +1969,8 @@ export function ProvidersPage({ lastUpdated, onRefresh }: ConsolePageProps) {
           <Button type="link" onClick={() => openEditProvider(record)}>
             编辑
           </Button>
-          <Button type="link" onClick={() => void buildTestRequest(record)}>
-            联调
+          <Button type="link" onClick={() => openProviderTest(record)}>
+            测试
           </Button>
         </Space>
       ),
@@ -2088,6 +2094,15 @@ export function ProvidersPage({ lastUpdated, onRefresh }: ConsolePageProps) {
         <ProviderConfigForm value={providerDraft} onChange={setProviderDraft} capabilities={providerCapabilities} />
       </CreateDrawer>
       <Drawer
+        title={`测试推送渠道：${providerTestDraft.name}`}
+        width={760}
+        open={providerTestOpen}
+        onClose={() => setProviderTestOpen(false)}
+        destroyOnHidden
+      >
+        <ProviderTestPanel value={providerTestDraft} onChange={setProviderTestDraft} />
+      </Drawer>
+      <Drawer
         title={selected ? `推送渠道详情：${selected.name}` : '推送渠道详情'}
         width={760}
         open={capabilityOpen}
@@ -2108,11 +2123,12 @@ export function ProvidersPage({ lastUpdated, onRefresh }: ConsolePageProps) {
                 {selected.requestMethod} {selected.requestUrl}
               </Descriptions.Item>
               <Descriptions.Item label="主动限流">{selected.rateLimit}</Descriptions.Item>
-              <Descriptions.Item label="并发上限">{selected.concurrency}</Descriptions.Item>
+              <Descriptions.Item label="发送模式">顺序发送</Descriptions.Item>
               <Descriptions.Item label="超时时间">{selected.timeout}</Descriptions.Item>
-              <Descriptions.Item label="重试策略">{selected.retryPolicy}</Descriptions.Item>
-              <Descriptions.Item label="死信策略">{selected.deadLetterPolicy}</Descriptions.Item>
-              <Descriptions.Item label="最近联调结果">{selected.lastTestResult}</Descriptions.Item>
+              <Descriptions.Item label="允许重试次数">{selected.retryAttempts}</Descriptions.Item>
+              <Descriptions.Item label="重试间隔">{selected.retryIntervalMs} ms</Descriptions.Item>
+              <Descriptions.Item label="死信策略">全局默认：重试耗尽或上级错误，保留 7 天</Descriptions.Item>
+              <Descriptions.Item label="最近测试结果">{selected.lastTestResult}</Descriptions.Item>
             </Descriptions>
             <Divider />
             <ProviderCapabilityTabs provider={selected} />
@@ -3201,13 +3217,192 @@ export function RoutesPage({ lastUpdated, onRefresh }: ConsolePageProps) {
 }
 
 
+export function TemplateRowActions({
+  record,
+  onEdit,
+  onValidate,
+  onDelete,
+}: {
+  record: TemplateRecord & { raw?: TemplateApiRecord };
+  onEdit: (record: TemplateRecord & { raw?: TemplateApiRecord }) => void;
+  onValidate: (record: TemplateRecord & { raw?: TemplateApiRecord }) => void;
+  onDelete: (record: TemplateRecord & { raw?: TemplateApiRecord }) => void;
+}) {
+  return (
+    <Space>
+      <Button type="link" onClick={() => onEdit(record)}>
+        编辑
+      </Button>
+      <Button type="link" onClick={() => onValidate(record)}>
+        校验
+      </Button>
+      <Button type="link" danger onClick={() => onDelete(record)}>
+        删除
+      </Button>
+    </Space>
+  );
+}
+
+export function TemplateVersionHistoryContent({
+  currentVersionId,
+  versions,
+  loading,
+  onRestore,
+}: {
+  currentVersionId: string;
+  versions: TemplateVersionApiRecord[];
+  loading: boolean;
+  onRestore: (version: TemplateVersionApiRecord) => void;
+}) {
+  const columns: TableProps<TemplateVersionApiRecord>['columns'] = [
+    {
+      title: '版本',
+      dataIndex: 'version_no',
+      width: 86,
+      render: (value: number, version) => (
+        <Space>
+          <Typography.Text strong>v{value}</Typography.Text>
+          {version.id === currentVersionId ? <Tag color="success">当前</Tag> : null}
+        </Space>
+      ),
+    },
+    {
+      title: '推送渠道类型',
+      dataIndex: 'target_provider_type',
+      render: (value: string) => getProviderTypeLabel(value as TemplateRecord['targetProviderType']),
+    },
+    {
+      title: '消息类型',
+      dataIndex: 'message_type',
+      render: (value: string) => getMessageTypeLabel(value),
+    },
+    {
+      title: '校验状态',
+      dataIndex: 'validation_status',
+      render: (value: TemplateRecord['validationStatus']) => <StatusTag meta={getValidationStatusMeta(value || 'draft')} />,
+    },
+    {
+      title: '使用变量',
+      dataIndex: 'used_variables',
+      render: (variables: string[] | undefined) => (
+        <Space wrap size={[4, 4]}>
+          {(variables ?? []).length ? (variables ?? []).map((variable) => <Tag key={variable}>{variable}</Tag>) : '-'}
+        </Space>
+      ),
+    },
+    { title: '发布时间', dataIndex: 'published_at', render: (value: string | null | undefined) => formatApiTime(value) },
+    {
+      title: '操作',
+      width: 150,
+      render: (_, version) =>
+        version.id === currentVersionId ? (
+          <Typography.Text type="secondary">当前版本</Typography.Text>
+        ) : (
+          <Button type="link" onClick={() => onRestore(version)}>
+            基于此版本恢复
+          </Button>
+        ),
+    },
+  ];
+
+  return (
+    <>
+      <Alert
+        type="info"
+        showIcon
+        className="semantic-alert"
+        message="历史版本不可修改；恢复会复制所选版本内容并发布为新版本。"
+        description="已发布路由策略引用的旧模板版本不会自动变更，需在路由策略中重新选择并发布。"
+      />
+      <Table
+        rowKey="id"
+        size="middle"
+        pagination={false}
+        columns={columns}
+        dataSource={versions}
+        loading={loading}
+        expandable={{
+          rowExpandable: () => true,
+          expandedRowRender: (version) => (
+            <div className="template-version-detail">
+              <div>
+                <Typography.Text type="secondary">模板内容</Typography.Text>
+                <pre className="code-block">{version.template_body || '-'}</pre>
+              </div>
+              <div>
+                <Typography.Text type="secondary">样例 Payload</Typography.Text>
+                <pre className="code-block">{stringifyJSON(version.sample_payload, '{}')}</pre>
+              </div>
+            </div>
+          ),
+        }}
+      />
+    </>
+  );
+}
+
+export function TemplateVersionHistoryDrawer({
+  open,
+  templateName,
+  currentVersionId,
+  versions,
+  loading,
+  onClose,
+  onRestore,
+}: {
+  open: boolean;
+  templateName: string;
+  currentVersionId: string;
+  versions: TemplateVersionApiRecord[];
+  loading: boolean;
+  onClose: () => void;
+  onRestore: (version: TemplateVersionApiRecord) => void;
+}) {
+  return (
+    <Drawer
+      title={`版本历史：${templateName || '模板'}`}
+      width={980}
+      open={open}
+      onClose={onClose}
+      destroyOnHidden
+    >
+      <TemplateVersionHistoryContent
+        currentVersionId={currentVersionId}
+        versions={versions}
+        loading={loading}
+        onRestore={onRestore}
+      />
+    </Drawer>
+  );
+}
+
+export function templateRecordWithRestoredVersion(
+  record: TemplateRecord & { raw?: TemplateApiRecord },
+  version: TemplateVersionApiRecord,
+): TemplateRecord & { raw?: TemplateApiRecord } {
+  return {
+    ...record,
+    version: `v${version.version_no}`,
+    raw: record.raw
+      ? {
+          ...record.raw,
+          current_version_id: version.id,
+          current_version: version,
+        }
+      : record.raw,
+  };
+}
+
 export function TemplatesPage({ lastUpdated, onRefresh }: ConsolePageProps) {
-  const { message } = App.useApp();
+  const { message, modal } = App.useApp();
   const [modalOpen, setModalOpen] = useState(false);
   const [sourceRows, setSourceRows] = useState<SourceRow[]>([]);
   const [templateRows, setTemplateRows] = useState<Array<TemplateRecord & { raw?: TemplateApiRecord }>>([]);
   const [providerCapabilities, setProviderCapabilities] = useState<ProviderCapabilityApiRecord[]>([]);
   const [selected, setSelected] = useState<TemplateRecord & { raw?: TemplateApiRecord } | null>(null);
+  const [versionHistoryTemplate, setVersionHistoryTemplate] = useState<TemplateRecord & { raw?: TemplateApiRecord } | null>(null);
+  const [templateVersions, setTemplateVersions] = useState<TemplateVersionApiRecord[]>([]);
+  const [templateVersionsLoading, setTemplateVersionsLoading] = useState(false);
   const [templateDraft, setTemplateDraft] = useState<TemplateDraft>(() => createTemplateDraft([]));
   const [templateFeedback, setTemplateFeedback] = useState<TemplateFeedback>(() => createTemplateFeedback());
   const [loadState, setLoadState] = useState<ApiLoadState>(emptyLoadState);
@@ -3341,6 +3536,83 @@ export function TemplatesPage({ lastUpdated, onRefresh }: ConsolePageProps) {
       message.warning(`请手动复制 ${variable}`);
     }
   };
+  const loadTemplateVersions = async (record: TemplateRecord & { raw?: TemplateApiRecord }) => {
+    const templateID = record.raw?.id ?? record.id;
+    setTemplateVersionsLoading(true);
+    try {
+      const response = await consoleApi.listTemplateVersions(templateID);
+      setTemplateVersions(response.versions);
+    } catch (error) {
+      setTemplateVersions([]);
+      message.error(userFacingError(error));
+    } finally {
+      setTemplateVersionsLoading(false);
+    }
+  };
+  const openTemplateVersionHistory = async (record: TemplateRecord & { raw?: TemplateApiRecord }) => {
+    setVersionHistoryTemplate(record);
+    setTemplateVersions([]);
+    await loadTemplateVersions(record);
+  };
+  const validateTemplateRow = async (record: TemplateRecord & { raw?: TemplateApiRecord }) => {
+    try {
+      await consoleApi.validateTemplate({
+        message_type: record.messageType || 'text',
+        target_provider_type: record.targetProviderType,
+        template_body: record.content || '{}',
+        message_body_schema: record.raw?.current_version?.message_body_schema ?? record.raw?.message_body_schema ?? {},
+        sample_payload:
+          record.raw?.current_version?.sample_payload ?? record.raw?.sample_payload ?? { title: '测试消息' },
+      });
+      message.success(`${record.name} 校验通过`);
+    } catch (error) {
+      message.error(userFacingError(error));
+    }
+  };
+  const confirmDeleteTemplate = (record: TemplateRecord & { raw?: TemplateApiRecord }) => {
+    modal.confirm({
+      title: `删除模板：${record.name}`,
+      content: '删除后路由策略中引用的模板版本可能失效，请二次确认后继续。',
+      okText: '确认删除',
+      cancelText: '取消',
+      okButtonProps: { danger: true },
+      onOk: async () => {
+        try {
+          await consoleApi.deleteTemplate(record.raw?.id ?? record.id);
+          message.success('模板已删除');
+          await loadTemplates();
+        } catch (error) {
+          message.error(userFacingError(error));
+        }
+      },
+    });
+  };
+  const confirmRestoreTemplateVersion = (version: TemplateVersionApiRecord) => {
+    const currentTemplate = versionHistoryTemplate;
+    if (!currentTemplate) {
+      return;
+    }
+    modal.confirm({
+      title: `恢复模板版本：v${version.version_no}`,
+      content: '将复制该历史版本的模板内容并发布为新版本，不会修改历史版本。已发布路由策略引用的旧模板版本不会自动变更，需在路由策略中重新选择并发布。',
+      okText: '发布为新版本',
+      cancelText: '取消',
+      okButtonProps: { danger: true },
+      onOk: async () => {
+        try {
+          const response = await consoleApi.restoreTemplateVersion(currentTemplate.raw?.id ?? currentTemplate.id, version.id);
+          const restoredVersion = response.version;
+          const nextTemplate = templateRecordWithRestoredVersion(currentTemplate, restoredVersion);
+          setVersionHistoryTemplate(nextTemplate);
+          message.success(`已基于 v${version.version_no} 发布新版本 v${response.version.version_no}`);
+          await loadTemplates();
+          await loadTemplateVersions(nextTemplate);
+        } catch (error) {
+          message.error(userFacingError(error));
+        }
+      },
+    });
+  };
 
   const templateColumns: TableProps<TemplateRecord & { raw?: TemplateApiRecord }>['columns'] = [
     { title: '模板名称', dataIndex: 'name' },
@@ -3363,35 +3635,24 @@ export function TemplatesPage({ lastUpdated, onRefresh }: ConsolePageProps) {
         <StatusTag meta={getValidationStatusMeta(value)} />
       ),
     },
-    { title: '当前版本', dataIndex: 'version' },
+    {
+      title: '当前版本',
+      dataIndex: 'version',
+      render: (value: string, record) => (
+        <Button type="link" onClick={() => void openTemplateVersionHistory(record)}>
+          {value || '草稿'}
+        </Button>
+      ),
+    },
     {
       title: '操作',
       render: (_, record) => (
-        <Space>
-          <Button type="link" onClick={() => openTemplateModal(record)}>
-            编辑
-          </Button>
-          <Button
-            type="link"
-            onClick={async () => {
-              try {
-                await consoleApi.validateTemplate({
-                  message_type: record.messageType || 'text',
-                  target_provider_type: record.targetProviderType,
-                  template_body: record.content || '{}',
-                  message_body_schema: record.raw?.current_version?.message_body_schema ?? record.raw?.message_body_schema ?? {},
-                  sample_payload:
-                    record.raw?.current_version?.sample_payload ?? record.raw?.sample_payload ?? { title: '测试消息' },
-                });
-                message.success(`${record.name} 校验通过`);
-              } catch (error) {
-                message.error(userFacingError(error));
-              }
-            }}
-          >
-            校验
-          </Button>
-        </Space>
+        <TemplateRowActions
+          record={record}
+          onEdit={openTemplateModal}
+          onValidate={(nextRecord) => void validateTemplateRow(nextRecord)}
+          onDelete={confirmDeleteTemplate}
+        />
       ),
     },
   ];
@@ -3508,7 +3769,7 @@ export function TemplatesPage({ lastUpdated, onRefresh }: ConsolePageProps) {
               <Tag>{selectedPayloadFields.length} 个字段</Tag>
             </div>
             <div className="template-panel-scroll">
-              <Descriptions size="small" column={1}>
+              <Descriptions size="small" column={1} className="template-payload-meta">
                 <Descriptions.Item label="来源">
                   {selectedTemplateSource ? `${selectedTemplateSource.name} / ${selectedTemplateSource.code}` : '-'}
                 </Descriptions.Item>
@@ -3538,6 +3799,7 @@ export function TemplatesPage({ lastUpdated, onRefresh }: ConsolePageProps) {
                 onChange={setTemplateDraft}
                 sourceRows={sourceRows}
                 capabilities={providerCapabilities}
+                showEnabledSwitch={Boolean(templateDraft.id)}
               />
               {templateFeedback.errors.length ? (
                 <Alert
@@ -3574,6 +3836,18 @@ export function TemplatesPage({ lastUpdated, onRefresh }: ConsolePageProps) {
           </section>
         </div>
       </Modal>
+      <TemplateVersionHistoryDrawer
+        open={Boolean(versionHistoryTemplate)}
+        templateName={versionHistoryTemplate?.name ?? ''}
+        currentVersionId={versionHistoryTemplate?.raw?.current_version_id ?? ''}
+        versions={templateVersions}
+        loading={templateVersionsLoading}
+        onClose={() => {
+          setVersionHistoryTemplate(null);
+          setTemplateVersions([]);
+        }}
+        onRestore={confirmRestoreTemplateVersion}
+      />
     </PageFrame>
   );
 }

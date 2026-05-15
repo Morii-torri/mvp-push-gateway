@@ -169,6 +169,66 @@ func TestTemplatesHandlerIncludesCurrentVersionMetadata(t *testing.T) {
 	}
 }
 
+func TestTemplateVersionHandlersListAndRestoreHistoricalVersions(t *testing.T) {
+	now := time.Date(2026, 5, 15, 8, 0, 0, 0, time.UTC)
+	store := &httpTemplateStore{
+		versions: []msgtemplate.TemplateVersion{{
+			ID:                 "version-2",
+			TemplateID:         "template-1",
+			VersionNo:          2,
+			MessageType:        "json",
+			TargetProviderType: "pushplus",
+			TemplateBody:       `{"content":"{{ payload.content | default('-') }}"}`,
+			MessageBodySchema:  json.RawMessage(`{"type":"object"}`),
+			SamplePayload:      json.RawMessage(`{"content":"历史内容"}`),
+			UsedVariables:      []string{"payload.content"},
+			ValidationStatus:   "valid",
+			ValidationErrors:   json.RawMessage(`[]`),
+			CreatedAt:          now,
+			UpdatedAt:          now,
+		}},
+	}
+	handler := httpapi.NewHandler(
+		testConfig(),
+		httpapi.WithAuthService(fakeAuthService{authenticatedToken: "admin-session"}),
+		httpapi.WithTemplateService(msgtemplate.NewService(store)),
+	)
+
+	listReq := httptest.NewRequest(http.MethodGet, "/api/v1/templates/template-1/versions", nil)
+	listReq.Header.Set("Authorization", "Bearer admin-session")
+	listRec := httptest.NewRecorder()
+	handler.ServeHTTP(listRec, listReq)
+
+	if listRec.Code != http.StatusOK {
+		t.Fatalf("expected list status 200, got %d body=%s", listRec.Code, listRec.Body.String())
+	}
+	var listBody struct {
+		Versions []struct {
+			ID           string `json:"id"`
+			VersionNo    int    `json:"version_no"`
+			TemplateBody string `json:"template_body"`
+		} `json:"versions"`
+	}
+	if err := json.NewDecoder(listRec.Body).Decode(&listBody); err != nil {
+		t.Fatalf("decode list versions response: %v", err)
+	}
+	if len(listBody.Versions) != 1 || listBody.Versions[0].ID != "version-2" || listBody.Versions[0].VersionNo != 2 || listBody.Versions[0].TemplateBody == "" {
+		t.Fatalf("unexpected versions response: %+v", listBody.Versions)
+	}
+
+	restoreReq := httptest.NewRequest(http.MethodPost, "/api/v1/templates/template-1/versions/version-2/restore", nil)
+	restoreReq.Header.Set("Authorization", "Bearer admin-session")
+	restoreRec := httptest.NewRecorder()
+	handler.ServeHTTP(restoreRec, restoreReq)
+
+	if restoreRec.Code != http.StatusCreated {
+		t.Fatalf("expected restore status 201, got %d body=%s", restoreRec.Code, restoreRec.Body.String())
+	}
+	if store.requestedTemplateID != "template-1" || store.requestedVersionID != "version-2" || store.publishCalls != 1 {
+		t.Fatalf("restore did not copy old version into new publish: template=%s version=%s publishCalls=%d", store.requestedTemplateID, store.requestedVersionID, store.publishCalls)
+	}
+}
+
 func hasTemplateError(errors []msgtemplate.ValidationError, code string, path string) bool {
 	for _, err := range errors {
 		if err.Code == code && err.Path == path {
@@ -179,9 +239,12 @@ func hasTemplateError(errors []msgtemplate.ValidationError, code string, path st
 }
 
 type httpTemplateStore struct {
-	templates     []msgtemplate.Template
-	publishCalls  int
-	publishParams msgtemplate.PublishTemplateVersionParams
+	templates           []msgtemplate.Template
+	versions            []msgtemplate.TemplateVersion
+	publishCalls        int
+	publishParams       msgtemplate.PublishTemplateVersionParams
+	requestedTemplateID string
+	requestedVersionID  string
 }
 
 func (s *httpTemplateStore) ListTemplates(context.Context) ([]msgtemplate.Template, error) {
@@ -202,6 +265,21 @@ func (s *httpTemplateStore) UpdateTemplate(context.Context, string, msgtemplate.
 
 func (s *httpTemplateStore) DeleteTemplate(context.Context, string) error {
 	return nil
+}
+
+func (s *httpTemplateStore) ListTemplateVersions(context.Context, string) ([]msgtemplate.TemplateVersion, error) {
+	return s.versions, nil
+}
+
+func (s *httpTemplateStore) GetTemplateVersionForRestore(_ context.Context, templateID string, versionID string) (msgtemplate.TemplateVersion, error) {
+	s.requestedTemplateID = templateID
+	s.requestedVersionID = versionID
+	for _, version := range s.versions {
+		if version.ID == versionID {
+			return version, nil
+		}
+	}
+	return msgtemplate.TemplateVersion{}, msgtemplate.ErrNotFound
 }
 
 func (s *httpTemplateStore) PublishTemplateVersion(_ context.Context, templateID string, params msgtemplate.PublishTemplateVersionParams) (msgtemplate.TemplateVersion, error) {

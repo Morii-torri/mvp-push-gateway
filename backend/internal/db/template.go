@@ -87,6 +87,53 @@ func (r Repository) DeleteTemplate(ctx context.Context, id string) error {
 	return nil
 }
 
+func (r Repository) ListTemplateVersions(ctx context.Context, templateID string) ([]msgtemplate.TemplateVersion, error) {
+	var exists bool
+	if err := r.pool.QueryRow(ctx, `SELECT true FROM templates WHERE id = $1`, templateID).Scan(&exists); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, msgtemplate.ErrNotFound
+		}
+		return nil, fmt.Errorf("check template before list versions: %w", err)
+	}
+	rows, err := r.pool.Query(ctx, `
+		SELECT `+templateVersionSelectColumns()+`
+		FROM template_versions
+		WHERE template_id = $1
+		ORDER BY version_no DESC
+	`, templateID)
+	if err != nil {
+		return nil, fmt.Errorf("list template versions: %w", err)
+	}
+	defer rows.Close()
+
+	versions := []msgtemplate.TemplateVersion{}
+	for rows.Next() {
+		version, err := scanTemplateVersion(rows)
+		if err != nil {
+			return nil, err
+		}
+		versions = append(versions, version)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("list template versions rows: %w", err)
+	}
+	return versions, nil
+}
+
+func (r Repository) GetTemplateVersionForRestore(ctx context.Context, templateID string, versionID string) (msgtemplate.TemplateVersion, error) {
+	row := r.pool.QueryRow(ctx, `
+		SELECT `+templateVersionSelectColumns()+`
+		FROM template_versions
+		WHERE template_id = $1
+			AND id = $2
+	`, templateID, versionID)
+	version, err := scanTemplateVersion(row)
+	if err != nil {
+		return msgtemplate.TemplateVersion{}, mapTemplateQueryError("get template version", err)
+	}
+	return version, nil
+}
+
 func (r Repository) PublishTemplateVersion(ctx context.Context, templateID string, params msgtemplate.PublishTemplateVersionParams) (msgtemplate.TemplateVersion, error) {
 	tx, err := r.pool.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {

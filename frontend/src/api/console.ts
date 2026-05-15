@@ -166,6 +166,27 @@ export type TemplateApiRecord = {
   updated_at: string;
 };
 
+export type TemplateVersionApiRecord = {
+  id: string;
+  template_id: string;
+  version_no: number;
+  message_type: string;
+  target_provider_type: string;
+  template_engine: string;
+  template_syntax_version: string;
+  template_body: string;
+  message_body_schema: JSONValue;
+  sample_payload: JSONValue;
+  compiled_preview?: JSONValue;
+  used_variables?: string[];
+  allowed_filters?: string[];
+  validation_status?: string;
+  validation_errors?: JSONValue;
+  published_at?: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
 export type TemplateInput = {
   name: string;
   description: string;
@@ -499,6 +520,18 @@ export const consoleApi = {
   },
   updateTemplate(id: string, input: TemplateInput, fetcher?: ApiFetcher) {
     return apiRequest<{ template: TemplateApiRecord }>(`/templates/${id}`, { method: 'PUT', body: input, fetcher });
+  },
+  deleteTemplate(id: string, fetcher?: ApiFetcher) {
+    return apiRequest<{ ok: boolean }>(`/templates/${id}`, { method: 'DELETE', fetcher });
+  },
+  listTemplateVersions(id: string, fetcher?: ApiFetcher) {
+    return apiRequest<{ versions: TemplateVersionApiRecord[] }>(`/templates/${id}/versions`, { fetcher });
+  },
+  restoreTemplateVersion(id: string, versionId: string, fetcher?: ApiFetcher) {
+    return apiRequest<{ version: TemplateVersionApiRecord }>(`/templates/${id}/versions/${versionId}/restore`, {
+      method: 'POST',
+      fetcher,
+    });
   },
   parseTemplate(input: TemplateVersionInput, fetcher?: ApiFetcher) {
     return apiRequest<{ result: JSONValue }>('/templates/parse', { method: 'POST', body: input, fetcher });

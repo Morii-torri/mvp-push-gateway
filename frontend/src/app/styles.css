@@ -1396,6 +1396,10 @@ body {
   overflow: auto;
 }
 
+.template-payload-meta {
+  margin-bottom: 16px;
+}
+
 .template-variable-cell {
   display: flex;
   flex-wrap: nowrap;
@@ -1439,7 +1443,21 @@ body {
 }
 
 .dense-tabs .ant-tabs-content-holder {
-  max-height: 560px;
+  min-height: 0;
+  max-height: none;
+  overflow: visible;
+}
+
+.provider-config-tabs {
+  min-height: 0;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+.provider-config-tabs > .ant-tabs-content-holder {
+  flex: 1;
+  min-height: 0;
   overflow: auto;
 }
 
@@ -1451,6 +1469,97 @@ body {
   padding-bottom: 4px;
 }
 
+.provider-test-result-grid {
+  display: grid;
+  gap: 12px;
+}
+
+.provider-test-live-result-grid {
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  align-items: start;
+}
+
+.provider-test-result-block {
+  display: grid;
+  gap: 6px;
+}
+
+.provider-test-live-panel {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+  padding: 14px;
+  background: #fbfdff;
+  border: 1px solid #dce7f5;
+  border-radius: 8px;
+}
+
+.provider-test-live-panel__header {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  justify-content: space-between;
+  min-width: 0;
+  padding-bottom: 10px;
+  border-bottom: 1px solid #e6eef8;
+}
+
+.provider-test-endpoint-line {
+  display: grid;
+  gap: 6px;
+}
+
+.provider-test-result-subgrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 12px;
+  min-width: 0;
+}
+
+.provider-test-inline-code {
+  padding: 10px 12px;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.provider-test-status-pill {
+  flex: none;
+  padding: 2px 8px;
+  color: #15508d;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 20px;
+  background: #eef6ff;
+  border: 1px solid #cfe3fa;
+  border-radius: 999px;
+}
+
+.provider-test-response-error {
+  padding: 8px 10px;
+  color: #9f2a2a;
+  font-size: 13px;
+  line-height: 1.6;
+  background: #fff7f7;
+  border: 1px solid #f2c9c9;
+  border-radius: 6px;
+}
+
+.provider-test-response-headers {
+  min-width: 0;
+}
+
+.provider-test-response-headers summary {
+  width: max-content;
+  color: #55708f;
+  font-size: 13px;
+  line-height: 1.6;
+  cursor: pointer;
+}
+
+.provider-test-response-headers[open] summary {
+  margin-bottom: 6px;
+}
+
 .advanced-json-fields {
   display: grid;
   gap: 8px;
@@ -1459,31 +1568,70 @@ body {
 
 .template-content-fields {
   display: grid;
-  gap: 10px;
+  gap: 0;
   margin-bottom: 14px;
+  border-top: 1px solid #e4ebf7;
 }
 
 .template-content-field {
   display: grid;
-  grid-template-columns: minmax(0, 1.4fr) minmax(140px, 0.6fr);
-  gap: 0 12px;
-  padding: 12px;
-  background: #f8fbff;
-  border: 1px solid #dce7f5;
-  border-radius: 6px;
+  grid-template-columns: 1fr;
+  gap: 9px;
+  align-items: start;
+  padding: 16px 0 18px;
+  border-bottom: 1px solid #e4ebf7;
+}
+
+.template-content-field__heading {
+  min-width: 0;
+}
+
+.template-content-field__name {
+  min-width: 0;
+  overflow: hidden;
+  color: #12213f;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.3;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.template-content-field__controls {
+  display: block;
+  min-width: 0;
+  padding-left: 24px;
+}
+
+.template-content-field__controls .ant-form-item {
+  margin-bottom: 0;
+}
+
+.template-version-detail {
+  display: grid;
+  grid-template-columns: minmax(0, 1.2fr) minmax(0, 0.8fr);
+  gap: 12px;
 }
 
 .template-name-row {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr) auto minmax(178px, 240px);
   gap: 14px;
   align-items: end;
+}
+
+.template-name-row--without-status {
+  grid-template-columns: minmax(0, 1fr) minmax(178px, 240px);
 }
 
 .two-column-form {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 0 14px;
+}
+
+.form-item-full {
+  grid-column: 1 / -1;
 }
 
 .editor-block,
@@ -1676,9 +1824,22 @@ body {
   .template-modal-grid,
   .template-name-row,
   .template-content-field,
+  .template-content-field__controls,
   .two-column-form,
   .send-action-row,
   .condition-row {
+    grid-template-columns: 1fr;
+  }
+
+  .template-content-field__heading {
+    padding-top: 0;
+  }
+
+  .template-content-field__controls {
+    padding-left: 0;
+  }
+
+  .template-version-detail {
     grid-template-columns: 1fr;
   }
 }

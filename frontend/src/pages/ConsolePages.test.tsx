@@ -6,8 +6,11 @@ import { describe, expect, it } from 'vitest';
 import * as ConsolePages from './ConsolePages';
 import {
   ProviderConfigForm,
+  ProviderTestPanel,
   RouteRuleForm,
   TemplateEditorForm,
+  TemplateRowActions,
+  TemplateVersionHistoryContent,
   OverviewPage,
   MatchGroupsPage,
   OrganizationPage,
@@ -20,6 +23,7 @@ import {
   SystemSettingsPage,
   TemplatesPage,
   buildOrgTreeData,
+  channelInputFromProvider,
   createChildOrgDraft,
   createProviderDraft,
   createSourceDraft,
@@ -39,13 +43,15 @@ import {
   switchTemplateProviderType,
   sourceInputFromDraft,
   templateDraftWithSourcePayload,
+  templateRecordWithRestoredVersion,
   templateRenderedPreview,
   templateUserFacingPreview,
   templateVersionInputFromDraft,
+  providerTestRequestPreview,
+  providerTestSendPreview,
 } from './ConsolePages';
-import type { ProviderCapabilityApiRecord } from '../api/console';
+import type { OrgUnitApiRecord, ProviderCapabilityApiRecord, TemplateApiRecord, TemplateVersionApiRecord } from '../api/console';
 import { getProviderTypeLabel } from '../utils/labels';
-import type { OrgUnitApiRecord } from '../api/console';
 
 const lastUpdated = new Date('2026-05-11T09:30:00+08:00');
 
@@ -417,14 +423,77 @@ describe('critical console pages', () => {
 
     expect(markup).toContain('corpsecret');
     expect(markup).toContain('https://www.ywxt.sh.cegn.cn/api-gateway/uranus/uranus/cgi-bin/');
-    expect(markup).toContain('开发环境不可访问，先实现不联调');
+    expect(markup).toContain('开发环境不可访问，先实现请求构建');
     expect(markup).not.toContain('Body 映射模板');
     expect(markup).not.toContain('请求 Header');
   });
 
-  it('uses simple provider fields and notice template fallbacks for PushPlus WxPusher and ServerChan', () => {
+  it('uses PushPlus token-only provider fields and JSON content template fallback', () => {
+    const providerDraft = createProviderDraft('pushplus', 1);
+    const providerMarkup = renderPage(
+      <ProviderConfigForm
+        value={providerDraft}
+        onChange={() => undefined}
+        capabilities={[]}
+      />,
+    );
+
+    expect(providerDraft.description).toBe('');
+    expect(providerMarkup).toContain('Token');
+    expect(providerMarkup).not.toContain('Topic');
+    expect(providerMarkup).not.toContain('推送渠道</label>');
+    expect(providerMarkup).not.toContain('template');
+    expect(providerMarkup).not.toContain('令牌获取');
+    expect(providerMarkup).not.toContain('请求映射');
+    expect(providerMarkup).not.toContain('高级 JSON 配置');
+    expect(providerMarkup).not.toContain('该平台为内置适配器');
+    expect(providerMarkup).not.toContain('突发容量');
+    expect(providerMarkup).not.toContain('推送渠道实例并发上限');
+    expect(providerMarkup).not.toContain('单 worker 抢占上限');
+    expect(providerMarkup).not.toContain('队列键');
+    expect(providerMarkup).not.toContain('幂等键');
+    expect(providerMarkup).toContain('更多设置');
+    expect(providerMarkup).not.toContain('测试发送');
+    expect(providerMarkup).not.toContain('模拟请求');
+    expect(providerMarkup).not.toContain('真实发送');
+    expect(providerMarkup).not.toContain('测试接收人');
+
+    const providerInput = channelInputFromProvider({ ...providerDraft, fieldValues: { 'auth_config.token': 'push-token' } });
+    expect(providerInput.auth_config).toEqual({ token: 'push-token' });
+    expect(providerInput.send_config).toEqual({});
+    expect(providerInput.rate_limit_config).toEqual({ enabled: true, qps: 10, minute_limit: 600 });
+    expect(providerInput.concurrency_limit).toBe(1);
+    expect(providerInput.retry_policy).toEqual({ max_attempts: 2, delay_ms: 3000, idempotency_key: '${message_id}:${provider_instance_id}' });
+    expect(providerInput.dead_letter_policy).toEqual({
+      policy: 'retry_exhausted_or_upstream_error',
+      retention_days: 7,
+      replay: true,
+    });
+
+    const templateDraft = createTemplateDraft([], [], 'pushplus');
+    const templateMarkup = renderPage(
+      <TemplateEditorForm
+        value={templateDraft}
+        onChange={() => undefined}
+        sourceRows={[]}
+        capabilities={[]}
+      />,
+    );
+    const templateInput = templateVersionInputFromDraft(templateDraft);
+    const templateBody = JSON.parse(templateInput.template_body) as Record<string, string>;
+
+    expect(templateInput.message_type).toBe('json');
+    expect(Object.keys(templateBody).sort()).toEqual(['content', 'title', 'topic']);
+    expect(templateMarkup).toContain('content');
+    expect(templateMarkup).toContain('title（可选）');
+    expect(templateMarkup).toContain('topic（可选）');
+    expect(templateMarkup).not.toContain('消息类型');
+    expect(templateMarkup).not.toContain('跳转链接');
+    expect(templateMarkup).not.toContain('内容格式');
+  });
+
+  it('uses simple provider fields and notice template fallbacks for WxPusher and ServerChan', () => {
     const providers = [
-      ['pushplus', 'PushPlus Token', ['topic', 'channel']],
       ['wxpusher', 'WxPusher AppToken', ['UID 列表', 'Topic ID 列表']],
       ['serverchan', 'Server酱 SendKey', ['版本', '推送渠道']],
     ] as const;
@@ -564,7 +633,7 @@ describe('critical console pages', () => {
     }
   });
 
-  it('renders provider capability driven fields with collapsed advanced JSON by default', () => {
+  it('renders provider capability driven fields without raw capability summary or advanced JSON', () => {
     const capabilities: ProviderCapabilityApiRecord[] = [
       {
         provider_type: 'wecom',
@@ -592,14 +661,34 @@ describe('critical console pages', () => {
     );
 
     expect(markup).toContain('企业微信应用兼容');
-    expect(markup).toContain('企业应用');
-    expect(markup).toContain('text、markdown');
     expect(markup).toContain('企业 ID');
     expect(markup).toContain('应用 Secret');
     expect(markup).toContain('API 基础地址');
-    expect(markup).toContain('高级 JSON 配置');
+    expect(markup).toContain('更多设置');
+    expect(markup).not.toContain('能力名称');
+    expect(markup).not.toContain('企业应用');
+    expect(markup).not.toContain('text、markdown');
+    expect(markup).not.toContain('高级 JSON 配置');
+    expect(markup).not.toContain('令牌获取');
+    expect(markup).not.toContain('请求映射');
     expect(markup).not.toContain('认证配置 JSON');
     expect(markup).not.toContain('Body 映射模板');
+  });
+
+  it('keeps mapping tabs only for custom HTTP providers', () => {
+    const builtInMarkup = renderPage(
+      <ProviderConfigForm value={createProviderDraft('wecom', 1)} onChange={() => undefined} capabilities={[]} />,
+    );
+    const customMarkup = renderPage(
+      <ProviderConfigForm value={createProviderDraft('custom_token', 1)} onChange={() => undefined} capabilities={[]} />,
+    );
+
+    expect(builtInMarkup).not.toContain('令牌获取');
+    expect(builtInMarkup).not.toContain('请求映射');
+    expect(builtInMarkup).not.toContain('高级 JSON 配置');
+    expect(customMarkup).toContain('令牌获取');
+    expect(customMarkup).toContain('请求映射');
+    expect(customMarkup).not.toContain('高级 JSON 配置');
   });
 
   it('changes provider fields when provider type switches', () => {
@@ -851,19 +940,100 @@ describe('critical console pages', () => {
     expect(markup).toContain('校验状态');
   });
 
-  it('renders dry-run as the default channel test action and separates live send risk', () => {
+  it('keeps provider create and edit form free of test send actions', () => {
     const draft = createProviderDraft('webhook', 1);
     const markup = renderPage(
       <ProviderConfigForm value={draft} onChange={() => undefined} capabilities={[]} />,
     );
 
-    expect(markup).toContain('生成 dry-run 请求');
-    expect(markup).toContain('dry-run 只生成请求快照，不调用真实推送渠道。');
-    expect(markup).toContain('真实发送');
-    expect(markup).toContain('会调用真实推送渠道');
+    expect(markup).not.toContain('测试发送');
+    expect(markup).not.toContain('模拟请求');
+    expect(markup).not.toContain('测试接收人');
+    expect(markup).not.toContain('测试消息体');
+    expect(markup).not.toContain('生成 dry-run 请求');
+    expect(markup).not.toContain('dry-run 只生成请求快照，不调用真实推送渠道。');
+    expect(markup).not.toContain('真实发送');
+    expect(markup).not.toContain('会调用真实推送渠道');
   });
 
-  it('renders provider and message type selectors in the template editor', () => {
+  it('renders PushPlus test panel fields without recipient input', () => {
+    const draft = createProviderDraft('pushplus', 1);
+    const markup = renderPage(
+      <ProviderTestPanel value={draft} onChange={() => undefined} />,
+    );
+
+    expect(markup).toContain('content');
+    expect(markup).toContain('title（可选）');
+    expect(markup).toContain('topic（可选）');
+    expect(markup).toContain('模拟请求');
+    expect(markup).toContain('真实发送');
+    expect(markup).not.toContain('测试接收人');
+  });
+
+  it('summarizes provider test result as final URL headers and body only', () => {
+    const preview = providerTestRequestPreview({
+      status: 'sent',
+      request: {
+        method: 'POST',
+        url: 'https://www.pushplus.plus/send',
+        headers: { 'Content-Type': 'application/json' },
+        query: {},
+        body: {
+          token: 'push-token',
+          content: 'PushPlus 测试消息',
+        },
+      },
+      target_context: { provider_type: 'pushplus' },
+      rendered_message: { content: { content: 'PushPlus 测试消息' } },
+      response_snapshot: { status_code: 200, body: { code: 888 } },
+    });
+
+    expect(preview.url).toBe('POST https://www.pushplus.plus/send');
+    expect(preview.headers).toEqual({ 'Content-Type': 'application/json' });
+    expect(preview.body).toEqual({ token: 'push-token', content: 'PushPlus 测试消息' });
+    expect(JSON.stringify(preview)).not.toContain('response_snapshot');
+    expect(JSON.stringify(preview)).not.toContain('target_context');
+  });
+
+  it('splits live provider test result into complete request and upstream response', () => {
+    const preview = providerTestSendPreview({
+      status: 'sent',
+      request: {
+        method: 'POST',
+        url: 'https://www.pushplus.plus/send',
+        headers: { 'Content-Type': 'application/json' },
+        query: {},
+        body: {
+          token: 'push-token',
+          content: 'PushPlus 测试消息',
+        },
+      },
+      target_context: { provider_type: 'pushplus' },
+      rendered_message: { content: { content: 'PushPlus 测试消息' } },
+      response_snapshot: {
+        status_code: 200,
+        headers: { Server: ['nginx'] },
+        body: { code: 888, msg: '积分不足' },
+        error: '',
+      },
+    });
+
+    expect(preview.request).toEqual({
+      url: 'POST https://www.pushplus.plus/send',
+      headers: { 'Content-Type': 'application/json' },
+      body: { token: 'push-token', content: 'PushPlus 测试消息' },
+    });
+    expect(preview.response).toEqual({
+      status_code: 200,
+      headers: { Server: ['nginx'] },
+      body: { code: 888, msg: '积分不足' },
+      error: '',
+    });
+    expect(JSON.stringify(preview)).not.toContain('target_context');
+    expect(JSON.stringify(preview)).not.toContain('rendered_message');
+  });
+
+  it('renders template editor without an enabled switch for new templates', () => {
     const draft = createTemplateDraft([], templateCapabilities);
     const markup = renderPage(
       <TemplateEditorForm
@@ -875,20 +1045,145 @@ describe('critical console pages', () => {
     );
 
     expect(markup).toContain('推送渠道类型');
-    expect(markup).toContain('消息类型');
+    expect(markup).not.toContain('消息类型');
+    expect(markup).toContain('内容编辑模式');
     expect(markup).toContain('企业微信应用兼容');
     expect(markup).toContain('正文内容');
+    expect(markup).toContain('模板表达式');
+    expect(markup).not.toContain('template-field-state');
+    expect(markup).not.toContain('必填');
     expect(markup).not.toContain('能力名称');
     expect(markup).not.toContain('字段来源');
     expect(markup).not.toContain('内置默认消息 schema');
     expect(markup).not.toContain('例如：通知');
+    expect(markup).not.toContain('启停');
 
     const nameIndex = markup.indexOf('模板名称');
-    const enabledIndex = markup.indexOf('启停');
+    const contentModeIndex = markup.indexOf('内容编辑模式');
     const sourceIndex = markup.indexOf('来源');
     expect(nameIndex).toBeGreaterThanOrEqual(0);
-    expect(enabledIndex).toBeGreaterThan(nameIndex);
-    expect(enabledIndex).toBeLessThan(sourceIndex);
+    expect(contentModeIndex).toBeGreaterThan(nameIndex);
+    expect(contentModeIndex).toBeLessThan(sourceIndex);
+  });
+
+  it('renders delete as a template row action', () => {
+    const row = {
+      id: 'tpl-1',
+      name: '告警模板',
+      source: '告警来源 / alerts',
+      messageType: 'text',
+      targetProviderType: 'wecom' as const,
+      targetField: '正文内容',
+      content: '{"content":"{{ payload.content }}"}',
+      validationStatus: 'valid' as const,
+      version: 'v1',
+      usedVariables: ['payload.content'],
+      updatedAt: '2026-05-15 10:00:00',
+    };
+
+    const markup = renderPage(
+      <TemplateRowActions
+        record={row}
+        onEdit={() => undefined}
+        onValidate={() => undefined}
+        onDelete={() => undefined}
+      />,
+    );
+
+    expect(markup).toContain('编辑');
+    expect(markup).toContain('校验');
+    expect(markup).toContain('删除');
+  });
+
+  it('renders template version history with restore action and immutable version content', () => {
+    const markup = renderPage(
+      <TemplateVersionHistoryContent
+        currentVersionId="version-3"
+        versions={[
+          {
+            id: 'version-2',
+            template_id: 'tpl-1',
+            version_no: 2,
+            message_type: 'json',
+            target_provider_type: 'pushplus',
+            template_engine: 'pongo2',
+            template_syntax_version: 'jinja-like-v1',
+            template_body: '{"content":"{{ payload.content }}"}',
+            message_body_schema: {},
+            sample_payload: { content: '历史内容' },
+            compiled_preview: {},
+            used_variables: ['payload.content'],
+            allowed_filters: [],
+            validation_status: 'valid',
+            validation_errors: [],
+            published_at: '2026-05-15T08:00:00Z',
+            created_at: '2026-05-15T08:00:00Z',
+            updated_at: '2026-05-15T08:00:00Z',
+          },
+        ]}
+        loading={false}
+        onRestore={() => undefined}
+      />,
+    );
+
+    expect(markup).toContain('历史版本不可修改');
+    expect(markup).toContain('v2');
+    expect(markup).toContain('PushPlus');
+    expect(markup).toContain('payload.content');
+    expect(markup).toContain('基于此版本恢复');
+  });
+
+  it('updates the current version pointer after restoring a historical version', () => {
+    const record: Parameters<typeof templateRecordWithRestoredVersion>[0] = {
+      id: 'tpl-1',
+      name: '模板',
+      source: '-',
+      messageType: 'json',
+      targetProviderType: 'pushplus',
+      targetField: 'content',
+      content: '{}',
+      validationStatus: 'valid',
+      version: 'v2',
+      usedVariables: [],
+      updatedAt: '2026-05-15 09:00:00',
+      raw: {
+        id: 'tpl-1',
+        name: '模板',
+        description: '',
+        source_id: '',
+        enabled: true,
+        current_version_id: 'version-2',
+        created_at: '2026-05-15T09:00:00Z',
+        updated_at: '2026-05-15T09:00:00Z',
+      } satisfies TemplateApiRecord,
+    };
+    const restoredVersion = {
+      id: 'version-3',
+      template_id: 'tpl-1',
+      version_no: 3,
+      message_type: 'json',
+      target_provider_type: 'pushplus',
+      template_engine: 'pongo2',
+      template_syntax_version: 'jinja-like-v1',
+      template_body: '{"content":"{{ payload.content }}"}',
+      message_body_schema: {},
+      sample_payload: {},
+      compiled_preview: {},
+      used_variables: ['payload.content'],
+      allowed_filters: [],
+      validation_status: 'valid',
+      validation_errors: [],
+      published_at: '2026-05-15T09:05:00Z',
+      created_at: '2026-05-15T09:05:00Z',
+      updated_at: '2026-05-15T09:05:00Z',
+    } satisfies TemplateVersionApiRecord;
+
+    const next = templateRecordWithRestoredVersion(record, restoredVersion);
+
+    expect(next.version).toBe('v3');
+    expect(next.raw?.current_version_id).toBe('version-3');
+    expect(next.raw?.current_version?.id).toBe('version-3');
+    expect(record.raw?.current_version_id).toBe('version-2');
   });
 
   it('renders long message content fields as multiline textareas', () => {
@@ -995,6 +1290,7 @@ describe('critical console pages', () => {
       ],
       templateCapabilities,
     );
+    draft.fieldValues.content = { expression: '{{ payload.content }}', defaultValue: '' };
 
     expect(templateRenderedPreview(draft)).toContain('CPU 90%');
     expect(templateRenderedPreview(draft)).not.toContain('{{ payload.content');
@@ -1033,16 +1329,49 @@ describe('critical console pages', () => {
     expect(emailMarkup).not.toContain('Markdown 内容');
   });
 
-  it('builds template version input with field expressions and blank default text', () => {
+  it('starts template field expressions empty and uses the global fallback', () => {
     const draft = createTemplateDraft([], templateCapabilities);
+    const markup = renderPage(
+      <TemplateEditorForm
+        value={draft}
+        onChange={() => undefined}
+        sourceRows={[]}
+        capabilities={templateCapabilities}
+      />,
+    );
     const input = templateVersionInputFromDraft(draft);
     const body = JSON.parse(input.template_body) as Record<string, string>;
 
+    expect(draft.fieldValues.content?.expression).toBe('');
     expect(input.target_provider_type).toBe('wecom');
     expect(input.message_type).toBe('text');
     expect(input.template_body).toContain('"content"');
-    expect(body.content).toBe('{{ payload.content }}');
-    expect(input.template_body).not.toContain("default('通知')");
+    expect(body.content).toBe('');
+    expect(markup).not.toContain('默认值');
+  });
+
+  it('applies the global fallback to payload variables inside template expressions', () => {
+    const draft = createTemplateDraft(
+      [
+        {
+          id: 'src-a',
+          code: 'alerts',
+          name: '告警来源',
+          latestPayload: JSON.stringify({ content: 'CPU 90%' }),
+        },
+      ],
+      templateCapabilities,
+    );
+    draft.fieldValues.content = {
+      expression: '{{ payload.content }} / {{ payload.alert.ip }}',
+      defaultValue: '',
+    };
+
+    const input = templateVersionInputFromDraft(draft);
+    const body = JSON.parse(input.template_body) as Record<string, string>;
+
+    expect(body.content).toBe("{{ payload.content | default('-') }} / {{ payload.alert.ip | default('-') }}");
+    expect(templateRenderedPreview(draft)).toContain('CPU 90% / -');
   });
 
   it('renders and switches custom JSON template content mode', () => {
@@ -1058,7 +1387,7 @@ describe('critical console pages', () => {
 
     expect(markup).toContain('自定义 JSON');
     expect(markup).toContain('完整消息内容 JSON');
-    expect(markup).toContain('{{ payload.content');
+    expect(markup).toContain('content');
   });
 
   it('maps template rows with provider type and message type instead of version id as a message field', () => {

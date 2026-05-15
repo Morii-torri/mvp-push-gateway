@@ -42,6 +42,10 @@ type templateVersionBody struct {
 	Version templateVersionResponse `json:"version"`
 }
 
+type templateVersionsResponse struct {
+	Versions []templateVersionResponse `json:"versions"`
+}
+
 type templateVersionResponse struct {
 	ID                    string          `json:"id"`
 	TemplateID            string          `json:"template_id"`
@@ -176,6 +180,14 @@ func (h *Handler) templateDetailHandler(w http.ResponseWriter, r *http.Request) 
 		h.templatePublishHandler(w, r, parts[0])
 		return
 	}
+	if len(parts) == 2 && parts[1] == "versions" {
+		h.templateVersionsHandler(w, r, parts[0])
+		return
+	}
+	if len(parts) == 4 && parts[1] == "versions" && parts[3] == "restore" {
+		h.templateRestoreVersionHandler(w, r, parts[0], parts[2])
+		return
+	}
 	if len(parts) != 1 || parts[0] == "" {
 		writeAPIError(w, http.StatusNotFound, "MGP-TPL-001", "模板不存在")
 		return
@@ -251,6 +263,53 @@ func (h *Handler) templatePublishHandler(w http.ResponseWriter, r *http.Request,
 	}
 	response := templateVersionBody{Version: toTemplateVersionResponse(version)}
 	h.recordAudit(r, adminUser, "publish", "template", templateID, request, response)
+	writeJSON(w, http.StatusCreated, response)
+}
+
+func (h *Handler) templateVersionsHandler(w http.ResponseWriter, r *http.Request, templateID string) {
+	if r.Method != http.MethodGet {
+		methodNotAllowed(w, http.MethodGet)
+		return
+	}
+	if !h.requireTemplateService(w) {
+		return
+	}
+	if _, ok := h.authenticateRequest(w, r); !ok {
+		return
+	}
+	versions, err := h.templates.ListTemplateVersions(r.Context(), templateID)
+	if err != nil {
+		status, code, message := templateErrorStatus(err)
+		writeAPIError(w, status, code, message)
+		return
+	}
+	response := templateVersionsResponse{Versions: make([]templateVersionResponse, 0, len(versions))}
+	for _, version := range versions {
+		response.Versions = append(response.Versions, toTemplateVersionResponse(version))
+	}
+	writeJSON(w, http.StatusOK, response)
+}
+
+func (h *Handler) templateRestoreVersionHandler(w http.ResponseWriter, r *http.Request, templateID string, versionID string) {
+	if r.Method != http.MethodPost {
+		methodNotAllowed(w, http.MethodPost)
+		return
+	}
+	if !h.requireTemplateService(w) {
+		return
+	}
+	adminUser, ok := h.authenticateRequest(w, r)
+	if !ok {
+		return
+	}
+	version, err := h.templates.RestoreTemplateVersion(r.Context(), templateID, versionID)
+	if err != nil {
+		status, code, message := templateErrorStatus(err)
+		writeAPIError(w, status, code, message)
+		return
+	}
+	response := templateVersionBody{Version: toTemplateVersionResponse(version)}
+	h.recordAudit(r, adminUser, "restore", "template", templateID, map[string]string{"version_id": versionID}, response)
 	writeJSON(w, http.StatusCreated, response)
 }
 
