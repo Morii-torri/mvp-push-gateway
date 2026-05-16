@@ -745,7 +745,7 @@ body {
 }
 
 .split-layout--organization-management {
-  grid-template-columns: 360px minmax(0, 1fr);
+  grid-template-columns: 320px minmax(0, 1fr);
   height: 100%;
   min-height: 0;
   align-items: stretch;
@@ -789,7 +789,7 @@ body {
 
 .org-tree-node {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 24px;
+  grid-template-columns: minmax(0, 1fr) auto;
   gap: 6px;
   align-items: center;
   min-height: 32px;
@@ -844,7 +844,14 @@ body {
   white-space: nowrap;
 }
 
-.org-tree-node__add {
+.org-tree-node__actions {
+  display: inline-flex;
+  gap: 4px;
+  align-items: center;
+}
+
+.org-tree-node__add,
+.org-tree-node__edit {
   display: inline-grid;
   width: 22px;
   height: 22px;
@@ -864,14 +871,39 @@ body {
 }
 
 .org-tree-node:hover .org-tree-node__add,
-.org-tree-node__add:focus-visible {
+.org-tree-node:hover .org-tree-node__edit,
+.org-tree-node__add:focus-visible,
+.org-tree-node__edit:focus-visible {
   opacity: 1;
   transform: translateX(0);
 }
 
-.org-tree-node__add:hover {
+.org-tree-node__add:hover,
+.org-tree-node__edit:hover {
   color: #ffffff;
   background: #1677ff;
+}
+
+.org-tree-empty {
+  display: grid;
+  min-height: 220px;
+  padding: 28px 16px;
+  place-items: center;
+  text-align: center;
+  border: 1px dashed #b8cff0;
+  border-radius: 8px;
+  background: #f7fbff;
+}
+
+.org-tree-empty__content {
+  display: grid;
+  gap: 12px;
+  justify-items: center;
+}
+
+.org-tree-empty .ant-btn {
+  height: 42px;
+  padding-inline: 18px;
 }
 
 .organization-tab-list {
@@ -1443,11 +1475,68 @@ body {
 .template-received-preview {
   min-height: 240px;
   padding: 16px;
-  white-space: pre-wrap;
   color: #14345a;
   background: #f8fbff;
   border: 1px solid #dce7f5;
   border-radius: 6px;
+}
+
+.template-received-preview__title {
+  margin-bottom: 10px;
+  font-size: 15px;
+  font-weight: 600;
+  line-height: 1.45;
+  color: #102744;
+}
+
+.template-received-preview__body {
+  line-height: 1.65;
+  word-break: break-word;
+}
+
+.template-received-preview--html .template-received-preview__body :where(h1, h2, h3, p, ul, ol) {
+  margin-top: 0;
+  margin-bottom: 10px;
+}
+
+.template-received-preview--markdown .template-markdown-heading {
+  margin: 0 0 10px;
+  font-weight: 650;
+  line-height: 1.35;
+}
+
+.template-received-preview--markdown h1.template-markdown-heading {
+  font-size: 22px;
+}
+
+.template-received-preview--markdown h2.template-markdown-heading {
+  font-size: 18px;
+}
+
+.template-received-preview--markdown h3.template-markdown-heading {
+  font-size: 16px;
+}
+
+.template-markdown-line {
+  min-height: 1.65em;
+}
+
+.template-markdown-list-item {
+  position: relative;
+  padding-left: 16px;
+}
+
+.template-markdown-list-item::before {
+  position: absolute;
+  left: 2px;
+  content: "•";
+}
+
+.template-received-preview code {
+  padding: 1px 5px;
+  font-size: 0.92em;
+  background: #eef4fb;
+  border-radius: 4px;
 }
 
 .dense-tabs .ant-tabs-content-holder {

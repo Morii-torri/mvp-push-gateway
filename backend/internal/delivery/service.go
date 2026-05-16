@@ -1401,10 +1401,8 @@ func (p retryPolicy) Delay() time.Duration {
 }
 
 type rateLimitConfig struct {
-	Enabled   bool    `json:"enabled"`
-	QPS       float64 `json:"qps"`
-	PerMinute float64 `json:"per_minute"`
-	Burst     int     `json:"burst"`
+	Enabled bool    `json:"enabled"`
+	QPS     float64 `json:"qps"`
 }
 
 func rateLimitFrom(raw json.RawMessage) rateLimitConfig {
@@ -1413,19 +1411,17 @@ func rateLimitFrom(raw json.RawMessage) rateLimitConfig {
 		return cfg
 	}
 	_ = json.Unmarshal(raw, &cfg)
-	if !cfg.Enabled {
+	if !cfg.Enabled || cfg.QPS <= 0 {
+		cfg.Enabled = false
 		return cfg
-	}
-	if cfg.Burst <= 0 {
-		cfg.Burst = 1
 	}
 	return cfg
 }
 
 type channelLimiter struct {
-	now   func() time.Time
-	rate  float64
-	burst float64
+	now      func() time.Time
+	rate     float64
+	capacity float64
 
 	mu     sync.Mutex
 	tokens float64
@@ -1434,16 +1430,13 @@ type channelLimiter struct {
 
 func newChannelLimiter(cfg rateLimitConfig, now func() time.Time) *channelLimiter {
 	rate := cfg.QPS
-	if rate <= 0 && cfg.PerMinute > 0 {
-		rate = cfg.PerMinute / 60
-	}
 	if rate <= 0 {
 		rate = math.Inf(1)
 	}
 	return &channelLimiter{
-		now:   now,
-		rate:  rate,
-		burst: float64(cfg.Burst),
+		now:      now,
+		rate:     rate,
+		capacity: math.Max(1, math.Ceil(rate)),
 	}
 }
 
@@ -1456,11 +1449,11 @@ func (l *channelLimiter) Wait(ctx context.Context) error {
 		now := l.now()
 		if l.last.IsZero() {
 			l.last = now
-			l.tokens = l.burst
+			l.tokens = l.capacity
 		}
 		elapsed := now.Sub(l.last).Seconds()
 		if elapsed > 0 {
-			l.tokens = math.Min(l.burst, l.tokens+(elapsed*l.rate))
+			l.tokens = math.Min(l.capacity, l.tokens+(elapsed*l.rate))
 			l.last = now
 		}
 		if l.tokens >= 1 {

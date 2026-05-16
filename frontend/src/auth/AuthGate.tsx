@@ -10,7 +10,7 @@ import Spin from 'antd/es/spin';
 import Typography from 'antd/es/typography';
 import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
 
-import { ApiClientError, tokenStore } from '../api/client';
+import { AUTH_EXPIRED_EVENT, ApiClientError, isAuthExpiredError, tokenStore } from '../api/client';
 import { authApi, type AdminUser } from '../api/auth';
 
 type AuthContextValue = {
@@ -53,11 +53,24 @@ export function AuthGate({ children }: { children: ReactNode }) {
   const [admin, setAdmin] = useState<AdminUser | null>(null);
   const [errorText, setErrorText] = useState('');
 
+  const redirectToLogin = () => {
+    setAdmin(null);
+    setErrorText('');
+    setMode('login');
+  };
+
   const refreshMe = async () => {
     const result = await authApi.me();
     setAdmin(result.admin);
     setMode(result.admin.must_change_password ? 'change-password' : 'ready');
   };
+
+  useEffect(() => {
+    window.addEventListener(AUTH_EXPIRED_EVENT, redirectToLogin);
+    return () => {
+      window.removeEventListener(AUTH_EXPIRED_EVENT, redirectToLogin);
+    };
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -83,6 +96,10 @@ export function AuthGate({ children }: { children: ReactNode }) {
         setMode(current.admin.must_change_password ? 'change-password' : 'ready');
       } catch (error) {
         if (cancelled) {
+          return;
+        }
+        if (isAuthExpiredError(error)) {
+          redirectToLogin();
           return;
         }
         setErrorText(errorMessage(error));
@@ -224,7 +241,7 @@ function SetupForm({ onDone }: { onDone: () => void }) {
           });
           onDone();
         } catch (error) {
-          message.error(errorMessage(error));
+          showAuthError(message, error);
         } finally {
           setLoading(false);
         }
@@ -259,7 +276,7 @@ function LoginForm({ onDone }: { onDone: (admin: AdminUser) => void }) {
           const result = await authApi.login({ username: values.username, password: values.password });
           onDone(result.admin);
         } catch (error) {
-          message.error(errorMessage(error));
+          showAuthError(message, error);
         } finally {
           setLoading(false);
         }
@@ -295,7 +312,7 @@ function ChangePasswordForm({ onDone }: { onDone: () => Promise<void> }) {
           });
           await onDone();
         } catch (error) {
-          message.error(errorMessage(error));
+          showAuthError(message, error);
         } finally {
           setLoading(false);
         }
@@ -323,6 +340,9 @@ function ChangePasswordForm({ onDone }: { onDone: () => Promise<void> }) {
 }
 
 function errorMessage(error: unknown): string {
+  if (isAuthExpiredError(error)) {
+    return '';
+  }
   if (error instanceof ApiClientError) {
     return error.userMessage;
   }
@@ -330,4 +350,11 @@ function errorMessage(error: unknown): string {
     return error.message;
   }
   return '操作失败，请稍后重试';
+}
+
+function showAuthError(messageApi: { error: (content: string) => unknown }, error: unknown) {
+  const text = errorMessage(error);
+  if (text) {
+    messageApi.error(text);
+  }
 }

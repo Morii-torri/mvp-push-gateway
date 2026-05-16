@@ -26,8 +26,8 @@ import {
   fallbackMessageTypes,
   isRecord,
   providerTypeOptions,
+  showUserFacingError,
   stringifyJSON,
-  userFacingError,
   type ProviderKind,
 } from './shared';
 
@@ -69,8 +69,6 @@ type ProviderPreset = {
   recipientMapping: string;
   bodyMapping: string;
   qps: number;
-  minuteLimit: number;
-  burst: number;
   concurrency: number;
   timeoutMs: number;
   retryPolicy: string;
@@ -136,8 +134,6 @@ const providerPresets: Record<ProviderKind, ProviderPreset> = {
     recipientMapping: '无接收人字段；高级模式可放入 body/header/query/path',
     bodyMapping: '{"event":"message.push","payload":"{{ message }}"}',
     qps: 50,
-    minuteLimit: 3000,
-    burst: 100,
     concurrency: 16,
     timeoutMs: 3000,
     retryPolicy: '3 次指数退避',
@@ -155,8 +151,6 @@ const providerPresets: Record<ProviderKind, ProviderPreset> = {
     recipientMapping: '默认无，由上级网关重新规划；也可透传 payload.recipients',
     bodyMapping: '原样透传 payload，或包装为 upstream/message/context',
     qps: 120,
-    minuteLimit: 7200,
-    burst: 240,
     concurrency: 24,
     timeoutMs: 3000,
     retryPolicy: '3 次指数退避',
@@ -174,8 +168,6 @@ const providerPresets: Record<ProviderKind, ProviderPreset> = {
     recipientMapping: '无需接收人；topic 由消息模板字段提供',
     bodyMapping: 'adapter 根据 content/title/topic 生成 JSON 请求体',
     qps: 10,
-    minuteLimit: 600,
-    burst: 20,
     concurrency: 4,
     timeoutMs: 5000,
     retryPolicy: '2 次固定间隔',
@@ -193,8 +185,6 @@ const providerPresets: Record<ProviderKind, ProviderPreset> = {
     recipientMapping: 'UIDs / topicIds；UID 来自 wxpusher_uid 身份字段或测试输入',
     bodyMapping: 'adapter 根据 content/summary/url 生成标准 POST JSON，contentType 固定为 2（HTML）',
     qps: 10,
-    minuteLimit: 600,
-    burst: 20,
     concurrency: 4,
     timeoutMs: 5000,
     retryPolicy: '2 次固定间隔',
@@ -207,23 +197,23 @@ const providerPresets: Record<ProviderKind, ProviderPreset> = {
     testUrl: 'https://wxpusher.zjiecode.com',
   },
   serverchan: {
-    tokenEndpoint: '固定 SendKey',
-    tokenRequest: 'sendKey',
+    tokenEndpoint: 'API URL',
+    tokenRequest: '',
     tokenResponsePath: '-',
-    tokenPlacement: 'path',
-    sendEndpoint: '内置 Server酱 adapter',
-    recipientMapping: '无需接收人；SendKey 绑定账号',
-    bodyMapping: 'adapter 根据 title/desp/channel/openid/tags 生成表单',
+    tokenPlacement: '-',
+    sendEndpoint: 'POST https://<uid>.push.ft07.com/send/<sendkey>.send',
+    recipientMapping: '无需接收人；API URL 绑定账号',
+    bodyMapping: 'adapter 根据 title/desp/short 生成 JSON 请求体',
     qps: 5,
-    minuteLimit: 300,
-    burst: 10,
     concurrency: 2,
     timeoutMs: 5000,
     retryPolicy: '2 次固定间隔',
     retryInterval: '5s / 15s',
     deadLetterPolicy: '全局默认：重试耗尽或上级错误进入死信',
     testRecipient: '-',
-    testBody: 'Server酱测试消息',
+    testBody: 'Server酱测试正文',
+    testTitle: 'Server酱测试标题',
+    testTopic: '',
   },
   ntfy: {
     tokenEndpoint: '无鉴权 / Basic / Bearer',
@@ -234,8 +224,6 @@ const providerPresets: Record<ProviderKind, ProviderPreset> = {
     recipientMapping: '无需接收人；topic 由渠道配置决定',
     bodyMapping: 'adapter 根据 title/body/priority/tags 生成文本请求',
     qps: 5,
-    minuteLimit: 300,
-    burst: 10,
     concurrency: 2,
     timeoutMs: 5000,
     retryPolicy: '3 次线性重试',
@@ -253,8 +241,6 @@ const providerPresets: Record<ProviderKind, ProviderPreset> = {
     recipientMapping: '无需接收人；应用 Token 绑定目标应用',
     bodyMapping: 'adapter 根据 title/body/priority/content_type 生成请求体',
     qps: 10,
-    minuteLimit: 600,
-    burst: 20,
     concurrency: 3,
     timeoutMs: 5000,
     retryPolicy: '3 次线性重试',
@@ -272,8 +258,6 @@ const providerPresets: Record<ProviderKind, ProviderPreset> = {
     recipientMapping: 'device_key 可由渠道配置或 bark_device_key 身份解析',
     bodyMapping: 'adapter 根据 title/body/subtitle/url/level 生成请求体',
     qps: 5,
-    minuteLimit: 300,
-    burst: 10,
     concurrency: 2,
     timeoutMs: 5000,
     retryPolicy: '3 次线性重试',
@@ -291,8 +275,6 @@ const providerPresets: Record<ProviderKind, ProviderPreset> = {
     recipientMapping: '无需接收人；Push Key 绑定目标设备或账号',
     bodyMapping: 'adapter 根据 title/content/type 生成请求体',
     qps: 2,
-    minuteLimit: 120,
-    burst: 5,
     concurrency: 2,
     timeoutMs: 5000,
     retryPolicy: '3 次线性重试',
@@ -310,8 +292,6 @@ const providerPresets: Record<ProviderKind, ProviderPreset> = {
     recipientMapping: 'mail.to = receivers.email',
     bodyMapping: 'adapter 根据 subject/text/html 生成 MIME 邮件',
     qps: 20,
-    minuteLimit: 600,
-    burst: 40,
     concurrency: 8,
     timeoutMs: 5000,
     retryPolicy: '2 次固定间隔',
@@ -329,8 +309,6 @@ const providerPresets: Record<ProviderKind, ProviderPreset> = {
     recipientMapping: 'PhoneNumbers = receivers.mobile',
     bodyMapping: 'adapter 根据 sign_name/template_code/template_params 生成 SendSms 请求',
     qps: 20,
-    minuteLimit: 1200,
-    burst: 40,
     concurrency: 8,
     timeoutMs: 5000,
     retryPolicy: '1 次重试',
@@ -348,8 +326,6 @@ const providerPresets: Record<ProviderKind, ProviderPreset> = {
     recipientMapping: 'PhoneNumberSet = receivers.mobile',
     bodyMapping: 'adapter 根据 sms_sdk_app_id/sign_name/template_id/template_params 生成 SendSms 请求',
     qps: 20,
-    minuteLimit: 1200,
-    burst: 40,
     concurrency: 8,
     timeoutMs: 5000,
     retryPolicy: '1 次重试',
@@ -367,8 +343,6 @@ const providerPresets: Record<ProviderKind, ProviderPreset> = {
     recipientMapping: 'phones = receivers.mobile',
     bodyMapping: 'adapter 根据 signature_id/template_id/template_params 生成短信下发请求',
     qps: 20,
-    minuteLimit: 1200,
-    burst: 40,
     concurrency: 8,
     timeoutMs: 5000,
     retryPolicy: '1 次重试',
@@ -386,8 +360,6 @@ const providerPresets: Record<ProviderKind, ProviderPreset> = {
     recipientMapping: '可选 mentioned_list = receivers.wecom_userid',
     bodyMapping: 'adapter 根据 text/markdown 内容生成机器人消息',
     qps: 20,
-    minuteLimit: 1200,
-    burst: 40,
     concurrency: 8,
     timeoutMs: 3000,
     retryPolicy: '2 次固定间隔',
@@ -405,8 +377,6 @@ const providerPresets: Record<ProviderKind, ProviderPreset> = {
     recipientMapping: 'touser/toparty/totag；touser 来自 receivers.wecom_userid',
     bodyMapping: 'adapter 根据 text/card 内容生成应用消息',
     qps: 80,
-    minuteLimit: 4800,
-    burst: 160,
     concurrency: 16,
     timeoutMs: 3000,
     retryPolicy: '2 次固定间隔',
@@ -424,8 +394,6 @@ const providerPresets: Record<ProviderKind, ProviderPreset> = {
     recipientMapping: 'touser/toparty/totag；touser 来自 receivers.wecom_userid',
     bodyMapping: 'adapter 根据 text/card 内容生成应用消息',
     qps: 80,
-    minuteLimit: 4800,
-    burst: 160,
     concurrency: 16,
     timeoutMs: 3000,
     retryPolicy: '2 次固定间隔',
@@ -443,8 +411,6 @@ const providerPresets: Record<ProviderKind, ProviderPreset> = {
     recipientMapping: '可选 atMobiles = receivers.mobile',
     bodyMapping: 'adapter 根据 text/markdown 内容生成机器人消息',
     qps: 20,
-    minuteLimit: 1200,
-    burst: 40,
     concurrency: 8,
     timeoutMs: 3000,
     retryPolicy: '2 次固定间隔',
@@ -462,8 +428,6 @@ const providerPresets: Record<ProviderKind, ProviderPreset> = {
     recipientMapping: 'userid_list = receivers.dingtalk_userid',
     bodyMapping: 'adapter 根据 text/card 内容生成工作消息',
     qps: 60,
-    minuteLimit: 3600,
-    burst: 120,
     concurrency: 12,
     timeoutMs: 3000,
     retryPolicy: '3 次指数退避',
@@ -481,8 +445,6 @@ const providerPresets: Record<ProviderKind, ProviderPreset> = {
     recipientMapping: 'userid_list = receivers.dingtalk_userid',
     bodyMapping: 'adapter 根据 text/card 内容生成工作消息',
     qps: 60,
-    minuteLimit: 3600,
-    burst: 120,
     concurrency: 12,
     timeoutMs: 3000,
     retryPolicy: '3 次指数退避',
@@ -500,8 +462,6 @@ const providerPresets: Record<ProviderKind, ProviderPreset> = {
     recipientMapping: '默认无需接收人；可在内容中引用 feishu_open_id',
     bodyMapping: 'adapter 根据 text/markdown 内容生成机器人消息',
     qps: 20,
-    minuteLimit: 1200,
-    burst: 40,
     concurrency: 8,
     timeoutMs: 3000,
     retryPolicy: '2 次固定间隔',
@@ -519,8 +479,6 @@ const providerPresets: Record<ProviderKind, ProviderPreset> = {
     recipientMapping: 'receive_id = receivers.feishu_open_id',
     bodyMapping: 'adapter 根据 text/card 内容生成飞书消息',
     qps: 60,
-    minuteLimit: 3600,
-    burst: 120,
     concurrency: 12,
     timeoutMs: 3000,
     retryPolicy: '3 次指数退避',
@@ -538,8 +496,6 @@ const providerPresets: Record<ProviderKind, ProviderPreset> = {
     recipientMapping: 'touser/toparty/totag；touser 来自 receivers.gov_userid',
     bodyMapping: 'adapter 根据 description 生成随申办文本消息；开发环境不可访问，先实现请求构建',
     qps: 80,
-    minuteLimit: 4800,
-    burst: 160,
     concurrency: 8,
     timeoutMs: 3000,
     retryPolicy: '3 次指数退避',
@@ -557,8 +513,6 @@ const providerPresets: Record<ProviderKind, ProviderPreset> = {
     recipientMapping: 'body.phoneNumbers = receivers.mobile',
     bodyMapping: 'adapter 根据 supplier/sign_name/template_id/template_params 生成短信请求',
     qps: 20,
-    minuteLimit: 1200,
-    burst: 40,
     concurrency: 8,
     timeoutMs: 5000,
     retryPolicy: '1 次重试',
@@ -576,8 +530,6 @@ const providerPresets: Record<ProviderKind, ProviderPreset> = {
     recipientMapping: 'body.receivers',
     bodyMapping: '{"receivers":"{{ receivers }}","message":"{{ message.content }}"}',
     qps: 30,
-    minuteLimit: 1800,
-    burst: 60,
     concurrency: 12,
     timeoutMs: 3000,
     retryPolicy: '3 次指数退避',
@@ -602,10 +554,13 @@ export function providerCapabilityView(
 ): ProviderCapabilityView {
   const records = capabilities.filter((capability) => capability.provider_type === providerType);
   const primary = records[0];
-  const fields = uniqueConfigFields([
-    ...extractSchemaFields(primary?.credential_schema, 'auth_config'),
-    ...extractSchemaFields(primary?.channel_config_schema, 'send_config'),
-  ]);
+  const fields =
+    providerType === 'serverchan'
+      ? []
+      : uniqueConfigFields([
+          ...extractSchemaFields(primary?.credential_schema, 'auth_config'),
+          ...extractSchemaFields(primary?.channel_config_schema, 'send_config'),
+        ]);
   const supportedMessageTypes = capabilityMessageTypes(providerType, records);
 
   return {
@@ -620,12 +575,29 @@ export function providerCapabilityView(
 }
 
 function capabilityMessageTypes(providerType: ProviderKind, records: ProviderCapabilityApiRecord[]): string[] {
+  if (providerType === 'pushplus' || providerType === 'wxpusher') {
+    return ['html'];
+  }
+  if (providerType === 'serverchan') {
+    return ['markdown'];
+  }
   const explicit = records.find((record) => record.supported_message_types?.length)?.supported_message_types;
   if (explicit?.length) {
-    return explicit;
+    return normalizedProviderMessageTypes(explicit);
   }
   const messageTypes = Array.from(new Set(records.map((record) => record.message_type).filter(Boolean))) as string[];
-  return messageTypes.length > 0 ? messageTypes : fallbackMessageTypes(providerType);
+  return messageTypes.length > 0 ? normalizedProviderMessageTypes(messageTypes) : fallbackMessageTypes(providerType);
+}
+
+function normalizedProviderMessageTypes(messageTypes: string[]): string[] {
+  const normalized = Array.from(
+    new Set(
+      messageTypes.map((messageType) =>
+        messageType === 'html' || messageType === 'markdown' ? messageType : 'text',
+      ),
+    ),
+  );
+  return normalized.length ? normalized : ['text'];
 }
 
 function providerCategoryLabel(providerType: ProviderKind): string {
@@ -933,12 +905,7 @@ function fallbackProviderFields(providerType: ProviderKind): ProviderConfigField
   }
   if (providerType === 'serverchan') {
     return [
-      field('version', '版本', 'send_config', 'text', false, 'turbo'),
-      field('send_key', 'Server酱 SendKey', 'auth_config', 'password', true),
-      field('channel', '推送渠道', 'send_config'),
-      field('openid', 'OpenID', 'send_config'),
-      field('tags', '标签', 'send_config'),
-      field('short', '短链文案', 'send_config'),
+      field('url', 'API URL', 'send_config', 'text', true, 'https://<uid>.push.ft07.com/send/<sendkey>.send'),
     ];
   }
   if (providerType === 'ntfy') {
@@ -1198,7 +1165,7 @@ export function providerWithCapability(value: ProviderRow, view: ProviderCapabil
     configFields: view.fields,
     fieldValues: { ...fieldValuesFromDefaults(view.fields), ...fieldValues, ...value.fieldValues },
     messageTypes: view.supportedMessageTypes,
-    capability: `${view.displayName}；支持消息类型 ${view.supportedMessageTypes.join('、')}；${view.category}`,
+    capability: `${view.displayName}；支持消息格式 ${view.supportedMessageTypes.join('、')}；${view.category}`,
     timeoutMs,
     timeout: `${timeoutMs} ms`,
     concurrency: 1,
@@ -1300,6 +1267,20 @@ function providerTestBodyValue(value: ProviderRow): JSONValue {
     }
     return body;
   }
+  if (value.providerType === 'serverchan') {
+    const body: Record<string, JSONValue> = {
+      title: value.testTitle.trim(),
+    };
+    const desp = value.testBody.trim();
+    const short = value.testTopic.trim();
+    if (desp) {
+      body.desp = desp;
+    }
+    if (short) {
+      body.short = short;
+    }
+    return body;
+  }
   const trimmed = value.testBody.trim();
   if (!trimmed) {
     return {};
@@ -1312,7 +1293,7 @@ function providerTestBodyValue(value: ProviderRow): JSONValue {
 }
 
 function normalizedProviderTestRecipient(value: ProviderRow): string {
-  if (value.providerType === 'pushplus' || value.providerType === 'wxpusher') {
+  if (value.providerType === 'pushplus' || value.providerType === 'wxpusher' || value.providerType === 'serverchan') {
     return '';
   }
   const recipient = value.testRecipient.trim();
@@ -1359,7 +1340,12 @@ function providerTestRecipients(value: ProviderRow, recipient: string): JSONValu
 export function providerTestPayload(value: ProviderRow, send: boolean, liveSendConfirmed = false): JSONValue {
   const body = providerTestBodyValue(value);
   const recipient = normalizedProviderTestRecipient(value);
-  const messageType = value.providerType === 'pushplus' ? 'html' : value.providerType === 'wxpusher' ? 'html' : value.messageTypes[0] ?? 'text';
+  const messageType =
+    value.providerType === 'pushplus' || value.providerType === 'wxpusher'
+      ? 'html'
+      : value.providerType === 'serverchan'
+        ? 'markdown'
+        : value.messageTypes[0] ?? 'text';
   const resolvedRecipients = providerTestRecipients(value, recipient);
   return {
     send,
@@ -1499,7 +1485,7 @@ function providerWithPreset(
     requestMethod: endpoint.requestMethod,
     requestUrl: endpoint.requestUrl,
     tokenPlacement: preset.tokenPlacement,
-    rateLimit: `每秒 ${preset.qps} 条 / 每分钟 ${preset.minuteLimit} 条`,
+    rateLimit: `每秒 ${preset.qps} 条`,
     concurrency: 1,
     timeout: `${preset.timeoutMs} ms`,
     retryPolicy: `${retryAttempts} 次`,
@@ -1525,11 +1511,7 @@ function providerWithPreset(
     authConfigJson: '{\n  "credential_ref": ""\n}',
     tokenConfigJson: '{\n  "token_endpoint": "' + preset.tokenEndpoint.replace(/"/g, '\\"') + '"\n}',
     sendConfigJson: '{\n  "send_endpoint": "' + preset.sendEndpoint.replace(/"/g, '\\"') + '"\n}',
-    rateLimitConfigJson: JSON.stringify(
-      { enabled: true, qps: preset.qps, minute_limit: preset.minuteLimit },
-      null,
-      2,
-    ),
+    rateLimitConfigJson: JSON.stringify({ enabled: true, qps: preset.qps }, null, 2),
     retryPolicyJson: JSON.stringify({ max_attempts: retryAttempts, delay_ms: retryIntervalMs }, null, 2),
     deadLetterPolicyJson: JSON.stringify(
       { policy: 'retry_exhausted_or_upstream_error', retention_days: 7, replay: true },
@@ -1649,7 +1631,6 @@ export function channelInputFromProvider(value: ProviderRow): ChannelInput {
     rate_limit_config: {
       enabled: value.rateLimitEnabled,
       qps: value.qps,
-      minute_limit: value.minuteLimit,
     },
     concurrency_limit: 1,
     timeout_ms: value.timeoutMs,
@@ -1891,17 +1872,7 @@ export function ProviderConfigForm({
                   min={1}
                   value={value.qps}
                   className="full-width"
-                  onChange={(qps) => update({ qps: qps ?? 1, rateLimit: `每秒 ${qps ?? 1} 条 / 每分钟 ${value.minuteLimit} 条` })}
-                />
-              </Form.Item>
-              <Form.Item label="每分钟请求数">
-                <InputNumber
-                  min={1}
-                  value={value.minuteLimit}
-                  className="full-width"
-                  onChange={(minuteLimit) =>
-                    update({ minuteLimit: minuteLimit ?? 1, rateLimit: `每秒 ${value.qps} 条 / 每分钟 ${minuteLimit ?? 1} 条` })
-                  }
+                  onChange={(qps) => update({ qps: qps ?? 1, rateLimit: `每秒 ${qps ?? 1} 条` })}
                 />
               </Form.Item>
               <Form.Item label="超时设置（毫秒）">
@@ -1956,6 +1927,7 @@ export function ProviderTestPanel({
   const [testResultMode, setTestResultMode] = useState<'simulate' | 'send' | null>(null);
   const pushPlusTest = value.providerType === 'pushplus';
   const wxPusherTest = value.providerType === 'wxpusher';
+  const serverChanTest = value.providerType === 'serverchan';
   const update = (patch: Partial<ProviderRow>) => onChange({ ...value, ...patch });
   const validateTestPayload = () => {
     if (pushPlusTest && !value.testBody.trim()) {
@@ -1968,6 +1940,10 @@ export function ProviderTestPanel({
     }
     if (wxPusherTest && splitListText(value.testRecipient).length === 0 && parseNumericList(value.testTopic).length === 0) {
       message.error('请填写 UIDs 或 Topic IDs');
+      return false;
+    }
+    if (serverChanTest && !value.testTitle.trim()) {
+      message.error('请填写 title');
       return false;
     }
     return true;
@@ -1983,7 +1959,7 @@ export function ProviderTestPanel({
       const preview = providerTestRequestPreview(result.result);
       message.success(`${send ? '真实发送请求已完成' : '模拟请求已生成'}：${preview.url}`);
     } catch (error) {
-      message.error(userFacingError(error));
+      showUserFacingError(message, error);
     }
   };
   const confirmLiveSend = () => {
@@ -2037,6 +2013,22 @@ export function ProviderTestPanel({
           </Form.Item>
           <Form.Item label="url（可选）">
             <Input value={value.testUrl} onChange={(event) => update({ testUrl: event.target.value })} />
+          </Form.Item>
+        </div>
+      ) : serverChanTest ? (
+        <div className="two-column-form provider-test-form">
+          <Form.Item label="title" required>
+            <Input value={value.testTitle} onChange={(event) => update({ testTitle: event.target.value })} />
+          </Form.Item>
+          <Form.Item label="short（可选）">
+            <Input value={value.testTopic} onChange={(event) => update({ testTopic: event.target.value })} />
+          </Form.Item>
+          <Form.Item label="desp（可选）" className="form-item-full" extra="支持 Markdown">
+            <Input.TextArea
+              rows={5}
+              value={value.testBody}
+              onChange={(event) => update({ testBody: event.target.value })}
+            />
           </Form.Item>
         </div>
       ) : (
@@ -2161,7 +2153,6 @@ export function ProviderCapabilityTabs({ provider }: { provider: ProviderRow }) 
             <Descriptions column={1} size="small" bordered>
               <Descriptions.Item label="主动限流">{provider.rateLimitEnabled ? '开启' : '关闭'}</Descriptions.Item>
               <Descriptions.Item label="QPS">{provider.qps}</Descriptions.Item>
-              <Descriptions.Item label="每分钟">{provider.minuteLimit}</Descriptions.Item>
             </Descriptions>
           ),
         },

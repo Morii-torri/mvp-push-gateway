@@ -52,6 +52,7 @@ type TemplateContentField = {
   placeholder: string;
   defaultExpression: string;
   defaultValue: string;
+  formatHint?: string;
 };
 
 type TemplateCapabilityView = {
@@ -99,17 +100,22 @@ const messageTypeLabels: Record<string, string> = {
   text: '文本',
   markdown: 'Markdown',
   html: 'HTML',
-  card: '卡片',
-  news: '图文',
-  template: '短信模板',
-  notice: '通知',
-  json: 'JSON',
 };
 
 const templateGlobalDefaultValue = '-';
 const templatePlaceholderPattern = /\{\{\s*([\s\S]*?)\s*\}\}/g;
 const templatePayloadPathPattern = /\bpayload(?:\.[A-Za-z_][A-Za-z0-9_]*)+\b/;
 const templateDefaultFilterPattern = /\|\s*default\s*(?:[:(])/i;
+
+export type TemplatePreviewFormat = 'text' | 'html' | 'markdown';
+
+export type TemplateReceivedPreview = {
+  format: TemplatePreviewFormat;
+  title: string;
+  body: string;
+  html: string;
+  isEmpty: boolean;
+};
 
 function contentField(
   key: string,
@@ -118,6 +124,7 @@ function contentField(
   defaultValue = '',
   defaultExpression = `{{ payload.${key} }}`,
   required = true,
+  formatHint?: string,
 ): TemplateContentField {
   return {
     key,
@@ -127,6 +134,7 @@ function contentField(
     placeholder: defaultExpression,
     defaultExpression,
     defaultValue,
+    formatHint,
   };
 }
 
@@ -173,8 +181,16 @@ function titleContentUrlFields(): TemplateContentField[] {
 function markdownNoticeFields(): TemplateContentField[] {
   return [
     contentField('title', '标题', 'string', '通知', '{{ payload.title }}'),
-    contentField('markdown', 'Markdown 内容', 'string', '', '{{ payload.content }}'),
+    contentField('markdown', 'Markdown 内容', 'markdown', '', '{{ payload.content }}'),
     contentField('url', '跳转链接', 'string', '', '{{ payload.url }}'),
+  ];
+}
+
+function serverChanMarkdownFields(): TemplateContentField[] {
+  return [
+    contentField('title', 'title', 'string', '', '{{ payload.title }}'),
+    contentField('desp', 'desp', 'markdown', '', '{{ payload.content }}', false, '支持 Markdown'),
+    contentField('short', 'short', 'string', '', '{{ payload.short }}', false),
   ];
 }
 
@@ -189,7 +205,7 @@ function noticeFields(): TemplateContentField[] {
 
 function pushPlusContentFields(): TemplateContentField[] {
   return [
-    contentField('content', 'content', 'string', '', '{{ payload.content }}'),
+    contentField('content', 'content', 'html', '', '{{ payload.content }}', true, '支持 HTML'),
     contentField('title', 'title', 'string', '', '{{ payload.title }}', false),
     contentField('topic', 'topic', 'string', '', '{{ payload.topic }}', false),
   ];
@@ -197,7 +213,7 @@ function pushPlusContentFields(): TemplateContentField[] {
 
 function wxPusherHTMLFields(): TemplateContentField[] {
   return [
-    contentField('content', 'content', 'html', '', '{{ payload.content }}'),
+    contentField('content', 'content', 'html', '', '{{ payload.content }}', true, '支持 HTML'),
     contentField('summary', 'summary', 'string', '', '{{ payload.title }}', false),
     contentField('url', 'url', 'string', '', '{{ payload.url }}', false),
   ];
@@ -230,17 +246,13 @@ function smsTemplateFields(): TemplateContentField[] {
 
 const fallbackTemplateSchemas: Record<ProviderKind, Record<string, { label: string; fields: TemplateContentField[] }>> = {
   webhook: {
-    json: {
-      label: 'JSON 消息',
+    text: {
+      label: '文本',
       fields: [
         contentField('event', '事件名', 'string', 'message.push', '{{ payload.event }}'),
         contentField('title', '标题', 'string', '通知', '{{ payload.title }}'),
         contentField('body', '正文', 'string', '', '{{ payload.content }}'),
       ],
-    },
-    text: {
-      label: '文本',
-      fields: [contentField('content', '正文内容', 'string', '通知', '{{ payload.content }}')],
     },
     markdown: {
       label: 'Markdown',
@@ -248,18 +260,14 @@ const fallbackTemplateSchemas: Record<ProviderKind, Record<string, { label: stri
     },
   },
   self: {
-    json: {
-      label: 'JSON 消息',
+    text: {
+      label: '文本',
       fields: [
         contentField('title', '标题', 'string', '通知', '{{ payload.title }}'),
         contentField('content', '正文内容', 'string', '', '{{ payload.content }}'),
         contentField('url', '跳转链接', 'string', '', '{{ payload.url }}'),
         contentField('severity', '级别', 'string', '', '{{ payload.severity }}'),
       ],
-    },
-    text: {
-      label: '文本',
-      fields: titleContentUrlFields(),
     },
   },
   pushplus: {
@@ -275,13 +283,9 @@ const fallbackTemplateSchemas: Record<ProviderKind, Record<string, { label: stri
     },
   },
   serverchan: {
-    text: {
-      label: '文本',
-      fields: titleContentUrlFields(),
-    },
     markdown: {
       label: 'Markdown',
-      fields: markdownNoticeFields(),
+      fields: serverChanMarkdownFields(),
     },
   },
   ntfy: {
@@ -465,8 +469,8 @@ const fallbackTemplateSchemas: Record<ProviderKind, Record<string, { label: stri
     },
   },
   custom_token: {
-    json: {
-      label: 'JSON 消息',
+    text: {
+      label: '文本',
       fields: [
         contentField('title', '标题', 'string', '通知', '{{ payload.title }}'),
         contentField('content', '正文内容', 'string', '', '{{ payload.content }}'),
@@ -501,6 +505,36 @@ function fallbackMessageTypes(providerType: ProviderKind): string[] {
   return Object.keys(fallbackTemplateSchemas[providerType] ?? { text: { label: '文本', fields: [] } });
 }
 
+const lockedTemplateMessageTypes: Partial<Record<ProviderKind, string[]>> = {
+  pushplus: ['html'],
+  wxpusher: ['html'],
+  serverchan: ['markdown'],
+};
+
+const fallbackSchemaFirstProviders = new Set<ProviderKind>(['serverchan']);
+
+function normalizeTemplateMessageFormat(messageType: string | undefined): TemplatePreviewFormat {
+  if (messageType === 'html' || messageType === 'markdown') {
+    return messageType;
+  }
+  return 'text';
+}
+
+function normalizeTemplateMessageTypes(messageTypes: string[]): string[] {
+  const normalized = uniqueStrings(
+    messageTypes.map((messageType) => (messageType === 'json' ? 'text' : messageType)),
+  );
+  return normalized.length ? normalized : ['text'];
+}
+
+function lockedTemplateMessageType(providerType: ProviderKind, messageType?: string): string | undefined {
+  const locked = lockedTemplateMessageTypes[providerType];
+  if (!locked?.length) {
+    return messageType === 'json' ? 'text' : messageType;
+  }
+  return messageType && locked.includes(messageType) ? messageType : locked[0];
+}
+
 function templateCapabilityRecords(
   providerType: ProviderKind,
   capabilities: ProviderCapabilityApiRecord[],
@@ -509,14 +543,18 @@ function templateCapabilityRecords(
 }
 
 function templateMessageTypes(providerType: ProviderKind, capabilities: ProviderCapabilityApiRecord[]): string[] {
+  const locked = lockedTemplateMessageTypes[providerType];
+  if (locked?.length) {
+    return locked;
+  }
   const records = templateCapabilityRecords(providerType, capabilities);
   const supported = uniqueStrings(records.flatMap((record) => record.supported_message_types ?? []));
   if (supported.length) {
-    return supported;
+    return normalizeTemplateMessageTypes(supported);
   }
   const perMessageRecords = uniqueStrings(records.map((record) => record.message_type ?? ''));
   if (perMessageRecords.length) {
-    return perMessageRecords;
+    return normalizeTemplateMessageTypes(perMessageRecords);
   }
   return fallbackMessageTypes(providerType);
 }
@@ -533,7 +571,7 @@ function templateProviderOptions(capabilities: ProviderCapabilityApiRecord[]): A
 }
 
 export function getMessageTypeLabel(value: string): string {
-  return messageTypeLabels[value] ?? value;
+  return messageTypeLabels[normalizeTemplateMessageFormat(value)];
 }
 
 function schemaForMessage(schema: JSONValue | undefined, messageType: string): JSONValue | undefined {
@@ -594,14 +632,20 @@ function fallbackTemplateSchema(providerType: ProviderKind, messageType: string)
   const providerFallback = fallbackTemplateSchemas[providerType] ?? fallbackTemplateSchemas.wecom;
   const definition = providerFallback[messageType] ?? providerFallback[fallbackMessageTypes(providerType)[0]];
   return {
-    fields: definition.fields.map((field) => ({
-      key: field.key,
-      label: field.label,
-      type: field.type,
-      required: field.required,
-      default: field.defaultValue,
-      expression: field.defaultExpression,
-    })),
+    fields: definition.fields.map((field) => {
+      const item: Record<string, JSONValue> = {
+        key: field.key,
+        label: field.label,
+        type: field.type,
+        required: field.required,
+        default: field.defaultValue,
+        expression: field.defaultExpression,
+      };
+      if (field.formatHint) {
+        item.format_hint = field.formatHint;
+      }
+      return item;
+    }),
   };
 }
 
@@ -612,8 +656,21 @@ function templateCapabilityView(
 ): TemplateCapabilityView {
   const records = templateCapabilityRecords(providerType, capabilities);
   const messageTypes = templateMessageTypes(providerType, capabilities);
-  const selectedMessageType = messageType && messageTypes.includes(messageType) ? messageType : messageTypes[0] ?? 'text';
-  const capabilitySchema = capabilitySchemaForMessage(records, selectedMessageType);
+  const normalizedMessageType = lockedTemplateMessageType(providerType, messageType);
+  const selectedMessageType =
+    normalizedMessageType && messageTypes.includes(normalizedMessageType)
+      ? normalizedMessageType
+      : messageTypes[0] ?? 'text';
+  const schemaRecords = lockedTemplateMessageTypes[providerType]
+    ? records.filter(
+        (record) =>
+          record.message_type === selectedMessageType ||
+          Boolean(record.supported_message_types?.includes(selectedMessageType)),
+      )
+    : records;
+  const capabilitySchema = fallbackSchemaFirstProviders.has(providerType)
+    ? undefined
+    : capabilitySchemaForMessage(schemaRecords, selectedMessageType);
   const schema = capabilitySchema ?? fallbackTemplateSchema(providerType, selectedMessageType);
   const fields = extractTemplateFieldsFromSchema(schema);
   const fallbackFields = extractTemplateFieldsFromSchema(fallbackTemplateSchema(providerType, selectedMessageType));
@@ -683,6 +740,7 @@ function templateFieldFromSchemaRecord(value: JSONValue, fallbackKey = ''): Temp
     placeholder: firstString(value.placeholder, value.example) || defaultExpression,
     defaultExpression,
     defaultValue,
+    formatHint: firstString(value.format_hint, value.formatHint, value['x-format-hint']),
   };
 }
 
@@ -968,6 +1026,23 @@ function baseFieldList(draft: TemplateDraft): TemplateContentField[] {
   }));
 }
 
+function templateFieldExtra(field: TemplateContentField): string | undefined {
+  if (field.formatHint) {
+    return field.formatHint;
+  }
+  const type = field.type.toLowerCase();
+  if (type === 'html') {
+    return '支持 HTML';
+  }
+  if (type === 'markdown') {
+    return '支持 Markdown';
+  }
+  if (type === 'json' || type === 'object' || type === 'array') {
+    return '支持 JSON';
+  }
+  return undefined;
+}
+
 export function switchTemplateProviderType(
   draft: TemplateDraft,
   targetProviderType: ProviderKind,
@@ -1153,18 +1228,120 @@ function hasPreviewContent(value: JSONValue): boolean {
 }
 
 export function templateUserFacingPreview(draft: TemplateDraft): string {
+  const preview = templateReceivedPreview(draft);
+  return [preview.title, preview.body].filter(Boolean).join('\n\n');
+}
+
+export function templateReceivedPreview(draft: TemplateDraft): TemplateReceivedPreview {
   const rendered = templateRenderedPreviewValue(draft);
+  const format = normalizeTemplateMessageFormat(draft.messageType);
   if (!isRecord(rendered)) {
-    return typeof rendered === 'string' ? rendered : stringifyJSON(rendered);
+    const body = typeof rendered === 'string' ? rendered : stringifyJSON(rendered);
+    return {
+      format,
+      title: '',
+      body,
+      html: previewBodyHTML(format, body),
+      isEmpty: !hasPreviewContent(rendered),
+    };
   }
   if (!hasPreviewContent(rendered)) {
-    return '';
+    return {
+      format,
+      title: '',
+      body: '',
+      html: '',
+      isEmpty: true,
+    };
   }
   const title = firstRenderedString(rendered, ['title', 'subject']);
-  const body =
+  const body = firstRenderedString(rendered, previewBodyKeys(format)) || fallbackRenderedBody(rendered);
+  return {
+    format,
+    title,
+    body,
+    html: previewBodyHTML(format, body),
+    isEmpty: !title && !body,
+  };
+}
+
+function previewBodyKeys(format: TemplatePreviewFormat): string[] {
+  if (format === 'html') {
+    return ['html', 'content', 'body', 'message', 'description', 'desp', 'markdown'];
+  }
+  if (format === 'markdown') {
+    return ['markdown', 'desp', 'content', 'body', 'message', 'description', 'html'];
+  }
+  return ['body', 'content', 'message', 'description', 'desp', 'html', 'markdown'];
+}
+
+function fallbackRenderedBody(rendered: Record<string, JSONValue>): string {
+  return (
     firstRenderedString(rendered, ['body', 'content', 'message', 'markdown', 'html', 'description', 'desp']) ||
-    stringifyJSON(rendered);
-  return [title, body].filter(Boolean).join('\n\n');
+    stringifyJSON(rendered)
+  );
+}
+
+function previewBodyHTML(format: TemplatePreviewFormat, body: string): string {
+  if (!body.trim()) {
+    return '';
+  }
+  if (format === 'html') {
+    return sanitizePreviewHTML(body);
+  }
+  if (format === 'markdown') {
+    return markdownPreviewHTML(body);
+  }
+  return escapePreviewHTML(body).replace(/\r?\n/g, '<br />');
+}
+
+function escapePreviewHTML(value: string): string {
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function sanitizePreviewHTML(value: string): string {
+  return value
+    .replace(/<\s*(script|style|iframe|object|embed)[\s\S]*?<\/\s*\1\s*>/gi, '')
+    .replace(/\son[a-z]+\s*=\s*(".*?"|'.*?'|[^\s>]+)/gi, '')
+    .replace(/\s(href|src)\s*=\s*(['"])\s*javascript:[\s\S]*?\2/gi, ' $1="#"')
+    .replace(/\s(href|src)\s*=\s*javascript:[^\s>]+/gi, ' $1="#"');
+}
+
+function markdownPreviewHTML(value: string): string {
+  return value
+    .split(/\r?\n/)
+    .map((line) => markdownLinePreviewHTML(line))
+    .join('');
+}
+
+function markdownLinePreviewHTML(line: string): string {
+  const escaped = escapePreviewHTML(line);
+  if (!escaped.trim()) {
+    return '<div class="template-markdown-line template-markdown-line--empty"><br /></div>';
+  }
+  const heading = escaped.match(/^(#{1,3})\s+(.+)$/);
+  if (heading) {
+    const level = heading[1].length;
+    return `<h${level} class="template-markdown-heading">${inlineMarkdownPreviewHTML(heading[2])}</h${level}>`;
+  }
+  const listItem = escaped.match(/^[-*]\s+(.+)$/);
+  if (listItem) {
+    return `<div class="template-markdown-list-item">${inlineMarkdownPreviewHTML(listItem[1])}</div>`;
+  }
+  return `<div class="template-markdown-line">${inlineMarkdownPreviewHTML(escaped)}</div>`;
+}
+
+function inlineMarkdownPreviewHTML(value: string): string {
+  return value
+    .replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g, '<a href="$2" target="_blank" rel="noreferrer">$1</a>')
+    .replace(/`([^`]+)`/g, '<code>$1</code>')
+    .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+    .replace(/\*([^*]+)\*/g, '<em>$1</em>');
 }
 
 export function templateFeedbackFromResult(result: JSONValue): TemplateFeedback {
@@ -1201,12 +1378,14 @@ export function mapTemplateRow(
   const currentVersion = template.current_version;
   const targetProviderType =
     providerKindFromString(currentVersion?.target_provider_type ?? template.target_provider_type) ?? firstTemplateProvider(capabilities);
-  const messageType = currentVersion?.message_type ?? template.message_type ?? 'text';
+  const rawMessageType = currentVersion?.message_type ?? template.message_type ?? 'text';
+  const capabilityView = templateCapabilityView(targetProviderType, rawMessageType, capabilities);
+  const messageType = capabilityView.messageType;
   const templateBody = currentVersion?.template_body ?? template.template_body ?? '';
   const schema =
     currentVersion?.message_body_schema ??
     template.message_body_schema ??
-    templateCapabilityView(targetProviderType, messageType, capabilities).schema;
+    capabilityView.schema;
   const validationStatus = validationStatusFromApi(
     currentVersion?.validation_status ?? template.validation_status,
     Boolean(template.current_version_id),
@@ -1308,7 +1487,7 @@ export function TemplateEditorForm({
               return (
                 <div className="template-content-field" key={field.key}>
                   <div className="template-content-field__controls">
-                    <Form.Item label={templateContentFieldLabel(field)} required={field.required}>
+                    <Form.Item label={templateContentFieldLabel(field)} required={field.required} extra={templateFieldExtra(field)}>
                       {multiline ? (
                         <Input.TextArea
                           value={fieldValue.expression}

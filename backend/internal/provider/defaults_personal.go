@@ -22,7 +22,7 @@ func pushPlusCapability() Capability {
 		SendAPI:              rawJSON(`{"method":"POST","url":"https://www.pushplus.plus/send","content_type":"application/json","live_test_status":"implemented_but_not_live_tested","notes":"No live PushPlus account is configured in this environment."}`),
 		SuccessRule:          rawJSON(`{"type":"json_field","status_codes":[200],"field":"code","equals":200}`),
 		RetryRule:            rawJSON(`{"status_codes":[408,429,500,502,503,504],"network_errors":true,"retryable_json_codes":[500],"non_retryable_json_codes":[401,403]}`),
-		DefaultRateLimit:     rawJSON(`{"qps":2,"burst":5}`),
+		DefaultRateLimit:     rawJSON(`{"qps":2}`),
 		DefaultConcurrency:   2,
 		DefaultTimeoutMS:     5000,
 		DefaultRetryPolicy:   rawJSON(`{"max_attempts":3,"delay_ms":1000,"backoff":"linear"}`),
@@ -32,7 +32,7 @@ func pushPlusCapability() Capability {
 }
 
 func pushPlusContentSchema() json.RawMessage {
-	return rawJSON(`{"type":"object","required":["content"],"properties":{"content":{"type":"string","title":"content","default":"{{ payload.content }}"},"title":{"type":"string","title":"title","default":"{{ payload.title }}"},"topic":{"type":"string","title":"topic","default":"{{ payload.topic }}"}}}`)
+	return rawJSON(`{"type":"object","required":["content"],"properties":{"content":{"type":"string","title":"content","format_hint":"支持 HTML","default":"{{ payload.content }}"},"title":{"type":"string","title":"title","default":"{{ payload.title }}"},"topic":{"type":"string","title":"topic","default":"{{ payload.topic }}"}}}`)
 }
 
 func wxPusherCapability() Capability {
@@ -58,7 +58,7 @@ func wxPusherCapability() Capability {
 		SendAPI:              rawJSON(`{"method":"POST","url":"https://wxpusher.zjiecode.com/api/send/message","content_type":"application/json","live_test_status":"implemented_but_not_live_tested","notes":"Standard POST API only. No live WxPusher account is configured in this environment."}`),
 		SuccessRule:          rawJSON(`{"type":"json_field","status_codes":[200],"field":"code","equals":1000}`),
 		RetryRule:            rawJSON(`{"status_codes":[408,429,500,502,503,504],"network_errors":true,"non_retryable_json_codes":[1000,1001]}`),
-		DefaultRateLimit:     rawJSON(`{"qps":2,"burst":5}`),
+		DefaultRateLimit:     rawJSON(`{"qps":2}`),
 		DefaultConcurrency:   2,
 		DefaultTimeoutMS:     5000,
 		DefaultRetryPolicy:   rawJSON(`{"max_attempts":3,"delay_ms":1000,"backoff":"linear"}`),
@@ -68,34 +68,33 @@ func wxPusherCapability() Capability {
 }
 
 func wxPusherContentSchema() json.RawMessage {
-	return rawJSON(`{"type":"object","required":["content"],"properties":{"content":{"type":"string","title":"content","template_expression":"{{ payload.content }}"},"summary":{"type":"string","title":"summary","template_expression":"{{ payload.title }}"},"url":{"type":"string","title":"url","template_expression":"{{ payload.url }}"}}}`)
+	return rawJSON(`{"type":"object","required":["content"],"properties":{"content":{"type":"string","title":"content","format_hint":"支持 HTML","template_expression":"{{ payload.content }}"},"summary":{"type":"string","title":"summary","template_expression":"{{ payload.title }}"},"url":{"type":"string","title":"url","template_expression":"{{ payload.url }}"}}}`)
 }
 
 func serverChanCapability() Capability {
 	return capability(capabilitySpec{
 		ProviderType:         ProviderServerChan,
-		DisplayName:          "ServerChan",
+		DisplayName:          "Server酱 3",
 		Category:             "personal_gateway",
-		MessageType:          "notice",
-		MessageSchema:        noticeContentSchema(),
-		CredentialSchema:     rawJSON(`{"type":"object","required":["send_key"],"properties":{"version":{"type":"string","enum":["turbo","v3"],"default":"turbo"},"send_key":{"type":"string","format":"password"},"uid":{"type":"string"}}}`),
-		ChannelConfigSchema:  rawJSON(`{"type":"object","properties":{"channel":{"type":"string"},"openid":{"type":"string"},"noip":{"type":"boolean"},"tags":{"type":"string"},"short":{"type":"string"}}}`),
+		MessageType:          "markdown",
+		MessageSchema:        rawJSON(`{"type":"object","required":["title"],"properties":{"title":{"type":"string","title":"title","template_expression":"{{ payload.title }}"},"desp":{"type":"string","title":"desp","format_hint":"支持 Markdown","template_expression":"{{ payload.content }}"},"short":{"type":"string","title":"short","template_expression":"{{ payload.short }}"}}}`),
+		CredentialSchema:     rawJSON(`{"type":"object","properties":{}}`),
+		ChannelConfigSchema:  rawJSON(`{"type":"object","required":["url"],"properties":{"url":{"type":"string","title":"API URL","format":"uri","default":"https://<uid>.push.ft07.com/send/<sendkey>.send"}}}`),
 		RecipientRequired:    false,
 		AllowNoRecipient:     true,
 		RecipientRequirement: "none",
 		RecipientLocation:    PlacementNone,
 		RecipientFormat:      "none",
-		TokenLocation:        PlacementPath,
-		TokenFieldName:       "send_key",
-		TokenStrategy:        rawJSON(`{"strategy":"static_path_key","cacheable":false,"placement":{"location":"path","field_name":"send_key"}}`),
-		SendAPI:              rawJSON(`{"method":"POST","turbo_url":"https://sctapi.ftqq.com/{send_key}.send","v3_url":"https://{uid}.push.ft07.com/send/{send_key}.send","content_type":"application/x-www-form-urlencoded","live_test_status":"implemented_but_not_live_tested","notes":"The request snapshot is HTTP-like JSON for form fields; no live ServerChan account is configured."}`),
+		TokenLocation:        PlacementNone,
+		TokenStrategy:        rawJSON(`{"strategy":"none","cacheable":false,"placement":{"location":"none"}}`),
+		SendAPI:              rawJSON(`{"method":"POST","url_pattern":"https://<uid>.push.ft07.com/send/<sendkey>.send","content_type":"application/json","live_test_status":"configuration_dependent","notes":"ServerChan 3 uses the copied API URL as the send endpoint."}`),
 		SuccessRule:          rawJSON(`{"type":"json_field","status_codes":[200],"field":"code","equals":0}`),
 		RetryRule:            rawJSON(`{"status_codes":[408,429,500,502,503,504],"network_errors":true,"non_retryable_json_codes":[40001,40003]}`),
-		DefaultRateLimit:     rawJSON(`{"qps":1,"burst":3}`),
+		DefaultRateLimit:     rawJSON(`{"qps":1}`),
 		DefaultConcurrency:   1,
 		DefaultTimeoutMS:     5000,
 		DefaultRetryPolicy:   rawJSON(`{"max_attempts":3,"delay_ms":1500,"backoff":"linear"}`),
-		RequestExamples:      rawJSON(`{"title":"Disk alert","desp":"Disk 95%","channel":"9"}`),
+		RequestExamples:      rawJSON(`{"title":"Disk alert","desp":"**Disk 95%**","short":"Disk alert"}`),
 		CustomBodyAllowed:    false,
 	})
 }
@@ -123,7 +122,7 @@ func barkCapability() Capability {
 		SendAPI:              rawJSON(`{"method":"POST","url_template":"{server_url}/push","content_type":"application/json","adapter":"mock_http","live_test_status":"implemented_but_not_live_tested","notes":"No live Bark device key is configured in this environment."}`),
 		SuccessRule:          rawJSON(`{"type":"json_field","status_codes":[200],"field":"code","equals":200}`),
 		RetryRule:            rawJSON(`{"status_codes":[408,429,500,502,503,504],"network_errors":true,"non_retryable_json_codes":[400,401,403,404]}`),
-		DefaultRateLimit:     rawJSON(`{"qps":5,"burst":10}`),
+		DefaultRateLimit:     rawJSON(`{"qps":5}`),
 		DefaultConcurrency:   2,
 		DefaultTimeoutMS:     5000,
 		DefaultRetryPolicy:   rawJSON(`{"max_attempts":3,"delay_ms":1000,"backoff":"linear"}`),
@@ -152,7 +151,7 @@ func pushMeCapability() Capability {
 		SendAPI:              rawJSON(`{"method":"POST","url_template":"{server_url}","content_type":"application/json","adapter":"mock_http","live_test_status":"implemented_but_not_live_tested","notes":"No live PushMe key is configured in this environment."}`),
 		SuccessRule:          rawJSON(`{"type":"text_or_json","status_codes":[200],"text_contains":["success"],"json_field":"errcode","json_equals":0}`),
 		RetryRule:            rawJSON(`{"status_codes":[408,429,500,502,503,504],"network_errors":true,"non_retryable_status_codes":[400,401,403,404]}`),
-		DefaultRateLimit:     rawJSON(`{"qps":2,"burst":5}`),
+		DefaultRateLimit:     rawJSON(`{"qps":2}`),
 		DefaultConcurrency:   2,
 		DefaultTimeoutMS:     5000,
 		DefaultRetryPolicy:   rawJSON(`{"max_attempts":3,"delay_ms":1000,"backoff":"linear"}`),

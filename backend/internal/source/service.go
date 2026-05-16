@@ -20,7 +20,7 @@ import (
 )
 
 const (
-	DefaultMaxPayloadBytes int64 = 1 << 20
+	DefaultMaxPayloadBytes int64 = 5 << 20
 	defaultDedupeTTL             = 24 * time.Hour
 	maxQuietHoursWindows         = 5
 )
@@ -158,6 +158,7 @@ type Service struct {
 	now            func() time.Time
 	traceID        func() string
 	maxPayloadSize int64
+	maxPayloadFunc func(context.Context) int64
 
 	limiterMu sync.Mutex
 	limiters  map[string]*rateWindow
@@ -177,6 +178,14 @@ func WithTraceIDGenerator(traceID func() string) Option {
 	return func(s *Service) {
 		if traceID != nil {
 			s.traceID = traceID
+		}
+	}
+}
+
+func WithMaxPayloadSizeFunc(maxPayloadFunc func(context.Context) int64) Option {
+	return func(s *Service) {
+		if maxPayloadFunc != nil {
+			s.maxPayloadFunc = maxPayloadFunc
 		}
 	}
 }
@@ -258,7 +267,7 @@ func (s *Service) Ingest(ctx context.Context, input IngestInput) (IngestResult, 
 	if !clientAllowed(configuredSource.IPAllowlist, input.RemoteAddr) {
 		return IngestResult{}, ErrIPNotAllowed
 	}
-	if int64(len(input.Body)) > s.maxPayloadSize {
+	if int64(len(input.Body)) > s.maxPayloadBytes(ctx) {
 		return IngestResult{}, ErrPayloadTooLarge
 	}
 	if !s.authorizeSource(configuredSource, input) {
@@ -353,6 +362,17 @@ func (s *Service) Ingest(ctx context.Context, input IngestInput) (IngestResult, 
 		Status:  "accepted",
 		Message: "accepted",
 	}, nil
+}
+
+func (s *Service) maxPayloadBytes(ctx context.Context) int64 {
+	if s.maxPayloadFunc == nil {
+		return s.maxPayloadSize
+	}
+	maxPayloadSize := s.maxPayloadFunc(ctx)
+	if maxPayloadSize <= 0 {
+		return s.maxPayloadSize
+	}
+	return maxPayloadSize
 }
 
 func normalizeSourceInput(input CreateSourceInput) (CreateSourceParams, error) {
@@ -746,8 +766,7 @@ func inboundDedupeTTL(raw json.RawMessage) time.Duration {
 type rateLimitConfig struct {
 	Enabled   bool    `json:"enabled"`
 	QPS       float64 `json:"qps"`
-	PerMinute int     `json:"per_minute"`
-	Burst     int     `json:"burst"`
+	PerSecond int     `json:"per_second"`
 }
 
 type rateWindow struct {
@@ -767,14 +786,12 @@ func (s *Service) rateLimited(configuredSource Source) bool {
 		return false
 	}
 
-	limit := config.PerMinute
-	window := time.Minute
+	limit := config.PerSecond
 	if limit <= 0 && config.QPS > 0 {
 		limit = int(config.QPS)
-		window = time.Second
-	}
-	if config.Burst > 0 && config.Burst > limit {
-		limit = config.Burst
+		if float64(limit) < config.QPS {
+			limit++
+		}
 	}
 	if limit <= 0 {
 		return false
@@ -785,7 +802,7 @@ func (s *Service) rateLimited(configuredSource Source) bool {
 	defer s.limiterMu.Unlock()
 
 	state := s.limiters[configuredSource.ID]
-	if state == nil || now.Sub(state.windowStart) >= window {
+	if state == nil || now.Sub(state.windowStart) >= time.Second {
 		s.limiters[configuredSource.ID] = &rateWindow{windowStart: now, count: 1}
 		return false
 	}

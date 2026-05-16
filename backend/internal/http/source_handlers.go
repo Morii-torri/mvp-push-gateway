@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -9,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"mvp-push-gateway/backend/internal/settings"
 	"mvp-push-gateway/backend/internal/source"
 )
 
@@ -189,8 +191,9 @@ func (h *Handler) ingestHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, source.DefaultMaxPayloadBytes+1))
-	if err != nil || int64(len(body)) > source.DefaultMaxPayloadBytes {
+	maxPayloadBytes := h.ingestMaxPayloadBytes(r.Context())
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxPayloadBytes+1))
+	if err != nil || int64(len(body)) > maxPayloadBytes {
 		writeAPIError(w, http.StatusRequestEntityTooLarge, "MGP-PAYLOAD-002", "Payload 超过大小限制")
 		return
 	}
@@ -212,6 +215,17 @@ func (h *Handler) ingestHandler(w http.ResponseWriter, r *http.Request) {
 		Status:  result.Status,
 		Message: result.Message,
 	})
+}
+
+func (h *Handler) ingestMaxPayloadBytes(ctx context.Context) int64 {
+	if h.settings == nil {
+		return source.DefaultMaxPayloadBytes
+	}
+	value := h.settings.IntSetting(ctx, settings.KeyIngestMaxPayloadBytes, int(settings.DefaultIngestMaxPayloadBytes))
+	if value <= 0 {
+		return source.DefaultMaxPayloadBytes
+	}
+	return int64(value)
 }
 
 func (r sourceRequest) toCreateInput() (source.CreateSourceInput, error) {

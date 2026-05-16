@@ -394,7 +394,7 @@ func missingCredentialFields(channel Channel, token string) []string {
 	case ProviderWxPusher:
 		requireAny("WxPusher appToken", auth["app_token"], auth["appToken"], send["app_token"], send["appToken"], token)
 	case ProviderServerChan:
-		requireAny("Server酱 send_key", auth["send_key"], send["send_key"])
+		requireAny("Server酱 API URL", send["url"], send["send_url"], send["api_url"], auth["url"])
 	case ProviderEmail:
 		requireAny("SMTP host", auth["host"], send["host"])
 		requireAny("SMTP from", auth["from"], send["from"])
@@ -1057,7 +1057,7 @@ func requestConfigFrom(channel Channel, input BuildRequestInput) (requestConfig,
 	if err := decodeInto(channel.SendConfig, &config); err != nil {
 		return requestConfig{}, err
 	}
-	if strings.TrimSpace(config.URL) == "" {
+	if channel.ProviderType == ProviderServerChan || strings.TrimSpace(config.URL) == "" {
 		defaultConfig, ok, err := builtInRequestConfig(channel, input)
 		if err != nil {
 			return requestConfig{}, err

@@ -441,8 +441,10 @@ type fakeSettingsService struct {
 	listResult  []settings.Setting
 	getResult   settings.Setting
 	updateInput settings.UpdateInput
+	intValues   map[string]int
 	listCalls   int
 	updateCalls int
+	intCalls    int
 }
 
 func (f *fakeSettingsService) ListSettings(context.Context) ([]settings.Setting, error) {
@@ -454,6 +456,22 @@ func (f *fakeSettingsService) UpdateSetting(_ context.Context, _ string, input s
 	f.updateCalls++
 	f.updateInput = input
 	return f.getResult, nil
+}
+
+func (f *fakeSettingsService) IntSetting(_ context.Context, key string, fallback int) int {
+	f.intCalls++
+	if f.intValues == nil {
+		return fallback
+	}
+	value, ok := f.intValues[key]
+	if !ok || value <= 0 {
+		return fallback
+	}
+	return value
+}
+
+func (f *fakeSettingsService) RunPerformanceTest(context.Context, settings.PerformanceTestInput) (settings.PerformanceTestResult, error) {
+	return settings.PerformanceTestResult{RecommendedGlobalConcurrency: 10}, nil
 }
 
 type fakeProviderService struct {

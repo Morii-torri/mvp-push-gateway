@@ -161,6 +161,8 @@ type auditService interface {
 type settingsService interface {
 	ListSettings(context.Context) ([]settings.Setting, error)
 	UpdateSetting(context.Context, string, settings.UpdateInput) (settings.Setting, error)
+	IntSetting(context.Context, string, int) int
+	RunPerformanceTest(context.Context, settings.PerformanceTestInput) (settings.PerformanceTestResult, error)
 }
 
 func WithAuthService(service authService) Option {
@@ -280,6 +282,7 @@ func NewHandler(cfg config.Config, options ...Option) http.Handler {
 	mux.HandleFunc(cfg.Server.APIPrefix+"/audit-logs", handler.auditLogsHandler)
 	mux.HandleFunc(cfg.Server.APIPrefix+"/audit-logs/", handler.auditLogDetailHandler)
 	mux.HandleFunc(cfg.Server.APIPrefix+"/settings", handler.settingsHandler)
+	mux.HandleFunc(cfg.Server.APIPrefix+"/settings/performance-test", handler.settingsPerformanceTestHandler)
 	mux.HandleFunc(cfg.Server.APIPrefix+"/settings/", handler.settingDetailHandler)
 	mux.HandleFunc(cfg.Server.APIPrefix+"/monitoring/queue", handler.queueMonitoringHandler)
 	mux.HandleFunc(cfg.Server.APIPrefix+"/monitor/queues", handler.queueMonitoringHandler)

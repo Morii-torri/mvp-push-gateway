@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 )
@@ -91,7 +92,7 @@ func TestIngestSilencesMessageDuringQuietHours(t *testing.T) {
 		Enabled:              true,
 		AuthMode:             AuthModeNone,
 		QuietHoursConfig:     json.RawMessage(`{"enabled":true,"windows":[{"start":"22:00","end":"08:00"}]}`),
-		RateLimitConfig:      json.RawMessage(`{"enabled":true,"per_minute":1}`),
+		RateLimitConfig:      json.RawMessage(`{"enabled":true,"per_second":1}`),
 		InboundDedupeEnabled: true,
 	})
 	service := NewService(
@@ -361,6 +362,128 @@ func TestIngestUpdatesLatestPayloadAndQueuesWithoutRoutes(t *testing.T) {
 	}
 	if len(store.enqueued) != 1 || store.enqueued[0].JobType != "route_plan" {
 		t.Fatalf("expected one route_plan job, got %+v", store.enqueued)
+	}
+}
+
+func TestIngestRateLimitUsesPerSecondWindow(t *testing.T) {
+	now := time.Date(2026, 5, 8, 10, 0, 0, 0, time.UTC)
+	currentTime := now
+	store := newMemoryStore(Source{
+		ID:              "source-1",
+		Code:            "orders",
+		Name:            "Orders",
+		Enabled:         true,
+		AuthMode:        AuthModeNone,
+		RateLimitConfig: json.RawMessage(`{"enabled":true,"per_second":1}`),
+	})
+	service := NewService(
+		store,
+		WithNow(func() time.Time { return currentTime }),
+		WithTraceIDGenerator(func() string { return "trace-rate-limit" }),
+	)
+
+	input := IngestInput{
+		SourceCode: "orders",
+		Method:     http.MethodPost,
+		Path:       "/api/v1/ingest/orders",
+		Headers:    http.Header{},
+		RemoteAddr: "127.0.0.1:4321",
+		Body:       []byte(`{"title":"paid"}`),
+	}
+	if _, err := service.Ingest(context.Background(), input); err != nil {
+		t.Fatalf("first ingest should pass: %v", err)
+	}
+	if _, err := service.Ingest(context.Background(), input); !errors.Is(err, ErrRateLimited) {
+		t.Fatalf("second ingest should be rate limited, got %v", err)
+	}
+
+	currentTime = currentTime.Add(time.Second)
+	if _, err := service.Ingest(context.Background(), input); err != nil {
+		t.Fatalf("ingest in next second should pass: %v", err)
+	}
+}
+
+func TestIngestRateLimitRequiresPerSecondLimit(t *testing.T) {
+	store := newMemoryStore(Source{
+		ID:              "source-1",
+		Code:            "orders",
+		Name:            "Orders",
+		Enabled:         true,
+		AuthMode:        AuthModeNone,
+		RateLimitConfig: json.RawMessage(`{"enabled":true}`),
+	})
+	service := NewService(
+		store,
+		WithNow(func() time.Time { return time.Date(2026, 5, 8, 10, 0, 0, 0, time.UTC) }),
+		WithTraceIDGenerator(func() string { return "trace-no-rate-limit-value" }),
+	)
+	input := IngestInput{
+		SourceCode: "orders",
+		Method:     http.MethodPost,
+		Path:       "/api/v1/ingest/orders",
+		Headers:    http.Header{},
+		RemoteAddr: "127.0.0.1:4321",
+		Body:       []byte(`{"title":"paid"}`),
+	}
+
+	if _, err := service.Ingest(context.Background(), input); err != nil {
+		t.Fatalf("first ingest should pass: %v", err)
+	}
+	if _, err := service.Ingest(context.Background(), input); err != nil {
+		t.Fatalf("enabled rate limit without per-second value should not reject: %v", err)
+	}
+}
+
+func TestIngestAllowsFiveMegabytePayloadByDefault(t *testing.T) {
+	store := newMemoryStore(Source{
+		ID:       "source-1",
+		Code:     "orders",
+		Name:     "Orders",
+		Enabled:  true,
+		AuthMode: AuthModeNone,
+	})
+	service := NewService(store, WithTraceIDGenerator(func() string { return "trace-large-payload" }))
+	body := []byte(`{"blob":"` + strings.Repeat("a", (2<<20)) + `"}`)
+
+	if _, err := service.Ingest(context.Background(), IngestInput{
+		SourceCode: "orders",
+		Method:     http.MethodPost,
+		Path:       "/api/v1/ingest/orders",
+		Headers:    http.Header{},
+		RemoteAddr: "127.0.0.1:4321",
+		Body:       body,
+	}); err != nil {
+		t.Fatalf("2MiB payload should pass with the new default limit: %v", err)
+	}
+}
+
+func TestIngestUsesConfiguredMaxPayloadSize(t *testing.T) {
+	store := newMemoryStore(Source{
+		ID:       "source-1",
+		Code:     "orders",
+		Name:     "Orders",
+		Enabled:  true,
+		AuthMode: AuthModeNone,
+	})
+	service := NewService(
+		store,
+		WithMaxPayloadSizeFunc(func(context.Context) int64 { return 32 }),
+		WithTraceIDGenerator(func() string { return "trace-configured-payload-limit" }),
+	)
+
+	_, err := service.Ingest(context.Background(), IngestInput{
+		SourceCode: "orders",
+		Method:     http.MethodPost,
+		Path:       "/api/v1/ingest/orders",
+		Headers:    http.Header{},
+		RemoteAddr: "127.0.0.1:4321",
+		Body:       []byte(`{"title":"payload larger than configured limit"}`),
+	})
+	if !errors.Is(err, ErrPayloadTooLarge) {
+		t.Fatalf("expected configured payload limit to reject oversized body, got %v", err)
+	}
+	if store.latestPayloadUpdates != 0 {
+		t.Fatalf("expected payload rejected before latest payload update, got %d", store.latestPayloadUpdates)
 	}
 }
 

@@ -84,6 +84,7 @@ import {
   type OrgUnitApiRecord,
   type OrgUnitInput,
   type ProviderCapabilityApiRecord,
+  type PerformanceTestResult,
   type RecipientGroupApiRecord,
   type RecipientGroupInput,
   type RouteFlowApiRecord,
@@ -103,7 +104,7 @@ import {
   type UserIdentityInput,
   type UserInput,
 } from '../api/console';
-import { ApiClientError } from '../api/client';
+import { ApiClientError, isAuthExpiredError } from '../api/client';
 import {
   formatHitCount,
   getAuditActionLabel,
@@ -186,11 +187,13 @@ import {
   templateDraftWithSourcePayload,
   templateFeedbackFromResult,
   templateInputFromDraft,
+  templateReceivedPreview,
   templateRenderedPreview,
   templateUserFacingPreview,
   templateVersionInputFromDraft,
   type TemplateDraft,
   type TemplateFeedback,
+  type TemplateReceivedPreview,
 } from './console/templateEditor';
 import { MessageLogAttemptBlocks } from './console/messageLogDetail';
 import { providerTypeOptions, recipientIdentityProviderOptions } from './console/shared';
@@ -216,6 +219,7 @@ export {
   TemplateEditorForm,
   createTemplateDraft,
   mapTemplateRow,
+  templateReceivedPreview,
   switchTemplateContentMode,
   switchTemplateMessageType,
   switchTemplateProviderType,
@@ -435,6 +439,9 @@ function uniqueValues(values: Array<string | undefined | null>) {
 }
 
 function userFacingError(error: unknown): string {
+  if (isAuthExpiredError(error)) {
+    return '';
+  }
   if (error instanceof ApiClientError) {
     return error.userMessage;
   }
@@ -442,6 +449,13 @@ function userFacingError(error: unknown): string {
     return error.message;
   }
   return '请求失败，请稍后重试';
+}
+
+function showError(messageApi: { error: (content: string) => unknown }, error: unknown) {
+  const text = userFacingError(error);
+  if (text) {
+    messageApi.error(text);
+  }
 }
 
 function formatApiTime(value?: string | null) {
@@ -595,7 +609,7 @@ type SourceDraft = {
   inboundDedupeEnabled: boolean;
   inboundDedupeTtlSeconds: string;
   rateLimitEnabled: boolean;
-  rateLimitPerMinute: string;
+  rateLimitPerSecond: string;
   quietHoursEnabled: boolean;
   quietHoursWindows: QuietHoursWindowDraft[];
 };
@@ -606,7 +620,7 @@ type QuietHoursWindowDraft = {
 };
 
 const defaultInboundDedupeTtlSeconds = 86400;
-const defaultRateLimitPerMinute = 1000;
+const defaultRateLimitPerSecond = 20;
 const defaultQuietHoursWindow: QuietHoursWindowDraft = { start: '22:00', end: '08:00' };
 const maxQuietHoursWindows = 5;
 
@@ -622,7 +636,7 @@ export function createSourceDraft(): SourceDraft {
     inboundDedupeEnabled: true,
     inboundDedupeTtlSeconds: String(defaultInboundDedupeTtlSeconds),
     rateLimitEnabled: false,
-    rateLimitPerMinute: String(defaultRateLimitPerMinute),
+    rateLimitPerSecond: String(defaultRateLimitPerSecond),
     quietHoursEnabled: false,
     quietHoursWindows: [{ ...defaultQuietHoursWindow }],
   };
@@ -630,7 +644,7 @@ export function createSourceDraft(): SourceDraft {
 
 function draftFromSource(source: SourceApiRecord): SourceDraft {
   const dedupeTTL = numberConfigValue(source.inbound_dedupe_config, ['ttl_seconds'], defaultInboundDedupeTtlSeconds);
-  const rateLimitPerMinute = numberConfigValue(source.rate_limit_config, ['per_minute'], defaultRateLimitPerMinute);
+  const rateLimitPerSecond = sourceRateLimitPerSecond(source.rate_limit_config, defaultRateLimitPerSecond);
   const quietHours = sourceQuietHoursDraft(source.do_not_disturb_config);
   return {
     id: source.id,
@@ -644,7 +658,7 @@ function draftFromSource(source: SourceApiRecord): SourceDraft {
     inboundDedupeEnabled: source.inbound_dedupe_enabled,
     inboundDedupeTtlSeconds: String(dedupeTTL),
     rateLimitEnabled: rateLimitConfigEnabled(source.rate_limit_config),
-    rateLimitPerMinute: String(rateLimitPerMinute),
+    rateLimitPerSecond: String(rateLimitPerSecond),
     quietHoursEnabled: quietHours.enabled,
     quietHoursWindows: quietHours.windows,
   };
@@ -654,9 +668,9 @@ export function sourceInputFromDraft(draft: SourceDraft): SourceInput {
   const dedupeTTLSeconds = draft.inboundDedupeEnabled
     ? parsePositiveInteger(draft.inboundDedupeTtlSeconds, '去重保留时间')
     : defaultInboundDedupeTtlSeconds;
-  const rateLimitPerMinute = draft.rateLimitEnabled
-    ? parsePositiveInteger(draft.rateLimitPerMinute, '每分钟最多接收')
-    : defaultRateLimitPerMinute;
+  const rateLimitPerSecond = draft.rateLimitEnabled
+    ? parsePositiveInteger(draft.rateLimitPerSecond, '每秒最多接收')
+    : defaultRateLimitPerSecond;
   return {
     code: draft.code.trim(),
     name: draft.name.trim(),
@@ -669,7 +683,7 @@ export function sourceInputFromDraft(draft: SourceDraft): SourceInput {
     inbound_dedupe_enabled: draft.inboundDedupeEnabled,
     inbound_dedupe_strategy: 'payload_hash',
     inbound_dedupe_config: draft.inboundDedupeEnabled ? { ttl_seconds: dedupeTTLSeconds } : {},
-    rate_limit_config: draft.rateLimitEnabled ? { enabled: true, per_minute: rateLimitPerMinute } : { enabled: false },
+    rate_limit_config: draft.rateLimitEnabled ? { enabled: true, per_second: rateLimitPerSecond } : { enabled: false },
     do_not_disturb_config: sourceQuietHoursInput(draft),
   };
 }
@@ -704,6 +718,18 @@ function numberConfigValue(config: JSONValue, keys: string[], fallback: number) 
   return fallback;
 }
 
+function sourceRateLimitPerSecond(config: JSONValue, fallback: number) {
+  const perSecond = numberConfigValue(config, ['per_second'], 0);
+  if (perSecond > 0) {
+    return perSecond;
+  }
+  const qps = numberConfigValue(config, ['qps'], 0);
+  if (qps > 0) {
+    return qps;
+  }
+  return fallback;
+}
+
 function rateLimitConfigEnabled(config: JSONValue) {
   if (!isRecord(config)) {
     return false;
@@ -711,16 +737,16 @@ function rateLimitConfigEnabled(config: JSONValue) {
   if (config.enabled === true) {
     return true;
   }
-  return numberConfigValue(config, ['per_minute'], 0) > 0;
+  return sourceRateLimitPerSecond(config, 0) > 0;
 }
 
 function summarizeSourceRateLimit(config: JSONValue) {
   if (!rateLimitConfigEnabled(config)) {
     return '未开启';
   }
-  const perMinute = numberConfigValue(config, ['per_minute'], 0);
-  if (perMinute > 0) {
-    return `每分钟 ${perMinute} 次`;
+  const perSecond = sourceRateLimitPerSecond(config, 0);
+  if (perSecond > 0) {
+    return `每秒 ${perSecond} 次`;
   }
   return '已开启';
 }
@@ -1231,13 +1257,13 @@ export function SourceConfigForm({
             <div />
           )}
           {value.rateLimitEnabled ? (
-            <Form.Item label="每分钟最多接收">
+            <Form.Item label="每秒最多接收">
               <InputNumber
                 min={1}
                 precision={0}
                 className="full-width"
-                value={value.rateLimitPerMinute === '' ? null : Number(value.rateLimitPerMinute)}
-                onChange={(nextValue) => update({ rateLimitPerMinute: nextValue === null ? '' : String(nextValue) })}
+                value={value.rateLimitPerSecond === '' ? null : Number(value.rateLimitPerSecond)}
+                onChange={(nextValue) => update({ rateLimitPerSecond: nextValue === null ? '' : String(nextValue) })}
               />
             </Form.Item>
           ) : (
@@ -1599,7 +1625,7 @@ export function SourcesPage({ lastUpdated, onRefresh }: ConsolePageProps) {
       message.success('来源配置已保存');
       await loadSources();
     } catch (error) {
-      message.error(userFacingError(error));
+      showError(message, error);
     }
   };
   const openInboundTest = (record: SourceRow) => {
@@ -1648,7 +1674,7 @@ export function SourcesPage({ lastUpdated, onRefresh }: ConsolePageProps) {
       message.success(`入站 Payload 已提交，trace_id：${result.trace_id || '-'}`);
       await loadSources();
     } catch (error) {
-      message.error(userFacingError(error));
+      showError(message, error);
     } finally {
       setInboundSending(false);
     }
@@ -1944,7 +1970,7 @@ export function ProvidersPage({ lastUpdated, onRefresh }: ConsolePageProps) {
       message.success('推送渠道配置已保存');
       await loadProviders();
     } catch (error) {
-      message.error(userFacingError(error));
+      showError(message, error);
     }
   };
   const openProviderTest = (record: ProviderRow) => {
@@ -1959,7 +1985,7 @@ export function ProvidersPage({ lastUpdated, onRefresh }: ConsolePageProps) {
       setSelected((current) => (current?.id === record.id ? { ...current, enabled } : current));
       message.success(enabled ? '推送渠道已启用' : '推送渠道已停用');
     } catch (error) {
-      message.error(userFacingError(error));
+      showError(message, error);
     } finally {
       setPendingProviderEnabledIds((current) => {
         const next = new Set(current);
@@ -2485,7 +2511,7 @@ export function RoutesPage({ lastUpdated, onRefresh }: ConsolePageProps) {
       }
       loadCanvasForGroup(nextGroup, nextRules);
     } catch (error) {
-      message.error(userFacingError(error));
+      showError(message, error);
       loadCanvasForGroup(group);
     }
   };
@@ -2519,7 +2545,7 @@ export function RoutesPage({ lastUpdated, onRefresh }: ConsolePageProps) {
     void consoleApi
       .listRouteVersions(group.id)
       .then((response) => setRouteVersionRows(response.versions))
-      .catch((error) => message.error(userFacingError(error)));
+      .catch((error) => showError(message, error));
   };
   const closeGroupEditor = () => {
     closeGroupDrawer();
@@ -2576,7 +2602,7 @@ export function RoutesPage({ lastUpdated, onRefresh }: ConsolePageProps) {
       message.success('路由大组已保存');
       await loadRouteData();
     } catch (error) {
-      message.error(userFacingError(error));
+      showError(message, error);
     }
   };
   const addRouteNode = useCallback(
@@ -2707,7 +2733,7 @@ export function RoutesPage({ lastUpdated, onRefresh }: ConsolePageProps) {
       }));
       message.success('路由画布已保存到后端');
     } catch (error) {
-      message.error(userFacingError(error));
+      showError(message, error);
     }
   };
   const resetCanvasLayout = () => {
@@ -2750,7 +2776,7 @@ export function RoutesPage({ lastUpdated, onRefresh }: ConsolePageProps) {
       message.success('路由规则已保存');
       await reloadRulesForGroup(selectedGroup);
     } catch (error) {
-      message.error(userFacingError(error));
+      showError(message, error);
     }
   };
   const moveRule = (id: string, direction: -1 | 1) => {
@@ -2783,7 +2809,7 @@ export function RoutesPage({ lastUpdated, onRefresh }: ConsolePageProps) {
       message.success('排序已保存到后端，画布将在重置或重新进入时按最新顺序生成');
       await reloadRulesForGroup(selectedGroup);
     } catch (error) {
-      message.error(userFacingError(error));
+      showError(message, error);
     }
   };
   const validateRoute = async () => {
@@ -2792,7 +2818,7 @@ export function RoutesPage({ lastUpdated, onRefresh }: ConsolePageProps) {
       const result = await consoleApi.validateRouteFlow(selectedGroup.id);
       message.success(result.status === 'valid' ? '路由校验通过' : '路由校验未通过，请查看后端返回错误');
     } catch (error) {
-      message.error(userFacingError(error));
+      showError(message, error);
     }
   };
   const openRouteSimulation = () => {
@@ -2811,7 +2837,7 @@ export function RoutesPage({ lastUpdated, onRefresh }: ConsolePageProps) {
       setSimulationResult(result as JSONValue);
       message.success(`模拟运行完成：${stringifyJSON(result, '{}').slice(0, 80)}`);
     } catch (error) {
-      message.error(userFacingError(error));
+      showError(message, error);
     }
   };
   const publishAndActivateRoute = () => {
@@ -2853,7 +2879,7 @@ export function RoutesPage({ lastUpdated, onRefresh }: ConsolePageProps) {
           message.success(versionId ? '路由版本已发布并激活' : '路由版本已发布');
           await loadRouteData();
         } catch (error) {
-          message.error(userFacingError(error));
+          showError(message, error);
           throw error;
         }
       },
@@ -2954,7 +2980,7 @@ export function RoutesPage({ lastUpdated, onRefresh }: ConsolePageProps) {
               );
               message.success(`${record.name} 已${checked ? '启用' : '停用'}`);
             } catch (error) {
-              message.error(userFacingError(error));
+              showError(message, error);
             }
           }}
         />
@@ -3320,6 +3346,24 @@ export function TemplateRowActions({
   );
 }
 
+function TemplateReceivedPreviewBlock({ preview }: { preview: TemplateReceivedPreview }) {
+  return (
+    <div className={`template-received-preview template-received-preview--${preview.format}`}>
+      {preview.isEmpty ? null : (
+        <>
+          {preview.title ? <div className="template-received-preview__title">{preview.title}</div> : null}
+          {preview.body ? (
+            <div
+              className="template-received-preview__body"
+              dangerouslySetInnerHTML={{ __html: preview.html }}
+            />
+          ) : null}
+        </>
+      )}
+    </div>
+  );
+}
+
 export function templateVersionSamplePayload(
   version: TemplateVersionApiRecord,
   payloadPreview?: JSONValue | null,
@@ -3575,8 +3619,9 @@ export function TemplatesPage({ lastUpdated, onRefresh }: ConsolePageProps) {
       message.success(`模板${actionLabel}已完成`);
       return feedback;
     } catch (error) {
-      setTemplateFeedback((current) => ({ ...current, status: 'invalid', errors: [userFacingError(error)] }));
-      message.error(userFacingError(error));
+      const errorText = userFacingError(error);
+      setTemplateFeedback((current) => ({ ...current, status: 'invalid', errors: errorText ? [errorText] : [] }));
+      showError(message, error);
       return null;
     }
   };
@@ -3603,7 +3648,7 @@ export function TemplatesPage({ lastUpdated, onRefresh }: ConsolePageProps) {
       message.success('模板已校验、保存并发布到后端');
       await loadTemplates();
     } catch (error) {
-      message.error(userFacingError(error));
+      showError(message, error);
     }
   };
   const copyVariable = async (path: string) => {
@@ -3623,7 +3668,7 @@ export function TemplatesPage({ lastUpdated, onRefresh }: ConsolePageProps) {
       setTemplateVersions(response.versions);
     } catch (error) {
       setTemplateVersions([]);
-      message.error(userFacingError(error));
+      showError(message, error);
     } finally {
       setTemplateVersionsLoading(false);
     }
@@ -3645,7 +3690,7 @@ export function TemplatesPage({ lastUpdated, onRefresh }: ConsolePageProps) {
       });
       message.success(`${record.name} 校验通过`);
     } catch (error) {
-      message.error(userFacingError(error));
+      showError(message, error);
     }
   };
   const confirmDeleteTemplate = (record: TemplateRecord & { raw?: TemplateApiRecord }) => {
@@ -3661,7 +3706,7 @@ export function TemplatesPage({ lastUpdated, onRefresh }: ConsolePageProps) {
           message.success('模板已删除');
           await loadTemplates();
         } catch (error) {
-          message.error(userFacingError(error));
+          showError(message, error);
         }
       },
     });
@@ -3687,7 +3732,7 @@ export function TemplatesPage({ lastUpdated, onRefresh }: ConsolePageProps) {
           await loadTemplates();
           await loadTemplateVersions(nextTemplate);
         } catch (error) {
-          message.error(userFacingError(error));
+          showError(message, error);
         }
       },
     });
@@ -3702,7 +3747,7 @@ export function TemplatesPage({ lastUpdated, onRefresh }: ConsolePageProps) {
       render: (value: TemplateRecord['targetProviderType']) => getProviderTypeLabel(value),
     },
     {
-      title: '消息类型',
+      title: '消息格式',
       dataIndex: 'messageType',
       render: (value: string) => getMessageTypeLabel(value),
     },
@@ -3755,7 +3800,7 @@ export function TemplatesPage({ lastUpdated, onRefresh }: ConsolePageProps) {
     (field) => !isRecipientPayloadPath(field.path),
   );
   const renderedMessagePreview = templateRenderedPreview(templateDraft);
-  const userFacingPreview = templateUserFacingPreview(templateDraft);
+  const receivedPreview = templateReceivedPreview(templateDraft);
 
   return (
     <PageFrame
@@ -3901,13 +3946,13 @@ export function TemplatesPage({ lastUpdated, onRefresh }: ConsolePageProps) {
                 items={[
                   {
                     key: 'json',
-                    label: 'JSON',
+                    label: '消息内容',
                     children: <pre className="code-block template-preview-code">{renderedMessagePreview}</pre>,
                   },
                   {
                     key: 'received',
                     label: '接收效果',
-                    children: <div className="template-received-preview">{userFacingPreview}</div>,
+                    children: <TemplateReceivedPreviewBlock preview={receivedPreview} />,
                   },
                 ]}
               />
@@ -4087,7 +4132,11 @@ function recipientGroupInputFromDraft(draft: RecipientGroupDraft): RecipientGrou
   };
 }
 
-export function buildOrgTreeData(orgRows: OrgUnitApiRecord[], onAddChild: (org: OrgUnitApiRecord) => void) {
+export function buildOrgTreeData(
+  orgRows: OrgUnitApiRecord[],
+  onAddChild: (org: OrgUnitApiRecord) => void,
+  onEdit?: (org: OrgUnitApiRecord) => void,
+) {
   type OrgTreeNode = { title: ReactNode; key: string; children?: OrgTreeNode[] };
   const childrenByParent = new Map<string, OrgUnitApiRecord[]>();
   for (const org of orgRows) {
@@ -4107,26 +4156,41 @@ export function buildOrgTreeData(orgRows: OrgUnitApiRecord[], onAddChild: (org: 
                 <span className="org-tree-node__name">{org.name}</span>
                 <span className="org-tree-node__code">{org.code}</span>
               </span>
-              <button
-                type="button"
-                className="org-tree-node__add"
-                aria-label={`新增下级组织：${org.name}`}
-                title={`新增下级组织：${org.name}`}
-                onClick={(event) => {
-                  event.stopPropagation();
-                  onAddChild(org);
-                }}
-              >
-                <PlusOutlined />
-              </button>
+              <span className="org-tree-node__actions">
+                <button
+                  type="button"
+                  className="org-tree-node__add"
+                  aria-label={`新增下级组织：${org.name}`}
+                  title={`新增下级组织：${org.name}`}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    onAddChild(org);
+                  }}
+                >
+                  <PlusOutlined />
+                </button>
+                {onEdit ? (
+                  <button
+                    type="button"
+                    className="org-tree-node__edit"
+                    aria-label={`编辑组织：${org.name}`}
+                    title={`编辑组织：${org.name}`}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      onEdit(org);
+                    }}
+                  >
+                    <EditOutlined />
+                  </button>
+                ) : null}
+              </span>
             </span>
           ),
           key: org.id,
           ...(children.length ? { children } : {}),
         };
       });
-  const roots = build('');
-  return roots.length ? roots : [{ title: '暂无组织', key: 'empty' }];
+  return build('');
 }
 
 function mapUserRow(
@@ -4446,19 +4510,18 @@ export function OrganizationPage({ lastUpdated, onRefresh }: ConsolePageProps) {
   const [pendingUserStatusIds, setPendingUserStatusIds] = useState<Set<string>>(() => new Set());
   const [editingOrg, setEditingOrg] = useState<OrgUnitApiRecord | null>(null);
   const [orgDraft, setOrgDraft] = useState<OrgUnitDraft>(() => createOrgUnitDraft());
+  const [selectedOrgId, setSelectedOrgId] = useState('all');
   const [editingRecipientGroup, setEditingRecipientGroup] = useState<RecipientGroupApiRecord | null>(null);
   const [recipientGroupDraft, setRecipientGroupDraft] = useState<RecipientGroupDraft>(() => createRecipientGroupDraft());
   const [detailOpen, setDetailOpen] = useState(false);
-  const orgQuery = useAppliedFilters<OrgUnitListQuery>({ keyword: '', parentId: 'all' });
   const userQuery = useAppliedFilters<UserListQuery>({ keyword: '', orgId: 'all', status: 'all' });
   const recipientGroupQuery = useAppliedFilters<RecipientGroupListQuery>({
     keyword: '',
     status: 'all',
   });
-  const filteredOrgRows = filterOrgRowsByQuery(orgRows, orgQuery.applied);
-  const filteredRows = filterUserRowsByQuery(rows, userQuery.applied);
+  const selectedUserOrgId = selectedOrgId === 'all' ? 'all' : selectedOrgId;
+  const filteredRows = filterUserRowsByQuery(rows, { ...userQuery.applied, orgId: selectedUserOrgId });
   const filteredRecipientGroups = filterRecipientGroupsByQuery(recipientGroupRows, recipientGroupQuery.applied);
-  const orgPage = usePagedRows(filteredOrgRows);
   const userPage = usePagedRows(filteredRows);
   const organizationRecipientGroupPage = usePagedRows(filteredRecipientGroups);
   const orgOptions = useMemo(
@@ -4476,6 +4539,11 @@ export function OrganizationPage({ lastUpdated, onRefresh }: ConsolePageProps) {
     () => orgRows.map((item) => ({ label: `${item.name}（${item.code}）`, value: item.id })),
     [orgRows],
   );
+  const selectedOrg = orgRows.find((item) => item.id === selectedOrgId);
+
+  useEffect(() => {
+    setSelectedOrgId((current) => (current === 'all' || orgRows.some((item) => item.id === current) ? current : 'all'));
+  }, [orgRows]);
 
   const loadOrganization = useCallback(async () => {
     setLoadState({ loading: true, error: '' });
@@ -4530,7 +4598,7 @@ export function OrganizationPage({ lastUpdated, onRefresh }: ConsolePageProps) {
       message.success('组织已保存到后端');
       await loadOrganization();
     } catch (error) {
-      message.error(userFacingError(error));
+      showError(message, error);
     }
   };
 
@@ -4545,9 +4613,12 @@ export function OrganizationPage({ lastUpdated, onRefresh }: ConsolePageProps) {
         try {
           await consoleApi.deleteOrgUnit(record.id);
           message.success('组织已删除');
+          closeOrgDrawer();
+          setEditingOrg(null);
+          setSelectedOrgId((current) => (current === record.id ? 'all' : current));
           await loadOrganization();
         } catch (error) {
-          message.error(userFacingError(error));
+          showError(message, error);
         }
       },
     });
@@ -4557,6 +4628,16 @@ export function OrganizationPage({ lastUpdated, onRefresh }: ConsolePageProps) {
     setEditingOrg(null);
     setOrgDraft(createChildOrgDraft(record));
     openOrgDrawer(`新增下级组织：${record.name}`);
+  };
+  const openCreateRootOrg = () => {
+    setEditingOrg(null);
+    setOrgDraft(createOrgUnitDraft());
+    openOrgDrawer('新增根组织');
+  };
+  const openEditOrg = (record: OrgUnitApiRecord) => {
+    setEditingOrg(record);
+    setOrgDraft(orgUnitDraftFromRecord(record));
+    openOrgDrawer(`编辑组织：${record.name}`);
   };
 
   const saveUser = async () => {
@@ -4592,7 +4673,7 @@ export function OrganizationPage({ lastUpdated, onRefresh }: ConsolePageProps) {
       message.success('人员已保存到后端');
       await loadOrganization();
     } catch (error) {
-      message.error(userFacingError(error));
+      showError(message, error);
     }
   };
 
@@ -4609,7 +4690,7 @@ export function OrganizationPage({ lastUpdated, onRefresh }: ConsolePageProps) {
           message.success('人员已删除');
           await loadOrganization();
         } catch (error) {
-          message.error(userFacingError(error));
+          showError(message, error);
         }
       },
     });
@@ -4633,7 +4714,7 @@ export function OrganizationPage({ lastUpdated, onRefresh }: ConsolePageProps) {
       );
       message.success(status ? '人员已启用' : '人员已停用');
     } catch (error) {
-      message.error(userFacingError(error));
+      showError(message, error);
     } finally {
       setPendingUserStatusIds((current) => {
         const next = new Set(current);
@@ -4660,7 +4741,7 @@ export function OrganizationPage({ lastUpdated, onRefresh }: ConsolePageProps) {
       message.success('接收人组已保存到后端');
       await loadOrganization();
     } catch (error) {
-      message.error(userFacingError(error));
+      showError(message, error);
     }
   };
 
@@ -4677,39 +4758,11 @@ export function OrganizationPage({ lastUpdated, onRefresh }: ConsolePageProps) {
           message.success('接收人组已删除');
           await loadOrganization();
         } catch (error) {
-          message.error(userFacingError(error));
+          showError(message, error);
         }
       },
     });
   };
-
-  const orgColumns: TableProps<OrgUnitApiRecord>['columns'] = [
-    { title: '组织名称', dataIndex: 'name', width: 120, ellipsis: true },
-    { title: '组织编码', dataIndex: 'code', width: 100, render: (value: string) => <Typography.Text code>{value}</Typography.Text> },
-    { title: '排序', dataIndex: 'sort_order', width: 52 },
-    {
-      title: '操作',
-      width: 88,
-      render: (_, record) => (
-        <Space size={4}>
-          <Button
-            type="link"
-            size="small"
-            onClick={() => {
-              setEditingOrg(record);
-              setOrgDraft(orgUnitDraftFromRecord(record));
-              openOrgDrawer(`编辑组织：${record.name}`);
-            }}
-          >
-            编辑
-          </Button>
-          <Button danger type="link" size="small" onClick={() => confirmDeleteOrgUnit(record)}>
-            删除
-          </Button>
-        </Space>
-      ),
-    },
-  ];
 
   const columns: TableProps<UserContactRow>['columns'] = [
     { title: '姓名', dataIndex: 'name' },
@@ -4813,60 +4866,87 @@ export function OrganizationPage({ lastUpdated, onRefresh }: ConsolePageProps) {
     >
       <Tabs
         className="organization-subpage-tabs"
-        defaultActiveKey="org-units"
+        defaultActiveKey="users"
         items={[
           {
-            key: 'org-units',
-            label: '组织管理',
+            key: 'users',
+            label: '人员管理',
             forceRender: true,
             children: (
               <div className="split-layout split-layout--organization-management">
                 <section className="tree-panel organization-tree-panel">
                   <div className="panel-heading">
                     <Typography.Title level={4}>组织树</Typography.Title>
-                    <Typography.Text type="secondary">悬停节点可新增下级</Typography.Text>
+                    <Space>
+                      <Button size="small" type={selectedOrgId === 'all' ? 'primary' : 'default'} onClick={() => setSelectedOrgId('all')}>
+                        全部人员
+                      </Button>
+                    </Space>
                   </div>
-                  <Tree defaultExpandAll treeData={buildOrgTreeData(orgRows, openCreateChildOrg)} />
+                  {orgRows.length ? (
+                    <Tree
+                      defaultExpandAll
+                      selectedKeys={selectedOrgId === 'all' ? [] : [selectedOrgId]}
+                      onSelect={(keys) => {
+                        const nextKey = String(keys[0] ?? '');
+                        if (nextKey) {
+                          setSelectedOrgId(nextKey);
+                        }
+                      }}
+                      treeData={buildOrgTreeData(orgRows, openCreateChildOrg, openEditOrg)}
+                    />
+                  ) : (
+                    <div className="org-tree-empty">
+                      <div className="org-tree-empty__content">
+                        <Typography.Text type="secondary">还没有组织，先创建根组织。</Typography.Text>
+                        <Button type="primary" icon={<PlusOutlined />} onClick={openCreateRootOrg}>
+                          新增根组织
+                        </Button>
+                      </div>
+                    </div>
+                  )}
                 </section>
                 <div className="list-stack organization-tab-list">
                   <QueryBar
-                    className="query-bar--compact"
                     onCreate={() => {
-                      setEditingOrg(null);
-                      setOrgDraft(createOrgUnitDraft());
-                      openOrgDrawer('新增组织');
+                      setSelected(null);
+                      setUserDraft(createUserDraft(rows.length + 1, orgRows));
+                      openUserDrawer('新增人员');
                     }}
                     onSearch={() => {
-                      orgQuery.applyFilters();
-                      message.success(`已筛选出 ${filterOrgRowsByQuery(orgRows, orgQuery.draft).length} 个组织`);
+                      userQuery.applyFilters();
+                      message.success(
+                        `已筛选出 ${filterUserRowsByQuery(rows, { ...userQuery.draft, orgId: selectedUserOrgId }).length} 名人员`,
+                      );
                     }}
                     onReset={() => {
-                      orgQuery.resetFilters();
-                      message.info('组织查询条件已重置');
+                      userQuery.resetFilters();
+                      message.info('人员查询条件已重置');
                     }}
-                    createText="新增组织"
+                    createText="新增人员"
                   >
                     <Input
-                      placeholder="组织名称 / 编码"
-                      value={orgQuery.draft.keyword}
-                      onChange={(event) => orgQuery.setFilter('keyword', event.target.value)}
+                      placeholder="姓名 / 手机号"
+                      value={userQuery.draft.keyword}
+                      onChange={(event) => userQuery.setFilter('keyword', event.target.value)}
                     />
                     <Select
-                      placeholder="上级组织"
-                      value={orgQuery.draft.parentId}
-                      onChange={(value) => orgQuery.setFilter('parentId', value)}
+                      placeholder="状态"
+                      value={userQuery.draft.status}
+                      onChange={(value) => userQuery.setFilter('status', value)}
                       options={[
-                        { label: '全部上级组织', value: 'all' },
-                        ...orgOptions,
+                        { label: '全部状态', value: 'all' },
+                        { label: '启用', value: 'enabled' },
+                        { label: '停用', value: 'disabled' },
                       ]}
                     />
                   </QueryBar>
                   <ListContainer
-                    title="组织列表"
-                    total={filteredOrgRows.length}
-                    pageSize={orgPage.pageSize}
-                    currentPage={orgPage.currentPage}
-                    onPageChange={orgPage.onPageChange}
+                    title={selectedOrg ? `人员列表：${selectedOrg.name}` : '人员列表'}
+                    total={filteredRows.length}
+                    pageSize={userPage.pageSize}
+                    currentPage={userPage.currentPage}
+                    onPageChange={userPage.onPageChange}
                     fill
                     scrollY={560}
                   >
@@ -4875,82 +4955,12 @@ export function OrganizationPage({ lastUpdated, onRefresh }: ConsolePageProps) {
                       rowKey="id"
                       size="middle"
                       pagination={false}
-                      columns={orgColumns}
-                      dataSource={orgPage.rows}
+                      columns={columns}
+                      dataSource={userPage.rows}
                       loading={loadState.loading}
-                      scroll={{ x: 520 }}
                     />
                   </ListContainer>
                 </div>
-              </div>
-            ),
-          },
-          {
-            key: 'users',
-            label: '人员管理',
-            forceRender: true,
-            children: (
-              <div className="list-stack organization-tab-list">
-                <QueryBar
-                  onCreate={() => {
-                    setSelected(null);
-                    setUserDraft(createUserDraft(rows.length + 1, orgRows));
-                    openUserDrawer('新增人员');
-                  }}
-                  onSearch={() => {
-                    userQuery.applyFilters();
-                    message.success(`已筛选出 ${filterUserRowsByQuery(rows, userQuery.draft).length} 名人员`);
-                  }}
-                  onReset={() => {
-                    userQuery.resetFilters();
-                    message.info('人员查询条件已重置');
-                  }}
-                  createText="新增人员"
-                >
-                  <Input
-                    placeholder="姓名 / 手机号"
-                    value={userQuery.draft.keyword}
-                    onChange={(event) => userQuery.setFilter('keyword', event.target.value)}
-                  />
-                  <Select
-                    placeholder="所属组织"
-                    value={userQuery.draft.orgId}
-                    onChange={(value) => userQuery.setFilter('orgId', value)}
-                    options={[
-                      { label: '全部组织', value: 'all' },
-                      ...orgRows.map((item) => ({ label: `${item.name}（${item.code}）`, value: item.id })),
-                    ]}
-                  />
-                  <Select
-                    placeholder="状态"
-                    value={userQuery.draft.status}
-                    onChange={(value) => userQuery.setFilter('status', value)}
-                    options={[
-                      { label: '全部状态', value: 'all' },
-                      { label: '启用', value: 'enabled' },
-                      { label: '停用', value: 'disabled' },
-                    ]}
-                  />
-                </QueryBar>
-                <ListContainer
-                  title="人员列表"
-                  total={filteredRows.length}
-                  pageSize={userPage.pageSize}
-                  currentPage={userPage.currentPage}
-                  onPageChange={userPage.onPageChange}
-                  fill
-                  scrollY={560}
-                >
-                  {loadState.error ? <Alert type="warning" showIcon message={loadState.error} /> : null}
-                  <Table
-                    rowKey="id"
-                    size="middle"
-                    pagination={false}
-                    columns={columns}
-                    dataSource={userPage.rows}
-                    loading={loadState.loading}
-                  />
-                </ListContainer>
               </div>
             ),
           },
@@ -5037,6 +5047,13 @@ export function OrganizationPage({ lastUpdated, onRefresh }: ConsolePageProps) {
           <Form.Item label="排序值">
             <InputNumber className="full-width" value={orgDraft.sortOrder} onChange={(sortOrder) => setOrgDraft({ ...orgDraft, sortOrder: sortOrder ?? 0 })} />
           </Form.Item>
+          {editingOrg ? (
+            <Form.Item>
+              <Button danger icon={<DeleteOutlined />} onClick={() => confirmDeleteOrgUnit(editingOrg)}>
+                删除组织
+              </Button>
+            </Form.Item>
+          ) : null}
         </Form>
       </CreateDrawer>
       <CreateDrawer title={userDrawer.title} open={userDrawer.open} onClose={closeUserDrawer} onSave={saveUser} width={760}>
@@ -5185,7 +5202,7 @@ export function RecipientGroupsPage({ lastUpdated, onRefresh }: ConsolePageProps
       message.success('接收人组已保存到后端');
       await loadRecipientGroups();
     } catch (error) {
-      message.error(userFacingError(error));
+      showError(message, error);
     }
   };
   const confirmDeleteRecipientGroup = (record: RecipientGroupApiRecord) => {
@@ -5201,7 +5218,7 @@ export function RecipientGroupsPage({ lastUpdated, onRefresh }: ConsolePageProps
           message.success('接收人组已删除');
           await loadRecipientGroups();
         } catch (error) {
-          message.error(userFacingError(error));
+          showError(message, error);
         }
       },
     });
@@ -5386,7 +5403,7 @@ export function MatchGroupsPage({ lastUpdated, onRefresh }: ConsolePageProps) {
       setSelected({ ...group, items: result.items, values: result.items.map((item) => item.value), itemCount: result.items.length });
     } catch (error) {
       setItemRows(group.items);
-      message.error(userFacingError(error));
+      showError(message, error);
     } finally {
       setItemsLoading(false);
     }
@@ -5413,7 +5430,7 @@ export function MatchGroupsPage({ lastUpdated, onRefresh }: ConsolePageProps) {
       message.success('匹配组已保存到后端');
       await loadMatchGroups();
     } catch (error) {
-      message.error(userFacingError(error));
+      showError(message, error);
     }
   };
 
@@ -5439,7 +5456,7 @@ export function MatchGroupsPage({ lastUpdated, onRefresh }: ConsolePageProps) {
       await loadMatchGroupItems(selected);
       await loadMatchGroups();
     } catch (error) {
-      message.error(userFacingError(error));
+      showError(message, error);
     }
   };
 
@@ -5456,7 +5473,7 @@ export function MatchGroupsPage({ lastUpdated, onRefresh }: ConsolePageProps) {
           message.success('匹配组已删除');
           await loadMatchGroups();
         } catch (error) {
-          message.error(userFacingError(error));
+          showError(message, error);
         }
       },
     });
@@ -5479,7 +5496,7 @@ export function MatchGroupsPage({ lastUpdated, onRefresh }: ConsolePageProps) {
           await loadMatchGroupItems(selected);
           await loadMatchGroups();
         } catch (error) {
-          message.error(userFacingError(error));
+          showError(message, error);
         }
       },
     });
@@ -5772,7 +5789,7 @@ export function MessageLogsPage({ lastUpdated, onRefresh }: ConsolePageProps) {
       const result = await consoleApi.getMessageLog(record.id);
       setSelectedDetail(result.message);
     } catch (error) {
-      message.error(userFacingError(error));
+      showError(message, error);
     }
   };
   const columns: TableProps<MessageLog>['columns'] = [
@@ -6291,6 +6308,9 @@ export function SettingsPage({ lastUpdated, onRefresh }: ConsolePageProps) {
   const [loadState, setLoadState] = useState<ApiLoadState>(emptyLoadState);
   const [editingSetting, setEditingSetting] = useState<SettingApiRecord | null>(null);
   const [editingValue, setEditingValue] = useState('');
+  const [performanceMessageCount, setPerformanceMessageCount] = useState(200);
+  const [performanceLoading, setPerformanceLoading] = useState(false);
+  const [performanceResult, setPerformanceResult] = useState<PerformanceTestResult | null>(null);
   const loadSettings = useCallback(async () => {
     setLoadState({ loading: true, error: '' });
     try {
@@ -6318,7 +6338,20 @@ export function SettingsPage({ lastUpdated, onRefresh }: ConsolePageProps) {
       message.success('系统参数已保存到后端');
       await loadSettings();
     } catch (error) {
-      message.error(userFacingError(error));
+      showError(message, error);
+    }
+  };
+  const runPerformanceTest = async () => {
+    setPerformanceLoading(true);
+    try {
+      const result = await consoleApi.runPerformanceTest({ message_count: performanceMessageCount });
+      setPerformanceResult(result.result);
+      message.success(`已更新全局发送并发为 ${result.result.recommended_global_concurrency}`);
+      await loadSettings();
+    } catch (error) {
+      showError(message, error);
+    } finally {
+      setPerformanceLoading(false);
     }
   };
   const columns: TableProps<SettingApiRecord>['columns'] = [
@@ -6351,70 +6384,122 @@ export function SettingsPage({ lastUpdated, onRefresh }: ConsolePageProps) {
       lastUpdated={lastUpdated}
       onRefresh={onRefresh}
     >
-      <QueryBar
-        onSearch={() => {
-          settingQuery.applyFilters();
-          message.success(`已筛选出 ${filterSettingsByQuery(settingRows, settingQuery.draft).length} 个系统参数`);
-        }}
-        onReset={() => {
-          settingQuery.resetFilters();
-          message.info('系统参数查询条件已重置');
-        }}
-        extra={<Button onClick={() => void loadSettings()}>重新加载</Button>}
-      >
-        <Input
-          placeholder="参数名称"
-          value={settingQuery.draft.keyword}
-          onChange={(event) => settingQuery.setFilter('keyword', event.target.value)}
-        />
-        <Select
-          placeholder="分类"
-          value={settingQuery.draft.category}
-          onChange={(value) => settingQuery.setFilter('category', value)}
-          options={[
-            { label: '全部分类', value: 'all' },
-            ...uniqueValues(settingRows.map((row) => row.category)).map((category) => ({
-              label: category,
-              value: category,
-            })),
-          ]}
-        />
-      </QueryBar>
+      <Tabs
+        className="workspace-page-tabs"
+        defaultActiveKey="parameters"
+        items={[
+          {
+            key: 'parameters',
+            label: '系统参数',
+            children: (
+              <>
+                <QueryBar
+                  onSearch={() => {
+                    settingQuery.applyFilters();
+                    message.success(`已筛选出 ${filterSettingsByQuery(settingRows, settingQuery.draft).length} 个系统参数`);
+                  }}
+                  onReset={() => {
+                    settingQuery.resetFilters();
+                    message.info('系统参数查询条件已重置');
+                  }}
+                  extra={<Button onClick={() => void loadSettings()}>重新加载</Button>}
+                >
+                  <Input
+                    placeholder="参数名称"
+                    value={settingQuery.draft.keyword}
+                    onChange={(event) => settingQuery.setFilter('keyword', event.target.value)}
+                  />
+                  <Select
+                    placeholder="分类"
+                    value={settingQuery.draft.category}
+                    onChange={(value) => settingQuery.setFilter('category', value)}
+                    options={[
+                      { label: '全部分类', value: 'all' },
+                      ...uniqueValues(settingRows.map((row) => row.category)).map((category) => ({
+                        label: category,
+                        value: category,
+                      })),
+                    ]}
+                  />
+                </QueryBar>
 
-      <ListContainer
-        title="系统参数列表"
-        total={filteredRows.length}
-        pageSize={settingsPage.pageSize}
-        currentPage={settingsPage.currentPage}
-        onPageChange={settingsPage.onPageChange}
-        fill
-        scrollY={560}
-        extra={<Alert type="info" showIcon message="参数值 JSON 必须是合法 JSON，保存后写入后端系统设置。" />}
-      >
-        {loadState.error ? <Alert type="warning" showIcon message={loadState.error} /> : null}
-        <Table
-          rowKey="key"
-          size="middle"
-          pagination={false}
-          columns={columns}
-          dataSource={settingsPage.rows}
-          loading={loadState.loading}
-        />
-      </ListContainer>
-      <Modal
-        title={editingSetting ? `编辑系统参数：${editingSetting.key}` : '编辑系统参数'}
-        open={Boolean(editingSetting)}
-        onCancel={() => setEditingSetting(null)}
-        onOk={saveSetting}
-        okText="保存"
-        cancelText="取消"
-      >
-        <Form layout="vertical">
-          <Form.Item label="参数值 JSON" extra="参数值必须是合法 JSON，保存后会直接写入后端系统设置。">
-            <Input.TextArea rows={6} value={editingValue} onChange={(event) => setEditingValue(event.target.value)} />
-          </Form.Item>
-        </Form>
-      </Modal>
+                <ListContainer
+                  title="系统参数列表"
+                  total={filteredRows.length}
+                  pageSize={settingsPage.pageSize}
+                  currentPage={settingsPage.currentPage}
+                  onPageChange={settingsPage.onPageChange}
+                  fill
+                  scrollY={560}
+                  extra={<Alert type="info" showIcon message="参数值 JSON 必须是合法 JSON，保存后写入后端系统设置。" />}
+                >
+                  {loadState.error ? <Alert type="warning" showIcon message={loadState.error} /> : null}
+                  <Table
+                    rowKey="key"
+                    size="middle"
+                    pagination={false}
+                    columns={columns}
+                    dataSource={settingsPage.rows}
+                    loading={loadState.loading}
+                  />
+                </ListContainer>
+                <Modal
+                  title={editingSetting ? `编辑系统参数：${editingSetting.key}` : '编辑系统参数'}
+                  open={Boolean(editingSetting)}
+                  onCancel={() => setEditingSetting(null)}
+                  onOk={saveSetting}
+                  okText="保存"
+                  cancelText="取消"
+                >
+                  <Form layout="vertical">
+                    <Form.Item label="参数值 JSON" extra="参数值必须是合法 JSON，保存后会直接写入后端系统设置。">
+                      <Input.TextArea rows={6} value={editingValue} onChange={(event) => setEditingValue(event.target.value)} />
+                    </Form.Item>
+                  </Form>
+                </Modal>
+              </>
+            ),
+          },
+          {
+            key: 'performance',
+            label: '性能测试',
+            forceRender: true,
+            children: (
+              <ListContainer
+                title="性能测试"
+                total={0}
+                extra={<Button type="primary" loading={performanceLoading} onClick={() => void runPerformanceTest()}>运行性能测试</Button>}
+              >
+                <Form layout="vertical" className="two-column-form">
+                  <Form.Item label="测试消息数">
+                    <InputNumber
+                      min={10}
+                      max={5000}
+                      precision={0}
+                      className="full-width"
+                      value={performanceMessageCount}
+                      onChange={(value) => setPerformanceMessageCount(value ?? 200)}
+                    />
+                  </Form.Item>
+                  <Form.Item label="全局发送并发">
+                    <Typography.Text>{performanceResult?.recommended_global_concurrency ?? '-'}</Typography.Text>
+                  </Form.Item>
+                </Form>
+                {performanceResult ? (
+                  <Descriptions column={2} size="small" bordered>
+                    <Descriptions.Item label="测试来源">{performanceResult.generated_source_code}</Descriptions.Item>
+                    <Descriptions.Item label="测试路由">{performanceResult.generated_route_name}</Descriptions.Item>
+                    <Descriptions.Item label="测试上级">{performanceResult.generated_channel_name}</Descriptions.Item>
+                    <Descriptions.Item label="估算发送 QPS">{performanceResult.estimated_send_qps}</Descriptions.Item>
+                    <Descriptions.Item label="耗时">{performanceResult.duration_ms} ms</Descriptions.Item>
+                    <Descriptions.Item label="写入参数">{performanceResult.updated_setting_key}</Descriptions.Item>
+                  </Descriptions>
+                ) : null}
+              </ListContainer>
+            ),
+          },
+        ]}
+      />
     </PageFrame>
   );
 }

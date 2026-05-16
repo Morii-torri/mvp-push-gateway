@@ -3,17 +3,20 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   ADMIN_TOKEN_KEY,
   API_BASE_PATH,
+  AUTH_EXPIRED_EVENT,
   ApiClientError,
   apiRequest,
   tokenStore,
 } from './client';
 
 let storage: Storage;
+let dispatchEventMock: ReturnType<typeof vi.fn>;
 
 beforeEach(() => {
   storage = memoryStorage();
+  dispatchEventMock = vi.fn();
   Object.defineProperty(globalThis, 'window', {
-    value: { localStorage: storage },
+    value: { localStorage: storage, dispatchEvent: dispatchEventMock },
     configurable: true,
   });
 });
@@ -61,6 +64,24 @@ describe('api client', () => {
       message: '来源不存在',
       userMessage: '来源不存在',
     } satisfies Partial<ApiClientError>);
+  });
+
+  it('clears token and emits auth expired event on authenticated 401 responses', async () => {
+    tokenStore.set('admin-token');
+    const fetchMock = vi.fn(async () =>
+      new Response(JSON.stringify({ error: { code: 'MGP-AUTH-401' } }), {
+        status: 401,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    );
+
+    await expect(apiRequest('/auth/me', { fetcher: fetchMock })).rejects.toMatchObject({
+      status: 401,
+      authExpired: true,
+    } satisfies Partial<ApiClientError>);
+
+    expect(storage.getItem(ADMIN_TOKEN_KEY)).toBeNull();
+    expect(dispatchEventMock).toHaveBeenCalledWith(expect.objectContaining({ type: AUTH_EXPIRED_EVENT }));
   });
 });
 

@@ -67,7 +67,7 @@ func TestDefaultCapabilitiesExposeFirstBatchBuiltInProviders(t *testing.T) {
 		{ProviderSelf, "json", "system_user_id"},
 		{ProviderPushPlus, "html", ""},
 		{ProviderWxPusher, "html", "wxpusher_uid"},
-		{ProviderServerChan, "notice", ""},
+		{ProviderServerChan, "markdown", ""},
 		{ProviderEmail, "email", "email"},
 		{ProviderAliyunSMS, "sms_template", "mobile"},
 		{ProviderTencentSMS, "sms_template", "mobile"},
@@ -117,6 +117,27 @@ func TestPushPlusCapabilityUsesSendJsonContentFields(t *testing.T) {
 	assertJSONField(t, capability.ChannelConfigSchema, "properties.topic", nil)
 	assertJSONField(t, capability.ChannelConfigSchema, "properties.template", nil)
 	assertJSONField(t, capability.ChannelConfigSchema, "properties.channel", nil)
+}
+
+func TestServerChanCapabilityUsesV3URLJsonAndMarkdownFields(t *testing.T) {
+	capability := findCapability(t, ProviderServerChan, "markdown")
+
+	assertJSONField(t, capability.SendAPI, "url_pattern", "https://<uid>.push.ft07.com/send/<sendkey>.send")
+	assertJSONField(t, capability.SendAPI, "content_type", "application/json")
+	assertJSONField(t, capability.ChannelConfigSchema, "properties.url.type", "string")
+	assertJSONField(t, capability.MessageSchema, "properties.title.type", "string")
+	assertJSONField(t, capability.MessageSchema, "properties.desp.format_hint", "支持 Markdown")
+	assertJSONField(t, capability.MessageSchema, "properties.short.type", "string")
+
+	var credentialSchema struct {
+		Properties map[string]any `json:"properties"`
+	}
+	if err := json.Unmarshal(capability.CredentialSchema, &credentialSchema); err != nil {
+		t.Fatalf("decode credential schema: %v", err)
+	}
+	if _, ok := credentialSchema.Properties["send_key"]; ok {
+		t.Fatalf("ServerChan v3 should only ask for URL in channel config, got credential schema %s", capability.CredentialSchema)
+	}
 }
 
 func TestWxPusherCapabilityUsesStandardPostHTMLFields(t *testing.T) {
@@ -387,19 +408,21 @@ func TestBuildDeliveryRequestUsesBuiltInProviderDefaultsWithoutLegacyURL(t *test
 			name: "serverchan",
 			channel: Channel{
 				ProviderType: ProviderServerChan,
-				AuthConfig:   json.RawMessage(`{"send_key":"SCT123"}`),
-				SendConfig:   json.RawMessage(`{"version":"turbo","channel":"9"}`),
+				SendConfig:   json.RawMessage(`{"url":"https://10000.push.ft07.com/send/sctp10000tabc.send"}`),
 			},
-			message: json.RawMessage(`{"title":"Build","body":"Failed"}`),
+			message: json.RawMessage(`{"title":"Build","desp":"**Failed**","short":"Failed"}`),
 			assert: func(t *testing.T, request BuiltRequest) {
-				requireRequest(t, request, "POST", "https://sctapi.ftqq.com/SCT123.send")
-				if request.Headers["Content-Type"] != "application/x-www-form-urlencoded" {
-					t.Fatalf("expected form content type, got %+v", request.Headers)
+				requireRequest(t, request, "POST", "https://10000.push.ft07.com/send/sctp10000tabc.send")
+				if request.Headers["Content-Type"] != "application/json" {
+					t.Fatalf("expected json content type, got %+v", request.Headers)
 				}
 				body := decodeRequestBody(t, request)
 				requireBodyField(t, body, "title", "Build")
-				requireBodyField(t, body, "desp", "Failed")
-				requireBodyField(t, body, "channel", "9")
+				requireBodyField(t, body, "desp", "**Failed**")
+				requireBodyField(t, body, "short", "Failed")
+				requireNoBodyField(t, body, "text")
+				requireNoBodyField(t, body, "send_key")
+				requireNoBodyField(t, body, "channel")
 			},
 		},
 		{

@@ -1,7 +1,6 @@
 package provider
 
 import (
-	"net/url"
 	"strings"
 )
 
@@ -41,30 +40,18 @@ func wxPusherRequestConfig(auth, send, content map[string]any, recipient any) (r
 }
 
 func serverChanRequestConfig(auth, send, content map[string]any) (requestConfig, error) {
-	version := firstString(stringConfig(send, "version"), stringConfig(auth, "version"), "turbo")
-	sendKey := firstString(stringConfig(auth, "send_key", "sendKey"), stringConfig(send, "send_key", "sendKey"))
-	if strings.TrimSpace(sendKey) == "" {
+	requestURL := firstString(stringConfig(send, "url", "send_url", "api_url"), stringConfig(auth, "url", "send_url", "api_url"))
+	if strings.TrimSpace(requestURL) == "" {
 		return requestConfig{}, ErrInvalidInput
-	}
-	requestURL := "https://sctapi.ftqq.com/" + url.PathEscape(sendKey) + ".send"
-	if version == "v3" {
-		uid := firstString(stringConfig(auth, "uid"), stringConfig(send, "uid"))
-		if strings.TrimSpace(uid) == "" {
-			return requestConfig{}, ErrInvalidInput
-		}
-		requestURL = "https://" + url.PathEscape(uid) + ".push.ft07.com/send/" + url.PathEscape(sendKey) + ".send"
 	}
 	body := map[string]any{
 		"title": messageTitle(content),
-		"desp":  messageBody(content),
 	}
-	for _, field := range []string{"channel", "openid", "tags", "short"} {
-		copyStringField(body, field, send, field)
+	if desp := firstString(stringConfig(content, "desp"), messageBody(content)); desp != "" {
+		body["desp"] = desp
 	}
-	if value, ok := send["noip"]; ok {
-		body["noip"] = value
-	}
-	return formLikeRequest("POST", firstString(stringConfig(send, "url"), requestURL), body)
+	copyStringField(body, "short", content, "short")
+	return jsonRequest("POST", requestURL, body)
 }
 
 func barkRequestConfig(auth, send, content map[string]any, recipient any) (requestConfig, error) {

@@ -463,6 +463,21 @@ export type SettingApiRecord = {
   updated_at: string;
 };
 
+export type PerformanceTestInput = {
+  message_count: number;
+};
+
+export type PerformanceTestResult = {
+  message_count: number;
+  generated_source_code: string;
+  generated_route_name: string;
+  generated_channel_name: string;
+  recommended_global_concurrency: number;
+  estimated_send_qps: number;
+  duration_ms: number;
+  updated_setting_key: string;
+};
+
 export const consoleApi = {
   listSources(fetcher?: ApiFetcher) {
     return apiRequest<{ sources: SourceApiRecord[] }>('/sources', { fetcher });
@@ -749,6 +764,13 @@ export const consoleApi = {
     return apiRequest<{ setting: SettingApiRecord }>(`/settings/${key}`, {
       method: 'PUT',
       body: { value },
+      fetcher,
+    });
+  },
+  runPerformanceTest(input: PerformanceTestInput, fetcher?: ApiFetcher) {
+    return apiRequest<{ result: PerformanceTestResult }>('/settings/performance-test', {
+      method: 'POST',
+      body: input,
       fetcher,
     });
   },

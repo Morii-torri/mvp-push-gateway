@@ -51,7 +51,16 @@ func main() {
 			log.Fatalf("database ping failed: %v", err)
 		}
 		authService := auth.NewService(repository)
-		sourceService := source.NewService(repository)
+		settingsService := settings.NewService(repository)
+		if err := settingsService.EnsureDefaults(ctx); err != nil {
+			log.Fatalf("seed system settings failed: %v", err)
+		}
+		sourceService := source.NewService(
+			repository,
+			source.WithMaxPayloadSizeFunc(func(ctx context.Context) int64 {
+				return int64(settingsService.IntSetting(ctx, settings.KeyIngestMaxPayloadBytes, int(settings.DefaultIngestMaxPayloadBytes)))
+			}),
+		)
 		providerService := provider.NewService(repository)
 		if err := providerService.SeedProviderCapabilities(ctx); err != nil {
 			log.Fatalf("seed provider capabilities failed: %v", err)
@@ -62,18 +71,17 @@ func main() {
 		matchGroupService := matchgroup.NewService(repository)
 		messageLogService := messagelog.NewService(repository)
 		auditService := audit.NewService(repository)
-		settingsService := settings.NewService(repository)
-		if err := settingsService.EnsureDefaults(ctx); err != nil {
-			log.Fatalf("seed system settings failed: %v", err)
-		}
 		monitoringService := monitoring.NewService(
 			db.NewRepository(pools.API),
 			db.NewRepository(pools.Maintenance),
 		)
 		statisticsService := statistics.NewService(db.NewRepository(pools.API))
 		workerHarness = appruntime.NewHarness(appruntime.Config{
-			PlanningWorker:   planning.NewWorker(db.NewRepository(pools.Planning)),
-			DeliveryWorker:   delivery.NewWorker(db.NewRepository(pools.Sending)),
+			PlanningWorker: planning.NewWorker(db.NewRepository(pools.Planning)),
+			DeliveryWorker: delivery.NewWorker(db.NewRepository(pools.Sending)),
+			DeliveryBatchSizeFunc: func(ctx context.Context) int {
+				return settingsService.IntSetting(ctx, settings.KeyRuntimeDeliveryConcurrency, settings.DefaultDeliveryGlobalConcurrency)
+			},
 			Recovery:         db.NewRepository(pools.Maintenance),
 			RetentionCleaner: monitoringService,
 		})

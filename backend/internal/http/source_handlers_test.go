@@ -10,6 +10,7 @@ import (
 
 	"mvp-push-gateway/backend/internal/auth"
 	httpapi "mvp-push-gateway/backend/internal/http"
+	"mvp-push-gateway/backend/internal/settings"
 	"mvp-push-gateway/backend/internal/source"
 )
 
@@ -171,6 +172,41 @@ func TestIngestHandlerReturnsAcceptedResponse(t *testing.T) {
 	}
 	if sourceService.ingestInput.SourceCode != "orders" || sourceService.ingestInput.Path != "/api/v1/ingest/orders" {
 		t.Fatalf("unexpected ingest input: %+v", sourceService.ingestInput)
+	}
+}
+
+func TestIngestHandlerUsesSystemPayloadLimit(t *testing.T) {
+	sourceService := &fakeSourceService{
+		ingestResult: source.IngestResult{
+			TraceID: "trace-http",
+			Status:  "accepted",
+			Message: "accepted",
+		},
+	}
+	settingsService := &fakeSettingsService{
+		intValues: map[string]int{
+			settings.KeyIngestMaxPayloadBytes: 32,
+		},
+	}
+	handler := httpapi.NewHandler(
+		testConfig(),
+		httpapi.WithSourceService(sourceService),
+		httpapi.WithSettingsService(settingsService),
+	)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/ingest/orders", strings.NewReader(`{"title":"payload larger than configured limit"}`))
+	req.Header.Set("Authorization", "Bearer sourceToken")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("expected configured payload limit to reject request, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	if sourceService.ingestInput.SourceCode != "" {
+		t.Fatalf("expected oversized request not to reach source service, got %+v", sourceService.ingestInput)
+	}
+	if settingsService.intCalls != 1 {
+		t.Fatalf("expected one settings lookup, got %d", settingsService.intCalls)
 	}
 }
 

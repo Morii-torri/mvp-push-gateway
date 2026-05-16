@@ -64,13 +64,14 @@ type Config struct {
 	RecoveryInterval  time.Duration
 	RetentionInterval time.Duration
 
-	PlanningBatchSize int
-	DeliveryBatchSize int
-	RecoveryLimit     int
-	RetentionDays     int
-	RetentionBatch    int
-	StaleTimeoutSec   int
-	RecoveryWorkerID  string
+	PlanningBatchSize     int
+	DeliveryBatchSize     int
+	DeliveryBatchSizeFunc func(context.Context) int
+	RecoveryLimit         int
+	RetentionDays         int
+	RetentionBatch        int
+	StaleTimeoutSec       int
+	RecoveryWorkerID      string
 
 	Now func() time.Time
 }
@@ -108,7 +109,7 @@ func (h *Harness) Start(ctx context.Context) {
 	}
 	if h.config.DeliveryWorker != nil {
 		h.startLoop(runtimeCtx, h.config.DeliveryInterval, func(ctx context.Context) {
-			_, _ = h.config.DeliveryWorker.ProcessBatch(ctx, h.config.DeliveryBatchSize)
+			_, _ = h.config.DeliveryWorker.ProcessBatch(ctx, h.deliveryBatchSize(ctx))
 		})
 	}
 	if h.config.Recovery != nil {
@@ -137,6 +138,17 @@ func (h *Harness) Start(ctx context.Context) {
 		h.wg.Wait()
 		close(done)
 	}()
+}
+
+func (h *Harness) deliveryBatchSize(ctx context.Context) int {
+	if h.config.DeliveryBatchSizeFunc == nil {
+		return h.config.DeliveryBatchSize
+	}
+	size := h.config.DeliveryBatchSizeFunc(ctx)
+	if size <= 0 {
+		return h.config.DeliveryBatchSize
+	}
+	return size
 }
 
 func (h *Harness) Shutdown(ctx context.Context) error {

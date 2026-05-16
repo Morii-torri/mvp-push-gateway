@@ -1,5 +1,6 @@
 export const API_BASE_PATH = '/api/v1';
 export const ADMIN_TOKEN_KEY = 'mgp_admin_token';
+export const AUTH_EXPIRED_EVENT = 'mgp-auth-expired';
 
 export type ApiFetcher = typeof fetch;
 
@@ -20,13 +21,15 @@ export class ApiClientError extends Error {
   readonly status: number;
   readonly code: string;
   readonly userMessage: string;
+  readonly authExpired: boolean;
 
-  constructor(status: number, code: string, message: string) {
+  constructor(status: number, code: string, message: string, options: { authExpired?: boolean } = {}) {
     super(message);
     this.name = 'ApiClientError';
     this.status = status;
     this.code = code;
     this.userMessage = message || fallbackErrorMessage(status);
+    this.authExpired = options.authExpired === true;
   }
 }
 
@@ -75,9 +78,13 @@ export async function apiRequest<T>(path: string, options: ApiRequestOptions = {
   });
 
   if (!response.ok) {
-    const error = await parseError(response);
+    const authExpired = auth && response.status === 401;
+    const error = await parseError(response, authExpired);
     if (response.status === 401) {
       tokenStore.clear();
+      if (authExpired) {
+        notifyAuthExpired();
+      }
     }
     throw error;
   }
@@ -112,11 +119,11 @@ export function normalizeApiPath(path: string): string {
     : `${API_BASE_PATH}${normalizedPath}`;
 }
 
-async function parseError(response: Response): Promise<ApiClientError> {
+async function parseError(response: Response, authExpired = false): Promise<ApiClientError> {
   const body = await safeJSON<BackendErrorBody>(response);
   const code = body?.error?.code ?? `HTTP-${response.status}`;
   const message = body?.error?.message ?? fallbackErrorMessage(response.status);
-  return new ApiClientError(response.status, code, message);
+  return new ApiClientError(response.status, code, message, { authExpired });
 }
 
 async function safeJSON<T>(response: Response): Promise<T | null> {
@@ -136,7 +143,7 @@ function fallbackErrorMessage(status: number): string {
     return '请求参数不合法';
   }
   if (status === 401) {
-    return '未登录或登录已过期，请重新登录';
+    return '请重新登录';
   }
   if (status === 403) {
     return '当前账号无权执行该操作';
@@ -151,4 +158,15 @@ function fallbackErrorMessage(status: number): string {
     return '请求过于频繁，请稍后重试';
   }
   return '服务暂时不可用，请稍后重试';
+}
+
+export function isAuthExpiredError(error: unknown): error is ApiClientError {
+  return error instanceof ApiClientError && error.authExpired;
+}
+
+function notifyAuthExpired() {
+  if (typeof window === 'undefined' || typeof window.dispatchEvent !== 'function') {
+    return;
+  }
+  window.dispatchEvent(new CustomEvent(AUTH_EXPIRED_EVENT));
 }

@@ -31,6 +31,17 @@ func (r Repository) ListSettings(ctx context.Context) ([]settings.Setting, error
 	return items, nil
 }
 
+func (r Repository) GetSetting(ctx context.Context, key string) (settings.Setting, error) {
+	item, err := r.querySetting(ctx, settingSelectSQL()+` WHERE key = $1`, key)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return settings.Setting{}, settings.ErrNotFound
+		}
+		return settings.Setting{}, fmt.Errorf("get system setting: %w", err)
+	}
+	return item, nil
+}
+
 func (r Repository) UpdateSetting(ctx context.Context, key string, input settings.UpdateInput) (settings.Setting, error) {
 	item, err := r.querySetting(ctx, `
 		UPDATE system_settings

@@ -33,7 +33,7 @@
 | `inbound_dedupe_enabled` | boolean | 入站去重 |
 | `inbound_dedupe_strategy` | text | 固定为 `payload_hash` |
 | `inbound_dedupe_config` | jsonb | Payload Hash 去重保留时间，例如 `{"ttl_seconds":86400}` |
-| `rate_limit_config` | jsonb | 限流配置 |
+| `rate_limit_config` | jsonb | 入站限流配置，例如 `{"enabled":true,"per_second":20}` |
 | `do_not_disturb_config` | jsonb | 消息免打扰配置，例如 `{"enabled":true,"windows":[{"start":"22:00","end":"08:00"}]}`，最多 5 个时间段，按服务端本地时间判断，支持跨天 |
 | `latest_payload_sample` | jsonb | 鉴权通过且 JSON 合法的最近入站 payload，不要求路由成功 |
 | `created_at` / `updated_at` | timestamptz | 时间 |
@@ -69,7 +69,7 @@
 | `dead_letter_policy` | jsonb | 死信策略 |
 | `created_at` / `updated_at` | timestamptz | 时间 |
 
-`rate_limit_config` 第一版至少支持 `enabled`、`qps`、`per_minute`、`burst`、`strategy`。这些配置由推送渠道页面维护，发送 worker 主动执行。
+`rate_limit_config` 第一版支持 `enabled`、`qps`。这些配置由推送渠道页面维护，发送 worker 主动执行。
 
 ### `provider_types`
 

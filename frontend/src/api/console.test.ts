@@ -157,6 +157,20 @@ describe('console api wrappers', () => {
     ]);
   });
 
+  it('runs system performance test through backend endpoint', async () => {
+    tokenStore.set('admin-token');
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) =>
+      json({ result: { recommended_global_concurrency: 12 } }),
+    );
+
+    await consoleApi.runPerformanceTest({ message_count: 200 }, fetchMock);
+
+    expect(fetchMock.mock.calls.map(([input, init]) => [String(input), init?.method])).toEqual([
+      ['/api/v1/settings/performance-test', 'POST'],
+    ]);
+    expect(JSON.parse(String(fetchMock.mock.calls[0][1]?.body))).toEqual({ message_count: 200 });
+  });
+
   it('creates updates activates and saves route rules with backend shaped request bodies', async () => {
     tokenStore.set('admin-token');
     const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) =>

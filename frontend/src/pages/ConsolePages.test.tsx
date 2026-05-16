@@ -45,6 +45,7 @@ import {
   sourceInputFromDraft,
   templateDraftWithSourcePayload,
   templateRecordWithRestoredVersion,
+  templateReceivedPreview,
   templateRenderedPreview,
   templateVersionSamplePayload,
   templateUserFacingPreview,
@@ -181,7 +182,7 @@ describe('critical console pages', () => {
           inboundDedupeEnabled: true,
           inboundDedupeTtlSeconds: '86400',
           rateLimitEnabled: true,
-          rateLimitPerMinute: '1000',
+          rateLimitPerSecond: '20',
           quietHoursEnabled: true,
           quietHoursWindows: [{ start: '22:00', end: '08:00' }],
         } as any}
@@ -198,7 +199,7 @@ describe('critical console pages', () => {
     expect(enabledMarkup).toContain('source-access-option-grid');
     expect(enabledMarkup).toContain('source-access-value-grid');
     expect(enabledMarkup).toContain('去重保留时间');
-    expect(enabledMarkup).toContain('每分钟最多接收');
+    expect(enabledMarkup).toContain('每秒最多接收');
     expect(enabledMarkup).toContain('消息免打扰');
     expect(enabledMarkup).toContain('启用消息免打扰');
     expect(enabledMarkup).toContain('在指定时间段内暂停推送，推送记录仍会正常保存');
@@ -226,7 +227,7 @@ describe('critical console pages', () => {
           inboundDedupeEnabled: false,
           inboundDedupeTtlSeconds: '86400',
           rateLimitEnabled: false,
-          rateLimitPerMinute: '1000',
+          rateLimitPerSecond: '20',
           quietHoursEnabled: false,
           quietHoursWindows: [{ start: '22:00', end: '08:00' }],
         } as any}
@@ -235,7 +236,7 @@ describe('critical console pages', () => {
     );
 
     expect(disabledMarkup).not.toContain('去重保留时间');
-    expect(disabledMarkup).not.toContain('每分钟最多接收');
+    expect(disabledMarkup).not.toContain('每秒最多接收');
     expect(disabledMarkup).not.toContain('时间段设置 (1/5)');
 
     const readOnlyCodeMarkup = renderPage(
@@ -251,7 +252,7 @@ describe('critical console pages', () => {
           inboundDedupeEnabled: false,
           inboundDedupeTtlSeconds: '86400',
           rateLimitEnabled: false,
-          rateLimitPerMinute: '1000',
+          rateLimitPerSecond: '20',
           quietHoursEnabled: false,
           quietHoursWindows: [{ start: '22:00', end: '08:00' }],
         } as any}
@@ -283,6 +284,15 @@ describe('critical console pages', () => {
     expect(input.inbound_dedupe_config).toEqual({});
     expect(input.rate_limit_config).toEqual({ enabled: false });
     expect(input.do_not_disturb_config).toEqual({ enabled: false, windows: [] });
+
+    const rateLimitedInput = sourceInputFromDraft({
+      ...draft,
+      name: '订单来源',
+      code: 'orders',
+      rateLimitEnabled: true,
+      rateLimitPerSecond: '15',
+    });
+    expect(rateLimitedInput.rate_limit_config).toEqual({ enabled: true, per_second: 15 });
 
     const mixedAllowlistInput = sourceInputFromDraft({
       ...draft,
@@ -458,7 +468,6 @@ describe('critical console pages', () => {
     expect(providerMarkup).not.toContain('请求映射');
     expect(providerMarkup).not.toContain('高级 JSON 配置');
     expect(providerMarkup).not.toContain('该平台为内置适配器');
-    expect(providerMarkup).not.toContain('突发容量');
     expect(providerMarkup).not.toContain('推送渠道实例并发上限');
     expect(providerMarkup).not.toContain('单 worker 抢占上限');
     expect(providerMarkup).not.toContain('队列键');
@@ -473,7 +482,7 @@ describe('critical console pages', () => {
     const providerInput = channelInputFromProvider({ ...providerDraft, fieldValues: { 'auth_config.token': 'push-token' } });
     expect(providerInput.auth_config).toEqual({ token: 'push-token' });
     expect(providerInput.send_config).toEqual({});
-    expect(providerInput.rate_limit_config).toEqual({ enabled: true, qps: 10, minute_limit: 600 });
+    expect(providerInput.rate_limit_config).toEqual({ enabled: true, qps: 10 });
     expect(providerInput.concurrency_limit).toBe(1);
     expect(providerInput.retry_policy).toEqual({ max_attempts: 2, delay_ms: 3000, idempotency_key: '${message_id}:${provider_instance_id}' });
     expect(providerInput.dead_letter_policy).toEqual({
@@ -499,6 +508,7 @@ describe('critical console pages', () => {
     expect(templateMarkup).toContain('content');
     expect(templateMarkup).toContain('title');
     expect(templateMarkup).toContain('topic');
+    expect(templateMarkup).toContain('支持 HTML');
     expect(templateMarkup).not.toContain('title（可选）');
     expect(templateMarkup).not.toContain('topic（可选）');
     expect(templateMarkup).not.toContain('模板表达式');
@@ -556,6 +566,7 @@ describe('critical console pages', () => {
     expect(templateMarkup).toContain('content');
     expect(templateMarkup).toContain('summary');
     expect(templateMarkup).toContain('url');
+    expect(templateMarkup).toContain('支持 HTML');
     expect(templateMarkup).not.toContain('HTML 内容');
     expect(templateMarkup).not.toContain('标题摘要（可选）');
     expect(templateMarkup).not.toContain('原文链接（可选）');
@@ -631,12 +642,12 @@ describe('critical console pages', () => {
     expect(payload.resolved_recipients).toEqual([{ value: 'userid_001' }]);
   });
 
-  it('uses simple provider fields and notice template fallbacks for ServerChan', () => {
+  it('uses ServerChan v3 URL-only fields and Markdown template fallback', () => {
     const providers = [
-      ['serverchan', 'Server酱 SendKey', ['版本', '推送渠道']],
+      ['serverchan', 'API URL'],
     ] as const;
 
-    for (const [providerType, credentialLabel, extraLabels] of providers) {
+    for (const [providerType, credentialLabel] of providers) {
       const providerMarkup = renderPage(
         <ProviderConfigForm
           value={createProviderDraft(providerType, 1)}
@@ -645,18 +656,26 @@ describe('critical console pages', () => {
         />,
       );
       expect(providerMarkup).toContain(credentialLabel);
-      for (const label of extraLabels) {
-        expect(providerMarkup).toContain(label);
-      }
+      expect(providerMarkup).not.toContain('Server酱 SendKey');
+      expect(providerMarkup).not.toContain('版本');
+      expect(providerMarkup).not.toContain('title="推送渠道">推送渠道');
       expect(providerMarkup).not.toContain('Body 映射模板');
       expect(providerMarkup).not.toContain('请求 Header JSON');
 
-      const textInput = templateVersionInputFromDraft(createTemplateDraft([], [], providerType, 'text'));
+      const templateMarkup = renderPage(
+        <TemplateEditorForm
+          value={createTemplateDraft([], [], providerType, 'markdown')}
+          onChange={() => undefined}
+          sourceRows={[]}
+          capabilities={[]}
+        />,
+      );
       const markdownInput = templateVersionInputFromDraft(createTemplateDraft([], [], providerType, 'markdown'));
-      expect(textInput.template_body).toContain('"title"');
-      expect(textInput.template_body).toContain('"content"');
-      expect(textInput.template_body).toContain('"url"');
-      expect(markdownInput.template_body).toContain('"markdown"');
+      const markdownBody = JSON.parse(markdownInput.template_body) as Record<string, string>;
+      expect(markdownInput.message_type).toBe('markdown');
+      expect(Object.keys(markdownBody)).toEqual(['title', 'desp', 'short']);
+      expect(markdownInput.template_body).not.toContain('"text"');
+      expect(templateMarkup).toContain('支持 Markdown');
     }
   });
 
@@ -1167,7 +1186,8 @@ describe('critical console pages', () => {
     expect(markup).toContain('提供模板编辑、字段复制、实时预览和保存前校验。');
     expect(markup).toContain('模板列表');
     expect(markup).toContain('推送渠道类型');
-    expect(markup).toContain('消息类型');
+    expect(markup).toContain('消息格式');
+    expect(markup).not.toContain('消息类型');
     expect(markup).toContain('校验状态');
   });
 
@@ -1556,6 +1576,47 @@ describe('critical console pages', () => {
     expect(templateUserFacingPreview(draft)).toContain('CPU 90%');
   });
 
+  it('renders received previews according to text HTML and Markdown formats', () => {
+    const sourceRows = [
+      {
+        id: 'src-a',
+        code: 'alerts',
+        name: '告警来源',
+        latestPayload: JSON.stringify({ title: 'CPU 告警', content: 'CPU 90%' }),
+      },
+    ];
+    const htmlDraft = createTemplateDraft(sourceRows, [], 'pushplus', 'html');
+    htmlDraft.fieldValues.title = { expression: '{{ payload.title }}', defaultValue: '' };
+    htmlDraft.fieldValues.content = {
+      expression: '<strong>{{ payload.content }}</strong><script>alert(1)</script>',
+      defaultValue: '',
+    };
+    const markdownDraft = createTemplateDraft(sourceRows, [], 'serverchan', 'markdown');
+    markdownDraft.fieldValues.title = { expression: '{{ payload.title }}', defaultValue: '' };
+    markdownDraft.fieldValues.desp = {
+      expression: '## {{ payload.content }}\n**请处理**',
+      defaultValue: '',
+    };
+    const textDraft = createTemplateDraft(sourceRows, [], 'webhook', 'json');
+    textDraft.fieldValues.body = { expression: '<b>{{ payload.content }}</b>', defaultValue: '' };
+
+    const htmlPreview = templateReceivedPreview(htmlDraft);
+    const markdownPreview = templateReceivedPreview(markdownDraft);
+    const textPreview = templateReceivedPreview(textDraft);
+
+    expect(htmlPreview.format).toBe('html');
+    expect(htmlPreview.title).toBe('CPU 告警');
+    expect(htmlPreview.html).toContain('<strong>CPU 90%</strong>');
+    expect(htmlPreview.html).not.toContain('<script>');
+    expect(markdownPreview.format).toBe('markdown');
+    expect(markdownPreview.html).toContain('<h2 class="template-markdown-heading">CPU 90%</h2>');
+    expect(markdownPreview.html).toContain('<strong>请处理</strong>');
+    expect(textPreview.format).toBe('text');
+    expect(textPreview.html).toContain('&lt;b&gt;CPU 90%&lt;/b&gt;');
+    expect(textPreview.html).not.toContain('<b>CPU 90%</b>');
+    expect(templateVersionInputFromDraft(textDraft).message_type).toBe('text');
+  });
+
   it('changes template content fields when provider and message type switch', () => {
     const initialDraft = createTemplateDraft([], templateCapabilities);
     const markdownDraft = switchTemplateMessageType(initialDraft, 'markdown', templateCapabilities);
@@ -1682,21 +1743,82 @@ describe('critical console pages', () => {
     expect(row.targetField).not.toBe('tpl-version-1');
   });
 
-  it('renders organization as separate org user and recipient group subpages', () => {
+  it('normalizes legacy PushPlus JSON template rows to HTML message format', () => {
+    const row = mapTemplateRow(
+      {
+        id: 'tpl-pushplus',
+        name: 'PushPlus 模板',
+        description: '',
+        source_id: 'src-1',
+        enabled: true,
+        current_version_id: 'tpl-version-1',
+        message_type: 'json',
+        target_provider_type: 'pushplus',
+        template_body: '{"content":"{{ payload.content }}"}',
+        message_body_schema: {
+          fields: [{ key: 'content', label: 'content' }],
+        },
+        sample_payload: { content: '正文' },
+        current_version: {
+          id: 'tpl-version-1',
+          version_no: 1,
+          message_type: 'json',
+          target_provider_type: 'pushplus',
+          template_body: '{"content":"{{ payload.content }}"}',
+          message_body_schema: { fields: [{ key: 'content', label: 'content' }] },
+          sample_payload: { content: '正文' },
+          validation_status: 'valid',
+          validation_errors: [],
+          used_variables: ['payload.content'],
+        },
+        created_at: '2026-05-11T09:00:00+08:00',
+        updated_at: '2026-05-11T09:30:00+08:00',
+      },
+      [{ id: 'src-1', code: 'source-a', name: '来源 A' }],
+    );
+
+    expect(row.targetProviderType).toBe('pushplus');
+    expect(row.messageType).toBe('html');
+  });
+
+  it('normalizes legacy JSON template rows to text message format', () => {
+    const row = mapTemplateRow(
+      {
+        id: 'tpl-webhook',
+        name: 'Webhook 模板',
+        description: '',
+        source_id: 'src-1',
+        enabled: true,
+        current_version_id: 'tpl-version-1',
+        message_type: 'json',
+        target_provider_type: 'webhook',
+        template_body: '{"body":"{{ payload.content }}"}',
+        message_body_schema: {},
+        sample_payload: { content: '正文' },
+        created_at: '2026-05-11T09:00:00+08:00',
+        updated_at: '2026-05-11T09:30:00+08:00',
+      },
+      [{ id: 'src-1', code: 'source-a', name: '来源 A' }],
+    );
+
+    expect(row.messageType).toBe('text');
+  });
+
+  it('renders organization tree inside person management without an organization list page', () => {
     const markup = renderPage(
       <OrganizationPage lastUpdated={lastUpdated} onRefresh={() => undefined} />,
     );
 
-    expect(markup).toContain('组织管理');
     expect(markup).toContain('人员管理');
     expect(markup).toContain('接收人组');
     expect(markup).toContain('组织树');
-    expect(markup).toContain('组织列表');
-    expect(markup).toContain('新增组织');
+    expect(markup).toContain('新增根组织');
     expect(markup).toContain('人员列表');
     expect(markup).toContain('新增人员');
     expect(markup).toContain('接收人组列表');
     expect(markup).toContain('新增接收人组');
+    expect(markup).not.toContain('组织管理');
+    expect(markup).not.toContain('组织列表');
     expect(markup).not.toContain('保存到本地');
   });
 
@@ -1711,10 +1833,12 @@ describe('critical console pages', () => {
       created_at: '2026-05-13T10:00:00+08:00',
       updated_at: '2026-05-13T10:00:00+08:00',
     };
-    const tree = buildOrgTreeData([org], () => undefined);
+    const tree = buildOrgTreeData([org], () => undefined, () => undefined);
 
     expect(renderToStaticMarkup(<>{tree[0]?.title}</>)).toContain('新增下级组织：数据中心');
+    expect(renderToStaticMarkup(<>{tree[0]?.title}</>)).toContain('编辑组织：数据中心');
     expect(renderToStaticMarkup(<>{tree[0]?.title}</>)).toContain('org-tree-node__add');
+    expect(renderToStaticMarkup(<>{tree[0]?.title}</>)).toContain('org-tree-node__edit');
     expect(createChildOrgDraft(org)).toEqual(expect.objectContaining({ parentId: 'org-root' }));
   });
 
@@ -1888,6 +2012,9 @@ describe('critical console pages', () => {
     expect(settingsMarkup).toContain('系统参数列表');
     expect(settingsMarkup).toContain('参数值 JSON');
     expect(settingsMarkup).toContain('必须是合法 JSON');
+    expect(settingsMarkup).toContain('性能测试');
+    expect(settingsMarkup).toContain('运行性能测试');
+    expect(settingsMarkup).toContain('全局发送并发');
   });
 
   it('keeps organization users out of the system settings page', () => {

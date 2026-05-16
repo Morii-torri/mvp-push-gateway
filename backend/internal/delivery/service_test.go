@@ -813,7 +813,7 @@ func TestWorkerPerChannelIsolationForConcurrencyAndRateLimit(t *testing.T) {
 		Enabled:          true,
 		ConcurrencyLimit: 1,
 		TimeoutMS:        1000,
-		RateLimitConfig:  json.RawMessage(`{"enabled":true,"qps":4,"burst":1}`),
+		RateLimitConfig:  json.RawMessage(`{"enabled":true,"qps":4}`),
 		SendConfig:       json.RawMessage(`{"method":"POST","url":"` + server.URL + `/slow"}`),
 	}
 	store.channels["channel-fast"] = provider.Channel{
@@ -965,6 +965,14 @@ func TestWorkerProcessBatchFairlyClaimsAcrossChannels(t *testing.T) {
 	}
 	if indexOf("fast-done") == -1 {
 		t.Fatalf("expected fast-channel send to execute in the claimed batch, got %+v", markers)
+	}
+}
+
+func TestRateLimitFromRequiresQPS(t *testing.T) {
+	cfg := rateLimitFrom(json.RawMessage(`{"enabled":true}`))
+
+	if cfg.Enabled {
+		t.Fatalf("rate limiting without qps must stay disabled: %+v", cfg)
 	}
 }
 

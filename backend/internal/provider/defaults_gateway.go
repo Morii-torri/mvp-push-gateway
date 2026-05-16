@@ -23,7 +23,7 @@ func selfCapability(messageType string) Capability {
 		SendAPI:              rawJSON(`{"method":"POST","path":"/api/v1/ingest/{source_code}","content_type":"application/json","success_status":202,"live_test_status":"implemented_but_not_live_tested","notes":"Build-request adapter targets another MVP Push Gateway instance and does not perform live cascade tests."}`),
 		SuccessRule:          rawJSON(`{"type":"status_and_json_field","status_codes":[202],"field":"status","equals":"accepted"}`),
 		RetryRule:            rawJSON(`{"status_codes":[408,429,500,502,503,504],"network_errors":true,"non_retryable_status_codes":[401,403,404,413]}`),
-		DefaultRateLimit:     rawJSON(`{"qps":20,"burst":40}`),
+		DefaultRateLimit:     rawJSON(`{"qps":20}`),
 		DefaultConcurrency:   4,
 		DefaultTimeoutMS:     5000,
 		DefaultRetryPolicy:   rawJSON(`{"max_attempts":3,"delay_ms":1000,"backoff":"linear"}`),

@@ -1,5 +1,5 @@
 import type { JSONValue } from '../../api/console';
-import { ApiClientError } from '../../api/client';
+import { ApiClientError, isAuthExpiredError } from '../../api/client';
 import type { MessageLog, ProviderRecord } from '../../data/demoData';
 
 export type ProviderKind = ProviderRecord['providerType'];
@@ -34,11 +34,11 @@ export const providerTypeOptions: Array<{ label: string; value: ProviderKind }> 
 export const recipientIdentityProviderOptions = providerTypeOptions.filter((item) => item.value !== 'pushplus');
 
 const fallbackMessageTypesByProvider: Record<ProviderKind, string[]> = {
-  webhook: ['json', 'text', 'markdown'],
-  self: ['json', 'text'],
+  webhook: ['text', 'markdown'],
+  self: ['text'],
   pushplus: ['html'],
   wxpusher: ['html'],
-  serverchan: ['text', 'markdown'],
+  serverchan: ['markdown'],
   ntfy: ['notice'],
   gotify: ['notice'],
   bark: ['notice'],
@@ -57,7 +57,7 @@ const fallbackMessageTypesByProvider: Record<ProviderKind, string[]> = {
   feishu: ['text', 'card'],
   gov_cloud: ['text', 'card'],
   sms: ['template', 'text'],
-  custom_token: ['json'],
+  custom_token: ['text'],
 };
 
 export function fallbackMessageTypes(providerType: ProviderKind): string[] {
@@ -70,6 +70,9 @@ export function providerKindFromString(value: string | undefined): ProviderKind 
 }
 
 export function userFacingError(error: unknown): string {
+  if (isAuthExpiredError(error)) {
+    return '';
+  }
   if (error instanceof ApiClientError) {
     return error.userMessage;
   }
@@ -77,6 +80,13 @@ export function userFacingError(error: unknown): string {
     return error.message;
   }
   return '请求失败，请稍后重试';
+}
+
+export function showUserFacingError(messageApi: { error: (content: string) => unknown }, error: unknown) {
+  const text = userFacingError(error);
+  if (text) {
+    messageApi.error(text);
+  }
 }
 
 export function formatApiTime(value?: string | null) {
