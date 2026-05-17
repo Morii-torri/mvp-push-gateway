@@ -3,6 +3,7 @@ import Form from 'antd/es/form';
 import Input from 'antd/es/input';
 import Segmented from 'antd/es/segmented';
 import Select from 'antd/es/select';
+import { marked } from 'marked';
 
 import type {
   JSONValue,
@@ -1313,67 +1314,7 @@ function sanitizePreviewHTML(value: string): string {
 }
 
 function markdownPreviewHTML(value: string): string {
-  const output: string[] = [];
-  const codeLines: string[] = [];
-  let codeLanguage = '';
-  let inCodeBlock = false;
-
-  for (const line of value.split(/\r?\n/)) {
-    const fence = line.match(/^```\s*([A-Za-z0-9_-]+)?\s*$/);
-    if (fence) {
-      if (inCodeBlock) {
-        output.push(markdownCodeBlockPreviewHTML(codeLines, codeLanguage));
-        codeLines.length = 0;
-        codeLanguage = '';
-        inCodeBlock = false;
-      } else {
-        inCodeBlock = true;
-        codeLanguage = fence[1] ?? '';
-      }
-      continue;
-    }
-    if (inCodeBlock) {
-      codeLines.push(line);
-      continue;
-    }
-    output.push(markdownLinePreviewHTML(line));
-  }
-
-  if (inCodeBlock) {
-    output.push(markdownCodeBlockPreviewHTML(codeLines, codeLanguage));
-  }
-
-  return output.join('');
-}
-
-function markdownCodeBlockPreviewHTML(lines: string[], language: string): string {
-  const languageClass = language ? ` class="language-${escapePreviewHTML(language.toLowerCase())}"` : '';
-  return `<pre class="template-markdown-code-block"><code${languageClass}>${escapePreviewHTML(lines.join('\n'))}</code></pre>`;
-}
-
-function markdownLinePreviewHTML(line: string): string {
-  const escaped = escapePreviewHTML(line);
-  if (!escaped.trim()) {
-    return '<div class="template-markdown-line template-markdown-line--empty"><br /></div>';
-  }
-  const heading = escaped.match(/^(#{1,3})\s+(.+)$/);
-  if (heading) {
-    const level = heading[1].length;
-    return `<h${level} class="template-markdown-heading">${inlineMarkdownPreviewHTML(heading[2])}</h${level}>`;
-  }
-  const listItem = escaped.match(/^[-*]\s+(.+)$/);
-  if (listItem) {
-    return `<div class="template-markdown-list-item">${inlineMarkdownPreviewHTML(listItem[1])}</div>`;
-  }
-  return `<div class="template-markdown-line">${inlineMarkdownPreviewHTML(escaped)}</div>`;
-}
-
-function inlineMarkdownPreviewHTML(value: string): string {
-  return value
-    .replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g, '<a href="$2" target="_blank" rel="noreferrer">$1</a>')
-    .replace(/`([^`]+)`/g, '<code>$1</code>')
-    .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
-    .replace(/\*([^*]+)\*/g, '<em>$1</em>');
+  return sanitizePreviewHTML(marked.parse(value, { async: false, gfm: true }));
 }
 
 export function templateFeedbackFromResult(result: JSONValue): TemplateFeedback {

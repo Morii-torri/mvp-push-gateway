@@ -1494,45 +1494,46 @@ body {
   word-break: break-word;
 }
 
-.template-received-preview--html .template-received-preview__body :where(h1, h2, h3, p, ul, ol) {
+.template-received-preview--html .template-received-preview__body :where(h1, h2, h3, p, ul, ol),
+.template-received-preview--markdown .template-received-preview__body :where(h1, h2, h3, p, ul, ol, blockquote, pre) {
   margin-top: 0;
   margin-bottom: 10px;
 }
 
-.template-received-preview--markdown .template-markdown-heading {
-  margin: 0 0 10px;
+.template-received-preview--markdown .template-received-preview__body :where(h1, h2, h3) {
   font-weight: 650;
   line-height: 1.35;
 }
 
-.template-received-preview--markdown h1.template-markdown-heading {
+.template-received-preview--markdown .template-received-preview__body h1 {
   font-size: 22px;
 }
 
-.template-received-preview--markdown h2.template-markdown-heading {
+.template-received-preview--markdown .template-received-preview__body h2 {
   font-size: 18px;
 }
 
-.template-received-preview--markdown h3.template-markdown-heading {
+.template-received-preview--markdown .template-received-preview__body h3 {
   font-size: 16px;
 }
 
-.template-markdown-line {
-  min-height: 1.65em;
+.template-received-preview--markdown .template-received-preview__body :where(ul, ol) {
+  padding-left: 22px;
 }
 
-.template-markdown-list-item {
-  position: relative;
-  padding-left: 16px;
+.template-received-preview--markdown .template-received-preview__body blockquote {
+  padding-left: 12px;
+  color: #5d7188;
+  border-left: 3px solid #bfd2e6;
 }
 
-.template-markdown-list-item::before {
-  position: absolute;
-  left: 2px;
-  content: "•";
+.template-received-preview--markdown .template-received-preview__body hr {
+  margin: 12px 0;
+  border: 0;
+  border-top: 1px solid #d8e5f2;
 }
 
-.template-markdown-code-block {
+.template-received-preview--markdown .template-received-preview__body pre {
   margin: 10px 0;
   padding: 12px;
   overflow: auto;
@@ -1552,7 +1553,7 @@ body {
   border-radius: 4px;
 }
 
-.template-markdown-code-block code {
+.template-received-preview--markdown .template-received-preview__body pre code {
   padding: 0;
   font-size: inherit;
   background: transparent;

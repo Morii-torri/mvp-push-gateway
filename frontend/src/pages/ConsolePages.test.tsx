@@ -1594,7 +1594,37 @@ describe('critical console pages', () => {
     const markdownDraft = createTemplateDraft(sourceRows, [], 'serverchan', 'markdown');
     markdownDraft.fieldValues.title = { expression: '{{ payload.title }}', defaultValue: '' };
     markdownDraft.fieldValues.desp = {
-      expression: '## {{ payload.content }}\n**请处理**\n```bash\ncurl -X POST http://127.0.0.1:18080/api/v1/ingest/smoke001\n```',
+      expression: [
+        '## {{ payload.content }}',
+        '',
+        '**请处理**',
+        '',
+        '> 重要提示',
+        '',
+        '| 字段 | 值 |',
+        '| --- | --- |',
+        '| bizId | ORDER-1001 |',
+        '',
+        '- [x] 已通知',
+        '- [ ] 待确认',
+        '',
+        '~~旧状态~~',
+        '',
+        '1. 第一步',
+        '2. 第二步',
+        '',
+        '---',
+        '',
+        '```bash',
+        'curl -X POST http://127.0.0.1:18080/api/v1/ingest/smoke001',
+        '```',
+        '',
+        '~~~json',
+        '{"ok": true}',
+        '~~~',
+        '',
+        '<img src=x onerror="alert(1)">',
+      ].join('\n'),
       defaultValue: '',
     };
     const textDraft = createTemplateDraft(sourceRows, [], 'webhook', 'json');
@@ -1609,11 +1639,22 @@ describe('critical console pages', () => {
     expect(htmlPreview.html).toContain('<strong>CPU 90%</strong>');
     expect(htmlPreview.html).not.toContain('<script>');
     expect(markdownPreview.format).toBe('markdown');
-    expect(markdownPreview.html).toContain('<h2 class="template-markdown-heading">CPU 90%</h2>');
+    expect(markdownPreview.html).toContain('<h2>CPU 90%</h2>');
     expect(markdownPreview.html).toContain('<strong>请处理</strong>');
-    expect(markdownPreview.html).toContain('<pre class="template-markdown-code-block">');
-    expect(markdownPreview.html).toContain('<code class="language-bash">');
+    expect(markdownPreview.html).toContain('<blockquote>');
+    expect(markdownPreview.html).toContain('<table>');
+    expect(markdownPreview.html).toContain('<td>ORDER-1001</td>');
+    expect(markdownPreview.html).toContain('<input');
+    expect(markdownPreview.html).toContain('type="checkbox"');
+    expect(markdownPreview.html).toContain('<del>旧状态</del>');
+    expect(markdownPreview.html).toContain('<ol>');
+    expect(markdownPreview.html).toContain('<li>第一步</li>');
+    expect(markdownPreview.html).toContain('<hr');
+    expect(markdownPreview.html).toContain('<pre><code class="language-bash">');
+    expect(markdownPreview.html).toContain('<pre><code class="language-json">');
     expect(markdownPreview.html).toContain('curl -X POST http://127.0.0.1:18080/api/v1/ingest/smoke001');
+    expect(markdownPreview.html).not.toContain('onerror');
+    expect(markdownPreview.html).not.toContain('alert(1)');
     expect(textPreview.format).toBe('text');
     expect(textPreview.html).toContain('&lt;b&gt;CPU 90%&lt;/b&gt;');
     expect(textPreview.html).not.toContain('<b>CPU 90%</b>');
