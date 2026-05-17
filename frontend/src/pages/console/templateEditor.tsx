@@ -1313,10 +1313,42 @@ function sanitizePreviewHTML(value: string): string {
 }
 
 function markdownPreviewHTML(value: string): string {
-  return value
-    .split(/\r?\n/)
-    .map((line) => markdownLinePreviewHTML(line))
-    .join('');
+  const output: string[] = [];
+  const codeLines: string[] = [];
+  let codeLanguage = '';
+  let inCodeBlock = false;
+
+  for (const line of value.split(/\r?\n/)) {
+    const fence = line.match(/^```\s*([A-Za-z0-9_-]+)?\s*$/);
+    if (fence) {
+      if (inCodeBlock) {
+        output.push(markdownCodeBlockPreviewHTML(codeLines, codeLanguage));
+        codeLines.length = 0;
+        codeLanguage = '';
+        inCodeBlock = false;
+      } else {
+        inCodeBlock = true;
+        codeLanguage = fence[1] ?? '';
+      }
+      continue;
+    }
+    if (inCodeBlock) {
+      codeLines.push(line);
+      continue;
+    }
+    output.push(markdownLinePreviewHTML(line));
+  }
+
+  if (inCodeBlock) {
+    output.push(markdownCodeBlockPreviewHTML(codeLines, codeLanguage));
+  }
+
+  return output.join('');
+}
+
+function markdownCodeBlockPreviewHTML(lines: string[], language: string): string {
+  const languageClass = language ? ` class="language-${escapePreviewHTML(language.toLowerCase())}"` : '';
+  return `<pre class="template-markdown-code-block"><code${languageClass}>${escapePreviewHTML(lines.join('\n'))}</code></pre>`;
 }
 
 function markdownLinePreviewHTML(line: string): string {

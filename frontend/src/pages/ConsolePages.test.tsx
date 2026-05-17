@@ -1594,7 +1594,7 @@ describe('critical console pages', () => {
     const markdownDraft = createTemplateDraft(sourceRows, [], 'serverchan', 'markdown');
     markdownDraft.fieldValues.title = { expression: '{{ payload.title }}', defaultValue: '' };
     markdownDraft.fieldValues.desp = {
-      expression: '## {{ payload.content }}\n**请处理**',
+      expression: '## {{ payload.content }}\n**请处理**\n```bash\ncurl -X POST http://127.0.0.1:18080/api/v1/ingest/smoke001\n```',
       defaultValue: '',
     };
     const textDraft = createTemplateDraft(sourceRows, [], 'webhook', 'json');
@@ -1611,6 +1611,9 @@ describe('critical console pages', () => {
     expect(markdownPreview.format).toBe('markdown');
     expect(markdownPreview.html).toContain('<h2 class="template-markdown-heading">CPU 90%</h2>');
     expect(markdownPreview.html).toContain('<strong>请处理</strong>');
+    expect(markdownPreview.html).toContain('<pre class="template-markdown-code-block">');
+    expect(markdownPreview.html).toContain('<code class="language-bash">');
+    expect(markdownPreview.html).toContain('curl -X POST http://127.0.0.1:18080/api/v1/ingest/smoke001');
     expect(textPreview.format).toBe('text');
     expect(textPreview.html).toContain('&lt;b&gt;CPU 90%&lt;/b&gt;');
     expect(textPreview.html).not.toContain('<b>CPU 90%</b>');
@@ -2014,7 +2017,7 @@ describe('critical console pages', () => {
     expect(settingsMarkup).toContain('必须是合法 JSON');
     expect(settingsMarkup).toContain('性能测试');
     expect(settingsMarkup).toContain('运行性能测试');
-    expect(settingsMarkup).toContain('全局发送并发');
+    expect(settingsMarkup).toContain('当前系统实例并发上限');
   });
 
   it('keeps organization users out of the system settings page', () => {

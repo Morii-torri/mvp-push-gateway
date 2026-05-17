@@ -138,7 +138,7 @@ func DefaultSettings() []Setting {
 		{Key: "logs.retention_days", Value: json.RawMessage(`30`), Description: "消息日志和运行记录保留天数", Category: "logs"},
 		{Key: "admin.single_account_mode", Value: json.RawMessage(`true`), Description: "一期管理员单账户模式", Category: "admin"},
 		{Key: KeyIngestMaxPayloadBytes, Value: json.RawMessage(`5242880`), Description: "入站 Payload 最大字节数", Category: "performance"},
-		{Key: KeyRuntimeDeliveryConcurrency, Value: json.RawMessage(`10`), Description: "所有推送渠道共享的全局发送并发上限", Category: "performance"},
+		{Key: KeyRuntimeDeliveryConcurrency, Value: json.RawMessage(`10`), Description: "当前系统实例并发上限", Category: "performance"},
 	}
 }
 

@@ -12,8 +12,12 @@ func TestDefaultSettingsExposePerformanceControls(t *testing.T) {
 	if settingValue(defaults, "ingest.max_payload_bytes") != "5242880" {
 		t.Fatalf("expected 5MiB ingest payload default, got %s", settingValue(defaults, "ingest.max_payload_bytes"))
 	}
-	if settingValue(defaults, "runtime.delivery_global_concurrency") != "10" {
-		t.Fatalf("expected default global delivery concurrency 10, got %s", settingValue(defaults, "runtime.delivery_global_concurrency"))
+	concurrency := settingByKey(defaults, "runtime.delivery_global_concurrency")
+	if string(concurrency.Value) != "10" {
+		t.Fatalf("expected default global delivery concurrency 10, got %s", concurrency.Value)
+	}
+	if concurrency.Description != "当前系统实例并发上限" {
+		t.Fatalf("expected system instance concurrency wording, got %q", concurrency.Description)
 	}
 }
 
@@ -37,12 +41,16 @@ func TestRunPerformanceTestUpdatesGlobalDeliveryConcurrency(t *testing.T) {
 }
 
 func settingValue(settings []Setting, key string) string {
+	return string(settingByKey(settings, key).Value)
+}
+
+func settingByKey(settings []Setting, key string) Setting {
 	for _, item := range settings {
 		if item.Key == key {
-			return string(item.Value)
+			return item
 		}
 	}
-	return ""
+	return Setting{}
 }
 
 func jsonNumber(value int) string {

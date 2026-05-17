@@ -6346,7 +6346,7 @@ export function SettingsPage({ lastUpdated, onRefresh }: ConsolePageProps) {
     try {
       const result = await consoleApi.runPerformanceTest({ message_count: performanceMessageCount });
       setPerformanceResult(result.result);
-      message.success(`已更新全局发送并发为 ${result.result.recommended_global_concurrency}`);
+      message.success(`已更新当前系统实例并发上限为 ${result.result.recommended_global_concurrency}`);
       await loadSettings();
     } catch (error) {
       showError(message, error);
@@ -6481,7 +6481,7 @@ export function SettingsPage({ lastUpdated, onRefresh }: ConsolePageProps) {
                       onChange={(value) => setPerformanceMessageCount(value ?? 200)}
                     />
                   </Form.Item>
-                  <Form.Item label="全局发送并发">
+                  <Form.Item label="当前系统实例并发上限">
                     <Typography.Text>{performanceResult?.recommended_global_concurrency ?? '-'}</Typography.Text>
                   </Form.Item>
                 </Form>
