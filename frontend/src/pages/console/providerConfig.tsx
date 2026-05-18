@@ -267,13 +267,13 @@ const providerPresets: Record<ProviderKind, ProviderPreset> = {
     testBody: 'Bark 测试消息',
   },
   pushme: {
-    tokenEndpoint: '固定 PushMe Push Key / Temp Key',
-    tokenRequest: 'push_key 或 temp_key',
+    tokenEndpoint: '固定 PushMe Push Key',
+    tokenRequest: 'push_key',
     tokenResponsePath: '-',
     tokenPlacement: 'body.push_key',
     sendEndpoint: '内置 PushMe adapter',
     recipientMapping: '无需接收人；Push Key 绑定目标设备或账号',
-    bodyMapping: 'adapter 根据 title/content/type 生成请求体',
+    bodyMapping: 'adapter 根据 title/content/type 生成 POST JSON 请求体',
     qps: 2,
     concurrency: 2,
     timeoutMs: 5000,
@@ -282,6 +282,8 @@ const providerPresets: Record<ProviderKind, ProviderPreset> = {
     deadLetterPolicy: '全局默认：重试耗尽或上级错误进入死信',
     testRecipient: '-',
     testBody: 'PushMe 测试消息',
+    testTitle: 'PushMe 测试标题',
+    testTopic: 'markdown',
   },
   email: {
     tokenEndpoint: 'SMTP 登录或固定凭证',
@@ -944,10 +946,7 @@ function fallbackProviderFields(providerType: ProviderKind): ProviderConfigField
   if (providerType === 'pushme') {
     return [
       field('server_url', '服务地址', 'auth_config', 'text', true, 'https://push.i-i.me', 'https://push.i-i.me'),
-      field('push_key', 'PushMe Push Key', 'auth_config', 'password'),
-      field('temp_key', 'PushMe 临时 Key', 'auth_config', 'password'),
-      field('type', '内容类型', 'send_config', 'text', false, 'markdown'),
-      field('method', '请求方法', 'send_config', 'text', false, 'POST'),
+      field('push_key', 'PushMe Push Key', 'auth_config', 'password', true),
     ];
   }
   if (providerType === 'wecom_robot') {
@@ -1328,6 +1327,13 @@ function providerTestBodyValue(value: ProviderRow): JSONValue {
     }
     return body;
   }
+  if (value.providerType === 'pushme') {
+    return {
+      title: value.testTitle.trim(),
+      content: value.testBody.trim(),
+      type: normalizedPushMeMessageType(value.testTopic),
+    };
+  }
   const trimmed = value.testBody.trim();
   if (!trimmed) {
     return {};
@@ -1339,8 +1345,15 @@ function providerTestBodyValue(value: ProviderRow): JSONValue {
   }
 }
 
+function providerTestNeedsRecipient(value: ProviderRow): boolean {
+  if (value.providerType === 'wxpusher') {
+    return false;
+  }
+  return value.testRecipient.trim() !== '-';
+}
+
 function normalizedProviderTestRecipient(value: ProviderRow): string {
-  if (value.providerType === 'pushplus' || value.providerType === 'wxpusher' || value.providerType === 'serverchan') {
+  if (!providerTestNeedsRecipient(value)) {
     return '';
   }
   const recipient = value.testRecipient.trim();
@@ -1384,6 +1397,11 @@ function providerTestRecipients(value: ProviderRow, recipient: string): JSONValu
   return recipient ? [{ value: recipient }] : [];
 }
 
+function normalizedPushMeMessageType(value: string): string {
+  const normalized = value.trim().toLowerCase();
+  return normalized === 'text' || normalized === 'html' || normalized === 'markdown' ? normalized : 'markdown';
+}
+
 export function providerTestPayload(value: ProviderRow, send: boolean, liveSendConfirmed = false): JSONValue {
   const body = providerTestBodyValue(value);
   const recipient = normalizedProviderTestRecipient(value);
@@ -1392,7 +1410,9 @@ export function providerTestPayload(value: ProviderRow, send: boolean, liveSendC
       ? 'html'
       : value.providerType === 'serverchan'
         ? 'markdown'
-        : value.messageTypes[0] ?? 'text';
+        : value.providerType === 'pushme'
+          ? normalizedPushMeMessageType(value.testTopic)
+          : value.messageTypes[0] ?? 'text';
   const resolvedRecipients = providerTestRecipients(value, recipient);
   return {
     send,
@@ -1980,6 +2000,7 @@ export function ProviderTestPanel({
   const pushPlusTest = value.providerType === 'pushplus';
   const wxPusherTest = value.providerType === 'wxpusher';
   const serverChanTest = value.providerType === 'serverchan';
+  const pushMeTest = value.providerType === 'pushme';
   const update = (patch: Partial<ProviderRow>) => onChange({ ...value, ...patch });
   const validateTestPayload = () => {
     if (pushPlusTest && !value.testBody.trim()) {
@@ -1996,6 +2017,14 @@ export function ProviderTestPanel({
     }
     if (serverChanTest && !value.testTitle.trim()) {
       message.error('请填写 title');
+      return false;
+    }
+    if (pushMeTest && !value.testTitle.trim()) {
+      message.error('请填写 title');
+      return false;
+    }
+    if (pushMeTest && !value.testBody.trim()) {
+      message.error('请填写 content');
       return false;
     }
     return true;
@@ -2083,11 +2112,37 @@ export function ProviderTestPanel({
             />
           </Form.Item>
         </div>
+      ) : pushMeTest ? (
+        <div className="two-column-form provider-test-form">
+          <Form.Item label="title" required>
+            <Input value={value.testTitle} onChange={(event) => update({ testTitle: event.target.value })} />
+          </Form.Item>
+          <Form.Item label="type" required>
+            <Select
+              value={normalizedPushMeMessageType(value.testTopic)}
+              options={[
+                { label: 'text', value: 'text' },
+                { label: 'markdown', value: 'markdown' },
+                { label: 'html', value: 'html' },
+              ]}
+              onChange={(testTopic) => update({ testTopic })}
+            />
+          </Form.Item>
+          <Form.Item label="content" required className="form-item-full">
+            <Input.TextArea
+              rows={5}
+              value={value.testBody}
+              onChange={(event) => update({ testBody: event.target.value })}
+            />
+          </Form.Item>
+        </div>
       ) : (
         <>
-          <Form.Item label="测试接收人">
-            <Input value={value.testRecipient} onChange={(event) => update({ testRecipient: event.target.value })} />
-          </Form.Item>
+          {providerTestNeedsRecipient(value) ? (
+            <Form.Item label="测试接收人">
+              <Input value={value.testRecipient} onChange={(event) => update({ testRecipient: event.target.value })} />
+            </Form.Item>
+          ) : null}
           <Form.Item label="测试消息体">
             <Input.TextArea
               rows={5}

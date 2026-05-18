@@ -731,7 +731,6 @@ describe('critical console pages', () => {
       ['ntfy', 'Topic', ['服务地址', '优先级']],
       ['gotify', 'Gotify App Token', ['服务地址', '优先级']],
       ['bark', 'Bark Device Key', ['服务地址', '通知级别']],
-      ['pushme', 'PushMe Push Key', ['服务地址', '内容类型']],
     ] as const;
 
     for (const [providerType, credentialLabel, extraLabels] of providers) {
@@ -761,6 +760,59 @@ describe('critical console pages', () => {
       expect(input.message_type).toBe('notice');
       expect(input.template_body).toContain('"body"');
     }
+  });
+
+  it('uses PushMe key-only channel fields and typed template content', () => {
+    const providerDraft = createProviderDraft('pushme', 1);
+    const providerMarkup = renderPage(
+      <ProviderConfigForm
+        value={providerDraft}
+        onChange={() => undefined}
+        capabilities={[]}
+      />,
+    );
+
+    expect(providerMarkup).toContain('服务地址');
+    expect(providerMarkup).toContain('PushMe Push Key');
+    expect(providerMarkup).not.toContain('PushMe 临时 Key');
+    expect(providerMarkup).not.toContain('内容类型');
+    expect(providerMarkup).not.toContain('请求方法');
+
+    const providerInput = channelInputFromProvider({
+      ...providerDraft,
+      fieldValues: {
+        'auth_config.server_url': 'https://push.i-i.me',
+        'auth_config.push_key': 'push-key',
+      },
+    });
+    expect(providerInput.auth_config).toEqual({
+      server_url: 'https://push.i-i.me',
+      push_key: 'push-key',
+    });
+    expect(providerInput.send_config).toEqual({});
+
+    const templateDraft = createTemplateDraft([], [], 'pushme', 'notice');
+    const templateMarkup = renderPage(
+      <TemplateEditorForm
+        value={templateDraft}
+        onChange={() => undefined}
+        sourceRows={[]}
+        capabilities={[]}
+      />,
+    );
+    const templateInput = templateVersionInputFromDraft(templateDraft);
+    const templateBody = JSON.parse(templateInput.template_body) as Record<string, string>;
+    const schema = templateInput.message_body_schema as { fields: Array<{ key: string; enum?: string[] }> };
+
+    expect(templateInput.message_type).toBe('notice');
+    expect(Object.keys(templateBody)).toEqual(['title', 'content', 'type']);
+    expect(schema.fields.find((field) => field.key === 'type')?.enum).toEqual(['text', 'markdown', 'html']);
+    expect(templateMarkup).toContain('title');
+    expect(templateMarkup).toContain('content');
+    expect(templateMarkup).toContain('type');
+    expect(templateMarkup).toContain('markdown');
+    expect(templateMarkup).not.toContain('body');
+    expect(templateMarkup).not.toContain('format');
   });
 
   it('uses vendor fields and template/content fallback schemas for the first SMS providers', () => {
@@ -877,6 +929,47 @@ describe('critical console pages', () => {
     expect(markup).not.toContain('请求映射');
     expect(markup).not.toContain('认证配置 JSON');
     expect(markup).not.toContain('Body 映射模板');
+  });
+
+  it('renders PushMe capability schema without temp key or channel-level content type', () => {
+    const capabilities: ProviderCapabilityApiRecord[] = [
+      {
+        provider_type: 'pushme',
+        display_name: 'PushMe',
+        category: 'personal_gateway',
+        message_type: 'notice',
+        credential_schema: {
+          type: 'object',
+          required: ['server_url', 'push_key'],
+          properties: {
+            server_url: { type: 'string', title: '服务地址', default: 'https://push.i-i.me' },
+            push_key: { type: 'string', title: 'PushMe Push Key', format: 'password' },
+          },
+        },
+        channel_config_schema: {
+          type: 'object',
+          properties: {},
+        },
+        custom_body_allowed: false,
+      },
+    ];
+    const draft = createProviderDraft('pushme', 1, capabilities);
+    const markup = renderPage(
+      <ProviderConfigForm value={draft} onChange={() => undefined} capabilities={capabilities} />,
+    );
+
+    expect(markup).toContain('服务地址');
+    expect(markup).toContain('PushMe Push Key');
+    expect(markup).not.toContain('临时 Key');
+    expect(markup).not.toContain('内容类型');
+    expect(markup).not.toContain('请求方法');
+    expect(channelInputFromProvider({
+      ...draft,
+      fieldValues: {
+        'auth_config.server_url': 'https://push.i-i.me',
+        'auth_config.push_key': 'push-key',
+      },
+    }).send_config).toEqual({});
   });
 
   it('keeps mapping tabs only for custom HTTP providers', () => {
@@ -1271,6 +1364,46 @@ describe('critical console pages', () => {
       rendered_message: { message_type: string };
     };
     expect(payload.rendered_message.message_type).toBe('html');
+  });
+
+  it('renders PushMe test panel without recipient and builds typed payload', () => {
+    const draft = createProviderDraft('pushme', 1);
+    const markup = renderPage(
+      <ProviderTestPanel value={draft} onChange={() => undefined} />,
+    );
+
+    expect(markup).toContain('title');
+    expect(markup).toContain('content');
+    expect(markup).toContain('type');
+    expect(markup).toContain('markdown');
+    expect(markup).toContain('模拟请求');
+    expect(markup).toContain('真实发送');
+    expect(markup).not.toContain('测试接收人');
+
+    const payload = providerTestPayload(
+      {
+        ...draft,
+        testTitle: 'PushMe 标题',
+        testBody: '<b>PushMe 内容</b>',
+        testTopic: 'html',
+      },
+      false,
+    ) as {
+      recipient: string;
+      body: Record<string, unknown>;
+      rendered_message: { message_type: string; content: Record<string, unknown> };
+      resolved_recipients: unknown[];
+    };
+
+    expect(payload.recipient).toBe('');
+    expect(payload.body).toEqual({
+      title: 'PushMe 标题',
+      content: '<b>PushMe 内容</b>',
+      type: 'html',
+    });
+    expect(payload.rendered_message.message_type).toBe('html');
+    expect(payload.rendered_message.content).toEqual(payload.body);
+    expect(payload.resolved_recipients).toEqual([]);
   });
 
   it('summarizes provider test result as final URL headers and body only', () => {
@@ -1727,6 +1860,40 @@ describe('critical console pages', () => {
     expect(textPreview.html).toContain('&lt;b&gt;CPU 90%&lt;/b&gt;');
     expect(textPreview.html).not.toContain('<b>CPU 90%</b>');
     expect(templateVersionInputFromDraft(textDraft).message_type).toBe('text');
+  });
+
+  it('uses PushMe type field to choose the received preview format', () => {
+    const sourceRows = [
+      {
+        id: 'src-a',
+        code: 'alerts',
+        name: '告警来源',
+        latestPayload: JSON.stringify({ title: 'CPU 告警', content: 'CPU 90%' }),
+      },
+    ];
+    const markdownDraft = createTemplateDraft(sourceRows, [], 'pushme', 'notice');
+    markdownDraft.fieldValues.title = { expression: '{{ payload.title }}', defaultValue: '' };
+    markdownDraft.fieldValues.content = { expression: '**{{ payload.content }}**', defaultValue: '' };
+    markdownDraft.fieldValues.type = { expression: 'markdown', defaultValue: '' };
+
+    const htmlDraft = createTemplateDraft(sourceRows, [], 'pushme', 'notice');
+    htmlDraft.fieldValues.content = { expression: '<strong>{{ payload.content }}</strong>', defaultValue: '' };
+    htmlDraft.fieldValues.type = { expression: 'html', defaultValue: '' };
+
+    const textDraft = createTemplateDraft(sourceRows, [], 'pushme', 'notice');
+    textDraft.fieldValues.content = { expression: '<strong>{{ payload.content }}</strong>', defaultValue: '' };
+    textDraft.fieldValues.type = { expression: 'text', defaultValue: '' };
+
+    const markdownPreview = templateReceivedPreview(markdownDraft);
+    const htmlPreview = templateReceivedPreview(htmlDraft);
+    const textPreview = templateReceivedPreview(textDraft);
+
+    expect(markdownPreview.format).toBe('markdown');
+    expect(markdownPreview.html).toContain('<strong>CPU 90%</strong>');
+    expect(htmlPreview.format).toBe('html');
+    expect(htmlPreview.html).toContain('<strong>CPU 90%</strong>');
+    expect(textPreview.format).toBe('text');
+    expect(textPreview.html).toContain('&lt;strong&gt;CPU 90%&lt;/strong&gt;');
   });
 
   it('changes template content fields when provider and message type switch', () => {

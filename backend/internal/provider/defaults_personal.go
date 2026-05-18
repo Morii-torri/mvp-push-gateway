@@ -137,9 +137,9 @@ func pushMeCapability() Capability {
 		DisplayName:          "PushMe",
 		Category:             "personal_gateway",
 		MessageType:          "notice",
-		MessageSchema:        noticeContentSchema(),
-		CredentialSchema:     rawJSON(`{"type":"object","properties":{"server_url":{"type":"string","default":"https://push.i-i.me"},"push_key":{"type":"string","format":"password"},"temp_key":{"type":"string","format":"password"}}}`),
-		ChannelConfigSchema:  rawJSON(`{"type":"object","properties":{"type":{"type":"string","enum":["text","markdown"],"default":"markdown"},"method":{"type":"string","enum":["POST","GET"],"default":"POST"}}}`),
+		MessageSchema:        pushMeContentSchema(),
+		CredentialSchema:     rawJSON(`{"type":"object","required":["server_url","push_key"],"properties":{"server_url":{"type":"string","title":"服务地址","default":"https://push.i-i.me"},"push_key":{"type":"string","title":"PushMe Push Key","format":"password"}}}`),
+		ChannelConfigSchema:  rawJSON(`{"type":"object","properties":{}}`),
 		RecipientRequired:    false,
 		AllowNoRecipient:     true,
 		RecipientRequirement: "none",
@@ -147,7 +147,7 @@ func pushMeCapability() Capability {
 		RecipientFormat:      "none",
 		TokenLocation:        PlacementBody,
 		TokenFieldName:       "push_key",
-		TokenStrategy:        rawJSON(`{"strategy":"static_key","cacheable":false,"placement":{"location":"body","field_name":"push_key"},"supported_fields":["push_key","temp_key"]}`),
+		TokenStrategy:        rawJSON(`{"strategy":"static_key","cacheable":false,"placement":{"location":"body","field_name":"push_key"},"supported_fields":["push_key"]}`),
 		SendAPI:              rawJSON(`{"method":"POST","url_template":"{server_url}","content_type":"application/json","adapter":"mock_http","live_test_status":"implemented_but_not_live_tested","notes":"No live PushMe key is configured in this environment."}`),
 		SuccessRule:          rawJSON(`{"type":"text_or_json","status_codes":[200],"text_contains":["success"],"json_field":"errcode","json_equals":0}`),
 		RetryRule:            rawJSON(`{"status_codes":[408,429,500,502,503,504],"network_errors":true,"non_retryable_status_codes":[400,401,403,404]}`),
@@ -158,4 +158,8 @@ func pushMeCapability() Capability {
 		RequestExamples:      rawJSON(`{"push_key":"pushme-key","title":"Disk alert","content":"Disk 95%","type":"markdown"}`),
 		CustomBodyAllowed:    false,
 	})
+}
+
+func pushMeContentSchema() json.RawMessage {
+	return rawJSON(`{"type":"object","required":["title","content","type"],"properties":{"title":{"type":"string","title":"title","template_expression":"{{ payload.title }}"},"content":{"type":"string","title":"content","template_expression":"{{ payload.content }}"},"type":{"type":"string","title":"type","enum":["text","markdown","html"],"default":"markdown","template_expression":"markdown"}}}`)
 }

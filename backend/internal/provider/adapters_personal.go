@@ -81,22 +81,26 @@ func barkRequestConfig(auth, send, content map[string]any, recipient any) (reque
 
 func pushMeRequestConfig(auth, send, content map[string]any) (requestConfig, error) {
 	serverURL := firstString(stringConfig(send, "server_url"), stringConfig(auth, "server_url"), "https://push.i-i.me")
-	pushKey := firstString(stringConfig(auth, "push_key"), stringConfig(send, "push_key"), stringConfig(auth, "temp_key"), stringConfig(send, "temp_key"))
+	pushKey := firstString(stringConfig(auth, "push_key"), stringConfig(send, "push_key"))
 	if strings.TrimSpace(serverURL) == "" || strings.TrimSpace(pushKey) == "" {
 		return requestConfig{}, ErrInvalidInput
 	}
 	body := map[string]any{
-		"push_key":         pushKey,
-		"title":            messageTitle(content),
-		"content":          messageBody(content),
-		"type":             firstString(stringConfig(send, "type"), stringConfig(content, "format"), "markdown"),
-		"live_test_status": "implemented_but_not_live_tested",
+		"push_key": pushKey,
+		"title":    messageTitle(content),
+		"content":  messageBody(content),
+		"type":     pushMeMessageType(stringConfig(content, "type")),
 	}
-	if _, ok := firstValueOK(auth, "temp_key"); ok && stringConfig(auth, "push_key") == "" {
-		body["temp_key"] = pushKey
-		delete(body, "push_key")
+	return jsonRequest("POST", serverURL, body)
+}
+
+func pushMeMessageType(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "text", "markdown", "html":
+		return strings.ToLower(strings.TrimSpace(value))
+	default:
+		return "markdown"
 	}
-	return jsonRequest(firstString(stringConfig(send, "method"), "POST"), serverURL, body)
 }
 
 func pushPlusTemplate(format string) string {

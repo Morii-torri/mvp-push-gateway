@@ -54,6 +54,7 @@ type TemplateContentField = {
   defaultExpression: string;
   defaultValue: string;
   formatHint?: string;
+  options?: Array<{ label: string; value: string }>;
 };
 
 type TemplateCapabilityView = {
@@ -126,6 +127,7 @@ function contentField(
   defaultExpression = `{{ payload.${key} }}`,
   required = true,
   formatHint?: string,
+  options?: Array<{ label: string; value: string }>,
 ): TemplateContentField {
   return {
     key,
@@ -136,6 +138,7 @@ function contentField(
     defaultExpression,
     defaultValue,
     formatHint,
+    options,
   };
 }
 
@@ -217,6 +220,19 @@ function wxPusherHTMLFields(): TemplateContentField[] {
     contentField('content', 'content', 'html', '', '{{ payload.content }}', true, '支持 HTML'),
     contentField('summary', 'summary', 'string', '', '{{ payload.title }}', false),
     contentField('url', 'url', 'string', '', '{{ payload.url }}', false),
+  ];
+}
+
+function pushMeNoticeFields(): TemplateContentField[] {
+  const typeOptions = [
+    { label: 'text', value: 'text' },
+    { label: 'markdown', value: 'markdown' },
+    { label: 'html', value: 'html' },
+  ];
+  return [
+    contentField('title', 'title', 'string', '', '{{ payload.title }}'),
+    contentField('content', 'content', 'string', '', '{{ payload.content }}'),
+    contentField('type', 'type', 'string', 'markdown', 'markdown', true, undefined, typeOptions),
   ];
 }
 
@@ -310,7 +326,7 @@ const fallbackTemplateSchemas: Record<ProviderKind, Record<string, { label: stri
   pushme: {
     notice: {
       label: '通知',
-      fields: noticeFields(),
+      fields: pushMeNoticeFields(),
     },
   },
   email: {
@@ -645,6 +661,9 @@ function fallbackTemplateSchema(providerType: ProviderKind, messageType: string)
       if (field.formatHint) {
         item.format_hint = field.formatHint;
       }
+      if (field.options?.length) {
+        item.enum = field.options.map((option) => option.value);
+      }
       return item;
     }),
   };
@@ -733,6 +752,11 @@ function templateFieldFromSchemaRecord(value: JSONValue, fallbackKey = ''): Temp
   const defaultValue = jsonScalarToText(value.default) || jsonScalarToText(value.default_value) || jsonScalarToText(value.fallback);
   const defaultExpression =
     firstString(value.expression, value.template, value.template_expression) || `{{ payload.${payloadKeyForContentField(key)} }}`;
+  const options = Array.isArray(value.enum)
+    ? value.enum
+        .filter((item): item is string => typeof item === 'string')
+        .map((item) => ({ label: item, value: item }))
+    : undefined;
   return {
     key,
     label: firstString(value.label, value.title, value.description) || providerFieldLabel(key),
@@ -742,6 +766,7 @@ function templateFieldFromSchemaRecord(value: JSONValue, fallbackKey = ''): Temp
     defaultExpression,
     defaultValue,
     formatHint: firstString(value.format_hint, value.formatHint, value['x-format-hint']),
+    options,
   };
 }
 
@@ -809,7 +834,10 @@ function defaultTemplateFieldValues(
 ): TemplateFieldValues {
   return fields.reduce<TemplateFieldValues>((values, field) => {
     values[field.key] = currentValues[field.key] ?? {
-      expression: '',
+      expression:
+        field.options?.length && field.defaultExpression && !field.defaultExpression.includes('{{')
+          ? field.defaultExpression
+          : '',
       defaultValue: '',
     };
     return values;
@@ -1235,7 +1263,7 @@ export function templateUserFacingPreview(draft: TemplateDraft): string {
 
 export function templateReceivedPreview(draft: TemplateDraft): TemplateReceivedPreview {
   const rendered = templateRenderedPreviewValue(draft);
-  const format = normalizeTemplateMessageFormat(draft.messageType);
+  const format = templatePreviewFormat(draft, rendered);
   if (!isRecord(rendered)) {
     const body = typeof rendered === 'string' ? rendered : stringifyJSON(rendered);
     return {
@@ -1264,6 +1292,27 @@ export function templateReceivedPreview(draft: TemplateDraft): TemplateReceivedP
     html: previewBodyHTML(format, body),
     isEmpty: !title && !body,
   };
+}
+
+function templatePreviewFormat(draft: TemplateDraft, rendered: JSONValue): TemplatePreviewFormat {
+  if (draft.targetProviderType === 'pushme' && isRecord(rendered)) {
+    const format = previewFormatFromValue(rendered.type);
+    if (format) {
+      return format;
+    }
+  }
+  return normalizeTemplateMessageFormat(draft.messageType);
+}
+
+function previewFormatFromValue(value: JSONValue | undefined): TemplatePreviewFormat | null {
+  if (typeof value !== 'string') {
+    return null;
+  }
+  const normalized = value.trim().toLowerCase();
+  if (normalized === 'text' || normalized === 'markdown' || normalized === 'html') {
+    return normalized;
+  }
+  return null;
 }
 
 function previewBodyKeys(format: TemplatePreviewFormat): string[] {
@@ -1461,7 +1510,13 @@ export function TemplateEditorForm({
                 <div className="template-content-field" key={field.key}>
                   <div className="template-content-field__controls">
                     <Form.Item label={templateContentFieldLabel(field)} required={field.required} extra={templateFieldExtra(field)}>
-                      {multiline ? (
+                      {field.options?.length ? (
+                        <Select
+                          value={fieldValue.expression || undefined}
+                          options={field.options}
+                          onChange={(expression) => updateFieldValue(field, { expression })}
+                        />
+                      ) : multiline ? (
                         <Input.TextArea
                           value={fieldValue.expression}
                           autoSize={{ minRows: 2, maxRows: 8 }}

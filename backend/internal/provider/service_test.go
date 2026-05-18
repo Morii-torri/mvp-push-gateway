@@ -180,6 +180,52 @@ func TestWxPusherCapabilityUsesStandardPostHTMLFields(t *testing.T) {
 	}
 }
 
+func TestPushMeCapabilityUsesPostKeyOnlyAndTypedContent(t *testing.T) {
+	capability := findCapability(t, ProviderPushMe, "notice")
+
+	assertJSONField(t, capability.SendAPI, "method", "POST")
+	assertJSONField(t, capability.SendAPI, "content_type", "application/json")
+	assertJSONField(t, capability.CredentialSchema, "properties.server_url.title", "服务地址")
+	assertJSONField(t, capability.CredentialSchema, "properties.server_url.default", "https://push.i-i.me")
+	assertJSONField(t, capability.CredentialSchema, "properties.push_key.title", "PushMe Push Key")
+	assertJSONField(t, capability.CredentialSchema, "properties.push_key.format", "password")
+	assertJSONField(t, capability.CredentialSchema, "properties.temp_key", nil)
+	assertJSONField(t, capability.ChannelConfigSchema, "properties.type", nil)
+	assertJSONField(t, capability.ChannelConfigSchema, "properties.method", nil)
+	assertJSONField(t, capability.MessageSchema, "properties.title.type", "string")
+	assertJSONField(t, capability.MessageSchema, "properties.content.type", "string")
+	assertJSONField(t, capability.MessageSchema, "properties.body", nil)
+	assertJSONField(t, capability.MessageSchema, "properties.format", nil)
+
+	var tokenStrategy struct {
+		SupportedFields []string `json:"supported_fields"`
+	}
+	if err := json.Unmarshal(capability.TokenStrategy, &tokenStrategy); err != nil {
+		t.Fatalf("decode pushme token strategy: %v", err)
+	}
+	if got, want := strings.Join(tokenStrategy.SupportedFields, ","), "push_key"; got != want {
+		t.Fatalf("expected PushMe token strategy to support only push_key, got %+v", tokenStrategy.SupportedFields)
+	}
+
+	var messageSchema struct {
+		Required   []string `json:"required"`
+		Properties struct {
+			Type struct {
+				Enum []string `json:"enum"`
+			} `json:"type"`
+		} `json:"properties"`
+	}
+	if err := json.Unmarshal(capability.MessageSchema, &messageSchema); err != nil {
+		t.Fatalf("decode pushme message schema: %v", err)
+	}
+	if got, want := strings.Join(messageSchema.Required, ","), "title,content,type"; got != want {
+		t.Fatalf("expected title/content/type to be required, got %+v", messageSchema.Required)
+	}
+	if got, want := strings.Join(messageSchema.Properties.Type.Enum, ","), "text,markdown,html"; got != want {
+		t.Fatalf("expected PushMe type enum text/markdown/html, got %+v", messageSchema.Properties.Type.Enum)
+	}
+}
+
 func TestDefaultCapabilitiesExposeP2Providers(t *testing.T) {
 	required := []struct {
 		providerType ProviderType
@@ -669,17 +715,25 @@ func TestBuildDeliveryRequestUsesBuiltInProviderDefaultsWithoutLegacyURL(t *test
 			channel: Channel{
 				ProviderType: ProviderPushMe,
 				AuthConfig:   json.RawMessage(`{"server_url":"https://push.example","push_key":"push-key"}`),
-				SendConfig:   json.RawMessage(`{"type":"markdown"}`),
+				SendConfig:   json.RawMessage(`{"type":"text","method":"GET"}`),
 			},
-			message: json.RawMessage(`{"title":"Build","body":"Failed","format":"markdown"}`),
+			message: json.RawMessage(`{"title":"Build","content":"Failed","type":"html"}`),
 			assert: func(t *testing.T, request BuiltRequest) {
 				requireRequest(t, request, "POST", "https://push.example")
 				body := decodeRequestBody(t, request)
+				if len(body) != 4 {
+					t.Fatalf("expected PushMe request body to only contain push_key/title/content/type, got %#v", body)
+				}
 				requireBodyField(t, body, "push_key", "push-key")
 				requireBodyField(t, body, "title", "Build")
 				requireBodyField(t, body, "content", "Failed")
-				requireBodyField(t, body, "type", "markdown")
-				requireBodyField(t, body, "live_test_status", "implemented_but_not_live_tested")
+				requireBodyField(t, body, "type", "html")
+				if _, ok := body["live_test_status"]; ok {
+					t.Fatalf("PushMe request body must not expose internal live test metadata: %#v", body)
+				}
+				if _, ok := body["temp_key"]; ok {
+					t.Fatalf("PushMe request body must not use temp_key: %#v", body)
+				}
 			},
 		},
 	} {
