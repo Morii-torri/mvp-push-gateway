@@ -438,13 +438,16 @@ func (f *fakeAuditService) Record(_ context.Context, input audit.RecordInput) (a
 }
 
 type fakeSettingsService struct {
-	listResult  []settings.Setting
-	getResult   settings.Setting
-	updateInput settings.UpdateInput
-	intValues   map[string]int
-	listCalls   int
-	updateCalls int
-	intCalls    int
+	listResult           []settings.Setting
+	getResult            settings.Setting
+	updateInput          settings.UpdateInput
+	performanceTestInput settings.PerformanceTestInput
+	intValues            map[string]int
+	performanceTestErr   error
+	listCalls            int
+	updateCalls          int
+	intCalls             int
+	performanceTestCalls int
 }
 
 func (f *fakeSettingsService) ListSettings(context.Context) ([]settings.Setting, error) {
@@ -470,14 +473,28 @@ func (f *fakeSettingsService) IntSetting(_ context.Context, key string, fallback
 	return value
 }
 
-func (f *fakeSettingsService) RunPerformanceTest(context.Context, settings.PerformanceTestInput) (settings.PerformanceTestResult, error) {
-	return settings.PerformanceTestResult{RecommendedGlobalConcurrency: 10}, nil
+func (f *fakeSettingsService) RunPerformanceTest(_ context.Context, input settings.PerformanceTestInput) (settings.PerformanceTestResult, error) {
+	f.performanceTestCalls++
+	f.performanceTestInput = input
+	if f.performanceTestErr != nil {
+		return settings.PerformanceTestResult{}, f.performanceTestErr
+	}
+	return settings.PerformanceTestResult{
+		MessageCount:                 input.MessageCount,
+		GeneratedSourceCode:          input.GeneratedSourceCode,
+		GeneratedRouteName:           input.GeneratedRouteName,
+		GeneratedChannelName:         input.GeneratedChannelName,
+		RecommendedGlobalConcurrency: 10,
+		UpdatedSettingKey:            settings.KeyRuntimeDeliveryConcurrency,
+	}, nil
 }
 
 type fakeProviderService struct {
-	testSendResult provider.TestSendResult
-	testSendInput  provider.TestSendInput
-	testSendCalls  int
+	testSendResult     provider.TestSendResult
+	testSendInput      provider.TestSendInput
+	testSendCalls      int
+	createChannelCalls int
+	deleteChannelCalls int
 }
 
 func (f *fakeProviderService) SeedProviderCapabilities(context.Context) error {
@@ -493,6 +510,7 @@ func (f *fakeProviderService) ListChannels(context.Context) ([]provider.Channel,
 }
 
 func (f *fakeProviderService) CreateChannel(_ context.Context, input provider.CreateChannelInput) (provider.Channel, error) {
+	f.createChannelCalls++
 	return provider.Channel{ID: "channel-1", ProviderType: input.ProviderType, Name: input.Name, Enabled: input.Enabled}, nil
 }
 
@@ -505,6 +523,7 @@ func (f *fakeProviderService) UpdateChannel(_ context.Context, id string, input 
 }
 
 func (f *fakeProviderService) DeleteChannel(context.Context, string) error {
+	f.deleteChannelCalls++
 	return nil
 }
 

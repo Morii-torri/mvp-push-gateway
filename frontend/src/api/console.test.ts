@@ -148,12 +148,14 @@ describe('console api wrappers', () => {
     await consoleApi.reorderRouteRules('flow-1', ['rule-a', 'rule-b'], fetchMock);
     await consoleApi.simulateRouteFlow('flow-1', { title: '测试' }, fetchMock);
     await consoleApi.publishRouteFlow('flow-1', fetchMock);
+    await consoleApi.deleteRouteFlow('flow-1', fetchMock);
 
     expect(fetchMock.mock.calls.map(([input, init]) => [String(input), init?.method])).toEqual([
       ['/api/v1/route-flows/flow-1/canvas', 'PUT'],
       ['/api/v1/route-flows/flow-1/rules/reorder', 'PUT'],
       ['/api/v1/route-flows/flow-1/simulate', 'POST'],
       ['/api/v1/route-flows/flow-1/publish', 'POST'],
+      ['/api/v1/route-flows/flow-1', 'DELETE'],
     ]);
   });
 
@@ -210,12 +212,14 @@ describe('console api wrappers', () => {
 
     await consoleApi.createRouteFlow(flowInput, fetchMock);
     await consoleApi.updateRouteFlow('flow-1', flowInput, fetchMock);
+    await consoleApi.deleteRouteFlow('flow-1', fetchMock);
     await consoleApi.saveRouteRules('flow-1', rulesInput, fetchMock);
     await consoleApi.activateRouteVersion('flow-1', 'version-1', fetchMock);
 
     expect(fetchMock.mock.calls.map(([input, init]) => [String(input), init?.method, init?.body])).toEqual([
       ['/api/v1/route-flows', 'POST', JSON.stringify(flowInput)],
       ['/api/v1/route-flows/flow-1', 'PUT', JSON.stringify(flowInput)],
+      ['/api/v1/route-flows/flow-1', 'DELETE', undefined],
       ['/api/v1/route-flows/flow-1/rules', 'PUT', JSON.stringify({ rules: rulesInput })],
       ['/api/v1/route-flows/flow-1/versions/version-1/activate', 'POST', undefined],
     ]);

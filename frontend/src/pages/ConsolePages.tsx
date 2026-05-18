@@ -1572,7 +1572,7 @@ export function OverviewPage({ lastUpdated, onRefresh }: ConsolePageProps) {
 }
 
 export function SourcesPage({ lastUpdated, onRefresh }: ConsolePageProps) {
-  const { message } = App.useApp();
+  const { message, modal } = App.useApp();
   const { drawer, openDrawer, closeDrawer } = useCreateDrawer('新增来源');
   const [sourceRows, setSourceRows] = useState<SourceRow[]>([]);
   const [loadState, setLoadState] = useState<ApiLoadState>(emptyLoadState);
@@ -1679,6 +1679,36 @@ export function SourcesPage({ lastUpdated, onRefresh }: ConsolePageProps) {
       setInboundSending(false);
     }
   };
+  const confirmDeleteSource = (record: SourceRow) => {
+    modal.confirm({
+      title: `删除来源：${record.name}`,
+      content: '删除来源会同时影响绑定的路由大组、模板和历史引用，请确认后继续。',
+      okText: '删除',
+      cancelText: '取消',
+      okButtonProps: { danger: true },
+      onOk: async () => {
+        try {
+          await consoleApi.deleteSource(record.id);
+          if (editingSourceId === record.id) {
+            setEditingSourceId(null);
+            closeDrawer();
+          }
+          if (payloadViewSource?.id === record.id) {
+            setPayloadViewSource(null);
+          }
+          if (inboundTestSource?.id === record.id) {
+            setInboundTestSource(null);
+            setInboundTestResult(null);
+          }
+          message.success('来源已删除');
+          await loadSources();
+        } catch (error) {
+          showError(message, error);
+          throw error;
+        }
+      },
+    });
+  };
   const columns: TableProps<SourceRow>['columns'] = [
     {
       title: '来源编码',
@@ -1713,24 +1743,17 @@ export function SourcesPage({ lastUpdated, onRefresh }: ConsolePageProps) {
       title: '操作',
       fixed: 'right',
       render: (_, record) => (
-        <Space>
-          <Button type="link" onClick={() => setPayloadViewSource(record)}>
-            查看
-          </Button>
-          <Button
-            type="link"
-            onClick={() => {
-              setEditingSourceId(record.id);
-              setSourceDraft(draftFromSource(record.raw));
-              openDrawer(`编辑来源：${record.name}`);
-            }}
-          >
-            编辑
-          </Button>
-          <Button type="link" onClick={() => openInboundTest(record)}>
-            入站测试
-          </Button>
-        </Space>
+        <SourceRowActions
+          record={record}
+          onView={setPayloadViewSource}
+          onEdit={(item) => {
+            setEditingSourceId(item.id);
+            setSourceDraft(draftFromSource(item.raw));
+            openDrawer(`编辑来源：${item.name}`);
+          }}
+          onTest={openInboundTest}
+          onDelete={confirmDeleteSource}
+        />
       ),
     },
   ];
@@ -1891,7 +1914,7 @@ export function SourcesPage({ lastUpdated, onRefresh }: ConsolePageProps) {
 }
 
 export function ProvidersPage({ lastUpdated, onRefresh }: ConsolePageProps) {
-  const { message } = App.useApp();
+  const { message, modal } = App.useApp();
   const { drawer, openDrawer, closeDrawer } = useCreateDrawer('新增推送渠道');
   const [providerRows, setProviderRows] = useState<ProviderRow[]>([]);
   const [providerCapabilities, setProviderCapabilities] = useState<ProviderCapabilityApiRecord[]>([]);
@@ -1994,6 +2017,36 @@ export function ProvidersPage({ lastUpdated, onRefresh }: ConsolePageProps) {
       });
     }
   };
+  const confirmDeleteProvider = (record: ProviderRow) => {
+    modal.confirm({
+      title: `删除推送渠道：${record.name}`,
+      content: '删除后路由规则中引用该渠道的发送目标可能失效，请确认后继续。',
+      okText: '删除',
+      cancelText: '取消',
+      okButtonProps: { danger: true },
+      onOk: async () => {
+        try {
+          await consoleApi.deleteChannel(record.id);
+          if (editingProviderId === record.id) {
+            setEditingProviderId(null);
+            closeDrawer();
+          }
+          if (selected?.id === record.id) {
+            setSelected(null);
+            setCapabilityOpen(false);
+          }
+          if (providerTestDraft.id === record.id) {
+            setProviderTestOpen(false);
+          }
+          message.success('推送渠道已删除');
+          await loadProviders();
+        } catch (error) {
+          showError(message, error);
+          throw error;
+        }
+      },
+    });
+  };
   const columns: TableProps<ProviderRow>['columns'] = [
     {
       title: '推送渠道类型',
@@ -2027,23 +2080,16 @@ export function ProvidersPage({ lastUpdated, onRefresh }: ConsolePageProps) {
     {
       title: '操作',
       render: (_, record) => (
-        <Space>
-          <Button
-            type="link"
-            onClick={() => {
-              setSelected(record);
-              setCapabilityOpen(true);
-            }}
-          >
-            查看
-          </Button>
-          <Button type="link" onClick={() => openEditProvider(record)}>
-            编辑
-          </Button>
-          <Button type="link" onClick={() => openProviderTest(record)}>
-            测试
-          </Button>
-        </Space>
+        <ProviderRowActions
+          record={record}
+          onView={(item) => {
+            setSelected(item);
+            setCapabilityOpen(true);
+          }}
+          onEdit={openEditProvider}
+          onTest={openProviderTest}
+          onDelete={confirmDeleteProvider}
+        />
       ),
     },
   ];
@@ -2605,6 +2651,32 @@ export function RoutesPage({ lastUpdated, onRefresh }: ConsolePageProps) {
       showError(message, error);
     }
   };
+  const confirmDeleteGroup = (group: RouteGroup) => {
+    modal.confirm({
+      title: `删除路由大组：${group.name}`,
+      content: '删除路由大组会同时删除其草稿规则、画布快照和历史版本引用，请确认后继续。',
+      okText: '删除',
+      cancelText: '取消',
+      okButtonProps: { danger: true },
+      onOk: async () => {
+        try {
+          await consoleApi.deleteRouteFlow(group.id);
+          clearGroupCanvasSnapshot(group.id);
+          if (selectedGroup?.id === group.id) {
+            setSelectedGroup(null);
+          }
+          if (editingGroupId === group.id) {
+            closeGroupEditor();
+          }
+          message.success('路由大组已删除');
+          await loadRouteData();
+        } catch (error) {
+          showError(message, error);
+          throw error;
+        }
+      },
+    });
+  };
   const addRouteNode = useCallback(
     (kind: RouteNodeKind, position?: { x: number; y: number }) => {
       if (kind === 'source' && flowNodes.some((node) => node.data.kind === 'source')) {
@@ -2779,6 +2851,38 @@ export function RoutesPage({ lastUpdated, onRefresh }: ConsolePageProps) {
       showError(message, error);
     }
   };
+  const confirmDeleteRule = (rule: RouteRuleRow) => {
+    if (!selectedGroup) {
+      return;
+    }
+    modal.confirm({
+      title: `删除路由规则：${rule.name}`,
+      content: '删除后会立即保存当前路由大组草稿规则集，请确认后继续。',
+      okText: '删除',
+      cancelText: '取消',
+      okButtonProps: { danger: true },
+      onOk: async () => {
+        if (!selectedGroup) {
+          return;
+        }
+        try {
+          const nextRules = groupRules
+            .filter((item) => item.id !== rule.id)
+            .map((item, index) => ({ ...item, sortOrder: index + 1 }));
+          await consoleApi.saveRouteRules(selectedGroup.id, nextRules.map(routeRuleToInput));
+          clearGroupCanvasSnapshot(selectedGroup.id);
+          if (editingRuleId === rule.id) {
+            closeRuleEditor();
+          }
+          message.success('路由规则已删除');
+          await reloadRulesForGroup(selectedGroup);
+        } catch (error) {
+          showError(message, error);
+          throw error;
+        }
+      },
+    });
+  };
   const moveRule = (id: string, direction: -1 | 1) => {
     const index = groupRules.findIndex((item) => item.id === id);
     const target = index + direction;
@@ -2922,14 +3026,12 @@ export function RoutesPage({ lastUpdated, onRefresh }: ConsolePageProps) {
       fixed: 'right',
       width: 190,
       render: (_, record) => (
-        <Space>
-          <Button type="link" onClick={() => openGroup(record)}>
-            进入编排
-          </Button>
-          <Button type="link" onClick={() => openEditGroup(record)}>
-            编辑
-          </Button>
-        </Space>
+        <RouteGroupRowActions
+          record={record}
+          onOpen={openGroup}
+          onEdit={openEditGroup}
+          onDelete={confirmDeleteGroup}
+        />
       ),
     },
   ];
@@ -2991,17 +3093,13 @@ export function RoutesPage({ lastUpdated, onRefresh }: ConsolePageProps) {
       fixed: 'right',
       width: 180,
       render: (_, record) => (
-        <Space>
-          <Button type="link" onClick={() => moveRule(record.id, -1)}>
-            上移
-          </Button>
-          <Button type="link" onClick={() => moveRule(record.id, 1)}>
-            下移
-          </Button>
-          <Button type="link" onClick={() => openEditRule(record)}>
-            编辑
-          </Button>
-        </Space>
+        <RouteRuleRowActions
+          record={record}
+          onMoveUp={(item) => moveRule(item.id, -1)}
+          onMoveDown={(item) => moveRule(item.id, 1)}
+          onEdit={openEditRule}
+          onDelete={confirmDeleteRule}
+        />
       ),
     },
   ];
@@ -3336,6 +3434,125 @@ export function TemplateRowActions({
 }) {
   return (
     <Space>
+      <Button type="link" onClick={() => onEdit(record)}>
+        编辑
+      </Button>
+      <Button type="link" danger onClick={() => onDelete(record)}>
+        删除
+      </Button>
+    </Space>
+  );
+}
+
+export function SourceRowActions({
+  record,
+  onView,
+  onEdit,
+  onTest,
+  onDelete,
+}: {
+  record: SourceRow;
+  onView: (record: SourceRow) => void;
+  onEdit: (record: SourceRow) => void;
+  onTest: (record: SourceRow) => void;
+  onDelete: (record: SourceRow) => void;
+}) {
+  return (
+    <Space>
+      <Button type="link" onClick={() => onView(record)}>
+        查看
+      </Button>
+      <Button type="link" onClick={() => onEdit(record)}>
+        编辑
+      </Button>
+      <Button type="link" onClick={() => onTest(record)}>
+        入站测试
+      </Button>
+      <Button type="link" danger onClick={() => onDelete(record)}>
+        删除
+      </Button>
+    </Space>
+  );
+}
+
+export function ProviderRowActions({
+  record,
+  onView,
+  onEdit,
+  onTest,
+  onDelete,
+}: {
+  record: ProviderRow;
+  onView: (record: ProviderRow) => void;
+  onEdit: (record: ProviderRow) => void;
+  onTest: (record: ProviderRow) => void;
+  onDelete: (record: ProviderRow) => void;
+}) {
+  return (
+    <Space>
+      <Button type="link" onClick={() => onView(record)}>
+        查看
+      </Button>
+      <Button type="link" onClick={() => onEdit(record)}>
+        编辑
+      </Button>
+      <Button type="link" onClick={() => onTest(record)}>
+        测试
+      </Button>
+      <Button type="link" danger onClick={() => onDelete(record)}>
+        删除
+      </Button>
+    </Space>
+  );
+}
+
+export function RouteGroupRowActions({
+  record,
+  onOpen,
+  onEdit,
+  onDelete,
+}: {
+  record: RouteGroup;
+  onOpen: (record: RouteGroup) => void;
+  onEdit: (record: RouteGroup) => void;
+  onDelete: (record: RouteGroup) => void;
+}) {
+  return (
+    <Space>
+      <Button type="link" onClick={() => onOpen(record)}>
+        进入编排
+      </Button>
+      <Button type="link" onClick={() => onEdit(record)}>
+        编辑
+      </Button>
+      <Button type="link" danger onClick={() => onDelete(record)}>
+        删除
+      </Button>
+    </Space>
+  );
+}
+
+export function RouteRuleRowActions({
+  record,
+  onMoveUp,
+  onMoveDown,
+  onEdit,
+  onDelete,
+}: {
+  record: RouteRuleRow;
+  onMoveUp: (record: RouteRuleRow) => void;
+  onMoveDown: (record: RouteRuleRow) => void;
+  onEdit: (record: RouteRuleRow) => void;
+  onDelete: (record: RouteRuleRow) => void;
+}) {
+  return (
+    <Space>
+      <Button type="link" onClick={() => onMoveUp(record)}>
+        上移
+      </Button>
+      <Button type="link" onClick={() => onMoveDown(record)}>
+        下移
+      </Button>
       <Button type="link" onClick={() => onEdit(record)}>
         编辑
       </Button>

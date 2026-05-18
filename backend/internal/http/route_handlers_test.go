@@ -301,15 +301,17 @@ type fakeRouteService struct {
 	saveRulesInput  route.SaveRulesInput
 	saveRulesFlowID string
 
-	createErr   error
-	getErr      error
-	updateErr   error
-	deleteErr   error
-	validateErr error
-	publishErr  error
-	simulateErr error
+	createErr    error
+	getErr       error
+	updateErr    error
+	deleteErr    error
+	saveRulesErr error
+	validateErr  error
+	publishErr   error
+	simulateErr  error
 
 	listCalls      int
+	deleteCalls    int
 	saveRulesCalls int
 }
 
@@ -343,6 +345,7 @@ func (f *fakeRouteService) UpdateFlow(context.Context, string, route.UpdateFlowI
 }
 
 func (f *fakeRouteService) DeleteFlow(context.Context, string) error {
+	f.deleteCalls++
 	return f.deleteErr
 }
 
@@ -366,6 +369,9 @@ func (f *fakeRouteService) SaveRules(_ context.Context, flowID string, input rou
 	f.saveRulesCalls++
 	f.saveRulesFlowID = flowID
 	f.saveRulesInput = input
+	if f.saveRulesErr != nil {
+		return route.RuleSet{}, f.saveRulesErr
+	}
 	return f.rulesResult, nil
 }
 

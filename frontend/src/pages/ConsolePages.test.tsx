@@ -7,7 +7,11 @@ import * as ConsolePages from './ConsolePages';
 import {
   ProviderConfigForm,
   ProviderTestPanel,
+  ProviderRowActions,
   RouteRuleForm,
+  RouteGroupRowActions,
+  RouteRuleRowActions,
+  SourceRowActions,
   TemplateEditorForm,
   TemplateRowActions,
   TemplateVersionHistoryContent,
@@ -54,9 +58,10 @@ import {
   providerTestSendPreview,
   providerTestPayload,
 } from './ConsolePages';
-import type { OrgUnitApiRecord, ProviderCapabilityApiRecord, TemplateApiRecord, TemplateVersionApiRecord } from '../api/console';
+import type { ChannelApiRecord, OrgUnitApiRecord, ProviderCapabilityApiRecord, TemplateApiRecord, TemplateVersionApiRecord } from '../api/console';
 import { getProviderTypeLabel } from '../utils/labels';
 import { recipientIdentityProviderOptions } from './console/shared';
+import { mapChannelRow, providerCapabilityView, providerWithCapability } from './console/providerConfig';
 
 const lastUpdated = new Date('2026-05-11T09:30:00+08:00');
 
@@ -515,6 +520,48 @@ describe('critical console pages', () => {
     expect(templateMarkup).not.toContain('消息类型');
     expect(templateMarkup).not.toContain('跳转链接');
     expect(templateMarkup).not.toContain('内容格式');
+  });
+
+  it('keeps provider instance more settings when mapping and editing existing channels', () => {
+    const capabilities: ProviderCapabilityApiRecord[] = [
+      {
+        id: 'serverchan-capability',
+        provider_type: 'serverchan',
+        display_name: 'Server酱',
+        category: 'personal_gateway',
+        supported_message_types: ['markdown'],
+        default_timeout_ms: 5000,
+        default_rate_limit: { enabled: true, qps: 5 },
+        default_retry_policy: { max_attempts: 2, delay_ms: 5000 },
+      },
+    ];
+    const channel: ChannelApiRecord = {
+      id: 'channel-1',
+      provider_type: 'serverchan',
+      name: 'Server酱实例',
+      enabled: true,
+      auth_config: {},
+      token_config: {},
+      send_config: { url: 'https://21329.push.ft07.com/send/key.send' },
+      rate_limit_config: { enabled: true, qps: 12 },
+      concurrency_limit: 1,
+      timeout_ms: 2600,
+      retry_policy: { max_attempts: 4, delay_ms: 800 },
+      dead_letter_policy: { policy: 'retry_exhausted_or_upstream_error', retention_days: 7, replay: false },
+      created_at: '2026-05-15T08:00:00Z',
+      updated_at: '2026-05-15T08:00:00Z',
+    };
+
+    const row = mapChannelRow(channel, capabilities);
+    const editing = providerWithCapability(row, providerCapabilityView('serverchan', capabilities));
+
+    expect(row.rateLimitEnabled).toBe(true);
+    expect(row.qps).toBe(12);
+    expect(row.rateLimit).toBe('每秒 12 条');
+    expect(editing.timeoutMs).toBe(2600);
+    expect(editing.retryAttempts).toBe(4);
+    expect(editing.retryIntervalMs).toBe(800);
+    expect(editing.deadLetterReplay).toBe(false);
   });
 
   it('uses WxPusher standard POST fields and HTML content template fallback', () => {
@@ -1364,6 +1411,27 @@ describe('critical console pages', () => {
     expect(markup).toContain('编辑');
     expect(markup).not.toContain('校验');
     expect(markup).toContain('删除');
+  });
+
+  it('renders delete actions for source provider route group and route rule rows', () => {
+    const noop = () => undefined;
+    const sourceMarkup = renderPage(
+      <SourceRowActions record={{ id: 'source-1', name: '来源一' } as any} onView={noop} onEdit={noop} onTest={noop} onDelete={noop} />,
+    );
+    const providerMarkup = renderPage(
+      <ProviderRowActions record={{ id: 'channel-1', name: '推送一' } as any} onView={noop} onEdit={noop} onTest={noop} onDelete={noop} />,
+    );
+    const routeGroupMarkup = renderPage(
+      <RouteGroupRowActions record={{ id: 'flow-1', name: '路由一' } as any} onOpen={noop} onEdit={noop} onDelete={noop} />,
+    );
+    const routeRuleMarkup = renderPage(
+      <RouteRuleRowActions record={{ id: 'rule-1', name: '规则一' } as any} onMoveUp={noop} onMoveDown={noop} onEdit={noop} onDelete={noop} />,
+    );
+
+    expect(sourceMarkup).toContain('删除');
+    expect(providerMarkup).toContain('删除');
+    expect(routeGroupMarkup).toContain('删除');
+    expect(routeRuleMarkup).toContain('删除');
   });
 
   it('renders template version history with restore action and immutable version content', () => {

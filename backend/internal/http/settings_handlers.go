@@ -55,16 +55,17 @@ func (h *Handler) settingsPerformanceTestHandler(w http.ResponseWriter, r *http.
 			return
 		}
 	}
-	if prepared, err := h.createPerformanceTestResources(r.Context()); err == nil {
-		request.GeneratedSourceCode = prepared.SourceCode
-		request.GeneratedRouteName = prepared.RouteName
-		request.GeneratedChannelName = prepared.ChannelName
-	} else {
+	prepared, err := h.createPerformanceTestResources(r.Context())
+	if err != nil {
 		writeAPIError(w, http.StatusInternalServerError, "MGP-SETTINGS-999", "性能测试配置生成失败")
 		return
 	}
+	request.GeneratedSourceCode = prepared.SourceCode
+	request.GeneratedRouteName = prepared.RouteName
+	request.GeneratedChannelName = prepared.ChannelName
 	result, err := h.settings.RunPerformanceTest(r.Context(), request)
 	if err != nil {
+		h.cleanupPerformanceTestResources(r.Context(), prepared)
 		status, code, message := settingsErrorStatus(err)
 		writeAPIError(w, status, code, message)
 		return
@@ -75,9 +76,13 @@ func (h *Handler) settingsPerformanceTestHandler(w http.ResponseWriter, r *http.
 }
 
 type performanceTestResources struct {
+	SourceID    string
 	SourceCode  string
+	RouteID     string
 	RouteName   string
+	ChannelID   string
 	ChannelName string
+	TemplateID  string
 }
 
 func (h *Handler) createPerformanceTestResources(ctx context.Context) (performanceTestResources, error) {
@@ -88,6 +93,17 @@ func (h *Handler) createPerformanceTestResources(ctx context.Context) (performan
 	sourceCode := "perftest" + suffix
 	channelName := "性能测试本地上级-" + suffix
 	routeName := "性能测试路由-" + suffix
+	resources := performanceTestResources{
+		SourceCode:  sourceCode,
+		RouteName:   routeName,
+		ChannelName: channelName,
+	}
+	created := false
+	defer func() {
+		if created {
+			h.cleanupPerformanceTestResources(ctx, resources)
+		}
+	}()
 
 	createdSource, err := h.sources.CreateSource(ctx, source.CreateSourceInput{
 		Code:            sourceCode,
@@ -101,6 +117,8 @@ func (h *Handler) createPerformanceTestResources(ctx context.Context) (performan
 	if err != nil {
 		return performanceTestResources{}, err
 	}
+	resources.SourceID = createdSource.ID
+	created = true
 	channel, err := h.providers.CreateChannel(ctx, provider.CreateChannelInput{
 		ProviderType:     provider.ProviderWebhook,
 		Name:             channelName,
@@ -115,6 +133,7 @@ func (h *Handler) createPerformanceTestResources(ctx context.Context) (performan
 	if err != nil {
 		return performanceTestResources{}, err
 	}
+	resources.ChannelID = channel.ID
 	template, err := h.templates.CreateTemplate(ctx, msgtemplate.TemplateInput{
 		Name:     "性能测试模板-" + suffix,
 		SourceID: createdSource.ID,
@@ -123,6 +142,7 @@ func (h *Handler) createPerformanceTestResources(ctx context.Context) (performan
 	if err != nil {
 		return performanceTestResources{}, err
 	}
+	resources.TemplateID = template.ID
 	version, err := h.templates.Publish(ctx, template.ID, msgtemplate.VersionInput{
 		MessageType:        "json",
 		TargetProviderType: string(provider.ProviderWebhook),
@@ -142,8 +162,8 @@ func (h *Handler) createPerformanceTestResources(ctx context.Context) (performan
 	if err != nil {
 		return performanceTestResources{}, err
 	}
+	resources.RouteID = flow.ID
 	if _, err := h.routes.SaveRules(ctx, flow.ID, route.SaveRulesInput{Rules: []route.RuleInput{{
-		RuleKey:       "perftest" + suffix,
 		SortOrder:     10,
 		Name:          "性能测试默认命中",
 		ConditionTree: json.RawMessage(`{"operator":"always"}`),
@@ -163,7 +183,23 @@ func (h *Handler) createPerformanceTestResources(ctx context.Context) (performan
 	if _, err := h.routes.Publish(ctx, flow.ID, "性能测试自动发布"); err != nil {
 		return performanceTestResources{}, err
 	}
-	return performanceTestResources{SourceCode: sourceCode, RouteName: routeName, ChannelName: channelName}, nil
+	created = false
+	return resources, nil
+}
+
+func (h *Handler) cleanupPerformanceTestResources(ctx context.Context, resources performanceTestResources) {
+	if resources.RouteID != "" && h.routes != nil {
+		_ = h.routes.DeleteFlow(ctx, resources.RouteID)
+	}
+	if resources.TemplateID != "" && h.templates != nil {
+		_ = h.templates.DeleteTemplate(ctx, resources.TemplateID)
+	}
+	if resources.ChannelID != "" && h.providers != nil {
+		_ = h.providers.DeleteChannel(ctx, resources.ChannelID)
+	}
+	if resources.SourceID != "" && h.sources != nil {
+		_ = h.sources.DeleteSource(ctx, resources.SourceID)
+	}
 }
 
 func (h *Handler) settingsHandler(w http.ResponseWriter, r *http.Request) {

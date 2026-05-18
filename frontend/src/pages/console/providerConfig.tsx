@@ -1150,13 +1150,28 @@ export function parseJSONOrEmpty(value: string): JSONValue {
 }
 
 export function providerWithCapability(value: ProviderRow, view: ProviderCapabilityView): ProviderRow {
+  const shouldUseCapabilityDefaults = value.id.startsWith('provider-local-');
   const fieldValues = fieldValuesFromConfigs(
     view.fields,
     parseJSONOrEmpty(value.authConfigJson),
     parseJSONOrEmpty(value.tokenConfigJson),
     parseJSONOrEmpty(value.sendConfigJson),
   );
-  const timeoutMs = capabilityDefaultTimeout(view, value.timeoutMs);
+  const currentRateLimitConfig = parseJSONOrEmpty(value.rateLimitConfigJson);
+  const currentRetryPolicy = parseJSONOrEmpty(value.retryPolicyJson);
+  const effectiveRateLimitConfig = shouldUseCapabilityDefaults
+    ? capabilityDefaultRateLimit(view, currentRateLimitConfig)
+    : currentRateLimitConfig;
+  const effectiveRetryPolicy = shouldUseCapabilityDefaults
+    ? capabilityDefaultRetryPolicy(view, currentRetryPolicy)
+    : currentRetryPolicy;
+  const timeoutMs = shouldUseCapabilityDefaults
+    ? capabilityDefaultTimeout(view, value.timeoutMs)
+    : value.timeoutMs || capabilityDefaultTimeout(view, value.timeoutMs);
+  const qps = qpsFromRateLimitConfig(effectiveRateLimitConfig, value.qps);
+  const rateLimitEnabled = rateLimitEnabledFromConfig(effectiveRateLimitConfig, value.rateLimitEnabled);
+  const retryAttempts = retryAttemptsFromJSON(effectiveRetryPolicy, value.retryAttempts);
+  const retryIntervalMs = retryIntervalMsFromJSON(effectiveRetryPolicy, value.retryIntervalMs);
   return {
     ...value,
     providerDisplayName: view.displayName,
@@ -1168,9 +1183,16 @@ export function providerWithCapability(value: ProviderRow, view: ProviderCapabil
     capability: `${view.displayName}；支持消息格式 ${view.supportedMessageTypes.join('、')}；${view.category}`,
     timeoutMs,
     timeout: `${timeoutMs} ms`,
+    qps,
+    rateLimitEnabled,
+    rateLimit: providerRateLimitLabel(rateLimitEnabled, qps),
     concurrency: 1,
-    rateLimitConfigJson: stringifyJSON(capabilityDefaultRateLimit(view, parseJSONOrEmpty(value.rateLimitConfigJson))),
-    retryPolicyJson: stringifyJSON(capabilityDefaultRetryPolicy(view, parseJSONOrEmpty(value.retryPolicyJson))),
+    retryAttempts,
+    retryIntervalMs,
+    retryPolicy: `${retryAttempts} 次`,
+    retryInterval: `${retryIntervalMs} ms`,
+    rateLimitConfigJson: stringifyJSON(effectiveRateLimitConfig),
+    retryPolicyJson: stringifyJSON(effectiveRetryPolicy),
   };
 }
 
@@ -1230,6 +1252,31 @@ function retryIntervalMsFromJSON(value: JSONValue, fallback: number): number {
     }
   }
   return fallback;
+}
+
+function qpsFromRateLimitConfig(config: JSONValue, fallback: number): number {
+  if (!isRecord(config)) {
+    return fallback;
+  }
+  const value = config.qps;
+  if (typeof value === 'number' && Number.isFinite(value) && value > 0) {
+    return Math.trunc(value);
+  }
+  return fallback;
+}
+
+function rateLimitEnabledFromConfig(config: JSONValue, fallback: boolean): boolean {
+  if (!isRecord(config)) {
+    return fallback;
+  }
+  if (typeof config.enabled === 'boolean') {
+    return config.enabled;
+  }
+  return qpsFromRateLimitConfig(config, 0) > 0 ? true : fallback;
+}
+
+function providerRateLimitLabel(enabled: boolean, qps: number): string {
+  return enabled ? `每秒 ${qps} 条` : '未开启';
 }
 
 function providerTestBodyValue(value: ProviderRow): JSONValue {
@@ -1594,12 +1641,17 @@ export function mapChannelRow(channel: ChannelApiRecord, capabilities: ProviderC
     capabilities,
   );
   const fieldValues = fieldValuesFromConfigs(base.configFields, channel.auth_config, channel.token_config, channel.send_config);
+  const qps = qpsFromRateLimitConfig(channel.rate_limit_config, base.qps);
+  const rateLimitEnabled = rateLimitEnabledFromConfig(channel.rate_limit_config, base.rateLimitEnabled);
   const retryAttempts = retryAttemptsFromJSON(channel.retry_policy, base.retryAttempts);
   const retryIntervalMs = retryIntervalMsFromJSON(channel.retry_policy, base.retryIntervalMs);
   const deadLetterPolicy = isRecord(channel.dead_letter_policy) ? channel.dead_letter_policy : {};
   return {
     ...base,
     concurrency: 1,
+    qps,
+    rateLimitEnabled,
+    rateLimit: providerRateLimitLabel(rateLimitEnabled, qps),
     timeoutMs: channel.timeout_ms,
     timeout: `${channel.timeout_ms} ms`,
     retryPolicy: `${retryAttempts} 次`,

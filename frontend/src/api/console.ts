@@ -588,6 +588,9 @@ export const consoleApi = {
   updateRouteFlow(id: string, input: RouteFlowInput, fetcher?: ApiFetcher) {
     return apiRequest<{ flow: RouteFlowApiRecord }>(`/route-flows/${id}`, { method: 'PUT', body: input, fetcher });
   },
+  deleteRouteFlow(id: string, fetcher?: ApiFetcher) {
+    return apiRequest<{ ok: boolean }>(`/route-flows/${id}`, { method: 'DELETE', fetcher });
+  },
   listRouteVersions(id: string, fetcher?: ApiFetcher) {
     return apiRequest<{ versions: RouteVersionApiRecord[] }>(`/route-flows/${id}/versions`, { fetcher });
   },
