@@ -60,7 +60,7 @@ import {
 } from './ConsolePages';
 import type { ChannelApiRecord, OrgUnitApiRecord, ProviderCapabilityApiRecord, TemplateApiRecord, TemplateVersionApiRecord } from '../api/console';
 import { getProviderTypeLabel } from '../utils/labels';
-import { recipientIdentityProviderOptions } from './console/shared';
+import { providerTypeOptions, recipientIdentityProviderOptions } from './console/shared';
 import { mapChannelRow, providerCapabilityView, providerWithCapability } from './console/providerConfig';
 
 const lastUpdated = new Date('2026-05-11T09:30:00+08:00');
@@ -433,6 +433,10 @@ describe('critical console pages', () => {
     }
     expect(providersMarkup).toContain('自建服务');
     expect(providersMarkup).not.toContain('政务与自托管');
+    expect(providersMarkup.indexOf('企业协同')).toBeLessThan(providersMarkup.indexOf('个人推送'));
+    expect(providersMarkup.indexOf('个人推送')).toBeLessThan(providersMarkup.indexOf('邮件短信'));
+    expect(providersMarkup.indexOf('邮件短信')).toBeLessThan(providersMarkup.indexOf('基础通道'));
+    expect(providersMarkup.indexOf('基础通道')).toBeLessThan(providersMarkup.indexOf('自建服务'));
     for (const label of hiddenLegacyProviderLabels) {
       expect(providersMarkup).not.toContain(label);
     }
@@ -441,6 +445,31 @@ describe('critical console pages', () => {
     expect(providersMarkup).not.toContain('baidu_sms');
     expect(providersMarkup).not.toContain('wecom_robot');
     expect(providersMarkup).not.toContain('custom_token');
+  });
+
+  it('orders provider type dropdown options by the console group priority', () => {
+    expect(providerTypeOptions.map((option) => option.value)).toEqual([
+      'wecom_robot',
+      'wecom_app',
+      'dingtalk_robot',
+      'dingtalk_work',
+      'feishu_robot',
+      'pushplus',
+      'wxpusher',
+      'serverchan',
+      'bark',
+      'pushme',
+      'email',
+      'aliyun_sms',
+      'tencent_sms',
+      'baidu_sms',
+      'webhook',
+      'self',
+      'custom_token',
+      'gov_cloud',
+      'ntfy',
+      'gotify',
+    ]);
   });
 
   it('renders gov cloud fields with documented base URL and no raw mapping fields', () => {

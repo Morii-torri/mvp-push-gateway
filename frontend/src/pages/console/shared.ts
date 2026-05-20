@@ -5,26 +5,26 @@ import type { MessageLog, ProviderRecord } from '../../data/demoData';
 export type ProviderKind = ProviderRecord['providerType'];
 
 export const providerTypeOptions: Array<{ label: string; value: ProviderKind }> = [
-  { label: '通用 Webhook', value: 'webhook' },
-  { label: '本平台级联', value: 'self' },
+  { label: '企业微信群机器人', value: 'wecom_robot' },
+  { label: '企业微信应用消息', value: 'wecom_app' },
+  { label: '钉钉群机器人', value: 'dingtalk_robot' },
+  { label: '钉钉工作消息', value: 'dingtalk_work' },
+  { label: '飞书机器人', value: 'feishu_robot' },
   { label: 'PushPlus', value: 'pushplus' },
   { label: 'WxPusher', value: 'wxpusher' },
   { label: 'Server酱', value: 'serverchan' },
-  { label: 'ntfy', value: 'ntfy' },
-  { label: 'Gotify', value: 'gotify' },
   { label: 'Bark', value: 'bark' },
   { label: 'PushMe', value: 'pushme' },
   { label: 'SMTP 邮件', value: 'email' },
   { label: '阿里云短信', value: 'aliyun_sms' },
   { label: '腾讯云短信', value: 'tencent_sms' },
   { label: '百度智能云短信', value: 'baidu_sms' },
-  { label: '企业微信群机器人', value: 'wecom_robot' },
-  { label: '企业微信应用消息', value: 'wecom_app' },
-  { label: '钉钉群机器人', value: 'dingtalk_robot' },
-  { label: '钉钉工作消息', value: 'dingtalk_work' },
-  { label: '飞书机器人', value: 'feishu_robot' },
-  { label: '随申办政务云', value: 'gov_cloud' },
+  { label: '通用 Webhook', value: 'webhook' },
+  { label: '本平台级联', value: 'self' },
   { label: '自定义 Token 平台', value: 'custom_token' },
+  { label: '随申办政务云', value: 'gov_cloud' },
+  { label: 'ntfy', value: 'ntfy' },
+  { label: 'Gotify', value: 'gotify' },
 ];
 
 export const recipientIdentityProviderOptions = providerTypeOptions;

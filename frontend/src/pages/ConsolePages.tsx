@@ -237,10 +237,10 @@ type ProviderTypeGroup = {
 };
 
 const providerTypeGroups: ProviderTypeGroup[] = [
-  { label: '基础通道', tone: 'blue', values: ['webhook', 'self', 'custom_token'] },
+  { label: '企业协同', tone: 'purple', values: ['wecom_robot', 'wecom_app', 'dingtalk_robot', 'dingtalk_work', 'feishu_robot'] },
   { label: '个人推送', tone: 'cyan', values: ['pushplus', 'wxpusher', 'serverchan', 'bark', 'pushme'] },
   { label: '邮件短信', tone: 'green', values: ['email', 'aliyun_sms', 'tencent_sms', 'baidu_sms'] },
-  { label: '企业协同', tone: 'purple', values: ['wecom_robot', 'wecom_app', 'dingtalk_robot', 'dingtalk_work', 'feishu_robot'] },
+  { label: '基础通道', tone: 'blue', values: ['webhook', 'self', 'custom_token'] },
   { label: '自建服务', tone: 'orange', values: ['gov_cloud', 'ntfy', 'gotify'] },
 ];
 
