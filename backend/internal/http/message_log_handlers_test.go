@@ -33,10 +33,10 @@ func TestMessageLogDetailReturnsDerivedAttemptSnapshots(t *testing.T) {
 					MessageID:         "message-1",
 					ChannelID:         "channel-wecom",
 					ChannelName:       "企业微信生产",
-					ProviderType:      "wecom",
+					ProviderType:      "wecom_app",
 					TemplateVersionID: "tpl-wecom-v1",
 					RequestSnapshot: json.RawMessage(`{
-						"target_context":{"channel_id":"channel-wecom","provider_type":"wecom","message_type":"markdown","template_version_id":"tpl-wecom-v1"},
+						"target_context":{"channel_id":"channel-wecom","provider_type":"wecom_app","message_type":"markdown","template_version_id":"tpl-wecom-v1"},
 						"rendered_message":{"message_type":"markdown","content":{"markdown":"## paid"}},
 						"resolved_recipients":[{"user_id":"user-1","wecom_userid":"zhangsan"}],
 						"final_request":{"method":"POST","url":"https://wecom.test/send","body":{"touser":"zhangsan","markdown":{"content":"## paid"}}}
@@ -101,7 +101,7 @@ func TestMessageLogDetailReturnsDerivedAttemptSnapshots(t *testing.T) {
 	}
 
 	first := body.Message.Attempts[0]
-	if first.TargetContext["provider_type"] != "wecom" || first.RenderedMessage["message_type"] != "markdown" || len(first.ResolvedRecipients) != 1 {
+	if first.TargetContext["provider_type"] != "wecom_app" || first.RenderedMessage["message_type"] != "markdown" || len(first.ResolvedRecipients) != 1 {
 		t.Fatalf("expected derived new attempt fields, got %+v", first)
 	}
 	if first.FinalRequest["url"] != "https://wecom.test/send" || first.UpstreamResponse["status_code"] != float64(200) {

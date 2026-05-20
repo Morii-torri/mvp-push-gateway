@@ -20,14 +20,10 @@ export type ProviderType =
   | 'baidu_sms'
   | 'wecom_robot'
   | 'wecom_app'
-  | 'wecom'
   | 'dingtalk_robot'
   | 'dingtalk_work'
-  | 'dingtalk'
   | 'feishu_robot'
-  | 'feishu'
   | 'gov_cloud'
-  | 'sms'
   | 'custom_token';
 export type InboundStatus =
   | 'accepted'
@@ -93,14 +89,10 @@ const providerTypeLabels: Record<ProviderType, string> = {
   baidu_sms: '百度智能云短信',
   wecom_robot: '企业微信群机器人',
   wecom_app: '企业微信应用消息',
-  wecom: '企业微信应用兼容',
   dingtalk_robot: '钉钉群机器人',
   dingtalk_work: '钉钉工作消息',
-  dingtalk: '钉钉工作消息兼容',
   feishu_robot: '飞书机器人',
-  feishu: '飞书兼容',
   gov_cloud: '随申办政务云',
-  sms: '短信兼容',
   custom_token: '自定义 Token 平台',
 };
 

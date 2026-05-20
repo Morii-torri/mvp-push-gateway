@@ -673,7 +673,7 @@ func TestWorkerMarksBusinessPlanningFailuresDone(t *testing.T) {
 			t.Fatalf("create source: %v", err)
 		}
 		channel, err := repository.CreateChannel(ctx, provider.CreateChannelParams{
-			ProviderType:     provider.ProviderWeCom,
+			ProviderType:     provider.ProviderWeComApp,
 			Name:             "WeCom",
 			Enabled:          true,
 			SendConfig:       json.RawMessage(`{"base_url":"https://qyapi.weixin.qq.com","safe":0}`),
@@ -692,7 +692,7 @@ func TestWorkerMarksBusinessPlanningFailuresDone(t *testing.T) {
 		}
 		templateVersion, err := templateService.Publish(ctx, template.ID, msgtemplate.VersionInput{
 			MessageType:        "text",
-			TargetProviderType: string(provider.ProviderDingTalk),
+			TargetProviderType: string(provider.ProviderDingTalkWork),
 			TemplateBody:       `{"content":"{{ payload.title }}"}`,
 			MessageBodySchema:  json.RawMessage(`{"type":"object"}`),
 			SamplePayload:      json.RawMessage(`{"title":"x"}`),

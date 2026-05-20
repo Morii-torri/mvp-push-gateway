@@ -19,16 +19,12 @@ import (
 type ProviderType string
 
 const (
-	ProviderWeCom         ProviderType = "wecom"
 	ProviderWeComApp      ProviderType = "wecom_app"
 	ProviderWeComRobot    ProviderType = "wecom_robot"
-	ProviderFeishu        ProviderType = "feishu"
 	ProviderFeishuRobot   ProviderType = "feishu_robot"
-	ProviderDingTalk      ProviderType = "dingtalk"
 	ProviderDingTalkWork  ProviderType = "dingtalk_work"
 	ProviderDingTalkRobot ProviderType = "dingtalk_robot"
 	ProviderEmail         ProviderType = "email"
-	ProviderSMS           ProviderType = "sms"
 	ProviderAliyunSMS     ProviderType = "aliyun_sms"
 	ProviderTencentSMS    ProviderType = "tencent_sms"
 	ProviderBaiduSMS      ProviderType = "baidu_sms"
@@ -345,13 +341,10 @@ func validateTestSendPrerequisites(channel Channel, input BuildDeliveryRequestIn
 func testSendRequiresRecipient(providerType ProviderType) bool {
 	switch providerType {
 	case ProviderEmail,
-		ProviderSMS,
 		ProviderAliyunSMS,
 		ProviderTencentSMS,
 		ProviderBaiduSMS,
-		ProviderWeCom,
 		ProviderWeComApp,
-		ProviderDingTalk,
 		ProviderDingTalkWork,
 		ProviderGovCloud,
 		ProviderPushPlus,
@@ -410,10 +403,7 @@ func missingCredentialFields(channel Channel, token string) []string {
 		requireAny("百度云 access_key_id", auth["access_key_id"])
 		requireAny("百度云 secret_access_key", auth["secret_access_key"])
 		requireAny("短信模板 ID", send["template_id"], send["template"])
-	case ProviderSMS:
-		requireAny("短信供应商凭证", auth["access_key_id"], auth["secret_id"], auth["username"])
-		requireAny("短信模板 ID", send["template_id"], send["template_code"], send["template"])
-	case ProviderWeCom, ProviderWeComApp:
+	case ProviderWeComApp:
 		requireAny("企业微信 access_token 或 corpid/corpsecret", token, auth["access_token"], auth["corpid"])
 		if isEmptyValue(token) && isEmptyValue(auth["access_token"]) {
 			requireAny("企业微信 corpsecret", auth["corpsecret"])
@@ -421,7 +411,7 @@ func missingCredentialFields(channel Channel, token string) []string {
 		requireAny("企业微信 agentid", auth["agentid"], auth["agent_id"], send["agentid"], send["agent_id"])
 	case ProviderWeComRobot:
 		requireAny("企业微信机器人 webhook/key", auth["webhook_url"], auth["key"], send["webhook_url"], send["key"])
-	case ProviderDingTalk, ProviderDingTalkWork:
+	case ProviderDingTalkWork:
 		requireAny("钉钉 access_token 或 app_key/app_secret", token, auth["access_token"], auth["app_key"])
 		if isEmptyValue(token) && isEmptyValue(auth["access_token"]) {
 			requireAny("钉钉 app_secret", auth["app_secret"])
@@ -429,7 +419,7 @@ func missingCredentialFields(channel Channel, token string) []string {
 		requireAny("钉钉 agent_id", auth["agent_id"], auth["agentid"], send["agent_id"], send["agentid"])
 	case ProviderDingTalkRobot:
 		requireAny("钉钉机器人 webhook", auth["webhook_url"], send["webhook_url"])
-	case ProviderFeishu, ProviderFeishuRobot:
+	case ProviderFeishuRobot:
 		requireAny("飞书机器人 webhook", auth["webhook_url"], send["webhook_url"])
 	case ProviderGovCloud:
 		requireAny("政务云 access_token 或 corpsecret", token, auth["access_token"], auth["corpsecret"])
@@ -621,16 +611,12 @@ func normalizeChannelInput(input CreateChannelInput) (CreateChannelParams, error
 
 func validProviderType(providerType ProviderType) bool {
 	switch providerType {
-	case ProviderWeCom,
-		ProviderWeComApp,
+	case ProviderWeComApp,
 		ProviderWeComRobot,
-		ProviderFeishu,
 		ProviderFeishuRobot,
-		ProviderDingTalk,
 		ProviderDingTalkWork,
 		ProviderDingTalkRobot,
 		ProviderEmail,
-		ProviderSMS,
 		ProviderAliyunSMS,
 		ProviderTencentSMS,
 		ProviderBaiduSMS,
@@ -955,7 +941,7 @@ func recipientIdentityValue(providerType ProviderType, recipient ResolvedRecipie
 	switch providerType {
 	case ProviderEmail:
 		return recipient.Email
-	case ProviderSMS, ProviderAliyunSMS, ProviderTencentSMS, ProviderBaiduSMS, ProviderDingTalkRobot:
+	case ProviderAliyunSMS, ProviderTencentSMS, ProviderBaiduSMS, ProviderDingTalkRobot:
 		return recipient.Mobile
 	case ProviderGovCloud:
 		return firstString(recipient.PlatformIDs["gov_userid"], recipient.Mobile)
@@ -968,11 +954,11 @@ func recipientIdentityValue(providerType ProviderType, recipient ResolvedRecipie
 
 func providerIdentityKeys(providerType ProviderType) []string {
 	switch providerType {
-	case ProviderWeCom, ProviderWeComApp, ProviderWeComRobot:
+	case ProviderWeComApp, ProviderWeComRobot:
 		return []string{"wecom_userid", "userid"}
-	case ProviderFeishu, ProviderFeishuRobot:
+	case ProviderFeishuRobot:
 		return []string{"feishu_open_id", "feishu_user_id", "open_id", "user_id"}
-	case ProviderDingTalk, ProviderDingTalkWork:
+	case ProviderDingTalkWork:
 		return []string{"dingtalk_userid", "userid", "user_id"}
 	case ProviderWxPusher:
 		return []string{"wxpusher_uid", "uid"}

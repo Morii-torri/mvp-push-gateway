@@ -79,7 +79,7 @@ describe('console api wrappers', () => {
     const capabilities: ProviderCapabilityApiRecord[] = [
       {
         id: 'cap-old',
-        provider_type: 'wecom',
+        provider_type: 'wecom_app',
         message_type: 'text',
         message_schema: { type: 'object' },
         recipient_required: true,
@@ -118,7 +118,7 @@ describe('console api wrappers', () => {
     const result = await consoleApi.listProviderCapabilities(fetchMock);
 
     expect(fetchMock.mock.calls.map(([input]) => String(input))).toEqual(['/api/v1/provider-capabilities']);
-    expect(result.capabilities[0].provider_type).toBe('wecom');
+    expect(result.capabilities[0].provider_type).toBe('wecom_app');
     expect(result.capabilities[1].display_name).toBe('SMTP 邮件');
     expect(result.capabilities[1].credential_schema).toEqual({
       fields: [{ key: 'host', label: 'SMTP 主机', target: 'auth_config' }],
@@ -237,7 +237,7 @@ describe('console api wrappers', () => {
 
     const versionInput = {
       message_type: 'text',
-      target_provider_type: 'wecom',
+      target_provider_type: 'wecom_app',
       template_body: '您好 {{ payload.title }}',
       message_body_schema: {},
       sample_payload: { title: '测试' },
@@ -306,7 +306,7 @@ describe('console api wrappers', () => {
     await consoleApi.deleteUser('user-1', fetchMock);
     await consoleApi.createUserIdentity(
       'user-1',
-      { provider_type: 'wecom', identity_kind: 'userid', identity_value: 'zhangsan', verified: true },
+      { provider_type: 'wecom_app', identity_kind: 'userid', identity_value: 'zhangsan', verified: true },
       fetchMock,
     );
     await consoleApi.updateUserIdentity(
@@ -363,7 +363,7 @@ describe('console api wrappers', () => {
       [
         '/api/v1/users/user-1/identities',
         'POST',
-        JSON.stringify({ provider_type: 'wecom', identity_kind: 'userid', identity_value: 'zhangsan', verified: true }),
+        JSON.stringify({ provider_type: 'wecom_app', identity_kind: 'userid', identity_value: 'zhangsan', verified: true }),
       ],
       [
         '/api/v1/user-identities/identity-1',

@@ -41,7 +41,7 @@
 - 来源最近 payload 样例来自“鉴权通过且 JSON 合法的最近入站 payload”，不要求路由、模板或接收人配置成功。
 - 推送渠道实例支持主动限流、独立并发上限、超时、重试和死信策略。
 - Provider capability registry 已数据化，包含 credential schema、channel config schema、message schema、recipient identity、token strategy、send API、success/retry rule、默认限流、超时、并发和重试。
-- 第一批 provider defaults 已实现 build-request/mock 级别支持：`webhook`、`self`、`pushplus`、`wxpusher`、`serverchan`、`email`、`aliyun_sms`、`tencent_sms`、`baidu_sms`、`wecom_robot`、`wecom_app`、legacy `wecom`、`dingtalk_robot`、`dingtalk_work`、legacy `dingtalk`、`feishu_robot`、legacy `feishu`、`gov_cloud`、legacy `sms` 和高级 `custom_token`。
+- 第一批 provider defaults 已实现 build-request/mock 级别支持：`webhook`、`self`、`pushplus`、`wxpusher`、`serverchan`、`email`、`aliyun_sms`、`tencent_sms`、`baidu_sms`、`wecom_robot`、`wecom_app`、`dingtalk_robot`、`dingtalk_work`、`feishu_robot`、`gov_cloud` 和高级 `custom_token`；legacy `wecom`、`dingtalk`、`feishu`、`sms` 已移除。
 - P2 provider defaults 已实现 build-request/mock 级别支持：`ntfy`、`gotify`、`bark`、`pushme`。
 - 上述 provider 当前不要描述为已真实发送成功；PushPlus、WxPusher、Server酱、短信、企微、钉钉、飞书、SMTP/self/gov_cloud、ntfy、Gotify、Bark、PushMe 均为 implemented but not live-tested 或 configuration-dependent。
 - 在上级平台账号、测试接收人、网络白名单准备完成前，后续实现和测试只做 dry-run/build-request、mock adapter、fake server、本地 webhook 或本平台级联，不主动调用真实上级发送接口。

@@ -4,7 +4,7 @@
 
 ## 枚举约定
 
-- `provider_type`: `webhook` / `self` / `pushplus` / `wxpusher` / `serverchan` / `email` / `aliyun_sms` / `tencent_sms` / `baidu_sms` / `wecom_robot` / `wecom_app` / `dingtalk_robot` / `dingtalk_work` / `feishu_robot` / `gov_cloud`，并兼容 legacy `wecom` / `dingtalk` / `feishu` / `sms` 和高级 `custom_token`
+- `provider_type`: `webhook` / `self` / `pushplus` / `wxpusher` / `serverchan` / `email` / `aliyun_sms` / `tencent_sms` / `baidu_sms` / `wecom_robot` / `wecom_app` / `dingtalk_robot` / `dingtalk_work` / `feishu_robot` / `gov_cloud` / `ntfy` / `gotify` / `bark` / `pushme` / `custom_token`。不再支持 legacy `wecom` / `dingtalk` / `feishu` / `sms` 渠道。
 - `location`: `query` / `header` / `body` / `path` / `none`
 - `message_status`: `accepted` / `deduped` / `silenced` / `planned` / `partial_sent` / `sent` / `failed` / `no_route`
 - `delivery_status`: `queued` / `processing` / `sent` / `failed` / `deduped` / `skipped`
@@ -118,7 +118,7 @@ Provider type registry，避免每新增一个 provider 都扩展 `delivery_chan
 | `default_retry_policy` | jsonb | 默认重试策略 |
 | `request_examples` | jsonb | 示例 |
 
-第一批 provider defaults 已实现 build-request/mock 级别支持：`webhook`、`self`、`pushplus`、`wxpusher`、`serverchan`、`email`、`aliyun_sms`、`tencent_sms`、`baidu_sms`、`wecom_robot`、`wecom_app`、legacy `wecom`、`dingtalk_robot`、`dingtalk_work`、legacy `dingtalk`、`feishu_robot`、legacy `feishu`、`gov_cloud`、legacy `sms` 和高级 `custom_token`。P2 provider defaults 已实现 build-request/mock 级别支持：`ntfy`、`gotify`、`bark`、`pushme`。其中 PushPlus、WxPusher、Server酱、短信、企微、钉钉、飞书、SMTP/self/gov_cloud、ntfy、Gotify、Bark、PushMe 当前均不要标注为已真实联调成功。
+第一批 provider defaults 已实现 build-request/mock 级别支持：`webhook`、`self`、`pushplus`、`wxpusher`、`serverchan`、`email`、`aliyun_sms`、`tencent_sms`、`baidu_sms`、`wecom_robot`、`wecom_app`、`dingtalk_robot`、`dingtalk_work`、`feishu_robot`、`gov_cloud` 和高级 `custom_token`。P2 provider defaults 已实现 build-request/mock 级别支持：`ntfy`、`gotify`、`bark`、`pushme`。legacy `wecom`、`dingtalk`、`feishu`、`sms` 已移除，不再作为可配置渠道或发送模型。PushPlus、WxPusher、Server酱、短信、企微、钉钉、飞书、SMTP/self/gov_cloud、ntfy、Gotify、Bark、PushMe 当前均不要标注为已真实联调成功。
 
 `delivery_channels.provider_type` 和 `provider_capabilities.provider_type` 通过 FK 指向 `provider_types`。
 

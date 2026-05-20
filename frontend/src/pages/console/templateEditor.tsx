@@ -409,16 +409,6 @@ const fallbackTemplateSchemas: Record<ProviderKind, Record<string, { label: stri
       fields: enterpriseCardFields(),
     },
   },
-  wecom: {
-    text: {
-      label: '文本',
-      fields: [contentField('content', '正文内容', 'string', '通知', '{{ payload.content }}')],
-    },
-    card: {
-      label: '卡片',
-      fields: enterpriseCardFields(),
-    },
-  },
   dingtalk_robot: {
     text: {
       label: '文本',
@@ -442,16 +432,6 @@ const fallbackTemplateSchemas: Record<ProviderKind, Record<string, { label: stri
       fields: enterpriseCardFields(),
     },
   },
-  dingtalk: {
-    text: {
-      label: '文本',
-      fields: [contentField('content', '正文内容', 'string', '通知', '{{ payload.content }}')],
-    },
-    card: {
-      label: '卡片',
-      fields: enterpriseCardFields(),
-    },
-  },
   feishu_robot: {
     text: {
       label: '文本',
@@ -460,20 +440,6 @@ const fallbackTemplateSchemas: Record<ProviderKind, Record<string, { label: stri
     markdown: {
       label: 'Markdown',
       fields: [contentField('markdown', 'Markdown 内容', 'string', '', '{{ payload.content }}')],
-    },
-  },
-  feishu: {
-    text: {
-      label: '文本',
-      fields: [contentField('content', '正文内容', 'string', '通知', '{{ payload.content }}')],
-    },
-    card: {
-      label: '卡片',
-      fields: [
-        contentField('title', '卡片标题', 'string', '通知', '{{ payload.title }}'),
-        contentField('markdown', '卡片正文 Markdown', 'string', '', '{{ payload.content }}'),
-        contentField('url', '跳转链接', 'string', '', '{{ payload.url }}'),
-      ],
     },
   },
   gov_cloud: {
@@ -487,16 +453,6 @@ const fallbackTemplateSchemas: Record<ProviderKind, Record<string, { label: stri
     card: {
       label: '卡片',
       fields: enterpriseCardFields(),
-    },
-  },
-  sms: {
-    template: {
-      label: '短信模板',
-      fields: smsTemplateFields(),
-    },
-    text: {
-      label: '短信内容',
-      fields: [contentField('content', '短信内容', 'string', '通知', '{{ payload.content }}')],
     },
   },
   custom_token: {
@@ -525,7 +481,7 @@ function firstTemplateProvider(capabilities: ProviderCapabilityApiRecord[]): Pro
       return providerType;
     }
   }
-  return 'wecom';
+  return 'webhook';
 }
 
 function uniqueStrings(values: string[]): string[] {
@@ -591,7 +547,15 @@ function templateMessageTypes(providerType: ProviderKind, capabilities: Provider
 }
 
 function templateProviderOptions(capabilities: ProviderCapabilityApiRecord[]): Array<{ label: string; value: ProviderKind }> {
-  return providerTypeOptions.map((option) => {
+  const values = new Set(providerTypeOptions.map((option) => option.value));
+  for (const capability of capabilities) {
+    const providerType = providerKindFromString(String(capability.provider_type));
+    if (providerType) {
+      values.add(providerType);
+    }
+  }
+  return Array.from(values).map((value) => {
+    const option = providerTypeOptions.find((item) => item.value === value) ?? { value, label: getProviderTypeLabel(value) };
     const capability = capabilities.find((item) => item.provider_type === option.value && item.display_name);
     const localized = getProviderTypeLabel(option.value);
     return {
@@ -684,7 +648,7 @@ function capabilitySchemaForMessage(
 }
 
 function fallbackTemplateSchema(providerType: ProviderKind, messageType: string): JSONValue {
-  const providerFallback = fallbackTemplateSchemas[providerType] ?? fallbackTemplateSchemas.wecom;
+  const providerFallback = fallbackTemplateSchemas[providerType] ?? fallbackTemplateSchemas.webhook;
   const definition = providerFallback[messageType] ?? providerFallback[fallbackMessageTypes(providerType)[0]];
   return {
     fields: definition.fields.map((field) => {

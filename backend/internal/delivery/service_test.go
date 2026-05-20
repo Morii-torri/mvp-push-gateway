@@ -406,15 +406,15 @@ func TestWorkerClassifiesSuccessWithCapabilityRules(t *testing.T) {
 		store := newMemoryRepository()
 		store.channels["channel-json-success"] = provider.Channel{
 			ID:               "channel-json-success",
-			ProviderType:     provider.ProviderWeCom,
+			ProviderType:     provider.ProviderWeComApp,
 			Name:             "JSON Success",
 			Enabled:          true,
 			ConcurrencyLimit: 1,
 			TimeoutMS:        1000,
 			SendConfig:       json.RawMessage(`{"method":"POST","url":"` + server.URL + `/send","recipient":{"location":"none"}}`),
 		}
-		store.capabilities[capabilityKey(provider.ProviderWeCom, "text")] = provider.Capability{
-			ProviderType: provider.ProviderWeCom,
+		store.capabilities[capabilityKey(provider.ProviderWeComApp, "text")] = provider.Capability{
+			ProviderType: provider.ProviderWeComApp,
 			MessageType:  "text",
 			SuccessRule:  json.RawMessage(`{"type":"json_field","status_codes":[200],"field":"errcode","equals":0}`),
 			RetryRule:    json.RawMessage(`{"status_codes":[408,429,500,502,503,504],"network_errors":true}`),
@@ -514,7 +514,7 @@ func TestWorkerClassifiesRetryWithCapabilityRules(t *testing.T) {
 		store := newMemoryRepository()
 		store.channels["channel-nonretry-status"] = provider.Channel{
 			ID:               "channel-nonretry-status",
-			ProviderType:     provider.ProviderWeCom,
+			ProviderType:     provider.ProviderWeComApp,
 			Name:             "Non Retry Status",
 			Enabled:          true,
 			ConcurrencyLimit: 1,
@@ -522,8 +522,8 @@ func TestWorkerClassifiesRetryWithCapabilityRules(t *testing.T) {
 			RetryPolicy:      json.RawMessage(`{"max_attempts":3,"delay_ms":10}`),
 			SendConfig:       json.RawMessage(`{"method":"POST","url":"` + server.URL + `/send","recipient":{"location":"none"}}`),
 		}
-		store.capabilities[capabilityKey(provider.ProviderWeCom, "text")] = provider.Capability{
-			ProviderType: provider.ProviderWeCom,
+		store.capabilities[capabilityKey(provider.ProviderWeComApp, "text")] = provider.Capability{
+			ProviderType: provider.ProviderWeComApp,
 			MessageType:  "text",
 			SuccessRule:  json.RawMessage(`{"type":"json_field","status_codes":[200],"field":"errcode","equals":0}`),
 			RetryRule:    json.RawMessage(`{"status_codes":[408,429,500,502,503,504],"network_errors":true,"non_retryable_status_codes":[400]}`),
@@ -567,7 +567,7 @@ func TestWorkerClassifiesRetryWithCapabilityRules(t *testing.T) {
 		store := newMemoryRepository()
 		store.channels["channel-nonretry-json"] = provider.Channel{
 			ID:               "channel-nonretry-json",
-			ProviderType:     provider.ProviderWeCom,
+			ProviderType:     provider.ProviderWeComApp,
 			Name:             "Non Retry JSON",
 			Enabled:          true,
 			ConcurrencyLimit: 1,
@@ -575,8 +575,8 @@ func TestWorkerClassifiesRetryWithCapabilityRules(t *testing.T) {
 			RetryPolicy:      json.RawMessage(`{"max_attempts":3,"delay_ms":10}`),
 			SendConfig:       json.RawMessage(`{"method":"POST","url":"` + server.URL + `/send","recipient":{"location":"none"}}`),
 		}
-		store.capabilities[capabilityKey(provider.ProviderWeCom, "text")] = provider.Capability{
-			ProviderType: provider.ProviderWeCom,
+		store.capabilities[capabilityKey(provider.ProviderWeComApp, "text")] = provider.Capability{
+			ProviderType: provider.ProviderWeComApp,
 			MessageType:  "text",
 			SuccessRule:  json.RawMessage(`{"type":"json_field","status_codes":[200],"field":"errcode","equals":0}`),
 			RetryRule:    json.RawMessage(`{"status_codes":[408,429,500,502,503,504],"network_errors":true,"non_retryable_json_codes":[40003]}`),
@@ -617,7 +617,7 @@ func TestWorkerClassifiesRetryWithCapabilityRules(t *testing.T) {
 		store := newMemoryRepository()
 		store.channels["channel-retry-status"] = provider.Channel{
 			ID:               "channel-retry-status",
-			ProviderType:     provider.ProviderWeCom,
+			ProviderType:     provider.ProviderWeComApp,
 			Name:             "Retry Status",
 			Enabled:          true,
 			ConcurrencyLimit: 1,
@@ -625,8 +625,8 @@ func TestWorkerClassifiesRetryWithCapabilityRules(t *testing.T) {
 			RetryPolicy:      json.RawMessage(`{"max_attempts":3,"delay_ms":25}`),
 			SendConfig:       json.RawMessage(`{"method":"POST","url":"` + server.URL + `/send","recipient":{"location":"none"}}`),
 		}
-		store.capabilities[capabilityKey(provider.ProviderWeCom, "text")] = provider.Capability{
-			ProviderType: provider.ProviderWeCom,
+		store.capabilities[capabilityKey(provider.ProviderWeComApp, "text")] = provider.Capability{
+			ProviderType: provider.ProviderWeComApp,
 			MessageType:  "text",
 			SuccessRule:  json.RawMessage(`{"type":"json_field","status_codes":[200],"field":"errcode","equals":0}`),
 			RetryRule:    json.RawMessage(`{"status_codes":[408,429,500,502,503,504],"network_errors":true,"retryable_json_codes":[45009],"non_retryable_status_classes":[400]}`),

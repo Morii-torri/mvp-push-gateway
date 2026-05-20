@@ -42,11 +42,11 @@ func TestDefaultCapabilitiesExposeProviderMetadata(t *testing.T) {
 	}
 
 	for _, providerType := range []ProviderType{
-		ProviderWeCom,
-		ProviderFeishu,
-		ProviderDingTalk,
+		ProviderWeComApp,
+		ProviderFeishuRobot,
+		ProviderDingTalkWork,
 		ProviderEmail,
-		ProviderSMS,
+		ProviderAliyunSMS,
 		ProviderGovCloud,
 		ProviderSelf,
 		ProviderWebhook,
@@ -75,10 +75,8 @@ func TestDefaultCapabilitiesExposeFirstBatchBuiltInProviders(t *testing.T) {
 		{ProviderBaiduSMS, "sms_template", "mobile"},
 		{ProviderWeComRobot, "text", "wecom_userid"},
 		{ProviderWeComApp, "text", "wecom_userid"},
-		{ProviderWeCom, "text", "wecom_userid"},
 		{ProviderDingTalkRobot, "text", "mobile"},
 		{ProviderDingTalkWork, "text", "dingtalk_userid"},
-		{ProviderDingTalk, "text", "dingtalk_userid"},
 		{ProviderFeishuRobot, "text", "feishu_open_id"},
 		{ProviderGovCloud, "text", "gov_userid"},
 	}
@@ -94,6 +92,14 @@ func TestDefaultCapabilitiesExposeFirstBatchBuiltInProviders(t *testing.T) {
 				t.Fatalf("%s/%s missing request example", capability.ProviderType, capability.MessageType)
 			}
 		})
+	}
+}
+
+func TestLegacyCompatibilityProviderTypesAreUnsupported(t *testing.T) {
+	for _, providerType := range []ProviderType{"sms", "wecom", "dingtalk", "feishu"} {
+		if validProviderType(providerType) {
+			t.Fatalf("expected legacy provider type %s to be unsupported", providerType)
+		}
 	}
 }
 
@@ -372,7 +378,7 @@ func TestDefaultCapabilitiesDistinguishWebhookAndBuiltInProviders(t *testing.T) 
 		t.Fatal("custom token provider should describe token placement")
 	}
 
-	wecom := findCapability(t, ProviderWeCom, "text")
+	wecom := findCapability(t, ProviderWeComApp, "text")
 	if !wecom.RecipientRequired || wecom.RecipientRequirement != "system" {
 		t.Fatalf("wecom should require system recipients, got required=%v requirement=%q", wecom.RecipientRequired, wecom.RecipientRequirement)
 	}
@@ -936,7 +942,7 @@ func TestBuildDeliveryRequestPersonalProvidersRequireRecipientIdentity(t *testin
 func TestBuildDeliveryRequestUsesRenderedMessageRecipientsAndTargetContext(t *testing.T) {
 	request, err := BuildDeliveryRequest(Channel{
 		ID:           "channel-wecom",
-		ProviderType: ProviderWeCom,
+		ProviderType: ProviderWeComApp,
 		Name:         "WeCom Prod",
 		TokenConfig:  json.RawMessage(`{"location":"query","field_name":"access_token"}`),
 		SendConfig: json.RawMessage(`{
@@ -948,7 +954,7 @@ func TestBuildDeliveryRequestUsesRenderedMessageRecipientsAndTargetContext(t *te
 	}, BuildDeliveryRequestInput{
 		Token: "token-1",
 		RenderedMessage: RenderedMessage{
-			ProviderType: ProviderWeCom,
+			ProviderType: ProviderWeComApp,
 			MessageType:  "text",
 			Content:      json.RawMessage(`{"text":{"content":"hello from template"}}`),
 		},
@@ -961,7 +967,7 @@ func TestBuildDeliveryRequestUsesRenderedMessageRecipientsAndTargetContext(t *te
 			MessageID:         "message-1",
 			ChannelID:         "channel-wecom",
 			ChannelName:       "WeCom Prod",
-			ProviderType:      string(ProviderWeCom),
+			ProviderType:      string(ProviderWeComApp),
 			TemplateVersionID: "template-version-1",
 			JobID:             "job-1",
 		},

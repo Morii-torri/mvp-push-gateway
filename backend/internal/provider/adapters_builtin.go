@@ -41,19 +41,19 @@ func builtInRequestConfig(channel Channel, input BuildRequestInput) (requestConf
 	case ProviderSelf:
 		config, err := selfRequestConfig(auth, send, content, input)
 		return config, true, err
-	case ProviderSMS, ProviderAliyunSMS, ProviderTencentSMS, ProviderBaiduSMS:
+	case ProviderAliyunSMS, ProviderTencentSMS, ProviderBaiduSMS:
 		config, err := smsRequestConfig(channel.ProviderType, auth, send, content, input.Recipient)
 		return config, true, err
 	case ProviderWeComRobot:
 		config, err := weComRobotRequestConfig(auth, send, content, input.Recipient)
 		return config, true, err
-	case ProviderWeCom, ProviderWeComApp:
+	case ProviderWeComApp:
 		config, err := weComAppRequestConfig(auth, send, content, input.Recipient)
 		return config, true, err
 	case ProviderDingTalkRobot:
 		config, err := dingTalkRobotRequestConfig(auth, send, content, input.Recipient)
 		return config, true, err
-	case ProviderDingTalk, ProviderDingTalkWork:
+	case ProviderDingTalkWork:
 		config, err := dingTalkWorkRequestConfig(auth, send, content, input.Recipient)
 		return config, true, err
 	case ProviderFeishuRobot:

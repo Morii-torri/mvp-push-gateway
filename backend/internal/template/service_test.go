@@ -9,7 +9,7 @@ import (
 func TestParseVariablesUsesCopyFormatAndInternalPath(t *testing.T) {
 	result, err := NewService(nil).Parse(VersionInput{
 		MessageType:        "text",
-		TargetProviderType: "wecom",
+		TargetProviderType: "wecom_app",
 		TemplateBody:       `标题：{{ payload.title }} 内容：{{ payload.alert.ip | default:"-" }}`,
 	})
 	if err != nil {
@@ -26,7 +26,7 @@ func TestParseVariablesUsesCopyFormatAndInternalPath(t *testing.T) {
 func TestValidateBlocksInvalidSyntax(t *testing.T) {
 	result := NewService(nil).Validate(VersionInput{
 		MessageType:        "text",
-		TargetProviderType: "wecom",
+		TargetProviderType: "wecom_app",
 		TemplateBody:       `标题：{{ payload.title `,
 		SamplePayload:      json.RawMessage(`{"title":"告警"}`),
 	})
@@ -41,7 +41,7 @@ func TestValidateBlocksInvalidSyntax(t *testing.T) {
 func TestPreviewUsesGlobalFallbackForMissingPayloadField(t *testing.T) {
 	result, err := NewService(nil).Preview(VersionInput{
 		MessageType:        "text",
-		TargetProviderType: "wecom",
+		TargetProviderType: "wecom_app",
 		TemplateBody:       `标题：{{ payload.title }} IP：{{ payload.alert.ip }}`,
 		SamplePayload:      json.RawMessage(`{"title":"告警"}`),
 	})
@@ -56,7 +56,7 @@ func TestPreviewUsesGlobalFallbackForMissingPayloadField(t *testing.T) {
 func TestPreviewRendersValidTemplate(t *testing.T) {
 	result, err := NewService(nil).Preview(VersionInput{
 		MessageType:        "text",
-		TargetProviderType: "wecom",
+		TargetProviderType: "wecom_app",
 		TemplateBody:       `标题：{{ payload.title }}`,
 		SamplePayload:      json.RawMessage(`{"title":"告警"}`),
 	})
@@ -83,7 +83,7 @@ func TestTemplateValidateRequiresProviderAndMessageType(t *testing.T) {
 func TestTemplatePreviewAllowsDefaultFilterFunctionSyntax(t *testing.T) {
 	result, err := NewService(nil).Preview(VersionInput{
 		MessageType:        "text",
-		TargetProviderType: "wecom",
+		TargetProviderType: "wecom_app",
 		TemplateBody:       `{{ payload.summary | default('通知') }}`,
 		SamplePayload:      json.RawMessage(`{}`),
 	})
@@ -98,7 +98,7 @@ func TestTemplatePreviewAllowsDefaultFilterFunctionSyntax(t *testing.T) {
 func TestTemplateValidateRejectsRecipientLikeFieldsInTemplateBody(t *testing.T) {
 	result := NewService(nil).Validate(VersionInput{
 		MessageType:        "text",
-		TargetProviderType: "wecom",
+		TargetProviderType: "wecom_app",
 		TemplateBody:       `{"touser":"{{ payload.user }}","content":"{{ payload.title }}"}`,
 		SamplePayload:      json.RawMessage(`{"user":"zhangsan","title":"告警"}`),
 	})
@@ -111,7 +111,7 @@ func TestTemplateValidateRejectsRecipientLikeFieldsInTemplateBody(t *testing.T) 
 func TestTemplateValidateUsesProviderDefaultSchemaRequiredFields(t *testing.T) {
 	result := NewService(nil).Validate(VersionInput{
 		MessageType:        "text",
-		TargetProviderType: "wecom",
+		TargetProviderType: "wecom_app",
 		TemplateBody:       `{"title":"{{ payload.title }}"}`,
 		SamplePayload:      json.RawMessage(`{"title":"告警"}`),
 	})
@@ -125,14 +125,14 @@ func TestPublishValidProviderAwareJSONTemplate(t *testing.T) {
 	store := &recordingTemplateStore{}
 	version, err := NewService(store).Publish(context.Background(), "template-1", VersionInput{
 		MessageType:        " text ",
-		TargetProviderType: " wecom ",
+		TargetProviderType: " wecom_app ",
 		TemplateBody:       `{"content":"{{ payload.summary | default('通知') }}"}`,
 		SamplePayload:      json.RawMessage(`{}`),
 	})
 	if err != nil {
 		t.Fatalf("publish provider-aware template: %v", err)
 	}
-	if version.ValidationStatus != "valid" || store.publishParams.MessageType != "text" || store.publishParams.TargetProviderType != "wecom" {
+	if version.ValidationStatus != "valid" || store.publishParams.MessageType != "text" || store.publishParams.TargetProviderType != "wecom_app" {
 		t.Fatalf("expected normalized valid publish, version=%+v params=%+v", version, store.publishParams)
 	}
 	if string(store.publishParams.CompiledPreview) != `{"rendered":"{\"content\":\"通知\"}"}` {

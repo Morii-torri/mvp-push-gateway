@@ -54,7 +54,7 @@ func TestRecipientIdentityLookupAndCRUD(t *testing.T) {
 	}
 	identity, err := repository.CreateUserIdentity(ctx, recipient.CreateUserIdentityParams{
 		UserID:        user.ID,
-		ProviderType:  "wecom",
+		ProviderType:  "wecom_app",
 		IdentityKind:  "wecom_userid",
 		IdentityValue: "zhangsan",
 		Verified:      true,
@@ -63,7 +63,7 @@ func TestRecipientIdentityLookupAndCRUD(t *testing.T) {
 		t.Fatalf("create identity: %v", err)
 	}
 
-	found, err := repository.FindUserIdentity(ctx, "wecom", "wecom_userid", "zhangsan")
+	found, err := repository.FindUserIdentity(ctx, "wecom_app", "wecom_userid", "zhangsan")
 	if err != nil {
 		t.Fatalf("find identity: %v", err)
 	}
@@ -73,7 +73,7 @@ func TestRecipientIdentityLookupAndCRUD(t *testing.T) {
 
 	updated, err := repository.UpdateUserIdentity(ctx, identity.ID, recipient.UpdateUserIdentityParams{
 		UserID:        user.ID,
-		ProviderType:  "wecom",
+		ProviderType:  "wecom_app",
 		IdentityKind:  "mobile",
 		IdentityValue: "13800000000",
 		Verified:      false,
@@ -88,7 +88,7 @@ func TestRecipientIdentityLookupAndCRUD(t *testing.T) {
 	if err := repository.DeleteUserIdentity(ctx, identity.ID); err != nil {
 		t.Fatalf("delete identity: %v", err)
 	}
-	if _, err := repository.FindUserIdentity(ctx, "wecom", "mobile", "13800000000"); !errors.Is(err, recipient.ErrNotFound) {
+	if _, err := repository.FindUserIdentity(ctx, "wecom_app", "mobile", "13800000000"); !errors.Is(err, recipient.ErrNotFound) {
 		t.Fatalf("expected missing identity after delete, got %v", err)
 	}
 }

@@ -20,14 +20,10 @@ export const providerTypeOptions: Array<{ label: string; value: ProviderKind }> 
   { label: '百度智能云短信', value: 'baidu_sms' },
   { label: '企业微信群机器人', value: 'wecom_robot' },
   { label: '企业微信应用消息', value: 'wecom_app' },
-  { label: '企业微信应用兼容', value: 'wecom' },
   { label: '钉钉群机器人', value: 'dingtalk_robot' },
   { label: '钉钉工作消息', value: 'dingtalk_work' },
-  { label: '钉钉工作消息兼容', value: 'dingtalk' },
   { label: '飞书机器人', value: 'feishu_robot' },
-  { label: '飞书兼容', value: 'feishu' },
   { label: '随申办政务云', value: 'gov_cloud' },
-  { label: '短信兼容', value: 'sms' },
   { label: '自定义 Token 平台', value: 'custom_token' },
 ];
 
@@ -49,14 +45,10 @@ const fallbackMessageTypesByProvider: Record<ProviderKind, string[]> = {
   baidu_sms: ['template', 'text'],
   wecom_robot: ['text', 'markdown'],
   wecom_app: ['text', 'card'],
-  wecom: ['text', 'card'],
   dingtalk_robot: ['text', 'markdown'],
   dingtalk_work: ['text', 'card'],
-  dingtalk: ['text', 'card'],
   feishu_robot: ['text', 'markdown'],
-  feishu: ['text', 'card'],
   gov_cloud: ['text', 'card'],
-  sms: ['template', 'text'],
   custom_token: ['text'],
 };
 

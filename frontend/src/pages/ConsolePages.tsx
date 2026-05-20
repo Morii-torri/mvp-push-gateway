@@ -239,9 +239,9 @@ type ProviderTypeGroup = {
 const providerTypeGroups: ProviderTypeGroup[] = [
   { label: '基础通道', tone: 'blue', values: ['webhook', 'self', 'custom_token'] },
   { label: '个人推送', tone: 'cyan', values: ['pushplus', 'wxpusher', 'serverchan', 'bark', 'pushme'] },
-  { label: '邮件短信', tone: 'green', values: ['email', 'aliyun_sms', 'tencent_sms', 'baidu_sms', 'sms'] },
-  { label: '企业协同', tone: 'purple', values: ['wecom_robot', 'wecom_app', 'wecom', 'dingtalk_robot', 'dingtalk_work', 'dingtalk', 'feishu_robot', 'feishu'] },
-  { label: '政务与自托管', tone: 'orange', values: ['gov_cloud', 'ntfy', 'gotify'] },
+  { label: '邮件短信', tone: 'green', values: ['email', 'aliyun_sms', 'tencent_sms', 'baidu_sms'] },
+  { label: '企业协同', tone: 'purple', values: ['wecom_robot', 'wecom_app', 'dingtalk_robot', 'dingtalk_work', 'feishu_robot'] },
+  { label: '自建服务', tone: 'orange', values: ['gov_cloud', 'ntfy', 'gotify'] },
 ];
 
 export type ConsolePageProps = {
@@ -1375,7 +1375,7 @@ export function IdentityEditor({
     onChange?.(identities.map((item, itemIndex) => (itemIndex === index ? { ...item, ...patch } : item)));
   };
   const addIdentity = () => {
-    const platform = providerLabelFromValue('sms');
+    const platform = providerLabelFromValue('webhook');
     onChange?.([
       ...identities,
       {
@@ -4603,7 +4603,7 @@ function defaultIdentityKindForPlatform(platform: string): string {
   if (providerType === 'email') {
     return 'email';
   }
-  if (providerType === 'sms' || providerType === 'aliyun_sms' || providerType === 'tencent_sms' || providerType === 'baidu_sms') {
+  if (providerType === 'aliyun_sms' || providerType === 'tencent_sms' || providerType === 'baidu_sms') {
     return 'mobile';
   }
   if (providerType === 'wxpusher') {
@@ -4624,16 +4624,16 @@ function defaultIdentityKindForPlatform(platform: string): string {
   if (providerType === 'gov_cloud') {
     return 'gov_userid';
   }
-  if (providerType === 'wecom' || providerType === 'wecom_app' || providerType === 'wecom_robot') {
+  if (providerType === 'wecom_app' || providerType === 'wecom_robot') {
     return 'wecom_userid';
   }
-  if (providerType === 'dingtalk' || providerType === 'dingtalk_work') {
+  if (providerType === 'dingtalk_work') {
     return 'dingtalk_userid';
   }
   if (providerType === 'dingtalk_robot') {
     return 'mobile';
   }
-  if (providerType === 'feishu' || providerType === 'feishu_robot') {
+  if (providerType === 'feishu_robot') {
     return 'feishu_open_id';
   }
   return 'identity';

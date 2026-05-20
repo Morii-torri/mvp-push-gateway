@@ -82,14 +82,10 @@ describe('critical console pages', () => {
     ['baidu_sms', '百度智能云短信'],
     ['wecom_robot', '企业微信群机器人'],
     ['wecom_app', '企业微信应用消息'],
-    ['wecom', '企业微信应用兼容'],
     ['dingtalk_robot', '钉钉群机器人'],
     ['dingtalk_work', '钉钉工作消息'],
-    ['dingtalk', '钉钉工作消息兼容'],
     ['feishu_robot', '飞书机器人'],
-    ['feishu', '飞书兼容'],
     ['gov_cloud', '随申办政务云'],
-    ['sms', '短信兼容'],
     ['custom_token', '自定义 Token 平台'],
     ['ntfy', 'ntfy'],
     ['gotify', 'Gotify'],
@@ -99,7 +95,7 @@ describe('critical console pages', () => {
 
   const templateCapabilities: ProviderCapabilityApiRecord[] = [
     {
-      provider_type: 'wecom',
+      provider_type: 'wecom_app',
       display_name: '企业微信应用消息',
       supported_message_types: ['text', 'markdown'],
       content_schema: {
@@ -429,10 +425,16 @@ describe('critical console pages', () => {
     const providersMarkup = renderPage(
       <ProvidersPage lastUpdated={lastUpdated} onRefresh={() => undefined} />,
     );
+    const hiddenLegacyProviderLabels = ['短信兼容', '企业微信应用兼容', '钉钉工作消息兼容', '飞书兼容'];
 
     for (const [providerType, label] of supportedProviderLabels) {
       expect(getProviderTypeLabel(providerType)).toBe(label);
       expect(providersMarkup).toContain(label);
+    }
+    expect(providersMarkup).toContain('自建服务');
+    expect(providersMarkup).not.toContain('政务与自托管');
+    for (const label of hiddenLegacyProviderLabels) {
+      expect(providersMarkup).not.toContain(label);
     }
     expect(providersMarkup).not.toContain('aliyun_sms');
     expect(providersMarkup).not.toContain('tencent_sms');
@@ -927,10 +929,7 @@ describe('critical console pages', () => {
     ] as const;
     const appTypes = [
       ['wecom_app', '企业微信应用消息'],
-      ['wecom', '企业微信应用兼容'],
       ['dingtalk_work', '钉钉工作消息'],
-      ['dingtalk', '钉钉工作消息兼容'],
-      ['feishu', '飞书兼容'],
     ] as const;
 
     for (const [providerType, label] of robotTypes) {
@@ -970,7 +969,7 @@ describe('critical console pages', () => {
   it('renders provider capability driven fields without raw capability summary or advanced JSON', () => {
     const capabilities: ProviderCapabilityApiRecord[] = [
       {
-        provider_type: 'wecom',
+        provider_type: 'wecom_app',
         display_name: '企业微信应用消息',
         category: '企业应用',
         supported_message_types: ['text', 'markdown'],
@@ -989,12 +988,12 @@ describe('critical console pages', () => {
         default_concurrency_limit: 6,
       },
     ];
-    const draft = createProviderDraft('wecom', 1, capabilities);
+    const draft = createProviderDraft('wecom_app', 1, capabilities);
     const markup = renderPage(
       <ProviderConfigForm value={draft} onChange={() => undefined} capabilities={capabilities} />,
     );
 
-    expect(markup).toContain('企业微信应用兼容');
+    expect(markup).toContain('企业微信应用消息');
     expect(markup).toContain('企业 ID');
     expect(markup).toContain('应用 Secret');
     expect(markup).toContain('API 基础地址');
@@ -1051,7 +1050,7 @@ describe('critical console pages', () => {
 
   it('keeps mapping tabs only for custom HTTP providers', () => {
     const builtInMarkup = renderPage(
-      <ProviderConfigForm value={createProviderDraft('wecom', 1)} onChange={() => undefined} capabilities={[]} />,
+      <ProviderConfigForm value={createProviderDraft('wecom_app', 1)} onChange={() => undefined} capabilities={[]} />,
     );
     const customMarkup = renderPage(
       <ProviderConfigForm value={createProviderDraft('custom_token', 1)} onChange={() => undefined} capabilities={[]} />,
@@ -1068,7 +1067,7 @@ describe('critical console pages', () => {
   it('changes provider fields when provider type switches', () => {
     const capabilities: ProviderCapabilityApiRecord[] = [
       {
-        provider_type: 'wecom',
+        provider_type: 'wecom_app',
         display_name: '企业微信应用消息',
         credential_schema: {
           fields: [{ key: 'corpid', label: '企业 ID', target: 'auth_config' }],
@@ -1092,7 +1091,7 @@ describe('critical console pages', () => {
         },
       },
     ];
-    const wecomDraft = createProviderDraft('wecom', 1, capabilities);
+    const wecomDraft = createProviderDraft('wecom_app', 1, capabilities);
     const emailDraft = switchProviderType(wecomDraft, 'email', capabilities);
     const markup = renderPage(
       <ProviderConfigForm value={emailDraft} onChange={() => undefined} capabilities={capabilities} />,
@@ -1117,7 +1116,7 @@ describe('critical console pages', () => {
 
   it('renders route send action group rows and supports multiple targets', () => {
     const channelRows = [
-      { id: 'channel-wecom', name: '企业微信实例', providerType: 'wecom' },
+      { id: 'channel-wecom', name: '企业微信实例', providerType: 'wecom_app' },
       { id: 'channel-email', name: '邮件实例', providerType: 'email' },
     ] as any;
     const templateRows = [
@@ -1129,7 +1128,7 @@ describe('critical console pages', () => {
           id: 'tpl-wecom',
           name: '企微模板',
           current_version_id: 'version-wecom',
-          target_provider_type: 'wecom',
+          target_provider_type: 'wecom_app',
         },
       },
       {
@@ -1225,7 +1224,7 @@ describe('critical console pages', () => {
 
   it('filters route target templates by the selected platform provider type', () => {
     const channelRows = [
-      { id: 'channel-wecom', name: '企业微信实例', providerType: 'wecom' },
+      { id: 'channel-wecom', name: '企业微信实例', providerType: 'wecom_app' },
       { id: 'channel-email', name: '邮件实例', providerType: 'email' },
     ] as any;
     const templateRows = [
@@ -1233,7 +1232,7 @@ describe('critical console pages', () => {
         id: 'tpl-wecom',
         name: '企微模板',
         version: 'v1',
-        raw: { current_version_id: 'version-wecom', target_provider_type: 'wecom' },
+        raw: { current_version_id: 'version-wecom', target_provider_type: 'wecom_app' },
       },
       {
         id: 'tpl-email',
@@ -1283,7 +1282,7 @@ describe('critical console pages', () => {
       updatedAt: '2026-05-12 09:00:00',
     };
     const channelRows = [
-      { id: 'channel-wecom', name: '企业微信实例', providerType: 'wecom' },
+      { id: 'channel-wecom', name: '企业微信实例', providerType: 'wecom_app' },
       { id: 'channel-email', name: '邮件实例', providerType: 'email' },
     ] as any;
     const templateRows = [
@@ -1291,7 +1290,7 @@ describe('critical console pages', () => {
         id: 'tpl-wecom',
         name: '企微模板',
         version: 'v1',
-        raw: { current_version_id: 'version-wecom', target_provider_type: 'wecom' },
+        raw: { current_version_id: 'version-wecom', target_provider_type: 'wecom_app' },
       },
       {
         id: 'tpl-email',
@@ -1645,7 +1644,7 @@ describe('critical console pages', () => {
     expect(markup).toContain('推送渠道类型');
     expect(markup).not.toContain('消息类型');
     expect(markup).toContain('内容编辑模式');
-    expect(markup).toContain('企业微信应用兼容');
+    expect(markup).toContain('企业微信应用消息');
     expect(markup).toContain('content');
     expect(markup).not.toContain('正文内容');
     expect(markup).not.toContain('模板表达式');
@@ -1686,7 +1685,7 @@ describe('critical console pages', () => {
       name: '告警模板',
       source: '告警来源 / alerts',
       messageType: 'text',
-      targetProviderType: 'wecom' as const,
+      targetProviderType: 'wecom_app' as const,
       targetField: 'content',
       content: '{"content":"{{ payload.content }}"}',
       validationStatus: 'valid' as const,
@@ -1866,8 +1865,8 @@ describe('critical console pages', () => {
   it('uses localized provider labels over backend capability names in template editor', () => {
     const draft = createTemplateDraft([], [
       {
-        provider_type: 'feishu',
-        display_name: 'Feishu application message (legacy)',
+        provider_type: 'feishu_robot',
+        display_name: 'Feishu robot message',
         supported_message_types: ['text'],
       },
     ]);
@@ -1878,16 +1877,16 @@ describe('critical console pages', () => {
         sourceRows={[]}
         capabilities={[
           {
-            provider_type: 'feishu',
-            display_name: 'Feishu application message (legacy)',
+            provider_type: 'feishu_robot',
+            display_name: 'Feishu robot message',
             supported_message_types: ['text'],
           },
         ]}
       />,
     );
 
-    expect(markup).toContain('飞书兼容');
-    expect(markup).not.toContain('Feishu application message (legacy)');
+    expect(markup).toContain('飞书机器人');
+    expect(markup).not.toContain('Feishu robot message');
   });
 
   it('uses selected source latest payload as the template sample payload', () => {
@@ -2104,7 +2103,7 @@ describe('critical console pages', () => {
     const body = JSON.parse(input.template_body) as Record<string, string>;
 
     expect(draft.fieldValues.content?.expression).toBe('');
-    expect(input.target_provider_type).toBe('wecom');
+    expect(input.target_provider_type).toBe('wecom_app');
     expect(input.message_type).toBe('text');
     expect(input.template_body).toContain('"content"');
     expect(body.content).toBe('');
@@ -2458,14 +2457,14 @@ describe('critical console pages', () => {
         message_id: 'message-1',
         channel_id: 'channel-wecom',
         channel_name: '企业微信生产',
-        provider_type: 'wecom',
+        provider_type: 'wecom_app',
         template_version_id: 'tpl-wecom-v1',
         status: 'sent',
         duration_ms: 120,
         attempt_no: 1,
         target_context: {
           channel_id: 'channel-wecom',
-          provider_type: 'wecom',
+          provider_type: 'wecom_app',
           message_type: 'markdown',
           template_version_id: 'tpl-wecom-v1',
         },

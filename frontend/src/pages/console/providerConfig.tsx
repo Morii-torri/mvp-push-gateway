@@ -400,23 +400,6 @@ const providerPresets: Record<ProviderKind, ProviderPreset> = {
     testRecipient: 'zhangwei',
     testBody: '企业微信应用测试消息',
   },
-  wecom: {
-    tokenEndpoint: 'GET /cgi-bin/gettoken',
-    tokenRequest: 'query.corpid + query.corpsecret',
-    tokenResponsePath: 'access_token',
-    tokenPlacement: 'Query.access_token = ${token}',
-    sendEndpoint: '内置企业微信应用兼容 adapter',
-    recipientMapping: 'touser/toparty/totag；touser 来自 receivers.wecom_userid',
-    bodyMapping: 'adapter 根据 text/card 内容生成应用消息',
-    qps: 80,
-    concurrency: 16,
-    timeoutMs: 3000,
-    retryPolicy: '2 次固定间隔',
-    retryInterval: '2s / 2s',
-    deadLetterPolicy: '全局默认：重试耗尽或上级错误进入死信',
-    testRecipient: 'zhangwei',
-    testBody: '企业微信兼容测试消息',
-  },
   dingtalk_robot: {
     tokenEndpoint: '固定机器人 Access Token',
     tokenRequest: 'access_token + optional secret',
@@ -451,23 +434,6 @@ const providerPresets: Record<ProviderKind, ProviderPreset> = {
     testRecipient: 'manager001',
     testBody: '钉钉工作消息测试',
   },
-  dingtalk: {
-    tokenEndpoint: '钉钉应用 access token',
-    tokenRequest: 'app_key + app_secret',
-    tokenResponsePath: 'access_token',
-    tokenPlacement: 'Query.access_token = ${token}',
-    sendEndpoint: '内置钉钉工作消息兼容 adapter',
-    recipientMapping: 'userid_list = receivers.dingtalk_userid',
-    bodyMapping: 'adapter 根据 text/card 内容生成工作消息',
-    qps: 60,
-    concurrency: 12,
-    timeoutMs: 3000,
-    retryPolicy: '3 次指数退避',
-    retryInterval: '1s / 3s / 9s',
-    deadLetterPolicy: '全局默认：重试耗尽或上级错误进入死信',
-    testRecipient: 'manager001',
-    testBody: '钉钉兼容测试消息',
-  },
   feishu_robot: {
     tokenEndpoint: '固定机器人 Hook Token',
     tokenRequest: 'hook_token + optional sign_secret',
@@ -485,23 +451,6 @@ const providerPresets: Record<ProviderKind, ProviderPreset> = {
     testRecipient: 'ou_12a8',
     testBody: '飞书机器人测试消息',
   },
-  feishu: {
-    tokenEndpoint: '飞书 tenant_access_token',
-    tokenRequest: 'app_id + app_secret',
-    tokenResponsePath: 'tenant_access_token',
-    tokenPlacement: 'Header.Authorization = Bearer ${token}',
-    sendEndpoint: '内置飞书兼容 adapter',
-    recipientMapping: 'receive_id = receivers.feishu_open_id',
-    bodyMapping: 'adapter 根据 text/card 内容生成飞书消息',
-    qps: 60,
-    concurrency: 12,
-    timeoutMs: 3000,
-    retryPolicy: '3 次指数退避',
-    retryInterval: '1s / 2s / 4s',
-    deadLetterPolicy: '全局默认：重试耗尽或上级错误进入死信',
-    testRecipient: 'ou_12a8',
-    testBody: '飞书兼容测试消息',
-  },
   gov_cloud: {
     tokenEndpoint: 'GET /gettoken?corpsecret=...',
     tokenRequest: 'corpsecret',
@@ -518,23 +467,6 @@ const providerPresets: Record<ProviderKind, ProviderPreset> = {
     deadLetterPolicy: '全局默认：重试耗尽或上级错误进入死信',
     testRecipient: 'gov-user-1',
     testBody: '随申办政务云测试消息',
-  },
-  sms: {
-    tokenEndpoint: '固定 AccessKey / Secret（legacy）',
-    tokenRequest: 'access_key + access_secret',
-    tokenResponsePath: '-',
-    tokenPlacement: 'SDK 签名参数',
-    sendEndpoint: '内置短信兼容 adapter',
-    recipientMapping: 'body.phoneNumbers = receivers.mobile',
-    bodyMapping: 'adapter 根据 supplier/sign_name/template_id/template_params 生成短信请求',
-    qps: 20,
-    concurrency: 8,
-    timeoutMs: 5000,
-    retryPolicy: '1 次重试',
-    retryInterval: '10s',
-    deadLetterPolicy: '全局默认：重试耗尽或上级错误进入死信',
-    testRecipient: '13800005678',
-    testBody: '短信兼容测试消息',
   },
   custom_token: {
     tokenEndpoint: '',
@@ -631,7 +563,7 @@ function providerCategoryLabel(providerType: ProviderKind): string {
   if (providerType === 'email') {
     return '邮件';
   }
-  if (providerType === 'sms' || providerType === 'aliyun_sms' || providerType === 'tencent_sms' || providerType === 'baidu_sms') {
+  if (providerType === 'aliyun_sms' || providerType === 'tencent_sms' || providerType === 'baidu_sms') {
     return '短信';
   }
   if (providerType === 'webhook' || providerType === 'custom_token') {
@@ -897,15 +829,6 @@ function fallbackProviderFields(providerType: ProviderKind): ProviderConfigField
       field('template_id', '短信模板 ID', 'send_config', 'text', true),
     ];
   }
-  if (providerType === 'sms') {
-    return [
-      field('supplier', '短信供应商', 'send_config', 'text', true),
-      field('access_key', 'Access Key', 'auth_config', 'text', true),
-      field('access_secret', 'Access Secret', 'auth_config', 'password', true),
-      field('template_id', '短信模板 ID', 'send_config'),
-      field('sign_name', '短信签名', 'send_config'),
-    ];
-  }
   if (providerType === 'gov_cloud') {
     return [
       field(
@@ -993,7 +916,7 @@ function fallbackProviderFields(providerType: ProviderKind): ProviderConfigField
       field('allow_at_all', '允许 @all', 'send_config'),
     ];
   }
-  if (providerType === 'wecom_app' || providerType === 'wecom') {
+  if (providerType === 'wecom_app') {
     return [
       field('corpid', '企业 ID', 'auth_config', 'text', true),
       field('corpsecret', '应用 Secret', 'auth_config', 'password', true),
@@ -1009,7 +932,7 @@ function fallbackProviderFields(providerType: ProviderKind): ProviderConfigField
       field('allow_at_all', '允许 @all', 'send_config'),
     ];
   }
-  if (providerType === 'dingtalk_work' || providerType === 'dingtalk') {
+  if (providerType === 'dingtalk_work') {
     return [
       field('app_key', '钉钉 App Key', 'auth_config', 'text', true),
       field('app_secret', '钉钉 App Secret', 'auth_config', 'password', true),
@@ -1020,12 +943,6 @@ function fallbackProviderFields(providerType: ProviderKind): ProviderConfigField
     return [
       field('hook_token', '机器人 Hook Token', 'auth_config', 'password', true),
       field('sign_secret', '签名 Secret', 'auth_config', 'password'),
-    ];
-  }
-  if (providerType === 'feishu') {
-    return [
-      field('app_id', '飞书 App ID', 'auth_config', 'text', true),
-      field('app_secret', '飞书 App Secret', 'auth_config', 'password', true),
     ];
   }
   if (providerType === 'self') {

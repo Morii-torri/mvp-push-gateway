@@ -31,7 +31,7 @@ func TestTemplateValidationHandlersReturnTemplateValidationErrors(t *testing.T) 
 		t.Run(tc.path, func(t *testing.T) {
 			req := httptest.NewRequest(http.MethodPost, tc.path, strings.NewReader(`{
 				"message_type":"text",
-				"target_provider_type":"wecom",
+				"target_provider_type":"wecom_app",
 				"template_body":"{\"touser\":\"{{ payload.user }}\",\"content\":\"{{ payload.title }}\"}",
 				"sample_payload":{"user":"zhangsan","title":"告警"}
 			}`))
@@ -66,7 +66,7 @@ func TestTemplatePublishHandlerPublishesProviderAwareTemplate(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/templates/template-1/publish", strings.NewReader(`{
 		"message_type":" text ",
-		"target_provider_type":" wecom ",
+		"target_provider_type":" wecom_app ",
 		"template_body":"{\"content\":\"{{ payload.summary | default('通知') }}\"}",
 		"sample_payload":{}
 	}`))
@@ -92,7 +92,7 @@ func TestTemplatePublishHandlerPublishesProviderAwareTemplate(t *testing.T) {
 	if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
 		t.Fatalf("decode publish response: %v", err)
 	}
-	if body.Version.MessageType != "text" || body.Version.TargetProviderType != "wecom" || body.Version.ValidationStatus != "valid" {
+	if body.Version.MessageType != "text" || body.Version.TargetProviderType != "wecom_app" || body.Version.ValidationStatus != "valid" {
 		t.Fatalf("unexpected template version response: %+v", body.Version)
 	}
 	if string(body.Version.CompiledPreview) != `{"rendered":"{\"content\":\"通知\"}"}` {

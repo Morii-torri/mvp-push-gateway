@@ -155,37 +155,6 @@ func feishuRobotCapability() Capability {
 	})
 }
 
-func feishuLegacyCapability() Capability {
-	return capability(capabilitySpec{
-		ProviderType:         ProviderFeishu,
-		DisplayName:          "Feishu application message (legacy)",
-		Category:             "enterprise_app",
-		MessageType:          "text",
-		MessageSchema:        robotTextContentSchema(),
-		CredentialSchema:     rawJSON(`{"type":"object","required":["app_id","app_secret"],"properties":{"app_id":{"type":"string"},"app_secret":{"type":"string","format":"password"}}}`),
-		ChannelConfigSchema:  rawJSON(`{"type":"object","properties":{"base_url":{"type":"string","default":"https://open.feishu.cn"},"receive_id_type":{"type":"string","default":"open_id"}}}`),
-		RecipientRequired:    true,
-		RecipientRequirement: "system",
-		RecipientFieldName:   "receive_id",
-		RecipientLocation:    PlacementBody,
-		RecipientPath:        "receive_id",
-		RecipientFormat:      "string",
-		IdentityKind:         "feishu_open_id",
-		TokenLocation:        PlacementHeader,
-		TokenFieldName:       "Authorization",
-		TokenStrategy:        rawJSON(`{"strategy":"tenant_access_token","cacheable":true,"placement":{"location":"header","field_name":"Authorization","prefix":"Bearer "}}`),
-		SendAPI:              rawJSON(`{"method":"POST","path":"/open-apis/im/v1/messages","content_type":"application/json","live_test_status":"implemented_but_not_live_tested","notes":"Legacy feishu capability is retained; prefer feishu_robot for robot webhooks."}`),
-		SuccessRule:          rawJSON(`{"type":"json_field","status_codes":[200],"field":"code","equals":0}`),
-		RetryRule:            rawJSON(`{"status_codes":[408,429,500,502,503,504],"json_codes":[99991663,99991664]}`),
-		DefaultRateLimit:     rawJSON(`{"qps":20}`),
-		DefaultConcurrency:   2,
-		DefaultTimeoutMS:     5000,
-		DefaultRetryPolicy:   rawJSON(`{"max_attempts":3,"delay_ms":1000,"backoff":"linear"}`),
-		RequestExamples:      rawJSON(`{"receive_id":"ou_xxx","msg_type":"text","content":"{\"text\":\"Disk 95%\"}"}`),
-		CustomBodyAllowed:    false,
-	})
-}
-
 func govCloudCapability() Capability {
 	return capability(capabilitySpec{
 		ProviderType:         ProviderGovCloud,

@@ -67,14 +67,10 @@ export type ProviderType =
   | 'baidu_sms'
   | 'wecom_robot'
   | 'wecom_app'
-  | 'wecom'
   | 'dingtalk_robot'
   | 'dingtalk_work'
-  | 'dingtalk'
   | 'feishu_robot'
-  | 'feishu'
   | 'gov_cloud'
-  | 'sms'
   | 'custom_token';
 
 export type ChannelApiRecord = {
