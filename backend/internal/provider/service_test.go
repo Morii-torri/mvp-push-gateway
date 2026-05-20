@@ -3,6 +3,7 @@ package provider
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 )
@@ -65,9 +66,9 @@ func TestDefaultCapabilitiesExposeFirstBatchBuiltInProviders(t *testing.T) {
 	}{
 		{ProviderWebhook, "json", ""},
 		{ProviderSelf, "json", "system_user_id"},
-		{ProviderPushPlus, "html", ""},
+		{ProviderPushPlus, "html", "pushplus_token"},
 		{ProviderWxPusher, "html", "wxpusher_uid"},
-		{ProviderServerChan, "markdown", ""},
+		{ProviderServerChan, "markdown", "serverchan_sendkey"},
 		{ProviderEmail, "email", "email"},
 		{ProviderAliyunSMS, "sms_template", "mobile"},
 		{ProviderTencentSMS, "sms_template", "mobile"},
@@ -104,6 +105,10 @@ func TestPushPlusCapabilityUsesSendJsonContentFields(t *testing.T) {
 	assertJSONField(t, capability.MessageSchema, "properties.content.type", "string")
 	assertJSONField(t, capability.MessageSchema, "properties.title.type", "string")
 	assertJSONField(t, capability.MessageSchema, "properties.topic.type", "string")
+	assertJSONField(t, capability.CredentialSchema, "properties.token", nil)
+	if capability.IdentityKind != "pushplus_token" {
+		t.Fatalf("expected PushPlus recipient identity kind pushplus_token, got %q", capability.IdentityKind)
+	}
 
 	var messageSchema struct {
 		Required []string `json:"required"`
@@ -125,6 +130,7 @@ func TestServerChanCapabilityUsesV3URLJsonAndMarkdownFields(t *testing.T) {
 	assertJSONField(t, capability.SendAPI, "url_pattern", "https://<uid>.push.ft07.com/send/<sendkey>.send")
 	assertJSONField(t, capability.SendAPI, "content_type", "application/json")
 	assertJSONField(t, capability.ChannelConfigSchema, "properties.url.type", "string")
+	assertJSONField(t, capability.ChannelConfigSchema, "properties.url.default", "https://<uid>.push.ft07.com/send/<sendkey>.send")
 	assertJSONField(t, capability.MessageSchema, "properties.title.type", "string")
 	assertJSONField(t, capability.MessageSchema, "properties.desp.format_hint", "支持 Markdown")
 	assertJSONField(t, capability.MessageSchema, "properties.short.type", "string")
@@ -137,6 +143,9 @@ func TestServerChanCapabilityUsesV3URLJsonAndMarkdownFields(t *testing.T) {
 	}
 	if _, ok := credentialSchema.Properties["send_key"]; ok {
 		t.Fatalf("ServerChan v3 should only ask for URL in channel config, got credential schema %s", capability.CredentialSchema)
+	}
+	if capability.IdentityKind != "serverchan_sendkey" {
+		t.Fatalf("expected ServerChan recipient identity kind serverchan_sendkey, got %q", capability.IdentityKind)
 	}
 }
 
@@ -187,8 +196,7 @@ func TestPushMeCapabilityUsesPostKeyOnlyAndTypedContent(t *testing.T) {
 	assertJSONField(t, capability.SendAPI, "content_type", "application/json")
 	assertJSONField(t, capability.CredentialSchema, "properties.server_url.title", "服务地址")
 	assertJSONField(t, capability.CredentialSchema, "properties.server_url.default", "https://push.i-i.me")
-	assertJSONField(t, capability.CredentialSchema, "properties.push_key.title", "PushMe Push Key")
-	assertJSONField(t, capability.CredentialSchema, "properties.push_key.format", "password")
+	assertJSONField(t, capability.CredentialSchema, "properties.push_key", nil)
 	assertJSONField(t, capability.CredentialSchema, "properties.temp_key", nil)
 	assertJSONField(t, capability.ChannelConfigSchema, "properties.type", nil)
 	assertJSONField(t, capability.ChannelConfigSchema, "properties.method", nil)
@@ -205,6 +213,9 @@ func TestPushMeCapabilityUsesPostKeyOnlyAndTypedContent(t *testing.T) {
 	}
 	if got, want := strings.Join(tokenStrategy.SupportedFields, ","), "push_key"; got != want {
 		t.Fatalf("expected PushMe token strategy to support only push_key, got %+v", tokenStrategy.SupportedFields)
+	}
+	if capability.IdentityKind != "pushme_push_key" {
+		t.Fatalf("expected PushMe recipient identity kind pushme_push_key, got %q", capability.IdentityKind)
 	}
 
 	var messageSchema struct {
@@ -226,6 +237,68 @@ func TestPushMeCapabilityUsesPostKeyOnlyAndTypedContent(t *testing.T) {
 	}
 }
 
+func TestBarkCapabilityUsesFallbackDeviceKeyAndMessageFields(t *testing.T) {
+	capability := findCapability(t, ProviderBark, "notice")
+
+	var credentialSchema struct {
+		Required   []string `json:"required"`
+		Properties map[string]struct {
+			Type string `json:"type"`
+		} `json:"properties"`
+	}
+	if err := json.Unmarshal(capability.CredentialSchema, &credentialSchema); err != nil {
+		t.Fatalf("decode bark credential schema: %v", err)
+	}
+	if got, want := strings.Join(credentialSchema.Required, ","), "server_url"; got != want {
+		t.Fatalf("expected only server_url to be required, got %+v", credentialSchema.Required)
+	}
+	if _, ok := credentialSchema.Properties["device_key"]; ok {
+		t.Fatalf("Bark channel config should not expose fallback device_key; recipients provide targets")
+	}
+	if _, ok := credentialSchema.Properties["device_keys"]; ok {
+		t.Fatalf("Bark channel config should not expose device_keys; recipients provide multiple targets")
+	}
+	if !capability.RecipientRequired || capability.AllowNoRecipient || capability.RecipientRequirement != "system" {
+		t.Fatalf("Bark should require system recipients, got required=%v allow_no_recipient=%v requirement=%q", capability.RecipientRequired, capability.AllowNoRecipient, capability.RecipientRequirement)
+	}
+
+	var channelSchema struct {
+		Properties map[string]any `json:"properties"`
+	}
+	if err := json.Unmarshal(capability.ChannelConfigSchema, &channelSchema); err != nil {
+		t.Fatalf("decode bark channel schema: %v", err)
+	}
+	if len(channelSchema.Properties) != 0 {
+		t.Fatalf("Bark message fields should not be channel config fields, got %+v", channelSchema.Properties)
+	}
+
+	var messageSchema struct {
+		Properties struct {
+			Level struct {
+				Enum         []string          `json:"enum"`
+				Descriptions map[string]string `json:"enum_descriptions"`
+			} `json:"level"`
+			Markdown struct {
+				Type       string `json:"type"`
+				FormatHint string `json:"format_hint"`
+			} `json:"markdown"`
+		} `json:"properties"`
+	}
+	if err := json.Unmarshal(capability.MessageSchema, &messageSchema); err != nil {
+		t.Fatalf("decode bark message schema: %v", err)
+	}
+	if got, want := strings.Join(messageSchema.Properties.Level.Enum, ","), "critical,active,timeSensitive,passive"; got != want {
+		t.Fatalf("expected Bark level enum active/timeSensitive/passive/critical, got %+v", messageSchema.Properties.Level.Enum)
+	}
+	if messageSchema.Properties.Level.Descriptions["critical"] == "" ||
+		messageSchema.Properties.Level.Descriptions["passive"] == "" {
+		t.Fatalf("expected Bark level descriptions, got descriptions=%+v", messageSchema.Properties.Level.Descriptions)
+	}
+	if messageSchema.Properties.Markdown.Type != "string" || messageSchema.Properties.Markdown.FormatHint == "" {
+		t.Fatalf("expected Bark markdown message field with format hint, got %+v", messageSchema.Properties.Markdown)
+	}
+}
+
 func TestDefaultCapabilitiesExposeP2Providers(t *testing.T) {
 	required := []struct {
 		providerType ProviderType
@@ -236,7 +309,7 @@ func TestDefaultCapabilitiesExposeP2Providers(t *testing.T) {
 		{ProviderNtfy, "notice", "", "configuration_dependent"},
 		{ProviderGotify, "notice", "", "configuration_dependent"},
 		{ProviderBark, "notice", "bark_device_key", "implemented_but_not_live_tested"},
-		{ProviderPushMe, "notice", "", "implemented_but_not_live_tested"},
+		{ProviderPushMe, "notice", "pushme_push_key", "implemented_but_not_live_tested"},
 	}
 
 	for _, item := range required {
@@ -413,14 +486,15 @@ func TestBuildDeliveryRequestUsesBuiltInProviderDefaultsWithoutLegacyURL(t *test
 			name: "pushplus",
 			channel: Channel{
 				ProviderType: ProviderPushPlus,
-				AuthConfig:   json.RawMessage(`{"token":"push-token"}`),
+				AuthConfig:   json.RawMessage(`{"token":"legacy-channel-token"}`),
 				SendConfig:   json.RawMessage(`{"topic":"legacy-send-topic","template":"markdown"}`),
 			},
-			message: json.RawMessage(`{"title":"Disk alert","content":"Disk 95%","topic":"ops","format":"markdown","url":"https://example.test/detail"}`),
+			message:    json.RawMessage(`{"title":"Disk alert","content":"Disk 95%","topic":"ops","format":"markdown","url":"https://example.test/detail"}`),
+			recipients: []ResolvedRecipient{{PlatformIDs: map[string]string{"pushplus_token": "recipient-push-token"}}},
 			assert: func(t *testing.T, request BuiltRequest) {
 				requireRequest(t, request, "POST", "https://www.pushplus.plus/send")
 				body := decodeRequestBody(t, request)
-				requireBodyField(t, body, "token", "push-token")
+				requireBodyField(t, body, "token", "recipient-push-token")
 				requireBodyField(t, body, "title", "Disk alert")
 				requireBodyField(t, body, "content", "Disk 95%")
 				requireBodyField(t, body, "topic", "ops")
@@ -454,11 +528,12 @@ func TestBuildDeliveryRequestUsesBuiltInProviderDefaultsWithoutLegacyURL(t *test
 			name: "serverchan",
 			channel: Channel{
 				ProviderType: ProviderServerChan,
-				SendConfig:   json.RawMessage(`{"url":"https://10000.push.ft07.com/send/sctp10000tabc.send"}`),
+				SendConfig:   json.RawMessage(`{"url":"https://<uid>.push.ft07.com/send/<sendkey>.send"}`),
 			},
-			message: json.RawMessage(`{"title":"Build","desp":"**Failed**","short":"Failed"}`),
+			message:    json.RawMessage(`{"title":"Build","desp":"**Failed**","short":"Failed"}`),
+			recipients: []ResolvedRecipient{{PlatformIDs: map[string]string{"serverchan_sendkey": "sctp21329tfauqvvbhe2wpeb5lufz4gz"}}},
 			assert: func(t *testing.T, request BuiltRequest) {
-				requireRequest(t, request, "POST", "https://10000.push.ft07.com/send/sctp10000tabc.send")
+				requireRequest(t, request, "POST", "https://21329.push.ft07.com/send/sctp21329tfauqvvbhe2wpeb5lufz4gz.send")
 				if request.Headers["Content-Type"] != "application/json" {
 					t.Fatalf("expected json content type, got %+v", request.Headers)
 				}
@@ -691,40 +766,57 @@ func TestBuildDeliveryRequestUsesBuiltInProviderDefaultsWithoutLegacyURL(t *test
 			name: "bark",
 			channel: Channel{
 				ProviderType: ProviderBark,
-				AuthConfig:   json.RawMessage(`{"server_url":"https://bark.example","device_key":"channel-key"}`),
-				SendConfig:   json.RawMessage(`{"group":"ops","sound":"alarm","level":"critical","icon":"https://example.test/icon.png"}`),
+				AuthConfig:   json.RawMessage(`{"server_url":"https://bark.example"}`),
+				SendConfig:   json.RawMessage(`{"group":"old-channel-group","sound":"old-channel-sound","level":"passive","icon":"https://example.test/old.png"}`),
 			},
-			message:    json.RawMessage(`{"title":"Disk alert","body":"Disk 95%","subtitle":"prod","url":"https://example.test/detail"}`),
-			recipients: []ResolvedRecipient{{PlatformIDs: map[string]string{"bark_device_key": "device-key"}}},
+			message: json.RawMessage(`{
+				"title":"Disk alert",
+				"markdown":"**Disk 95%**",
+				"subtitle":"prod",
+				"url":"https://example.test/detail",
+				"group":"ops",
+				"sound":"alarm",
+				"level":"critical",
+				"icon":"https://example.test/icon.png",
+				"image":"https://example.test/image.png"
+			}`),
+			recipients: []ResolvedRecipient{
+				{PlatformIDs: map[string]string{"bark_device_key": "device-key-1"}},
+				{PlatformIDs: map[string]string{"bark_device_key": "device-key-2"}},
+			},
 			assert: func(t *testing.T, request BuiltRequest) {
 				requireRequest(t, request, "POST", "https://bark.example/push")
 				body := decodeRequestBody(t, request)
-				requireBodyField(t, body, "device_key", "device-key")
+				requireNoBodyField(t, body, "device_key")
+				requireStringListField(t, body, "device_keys", []string{"device-key-1", "device-key-2"})
 				requireBodyField(t, body, "title", "Disk alert")
 				requireBodyField(t, body, "subtitle", "prod")
-				requireBodyField(t, body, "body", "Disk 95%")
+				requireNoBodyField(t, body, "body")
+				requireBodyField(t, body, "markdown", "**Disk 95%**")
 				requireBodyField(t, body, "url", "https://example.test/detail")
 				requireBodyField(t, body, "group", "ops")
 				requireBodyField(t, body, "sound", "alarm")
 				requireBodyField(t, body, "level", "critical")
 				requireBodyField(t, body, "icon", "https://example.test/icon.png")
+				requireBodyField(t, body, "image", "https://example.test/image.png")
 			},
 		},
 		{
 			name: "pushme",
 			channel: Channel{
 				ProviderType: ProviderPushMe,
-				AuthConfig:   json.RawMessage(`{"server_url":"https://push.example","push_key":"push-key"}`),
+				AuthConfig:   json.RawMessage(`{"server_url":"https://push.example","push_key":"legacy-channel-key"}`),
 				SendConfig:   json.RawMessage(`{"type":"text","method":"GET"}`),
 			},
-			message: json.RawMessage(`{"title":"Build","content":"Failed","type":"html"}`),
+			message:    json.RawMessage(`{"title":"Build","content":"Failed","type":"html"}`),
+			recipients: []ResolvedRecipient{{PlatformIDs: map[string]string{"pushme_push_key": "recipient-push-key"}}},
 			assert: func(t *testing.T, request BuiltRequest) {
 				requireRequest(t, request, "POST", "https://push.example")
 				body := decodeRequestBody(t, request)
 				if len(body) != 4 {
 					t.Fatalf("expected PushMe request body to only contain push_key/title/content/type, got %#v", body)
 				}
-				requireBodyField(t, body, "push_key", "push-key")
+				requireBodyField(t, body, "push_key", "recipient-push-key")
 				requireBodyField(t, body, "title", "Build")
 				requireBodyField(t, body, "content", "Failed")
 				requireBodyField(t, body, "type", "html")
@@ -787,6 +879,58 @@ func TestBuildDeliveryRequestFallsBackToResolvedRecipientsWhenLegacyRecipientIsE
 	requireStringListField(t, body, "uids", []string{"UID_1", "UID_2"})
 	requireNumberListField(t, body, "topicIds", []float64{101, 102})
 	requireBodyField(t, body, "contentType", float64(2))
+}
+
+func TestBuildDeliveryRequestBarkRequiresRecipient(t *testing.T) {
+	_, err := BuildDeliveryRequest(Channel{
+		ProviderType: ProviderBark,
+		AuthConfig:   json.RawMessage(`{"server_url":"https://bark.example","device_key":"channel-key"}`),
+	}, BuildDeliveryRequestInput{
+		RenderedMessage: RenderedMessage{
+			ProviderType: ProviderBark,
+			MessageType:  "text",
+			Content:      json.RawMessage(`{"body":"Fallback target"}`),
+		},
+	})
+	if !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("expected invalid input without Bark recipient, got %v", err)
+	}
+}
+
+func TestBuildDeliveryRequestPersonalProvidersRequireRecipientIdentity(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		channel Channel
+		message json.RawMessage
+	}{
+		{
+			name:    "pushplus",
+			channel: Channel{ProviderType: ProviderPushPlus, AuthConfig: json.RawMessage(`{"token":"legacy-channel-token"}`)},
+			message: json.RawMessage(`{"content":"PushPlus message"}`),
+		},
+		{
+			name:    "serverchan",
+			channel: Channel{ProviderType: ProviderServerChan, SendConfig: json.RawMessage(`{"url":"https://<uid>.push.ft07.com/send/<sendkey>.send"}`)},
+			message: json.RawMessage(`{"title":"ServerChan title"}`),
+		},
+		{
+			name:    "pushme",
+			channel: Channel{ProviderType: ProviderPushMe, AuthConfig: json.RawMessage(`{"server_url":"https://push.example","push_key":"legacy-channel-key"}`)},
+			message: json.RawMessage(`{"title":"PushMe title","content":"PushMe content","type":"markdown"}`),
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := BuildDeliveryRequest(tc.channel, BuildDeliveryRequestInput{
+				RenderedMessage: RenderedMessage{
+					ProviderType: tc.channel.ProviderType,
+					Content:      tc.message,
+				},
+			})
+			if !errors.Is(err, ErrInvalidInput) {
+				t.Fatalf("expected invalid input without recipient identity, got %v", err)
+			}
+		})
+	}
 }
 
 func TestBuildDeliveryRequestUsesRenderedMessageRecipientsAndTargetContext(t *testing.T) {
@@ -946,6 +1090,51 @@ func TestTestSendDryRunSnapshotIncludesAdapterContext(t *testing.T) {
 	if finalRequest["url"] != "http://127.0.0.1:18081/webhook" || finalRequest["method"] != "POST" {
 		t.Fatalf("unexpected final request summary: %+v", finalRequest)
 	}
+}
+
+func TestTestSendRequiresBarkRecipientEvenWithLegacyChannelDeviceKey(t *testing.T) {
+	service := NewService(singleChannelStore{
+		channel: Channel{
+			ID:           "channel-bark",
+			ProviderType: ProviderBark,
+			Name:         "Bark",
+			AuthConfig:   json.RawMessage(`{"server_url":"https://bark.example","device_key":"channel-key"}`),
+			TimeoutMS:    1000,
+		},
+	})
+
+	_, err := service.TestSend(context.Background(), "channel-bark", TestSendInput{
+		BuildRequestInput: BuildRequestInput{
+			Body: json.RawMessage(`{"body":"Bark dry run"}`),
+		},
+	})
+	if !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("expected Bark test send to require recipient, got %v", err)
+	}
+}
+
+func TestTestSendAllowsBarkResolvedRecipientWithoutChannelDeviceKey(t *testing.T) {
+	service := NewService(singleChannelStore{
+		channel: Channel{
+			ID:           "channel-bark",
+			ProviderType: ProviderBark,
+			Name:         "Bark",
+			AuthConfig:   json.RawMessage(`{"server_url":"https://bark.example"}`),
+			TimeoutMS:    1000,
+		},
+	})
+
+	result, err := service.TestSend(context.Background(), "channel-bark", TestSendInput{
+		BuildRequestInput: BuildRequestInput{
+			Body: json.RawMessage(`{"body":"Bark dry run"}`),
+		},
+		ResolvedRecipients: []ResolvedRecipient{{PlatformIDs: map[string]string{"bark_device_key": "device-key"}}},
+	})
+	if err != nil {
+		t.Fatalf("bark dry-run with resolved recipient: %v", err)
+	}
+	body := decodeRequestBody(t, result.Request)
+	requireBodyField(t, body, "device_key", "device-key")
 }
 
 func TestTestSendRequiresExplicitLiveSendConfirmation(t *testing.T) {

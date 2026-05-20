@@ -751,6 +751,29 @@ function summarizeSourceRateLimit(config: JSONValue) {
   return '已开启';
 }
 
+function summarizeSourceDedupe(enabled: boolean, config: JSONValue): string {
+  if (!enabled) {
+    return '未开启';
+  }
+  if (!isRecord(config)) {
+    return '已开启';
+  }
+  const ttl = config.ttl_seconds;
+  if (typeof ttl === 'number' && ttl > 0) {
+    if (ttl % 86400 === 0) {
+      return `${ttl / 86400}天去重`;
+    }
+    if (ttl % 3600 === 0) {
+      return `${ttl / 3600}小时去重`;
+    }
+    if (ttl % 60 === 0) {
+      return `${ttl / 60}分钟去重`;
+    }
+    return `${ttl}秒去重`;
+  }
+  return '已开启';
+}
+
 function sourceQuietHoursDraft(config: JSONValue): { enabled: boolean; windows: QuietHoursWindowDraft[] } {
   if (!isRecord(config) || config.enabled !== true) {
     return { enabled: false, windows: [{ ...defaultQuietHoursWindow }] };
@@ -1332,14 +1355,6 @@ export function SourceConfigForm({
           />
         </div>
       ) : null}
-      <Form.Item label="状态">
-        <Switch
-          checked={value.enabled}
-          checkedChildren="启用"
-          unCheckedChildren="停用"
-          onChange={(enabled) => update({ enabled })}
-        />
-      </Form.Item>
     </Form>
   );
 }
@@ -1378,11 +1393,14 @@ export function IdentityEditor({
     {
       title: '推送渠道类型',
       dataIndex: 'platform',
+      className: 'identity-provider-cell',
+      width: 220,
       render: (value, _record, index) =>
         readOnly ? (
           value
         ) : (
           <Select
+            className="full-width"
             value={value}
             options={recipientIdentityProviderOptions.map((item) => ({ label: item.label, value: item.label }))}
             onChange={(platform) => updateIdentity(index, { platform, fieldName: defaultIdentityKindForPlatform(platform) })}
@@ -1392,20 +1410,25 @@ export function IdentityEditor({
     {
       title: '身份值',
       dataIndex: 'value',
+      className: 'identity-value-cell',
+      width: 260,
       render: (value, _record, index) =>
         readOnly ? value : <Input value={value} onChange={(event) => updateIdentity(index, { value: event.target.value })} />,
     },
     {
       title: '验证状态',
       dataIndex: 'verified',
+      className: 'identity-verified-cell',
+      width: 92,
       render: (verified: boolean, _record, index) =>
         readOnly ? (
-          <Tag color={verified ? 'success' : 'default'}>{verified ? '已验证' : '未验证'}</Tag>
+          <Tag color={verified ? 'success' : 'default'}>{verified ? '通过' : ''}</Tag>
         ) : (
           <Switch
             checked={verified}
-            checkedChildren="已验证"
-            unCheckedChildren="未验证"
+            checkedChildren="通过"
+            unCheckedChildren=" "
+            aria-label="验证状态"
             onChange={(nextVerified) => updateIdentity(index, { verified: nextVerified })}
           />
         ),
@@ -1414,11 +1437,17 @@ export function IdentityEditor({
   if (!readOnly) {
     identityColumns.push({
       title: '操作',
-      width: 86,
+      className: 'identity-action-cell',
+      width: 48,
       render: (_value, _record, index) => (
-        <Button danger type="link" icon={<DeleteOutlined />} onClick={() => deleteIdentity(index)}>
-          删除
-        </Button>
+        <Button
+          danger
+          type="text"
+          aria-label="删除身份字段"
+          className="identity-delete-icon-button"
+          icon={<DeleteOutlined />}
+          onClick={() => deleteIdentity(index)}
+        />
       ),
     });
   }
@@ -1438,6 +1467,7 @@ export function IdentityEditor({
         pagination={false}
         dataSource={rows}
         columns={identityColumns}
+        rowClassName={(record) => (record.verified ? 'identity-row--verified' : '')}
       />
     </Space>
   );
@@ -1470,16 +1500,16 @@ export function OverviewPage({ lastUpdated, onRefresh }: ConsolePageProps) {
 
   const rankingColumns: TableProps<OverviewViewModel['platformRanking'][number]>['columns'] = [
     { title: '排名', render: (_value, _record, index) => index + 1, width: 72 },
-    { title: '推送渠道名称', dataIndex: 'name' },
-    { title: '推送渠道类型', dataIndex: 'providerType' },
-    { title: '发送量', dataIndex: 'sent', align: 'right' },
-    { title: '成功率', dataIndex: 'success', align: 'right' },
-    { title: 'QPS', dataIndex: 'qps', align: 'right' },
-    { title: '失败数', dataIndex: 'failures', align: 'right' },
-    { title: '限流次数', dataIndex: 'rateLimited', align: 'right' },
-    { title: '平均耗时', dataIndex: 'latency', align: 'right' },
-    { title: 'P95', dataIndex: 'p95', align: 'right' },
-    { title: '最近错误', dataIndex: 'lastError' },
+    { title: '推送渠道名称', dataIndex: 'name', width: 160 },
+    { title: '推送渠道类型', dataIndex: 'providerType', width: 140 },
+    { title: '发送量', dataIndex: 'sent', align: 'right', width: 100 },
+    { title: '成功率', dataIndex: 'success', align: 'right', width: 100 },
+    { title: 'QPS', dataIndex: 'qps', align: 'right', width: 90 },
+    { title: '失败数', dataIndex: 'failures', align: 'right', width: 90 },
+    { title: '限流次数', dataIndex: 'rateLimited', align: 'right', width: 100 },
+    { title: '平均耗时', dataIndex: 'latency', align: 'right', width: 110 },
+    { title: 'P95', dataIndex: 'p95', align: 'right', width: 90 },
+    { title: '最近错误', dataIndex: 'lastError', width: 170 },
   ];
   const platformRankingPage = usePagedRows(viewModel.platformRanking, 10);
 
@@ -1564,7 +1594,7 @@ export function OverviewPage({ lastUpdated, onRefresh }: ConsolePageProps) {
           pagination={false}
           columns={rankingColumns}
           dataSource={platformRankingPage.rows}
-          scroll={{ x: 1180 }}
+          scroll={{ x: 1122 }}
         />
       </ListContainer>
     </PageFrame>
@@ -1589,6 +1619,7 @@ export function SourcesPage({ lastUpdated, onRefresh }: ConsolePageProps) {
   const [inboundPayloadText, setInboundPayloadText] = useState('');
   const [inboundTestResult, setInboundTestResult] = useState<JSONValue | null>(null);
   const [inboundSending, setInboundSending] = useState(false);
+  const [pendingSourceEnabledIds, setPendingSourceEnabledIds] = useState<Set<string>>(new Set());
 
   const loadSources = useCallback(async () => {
     setLoadState({ loading: true, error: '' });
@@ -1605,6 +1636,31 @@ export function SourcesPage({ lastUpdated, onRefresh }: ConsolePageProps) {
   useEffect(() => {
     void loadSources();
   }, [loadSources, lastUpdated]);
+
+  const toggleSourceEnabled = async (record: SourceRow, enabled: boolean) => {
+    setPendingSourceEnabledIds((current) => new Set(current).add(record.id));
+    try {
+      const draft = draftFromSource(record.raw);
+      const input = sourceInputFromDraft({ ...draft, enabled });
+      await consoleApi.updateSource(record.id, input);
+      setSourceRows((current) =>
+        current.map((item) =>
+          item.id === record.id
+            ? { ...item, enabled, raw: { ...item.raw, enabled } }
+            : item
+        )
+      );
+      message.success(enabled ? '来源已启用' : '来源已停用');
+    } catch (error) {
+      showError(message, error);
+    } finally {
+      setPendingSourceEnabledIds((current) => {
+        const next = new Set(current);
+        next.delete(record.id);
+        return next;
+      });
+    }
+  };
 
   const filteredRows = filterSourceRowsByQuery(sourceRows, sourceQuery.applied);
   const sourcePage = usePagedRows(filteredRows);
@@ -1713,35 +1769,58 @@ export function SourcesPage({ lastUpdated, onRefresh }: ConsolePageProps) {
     {
       title: '来源编码',
       dataIndex: 'code',
-      render: (code: string) => <Typography.Text code>{code}</Typography.Text>,
+      width: 120,
     },
-    { title: '来源名称', dataIndex: 'name' },
+    { title: '来源名称', dataIndex: 'name', width: 160 },
     {
       title: '鉴权方式',
       dataIndex: 'authMode',
+      width: 140,
       render: (value: SourceRecord['authMode']) => <StatusTag meta={getAuthModeMeta(value)} />,
     },
     {
       title: 'IP 白名单',
       dataIndex: 'ipAllowlist',
+      width: 140,
+      className: 'allow-wrap',
       render: (items: string[]) => items.map((item) => <Tag key={item}>{item}</Tag>),
     },
     {
       title: '入站去重',
       dataIndex: 'inboundDedupeEnabled',
-      render: (enabled: boolean) => (
-        <Tag color={enabled ? 'success' : 'default'}>{enabled ? '已开启' : '未开启'}</Tag>
-      ),
+      width: 100,
+      render: (enabled: boolean, record) => {
+        const text = summarizeSourceDedupe(enabled, record.raw?.inbound_dedupe_config);
+        return <Tag color={enabled ? 'processing' : 'default'}>{text}</Tag>;
+      },
     },
-    { title: '入站限流', dataIndex: 'rateLimit' },
+    {
+      title: '入站限流',
+      dataIndex: 'rateLimit',
+      width: 110,
+      render: (value: string) => {
+        const isEnabled = value !== '未开启';
+        return <Tag color={isEnabled ? 'processing' : 'default'}>{value}</Tag>;
+      },
+    },
     {
       title: '状态',
       dataIndex: 'enabled',
-      render: (enabled: boolean) => <StatusTag meta={getEnabledMeta(enabled)} />,
+      width: 90,
+      render: (enabled: boolean, record) => (
+        <Switch
+          checked={enabled}
+          loading={pendingSourceEnabledIds.has(record.id)}
+          onChange={(checked) => void toggleSourceEnabled(record, checked)}
+          checkedChildren="启用"
+          unCheckedChildren="停用"
+        />
+      ),
     },
     {
       title: '操作',
       fixed: 'right',
+      width: 260,
       render: (_, record) => (
         <SourceRowActions
           record={record}
@@ -1832,7 +1911,7 @@ export function SourcesPage({ lastUpdated, onRefresh }: ConsolePageProps) {
           columns={columns}
           dataSource={sourcePage.rows}
           loading={loadState.loading}
-          scroll={{ x: 1180 }}
+          scroll={{ x: 1120 }}
         />
       </ListContainer>
 
@@ -2051,22 +2130,25 @@ export function ProvidersPage({ lastUpdated, onRefresh }: ConsolePageProps) {
     {
       title: '推送渠道类型',
       dataIndex: 'providerType',
+      width: 140,
       render: (value: ProviderRow['providerType']) => <Tag color="blue">{getProviderTypeLabel(value)}</Tag>,
     },
-    { title: '推送渠道名称', dataIndex: 'name' },
-    { title: '主动限流', dataIndex: 'rateLimit' },
-    { title: '超时时间', dataIndex: 'timeout' },
-    { title: '允许重试次数', render: (_, record) => record.retryAttempts },
+    { title: '推送渠道名称', dataIndex: 'name', width: 180 },
+    { title: '主动限流', dataIndex: 'rateLimit', width: 120 },
+    { title: '超时时间', dataIndex: 'timeout', width: 110 },
+    { title: '允许重试次数', width: 130, render: (_, record) => record.retryAttempts },
     {
       title: '死信策略',
+      width: 110,
       render: (_, record) => {
         const enabled = providerDeadLetterEnabled(record);
-        return <Tag color={enabled ? 'success' : 'default'}>{enabled ? '开启' : '关闭'}</Tag>;
+        return <Tag color={enabled ? 'processing' : 'default'}>{enabled ? '开启' : '关闭'}</Tag>;
       },
     },
     {
-      title: '启停',
+      title: '状态',
       dataIndex: 'enabled',
+      width: 90,
       render: (enabled: boolean, record) => (
         <Switch
           checked={enabled}
@@ -2079,6 +2161,8 @@ export function ProvidersPage({ lastUpdated, onRefresh }: ConsolePageProps) {
     },
     {
       title: '操作',
+      fixed: 'right',
+      width: 260,
       render: (_, record) => (
         <ProviderRowActions
           record={record}
@@ -2202,7 +2286,7 @@ export function ProvidersPage({ lastUpdated, onRefresh }: ConsolePageProps) {
               columns={columns}
               dataSource={providerPage.rows}
               loading={loadState.loading}
-              scroll={{ x: 1100 }}
+              scroll={{ x: 1140 }}
             />
           </ListContainer>
         </div>
@@ -2995,10 +3079,9 @@ export function RoutesPage({ lastUpdated, onRefresh }: ConsolePageProps) {
       title: '绑定来源',
       width: 210,
       render: (_, record) => (
-        <Space direction="vertical" size={0}>
-          <span>{record.sourceName}</span>
-          <Typography.Text code>{record.sourceCode}</Typography.Text>
-        </Space>
+        <span>
+          {record.sourceName} <span style={{ color: '#d9d9d9', margin: '0 4px' }}>|</span> <Typography.Text code>{record.sourceCode}</Typography.Text>
+        </span>
       ),
     },
     {
@@ -3024,7 +3107,7 @@ export function RoutesPage({ lastUpdated, onRefresh }: ConsolePageProps) {
     {
       title: '操作',
       fixed: 'right',
-      width: 190,
+      width: 240,
       render: (_, record) => (
         <RouteGroupRowActions
           record={record}
@@ -3060,7 +3143,7 @@ export function RoutesPage({ lastUpdated, onRefresh }: ConsolePageProps) {
       render: (value: number) => <Typography.Text strong>{formatHitCount(value)}</Typography.Text>,
     },
     {
-      title: '启停',
+      title: '状态',
       dataIndex: 'enabled',
       width: 100,
       render: (enabled: boolean, record) => (
@@ -3091,7 +3174,7 @@ export function RoutesPage({ lastUpdated, onRefresh }: ConsolePageProps) {
     {
       title: '操作',
       fixed: 'right',
-      width: 180,
+      width: 240,
       render: (_, record) => (
         <RouteRuleRowActions
           record={record}
@@ -3174,7 +3257,7 @@ export function RoutesPage({ lastUpdated, onRefresh }: ConsolePageProps) {
             columns={groupColumns}
             dataSource={routeGroupPage.rows}
             loading={loadState.loading}
-            scroll={{ x: 1250 }}
+            scroll={{ x: 1350 }}
           />
         </ListContainer>
         <CreateDrawer title={groupDrawer.title} open={groupDrawer.open} onClose={closeGroupEditor} onSave={saveGroup}>
@@ -3367,7 +3450,7 @@ export function RoutesPage({ lastUpdated, onRefresh }: ConsolePageProps) {
               pagination={false}
               columns={columns}
               dataSource={routeRulePage.rows}
-              scroll={{ x: 1650 }}
+              scroll={{ x: 1618 }}
             />
           </ListContainer>
         </>
@@ -3433,7 +3516,7 @@ export function TemplateRowActions({
   onDelete: (record: TemplateRecord & { raw?: TemplateApiRecord }) => void;
 }) {
   return (
-    <Space>
+    <Space size={4}>
       <Button type="link" onClick={() => onEdit(record)}>
         编辑
       </Button>
@@ -3458,7 +3541,7 @@ export function SourceRowActions({
   onDelete: (record: SourceRow) => void;
 }) {
   return (
-    <Space>
+    <Space size={4}>
       <Button type="link" onClick={() => onView(record)}>
         查看
       </Button>
@@ -3489,7 +3572,7 @@ export function ProviderRowActions({
   onDelete: (record: ProviderRow) => void;
 }) {
   return (
-    <Space>
+    <Space size={4}>
       <Button type="link" onClick={() => onView(record)}>
         查看
       </Button>
@@ -3518,7 +3601,7 @@ export function RouteGroupRowActions({
   onDelete: (record: RouteGroup) => void;
 }) {
   return (
-    <Space>
+    <Space size={4}>
       <Button type="link" onClick={() => onOpen(record)}>
         进入编排
       </Button>
@@ -3546,7 +3629,7 @@ export function RouteRuleRowActions({
   onDelete: (record: RouteRuleRow) => void;
 }) {
   return (
-    <Space>
+    <Space size={4}>
       <Button type="link" onClick={() => onMoveUp(record)}>
         上移
       </Button>
@@ -3956,22 +4039,43 @@ export function TemplatesPage({ lastUpdated, onRefresh }: ConsolePageProps) {
   };
 
   const templateColumns: TableProps<TemplateRecord & { raw?: TemplateApiRecord }>['columns'] = [
-    { title: '模板名称', dataIndex: 'name' },
-    { title: '来源', dataIndex: 'source' },
+    {
+      title: '模板名称',
+      dataIndex: 'name',
+      width: 140,
+      render: (value: string) => (
+        <Typography.Text ellipsis={{ tooltip: value }} style={{ maxWidth: 120 }}>
+          {value}
+        </Typography.Text>
+      ),
+    },
+    { title: '来源', dataIndex: 'source', width: 140 },
     {
       title: '推送渠道类型',
       dataIndex: 'targetProviderType',
+      width: 120,
       render: (value: TemplateRecord['targetProviderType']) => getProviderTypeLabel(value),
     },
     {
       title: '消息格式',
       dataIndex: 'messageType',
+      width: 100,
       render: (value: string) => getMessageTypeLabel(value),
     },
-    { title: '内容字段', dataIndex: 'targetField' },
+    {
+      title: '内容字段',
+      dataIndex: 'targetField',
+      width: 140,
+      render: (value: string) => (
+        <Typography.Text ellipsis={{ tooltip: value }} style={{ maxWidth: 120 }}>
+          {value || '-'}
+        </Typography.Text>
+      ),
+    },
     {
       title: '校验状态',
       dataIndex: 'validationStatus',
+      width: 110,
       render: (value: TemplateRecord['validationStatus']) => (
         <StatusTag meta={getValidationStatusMeta(value)} />
       ),
@@ -3979,6 +4083,7 @@ export function TemplatesPage({ lastUpdated, onRefresh }: ConsolePageProps) {
     {
       title: '当前版本',
       dataIndex: 'version',
+      width: 90,
       render: (value: string, record) => (
         <Button type="link" onClick={() => void openTemplateVersionHistory(record)}>
           {value || '草稿'}
@@ -3987,6 +4092,8 @@ export function TemplatesPage({ lastUpdated, onRefresh }: ConsolePageProps) {
     },
     {
       title: '操作',
+      fixed: 'right',
+      width: 180,
       render: (_, record) => (
         <TemplateRowActions
           record={record}
@@ -4091,6 +4198,7 @@ export function TemplatesPage({ lastUpdated, onRefresh }: ConsolePageProps) {
           columns={templateColumns}
           dataSource={templatePage.rows}
           loading={loadState.loading}
+          scroll={{ x: 1020 }}
         />
       </ListContainer>
 
@@ -4501,8 +4609,17 @@ function defaultIdentityKindForPlatform(platform: string): string {
   if (providerType === 'wxpusher') {
     return 'wxpusher_uid';
   }
+  if (providerType === 'pushplus') {
+    return 'pushplus_token';
+  }
+  if (providerType === 'serverchan') {
+    return 'serverchan_sendkey';
+  }
   if (providerType === 'bark') {
     return 'bark_device_key';
+  }
+  if (providerType === 'pushme') {
+    return 'pushme_push_key';
   }
   if (providerType === 'gov_cloud') {
     return 'gov_userid';
@@ -4982,13 +5099,26 @@ export function OrganizationPage({ lastUpdated, onRefresh }: ConsolePageProps) {
   };
 
   const columns: TableProps<UserContactRow>['columns'] = [
-    { title: '姓名', dataIndex: 'name' },
-    { title: '所属组织', dataIndex: 'department' },
-    { title: '手机号', dataIndex: 'mobile' },
-    { title: '邮箱', dataIndex: 'email' },
+    { title: '姓名', dataIndex: 'name', width: 120 },
+    { title: '所属组织', dataIndex: 'department', width: 140 },
+    { title: '手机号', dataIndex: 'mobile', width: 130 },
+    { title: '邮箱', dataIndex: 'email', width: 170 },
     {
-      title: '启停',
+      title: '平台身份字段（验证状态）',
+      dataIndex: 'identities',
+      width: 220,
+      className: 'allow-wrap',
+      render: (items: UserIdentityDraft[]) =>
+        items.map((item) => (
+          <Tag key={`${item.platform}-${item.fieldName}`} color={item.verified ? 'success' : 'default'}>
+            {item.platform}
+          </Tag>
+        )),
+    },
+    {
+      title: '状态',
       dataIndex: 'status',
+      width: 90,
       render: (enabled: boolean, record) => (
         <Switch
           checked={enabled}
@@ -5000,17 +5130,9 @@ export function OrganizationPage({ lastUpdated, onRefresh }: ConsolePageProps) {
       ),
     },
     {
-      title: '平台身份字段（验证状态）',
-      dataIndex: 'identities',
-      render: (items: UserIdentityDraft[]) =>
-        items.map((item) => (
-          <Tag key={`${item.platform}-${item.fieldName}`}>
-            {item.platform} / {item.verified ? '已验证' : '未验证'}
-          </Tag>
-        )),
-    },
-    {
       title: '操作',
+      fixed: 'right',
+      width: 200,
       render: (_, record) => (
         <Space>
           <Button
@@ -5041,19 +5163,22 @@ export function OrganizationPage({ lastUpdated, onRefresh }: ConsolePageProps) {
   ];
 
   const recipientGroupColumns: TableProps<RecipientGroupApiRecord>['columns'] = [
-    { title: '接收人组名称', dataIndex: 'name' },
-    { title: '包含人员', dataIndex: 'user_ids', render: (items: string[]) => <Tag>{items.length} 人</Tag> },
-    { title: '包含组织', dataIndex: 'org_ids', render: (items: string[]) => <Tag color="blue">{items.length} 个组织</Tag> },
-    { title: '排除人员', dataIndex: 'excluded_user_ids', render: (items: string[]) => items.length || '-' },
-    { title: '排除组织', dataIndex: 'excluded_org_ids', render: (items: string[]) => items.length || '-' },
+    { title: '接收人组名称', dataIndex: 'name', width: 180 },
+    { title: '包含人员', dataIndex: 'user_ids', width: 110, render: (items: string[]) => <Tag>{items.length} 人</Tag> },
+    { title: '包含组织', dataIndex: 'org_ids', width: 120, render: (items: string[]) => <Tag color="blue">{items.length} 个组织</Tag> },
+    { title: '排除人员', dataIndex: 'excluded_user_ids', width: 100, render: (items: string[]) => items.length || '-' },
+    { title: '排除组织', dataIndex: 'excluded_org_ids', width: 100, render: (items: string[]) => items.length || '-' },
     {
       title: '状态',
       dataIndex: 'enabled',
+      width: 90,
       render: (enabled: boolean) => <StatusTag meta={getEnabledMeta(enabled)} />,
     },
-    { title: '更新时间', dataIndex: 'updated_at', render: (value: string) => formatApiTime(value) },
+    { title: '更新时间', dataIndex: 'updated_at', width: 170, render: (value: string) => formatApiTime(value) },
     {
       title: '操作',
+      fixed: 'right',
+      width: 180,
       render: (_, record) => (
         <Space>
           <Button
@@ -5175,6 +5300,7 @@ export function OrganizationPage({ lastUpdated, onRefresh }: ConsolePageProps) {
                       columns={columns}
                       dataSource={userPage.rows}
                       loading={loadState.loading}
+                      scroll={{ x: 1070 }}
                     />
                   </ListContainer>
                 </div>
@@ -5238,7 +5364,7 @@ export function OrganizationPage({ lastUpdated, onRefresh }: ConsolePageProps) {
                     columns={recipientGroupColumns}
                     dataSource={organizationRecipientGroupPage.rows}
                     loading={loadState.loading}
-                    scroll={{ x: 920 }}
+                    scroll={{ x: 1050 }}
                   />
                 </ListContainer>
               </div>
@@ -5442,19 +5568,22 @@ export function RecipientGroupsPage({ lastUpdated, onRefresh }: ConsolePageProps
   };
 
   const columns: TableProps<RecipientGroupApiRecord>['columns'] = [
-    { title: '接收人组名称', dataIndex: 'name' },
-    { title: '包含人员', dataIndex: 'user_ids', render: (items: string[]) => <Tag>{items.length} 人</Tag> },
-    { title: '包含组织', dataIndex: 'org_ids', render: (items: string[]) => <Tag color="blue">{items.length} 个组织</Tag> },
-    { title: '排除人员', dataIndex: 'excluded_user_ids', render: (items: string[]) => items.length || '-' },
-    { title: '排除组织', dataIndex: 'excluded_org_ids', render: (items: string[]) => items.length || '-' },
+    { title: '接收人组名称', dataIndex: 'name', width: 180 },
+    { title: '包含人员', dataIndex: 'user_ids', width: 110, render: (items: string[]) => <Tag>{items.length} 人</Tag> },
+    { title: '包含组织', dataIndex: 'org_ids', width: 120, render: (items: string[]) => <Tag color="blue">{items.length} 个组织</Tag> },
+    { title: '排除人员', dataIndex: 'excluded_user_ids', width: 100, render: (items: string[]) => items.length || '-' },
+    { title: '排除组织', dataIndex: 'excluded_org_ids', width: 100, render: (items: string[]) => items.length || '-' },
     {
       title: '状态',
       dataIndex: 'enabled',
+      width: 90,
       render: (enabled: boolean) => <StatusTag meta={getEnabledMeta(enabled)} />,
     },
-    { title: '更新时间', dataIndex: 'updated_at', render: (value: string) => formatApiTime(value) },
+    { title: '更新时间', dataIndex: 'updated_at', width: 170, render: (value: string) => formatApiTime(value) },
     {
       title: '操作',
+      fixed: 'right',
+      width: 180,
       render: (_, record) => (
         <Space>
           <Button type="link" onClick={() => openEditRecipientGroup(record)}>
@@ -5522,7 +5651,7 @@ export function RecipientGroupsPage({ lastUpdated, onRefresh }: ConsolePageProps
           columns={columns}
           dataSource={recipientGroupPage.rows}
           loading={loadState.loading}
-          scroll={{ x: 920 }}
+          scroll={{ x: 1050 }}
         />
       </ListContainer>
       <CreateDrawer title={drawer.title} open={drawer.open} onClose={closeDrawer} onSave={saveRecipientGroup} width={720}>
@@ -5720,18 +5849,21 @@ export function MatchGroupsPage({ lastUpdated, onRefresh }: ConsolePageProps) {
   };
 
   const columns: TableProps<MatchGroupRow>['columns'] = [
-    { title: '名称', dataIndex: 'name' },
-    { title: '类型', dataIndex: 'type' },
-    { title: '组内值数量', render: (_, record) => record.itemCount },
-    { title: '引用次数', dataIndex: 'references' },
+    { title: '名称', dataIndex: 'name', width: 180 },
+    { title: '类型', dataIndex: 'type', width: 120 },
+    { title: '组内值数量', width: 130, render: (_, record) => record.itemCount },
+    { title: '引用次数', dataIndex: 'references', width: 110 },
     {
       title: '状态',
       dataIndex: 'enabled',
+      width: 100,
       render: (enabled: boolean) => <StatusTag meta={getEnabledMeta(enabled)} />,
     },
-    { title: '更新时间', dataIndex: 'updatedAt' },
+    { title: '更新时间', dataIndex: 'updatedAt', width: 170 },
     {
       title: '操作',
+      fixed: 'right',
+      width: 200,
       render: (_, record) => (
         <Space>
           <Button
@@ -5765,16 +5897,19 @@ export function MatchGroupsPage({ lastUpdated, onRefresh }: ConsolePageProps) {
   ];
 
   const valueColumns: TableProps<MatchGroupItemApiRecord>['columns'] = [
-    { title: '匹配值', dataIndex: 'value', render: (value: string) => <Typography.Text code>{value}</Typography.Text> },
-    { title: '值类型', dataIndex: 'value_type', render: (value: string) => getValueTypeLabel(value) },
+    { title: '匹配值', dataIndex: 'value', width: 120, render: (value: string) => <Typography.Text code>{value}</Typography.Text> },
+    { title: '值类型', dataIndex: 'value_type', width: 100, render: (value: string) => getValueTypeLabel(value) },
     {
       title: '条目高级 JSON',
       dataIndex: 'metadata',
+      width: 140,
       render: (value: JSONValue) => <Typography.Text code>{stringifyJSON(value, '{}')}</Typography.Text>,
     },
-    { title: '创建时间', dataIndex: 'created_at', render: (value: string) => formatApiTime(value) },
+    { title: '创建时间', dataIndex: 'created_at', width: 150, render: (value: string) => formatApiTime(value) },
     {
       title: '操作',
+      fixed: 'right',
+      width: 130,
       render: (_, record) => (
         <Space>
           <Button
@@ -5864,6 +5999,7 @@ export function MatchGroupsPage({ lastUpdated, onRefresh }: ConsolePageProps) {
           columns={columns}
           dataSource={matchGroupPage.rows}
           loading={loadState.loading}
+          scroll={{ x: 1010 }}
         />
       </ListContainer>
       <CreateDrawer title={drawer.title} open={drawer.open} onClose={closeDrawer} onSave={saveMatchGroup} width={640}>
@@ -5923,6 +6059,7 @@ export function MatchGroupsPage({ lastUpdated, onRefresh }: ConsolePageProps) {
             columns={valueColumns}
             dataSource={itemRows}
             loading={itemsLoading}
+            scroll={{ x: 640 }}
           />
         </Space>
       </CreateDrawer>
@@ -6011,25 +6148,29 @@ export function MessageLogsPage({ lastUpdated, onRefresh }: ConsolePageProps) {
   };
   const columns: TableProps<MessageLog>['columns'] = [
     { title: 'Trace ID', dataIndex: 'traceId', width: 190 },
-    { title: '来源', dataIndex: 'source' },
-    { title: '入站时间', dataIndex: 'receivedAt' },
+    { title: '来源', dataIndex: 'source', width: 130 },
+    { title: '入站时间', dataIndex: 'receivedAt', width: 170 },
     {
       title: '入站状态',
       dataIndex: 'status',
+      width: 110,
       render: (value: MessageLog['status']) => <StatusTag meta={getInboundStatusMeta(value)} />,
     },
-    { title: '命中路由', dataIndex: 'matchedRoute' },
+    { title: '命中路由', dataIndex: 'matchedRoute', width: 130 },
     {
       title: '出站状态',
       dataIndex: 'outboundStatus',
+      width: 110,
       render: (value?: MessageLog['outboundStatus']) =>
         value ? <StatusTag meta={getOutboundStatusMeta(value)} /> : '-',
     },
-    { title: '目标平台', dataIndex: 'targetProvider', render: (value?: string) => value ?? '-' },
-    { title: '耗时', dataIndex: 'duration' },
-    { title: '错误码', dataIndex: 'errorCode', render: (value?: string) => value ?? '-' },
+    { title: '目标平台', dataIndex: 'targetProvider', width: 130, render: (value?: string) => value ?? '-' },
+    { title: '耗时', dataIndex: 'duration', width: 90 },
+    { title: '错误码', dataIndex: 'errorCode', width: 100, render: (value?: string) => value ?? '-' },
     {
       title: '操作',
+      fixed: 'right',
+      width: 90,
       render: (_, record) => (
         <Button type="link" onClick={() => void openMessageDetail(record)}>
           详情
@@ -6156,7 +6297,7 @@ export function MessageLogsPage({ lastUpdated, onRefresh }: ConsolePageProps) {
           columns={columns}
           dataSource={messageLogPage.rows}
           loading={loadState.loading}
-          scroll={{ x: 1180 }}
+          scroll={{ x: 1260 }}
         />
       </ListContainer>
 
@@ -6377,20 +6518,23 @@ export function AuditPage({ lastUpdated, onRefresh }: ConsolePageProps) {
     void loadAuditLogs();
   }, [loadAuditLogs, lastUpdated]);
   const columns: TableProps<AuditLogRow>['columns'] = [
-    { title: '操作人', dataIndex: 'actor' },
-    { title: '操作角色', dataIndex: 'role' },
-    { title: '操作', dataIndex: 'action', render: (value: AuditLog['action']) => getAuditActionLabel(value) },
-    { title: '资源类型', dataIndex: 'resourceType' },
-    { title: '资源名称', dataIndex: 'resourceName' },
+    { title: '操作人', dataIndex: 'actor', width: 120 },
+    { title: '操作角色', dataIndex: 'role', width: 120 },
+    { title: '操作', dataIndex: 'action', width: 110, render: (value: AuditLog['action']) => getAuditActionLabel(value) },
+    { title: '资源类型', dataIndex: 'resourceType', width: 130 },
+    { title: '资源名称', dataIndex: 'resourceName', width: 180 },
     {
       title: '状态',
       dataIndex: 'status',
+      width: 100,
       render: (value: AuditLog['status']) => <StatusTag meta={getJobStatusMeta(value)} />,
     },
-    { title: 'IP', dataIndex: 'ip' },
-    { title: '创建时间', dataIndex: 'createdAt' },
+    { title: 'IP', dataIndex: 'ip', width: 130 },
+    { title: '创建时间', dataIndex: 'createdAt', width: 170 },
     {
       title: '操作',
+      fixed: 'right',
+      width: 90,
       render: (_, record) => (
         <Button type="link" onClick={() => setSelected(record)}>
           详情
@@ -6488,6 +6632,7 @@ export function AuditPage({ lastUpdated, onRefresh }: ConsolePageProps) {
           columns={columns}
           dataSource={auditPage.rows}
           loading={loadState.loading}
+          scroll={{ x: 1150 }}
         />
       </ListContainer>
       <Drawer
@@ -6572,13 +6717,15 @@ export function SettingsPage({ lastUpdated, onRefresh }: ConsolePageProps) {
     }
   };
   const columns: TableProps<SettingApiRecord>['columns'] = [
-    { title: '参数键', dataIndex: 'key' },
-    { title: '参数说明', dataIndex: 'description' },
-    { title: '分类', dataIndex: 'category', render: (value: string) => <Tag color="blue">{value}</Tag> },
-    { title: '当前值', dataIndex: 'value', render: (value: JSONValue) => <Typography.Text code>{stringifyJSON(value, '-')}</Typography.Text> },
-    { title: '更新时间', dataIndex: 'updated_at', render: (value: string) => formatApiTime(value) },
+    { title: '参数键', dataIndex: 'key', width: 180 },
+    { title: '参数说明', dataIndex: 'description', width: 260 },
+    { title: '分类', dataIndex: 'category', width: 120, render: (value: string) => <Tag color="blue">{value}</Tag> },
+    { title: '当前值', dataIndex: 'value', width: 220, render: (value: JSONValue) => <Typography.Text code>{stringifyJSON(value, '-')}</Typography.Text> },
+    { title: '更新时间', dataIndex: 'updated_at', width: 170, render: (value: string) => formatApiTime(value) },
     {
       title: '操作',
+      fixed: 'right',
+      width: 100,
       render: (_, record) => (
         <Button
           type="link"
@@ -6658,6 +6805,7 @@ export function SettingsPage({ lastUpdated, onRefresh }: ConsolePageProps) {
                     columns={columns}
                     dataSource={settingsPage.rows}
                     loading={loadState.loading}
+                    scroll={{ x: 1050 }}
                   />
                 </ListContainer>
                 <Modal

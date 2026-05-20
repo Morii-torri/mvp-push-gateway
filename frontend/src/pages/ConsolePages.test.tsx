@@ -166,7 +166,7 @@ describe('critical console pages', () => {
     expect(providersMarkup).not.toContain('发送模式');
     expect(providersMarkup).not.toContain('custom_token');
     const deadLetterIndex = providersMarkup.indexOf('死信策略');
-    const enabledIndex = providersMarkup.indexOf('启停');
+    const enabledIndex = providersMarkup.indexOf('状态', deadLetterIndex);
     const actionIndex = providersMarkup.indexOf('操作');
     expect(deadLetterIndex).toBeGreaterThan(-1);
     expect(enabledIndex).toBeGreaterThan(deadLetterIndex);
@@ -454,7 +454,7 @@ describe('critical console pages', () => {
     expect(markup).not.toContain('请求 Header');
   });
 
-  it('uses PushPlus token-only provider fields and HTML content template fallback', () => {
+  it('uses PushPlus recipient-token provider fields and HTML content template fallback', () => {
     const providerDraft = createProviderDraft('pushplus', 1);
     const providerMarkup = renderPage(
       <ProviderConfigForm
@@ -465,7 +465,7 @@ describe('critical console pages', () => {
     );
 
     expect(providerDraft.description).toBe('');
-    expect(providerMarkup).toContain('Token');
+    expect(providerMarkup).not.toContain('Token</label>');
     expect(providerMarkup).not.toContain('Topic');
     expect(providerMarkup).not.toContain('推送渠道</label>');
     expect(providerMarkup).not.toContain('template');
@@ -484,8 +484,8 @@ describe('critical console pages', () => {
     expect(providerMarkup).not.toContain('测试接收人');
     expect(providerMarkup).not.toContain('启停');
 
-    const providerInput = channelInputFromProvider({ ...providerDraft, fieldValues: { 'auth_config.token': 'push-token' } });
-    expect(providerInput.auth_config).toEqual({ token: 'push-token' });
+    const providerInput = channelInputFromProvider({ ...providerDraft, fieldValues: {} });
+    expect(providerInput.auth_config).toEqual({});
     expect(providerInput.send_config).toEqual({});
     expect(providerInput.rate_limit_config).toEqual({ enabled: true, qps: 10 });
     expect(providerInput.concurrency_limit).toBe(1);
@@ -730,7 +730,7 @@ describe('critical console pages', () => {
     const providers = [
       ['ntfy', 'Topic', ['服务地址', '优先级']],
       ['gotify', 'Gotify App Token', ['服务地址', '优先级']],
-      ['bark', 'Bark Device Key', ['服务地址', '通知级别']],
+      ['bark', '服务地址', []],
     ] as const;
 
     for (const [providerType, credentialLabel, extraLabels] of providers) {
@@ -762,7 +762,7 @@ describe('critical console pages', () => {
     }
   });
 
-  it('uses PushMe key-only channel fields and typed template content', () => {
+  it('uses PushMe recipient-key channel fields and typed template content', () => {
     const providerDraft = createProviderDraft('pushme', 1);
     const providerMarkup = renderPage(
       <ProviderConfigForm
@@ -773,7 +773,7 @@ describe('critical console pages', () => {
     );
 
     expect(providerMarkup).toContain('服务地址');
-    expect(providerMarkup).toContain('PushMe Push Key');
+    expect(providerMarkup).not.toContain('PushMe Push Key');
     expect(providerMarkup).not.toContain('PushMe 临时 Key');
     expect(providerMarkup).not.toContain('内容类型');
     expect(providerMarkup).not.toContain('请求方法');
@@ -782,12 +782,10 @@ describe('critical console pages', () => {
       ...providerDraft,
       fieldValues: {
         'auth_config.server_url': 'https://push.i-i.me',
-        'auth_config.push_key': 'push-key',
       },
     });
     expect(providerInput.auth_config).toEqual({
       server_url: 'https://push.i-i.me',
-      push_key: 'push-key',
     });
     expect(providerInput.send_config).toEqual({});
 
@@ -813,6 +811,86 @@ describe('critical console pages', () => {
     expect(templateMarkup).toContain('markdown');
     expect(templateMarkup).not.toContain('body');
     expect(templateMarkup).not.toContain('format');
+  });
+
+  it('uses Bark recipient-only channel fields and message-level option fields', () => {
+    const providerDraft = createProviderDraft('bark', 1);
+    const providerMarkup = renderPage(
+      <ProviderConfigForm
+        value={providerDraft}
+        onChange={() => undefined}
+        capabilities={[]}
+      />,
+    );
+
+    expect(providerMarkup).toContain('服务地址');
+    expect(providerMarkup).not.toContain('Bark Device Key');
+    expect(providerMarkup).not.toContain('Bark Device Key 列表');
+    expect(providerMarkup).not.toContain('分组');
+    expect(providerMarkup).not.toContain('提示音');
+    expect(providerMarkup).not.toContain('通知级别');
+    expect(providerMarkup).not.toContain('图标 URL');
+
+    const providerInput = channelInputFromProvider({
+      ...providerDraft,
+      fieldValues: {
+        'auth_config.server_url': 'https://api.day.app',
+      },
+    });
+    expect(providerInput.auth_config).toEqual({
+      server_url: 'https://api.day.app',
+    });
+    expect(providerInput.send_config).toEqual({});
+
+    const templateDraft = createTemplateDraft([], [], 'bark', 'notice');
+    const templateMarkup = renderPage(
+      <TemplateEditorForm
+        value={templateDraft}
+        onChange={() => undefined}
+        sourceRows={[]}
+        capabilities={[]}
+      />,
+    );
+    const templateInput = templateVersionInputFromDraft(templateDraft);
+    const templateBody = JSON.parse(templateInput.template_body) as Record<string, string>;
+    const schema = templateInput.message_body_schema as {
+      fields: Array<{ key: string; enum?: string[]; format_hint?: string; enum_descriptions?: Record<string, string> }>;
+    };
+
+    expect(templateInput.message_type).toBe('notice');
+    expect(Object.keys(templateBody)).toEqual(['title', 'subtitle', 'body', 'group', 'sound', 'level', 'icon', 'url', 'image']);
+    const levelSchema = schema.fields.find((field) => field.key === 'level');
+    expect(levelSchema?.enum).toEqual(['critical', 'active', 'timeSensitive', 'passive']);
+    expect(levelSchema?.format_hint).toBeUndefined();
+    expect(levelSchema?.enum_descriptions?.passive).toContain('不会亮屏提醒');
+    expect(schema.fields.find((field) => field.key === 'markdown')?.format_hint).toBe('支持 Markdown');
+    expect(templateMarkup).toContain('正文格式');
+    expect(templateMarkup).toContain('title');
+    expect(templateMarkup).toContain('body');
+    expect(templateMarkup).not.toContain('critical: 重要警告');
+    expect(templateMarkup).toContain('level');
+
+    const markdownDraft = {
+      ...templateDraft,
+      barkBodyFormat: 'markdown' as const,
+      fieldValues: {
+        ...templateDraft.fieldValues,
+        markdown: { expression: '{{ payload.content }}', defaultValue: '' },
+      },
+    };
+    const markdownBody = JSON.parse(templateVersionInputFromDraft(markdownDraft).template_body) as Record<string, string>;
+    const markdownMarkup = renderPage(
+      <TemplateEditorForm
+        value={markdownDraft}
+        onChange={() => undefined}
+        sourceRows={[]}
+        capabilities={[]}
+      />,
+    );
+    expect(Object.keys(markdownBody)).toEqual(['title', 'subtitle', 'markdown', 'group', 'sound', 'level', 'icon', 'url', 'image']);
+    expect(markdownMarkup).toContain('markdown');
+    expect(markdownMarkup).toContain('支持 Markdown');
+    expect(markdownMarkup).not.toContain('critical: 重要警告');
   });
 
   it('uses vendor fields and template/content fallback schemas for the first SMS providers', () => {
@@ -959,7 +1037,7 @@ describe('critical console pages', () => {
     );
 
     expect(markup).toContain('服务地址');
-    expect(markup).toContain('PushMe Push Key');
+    expect(markup).not.toContain('PushMe Push Key');
     expect(markup).not.toContain('临时 Key');
     expect(markup).not.toContain('内容类型');
     expect(markup).not.toContain('请求方法');
@@ -967,7 +1045,6 @@ describe('critical console pages', () => {
       ...draft,
       fieldValues: {
         'auth_config.server_url': 'https://push.i-i.me',
-        'auth_config.push_key': 'push-key',
       },
     }).send_config).toEqual({});
   });
@@ -1347,26 +1424,31 @@ describe('critical console pages', () => {
     expect(markup).not.toContain('会调用真实推送渠道');
   });
 
-  it('renders PushPlus test panel fields without recipient input', () => {
+  it('renders PushPlus test panel fields with recipient token input', () => {
     const draft = createProviderDraft('pushplus', 1);
     const markup = renderPage(
       <ProviderTestPanel value={draft} onChange={() => undefined} />,
     );
 
     expect(markup).toContain('content');
+    expect(markup).toContain('PushPlus Token');
     expect(markup).toContain('title（可选）');
     expect(markup).toContain('topic（可选）');
     expect(markup).toContain('模拟请求');
     expect(markup).toContain('真实发送');
     expect(markup).not.toContain('测试接收人');
 
-    const payload = providerTestPayload({ ...draft, testBody: '<p>PushPlus 测试消息</p>' }, false) as {
+    const payload = providerTestPayload({ ...draft, testRecipient: 'push-token-1', testBody: '<p>PushPlus 测试消息</p>' }, false) as {
       rendered_message: { message_type: string };
+      recipient: string;
+      resolved_recipients: Array<{ platform_ids: Record<string, string> }>;
     };
     expect(payload.rendered_message.message_type).toBe('html');
+    expect(payload.recipient).toBe('');
+    expect(payload.resolved_recipients).toEqual([{ platform_ids: { pushplus_token: 'push-token-1' } }]);
   });
 
-  it('renders PushMe test panel without recipient and builds typed payload', () => {
+  it('renders PushMe test panel with recipient key and builds typed payload', () => {
     const draft = createProviderDraft('pushme', 1);
     const markup = renderPage(
       <ProviderTestPanel value={draft} onChange={() => undefined} />,
@@ -1375,6 +1457,7 @@ describe('critical console pages', () => {
     expect(markup).toContain('title');
     expect(markup).toContain('content');
     expect(markup).toContain('type');
+    expect(markup).toContain('PushMe Push Key');
     expect(markup).toContain('markdown');
     expect(markup).toContain('模拟请求');
     expect(markup).toContain('真实发送');
@@ -1383,6 +1466,7 @@ describe('critical console pages', () => {
     const payload = providerTestPayload(
       {
         ...draft,
+        testRecipient: 'pushme-key-1',
         testTitle: 'PushMe 标题',
         testBody: '<b>PushMe 内容</b>',
         testTopic: 'html',
@@ -1392,7 +1476,7 @@ describe('critical console pages', () => {
       recipient: string;
       body: Record<string, unknown>;
       rendered_message: { message_type: string; content: Record<string, unknown> };
-      resolved_recipients: unknown[];
+      resolved_recipients: Array<{ platform_ids: Record<string, string> }>;
     };
 
     expect(payload.recipient).toBe('');
@@ -1403,7 +1487,84 @@ describe('critical console pages', () => {
     });
     expect(payload.rendered_message.message_type).toBe('html');
     expect(payload.rendered_message.content).toEqual(payload.body);
-    expect(payload.resolved_recipients).toEqual([]);
+    expect(payload.resolved_recipients).toEqual([{ platform_ids: { pushme_push_key: 'pushme-key-1' } }]);
+  });
+
+  it('renders ServerChan test panel with recipient sendKey and builds URL identity payload', () => {
+    const draft = createProviderDraft('serverchan', 1);
+    const markup = renderPage(
+      <ProviderTestPanel value={draft} onChange={() => undefined} />,
+    );
+
+    expect(markup).toContain('Server酱 SendKey');
+    expect(markup).toContain('title');
+    expect(markup).toContain('desp（可选）');
+
+    const payload = providerTestPayload(
+      {
+        ...draft,
+        testRecipient: 'sctp21329tfauqvvbhe2wpeb5lufz4gz',
+        testTitle: 'Server酱标题',
+        testBody: '**正文**',
+      },
+      false,
+    ) as {
+      recipient: string;
+      resolved_recipients: Array<{ platform_ids: Record<string, string> }>;
+    };
+
+    expect(payload.recipient).toBe('');
+    expect(payload.resolved_recipients).toEqual([
+      { platform_ids: { serverchan_sendkey: 'sctp21329tfauqvvbhe2wpeb5lufz4gz' } },
+    ]);
+  });
+
+  it('renders Bark test panel with required recipient and typed payload', () => {
+    const draft = createProviderDraft('bark', 1);
+    const markup = renderPage(
+      <ProviderTestPanel value={{ ...draft, testLevel: 'timeSensitive' }} onChange={() => undefined} />,
+    );
+
+    expect(markup).toContain('Bark Device Key');
+    expect(markup).toContain('body / markdown');
+    expect(markup).toContain('level（可选）');
+    expect(markup).toContain('icon（可选）');
+    expect(markup).toContain('timeSensitive');
+    expect(markup).not.toContain('critical: 重要警告');
+
+    const payload = providerTestPayload(
+      {
+        ...draft,
+        testRecipient: 'device-key-1,device-key-2',
+        testTitle: 'Bark 标题',
+        testTopic: 'markdown',
+        testBody: '**Bark 内容**',
+        testUrl: 'https://example.test/detail',
+        testLevel: 'critical',
+        testIcon: 'https://example.test/icon.png',
+      },
+      false,
+    ) as {
+      recipient: string;
+      body: Record<string, unknown>;
+      rendered_message: { message_type: string; content: Record<string, unknown> };
+      resolved_recipients: Array<{ platform_ids: Record<string, string> }>;
+    };
+
+    expect(payload.recipient).toBe('');
+    expect(payload.body).toEqual({
+      title: 'Bark 标题',
+      markdown: '**Bark 内容**',
+      url: 'https://example.test/detail',
+      level: 'critical',
+      icon: 'https://example.test/icon.png',
+    });
+    expect(payload.rendered_message.message_type).toBe('markdown');
+    expect(payload.rendered_message.content).toEqual(payload.body);
+    expect(payload.resolved_recipients).toEqual([
+      { platform_ids: { bark_device_key: 'device-key-1' } },
+      { platform_ids: { bark_device_key: 'device-key-2' } },
+    ]);
   });
 
   it('summarizes provider test result as final URL headers and body only', () => {
@@ -2143,8 +2304,9 @@ describe('critical console pages', () => {
     expect(markup).not.toContain('身份类型');
     expect(markup).not.toContain('人员属性高级 JSON');
     expect(markup).toContain('验证状态');
-    expect(userSection).toContain('scope="col">启停</th>');
-    expect(userSection).not.toContain('scope="col">状态</th>');
+    expect(userSection).toContain('scope="col">状态</th>');
+    expect(userSection).not.toContain('scope="col">启停</th>');
+    expect(userSection.indexOf('scope="col">状态</th>')).toBeLessThan(userSection.indexOf('scope="col">操作</th>'));
   });
 
   it('renders user profile form without a status switch', () => {
@@ -2180,7 +2342,7 @@ describe('critical console pages', () => {
 
   it('renders the identity editor with a right aligned primary add button and no identity-kind input', () => {
     const IdentityEditor = (ConsolePages as typeof ConsolePages & {
-      IdentityEditor?: (props: { identities: []; onChange: (identities: []) => void }) => ReactElement;
+      IdentityEditor?: (props: { identities: Array<Record<string, unknown>>; onChange: (identities: Array<Record<string, unknown>>) => void }) => ReactElement;
     }).IdentityEditor;
 
     expect(IdentityEditor).toBeTypeOf('function');
@@ -2188,17 +2350,37 @@ describe('critical console pages', () => {
       throw new Error('IdentityEditor is not exported');
     }
 
-    const markup = renderPage(<IdentityEditor identities={[]} onChange={() => undefined} />);
+    const markup = renderPage(
+      <IdentityEditor
+        identities={[
+          {
+            platform: 'PushPlus',
+            fieldName: 'pushplus_token',
+            value: 'token-1',
+            verified: true,
+          },
+        ]}
+        onChange={() => undefined}
+      />,
+    );
 
     expect(markup).toContain('平台身份字段');
     expect(markup).toContain('新增身份字段');
     expect(markup).toContain('ant-btn-primary');
     expect(markup).toContain('identity-add-button');
+    expect(markup).toContain('identity-row--verified');
+    expect(markup).toContain('identity-delete-icon-button');
+    expect(markup).toContain('通过');
+    expect(markup).not.toContain('>删除</');
+    expect(markup).not.toContain('已验证');
+    expect(markup).not.toContain('未验证');
     expect(markup).not.toContain('身份类型');
   });
 
-  it('does not offer PushPlus as a personnel platform identity', () => {
-    expect(recipientIdentityProviderOptions.map((item) => item.value)).not.toContain('pushplus');
+  it('offers recipient-bound personal providers as personnel platform identities', () => {
+    expect(recipientIdentityProviderOptions.map((item) => item.value)).toEqual(
+      expect.arrayContaining(['pushplus', 'serverchan', 'pushme']),
+    );
   });
 
   it('renders message log detail attempts as separate send target blocks', () => {

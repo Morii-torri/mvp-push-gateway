@@ -550,12 +550,11 @@ func (r Repository) getOverviewSummary(ctx context.Context, windowStart, now tim
 			WHERE COALESCE(finished_at, queued_at) >= $1
 				AND COALESCE(finished_at, queued_at) <= $2
 		),
-		active_platforms AS (
-			SELECT count(DISTINCT channel_id)::integer AS active_platform_count
-			FROM delivery_attempts
-			WHERE channel_id IS NOT NULL
-				AND COALESCE(finished_at, queued_at) >= $1
-				AND COALESCE(finished_at, queued_at) <= $2
+		received_summary AS (
+			SELECT count(*)::integer AS total_received
+			FROM message_records
+			WHERE received_at >= $1
+				AND received_at <= $2
 		)
 		SELECT
 			delivery_summary.total_sent,
@@ -563,15 +562,15 @@ func (r Repository) getOverviewSummary(ctx context.Context, windowStart, now tim
 			delivery_summary.failed,
 			COALESCE(round((delivery_summary.successful::numeric * 100.0) / NULLIF(delivery_summary.total_sent::numeric, 0), 2), 0)::float8 AS success_rate,
 			COALESCE(round(delivery_summary.total_sent::numeric / $3::numeric, 2), 0)::float8 AS average_qps,
-			active_platforms.active_platform_count
-		FROM delivery_summary, active_platforms
+			received_summary.total_received
+		FROM delivery_summary, received_summary
 	`, windowStart, now, windowSeconds).Scan(
 		&summary.TotalSent,
 		&summary.Successful,
 		&summary.Failed,
 		&summary.SuccessRate,
 		&summary.AverageQPS,
-		&summary.ActivePlatforms,
+		&summary.TotalReceived,
 	)
 	if err != nil {
 		return statistics.Summary{}, fmt.Errorf("query overview summary: %w", err)

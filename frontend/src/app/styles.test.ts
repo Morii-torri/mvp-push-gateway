@@ -17,7 +17,7 @@ describe('console list layout rhythm', () => {
     expect(styles).toContain('min-width: 0;');
     expect(styles).toContain('grid-template-columns: minmax(0, 1fr);');
     expect(styles).toContain('.workspace-page-tabs');
-    expect(styles).toContain('.workspace-page-tabs .page-frame:has(.list-container--fill)');
+    expect(styles).toContain('.page-frame:has(.workspace-page-tabs)');
     expect(styles).toContain('.organization-subpage-tabs');
     expect(styles).toContain('.split-layout--organization-management');
     expect(styles).toContain('.org-tree-node__add');

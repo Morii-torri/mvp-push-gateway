@@ -32,7 +32,7 @@ import {
 } from './shared';
 
 type ProviderFieldTarget = 'auth_config' | 'token_config' | 'send_config';
-type ProviderFieldInputType = 'text' | 'password' | 'number' | 'textarea';
+type ProviderFieldInputType = 'text' | 'password' | 'number' | 'textarea' | 'select';
 
 type ProviderConfigField = {
   key: string;
@@ -45,6 +45,7 @@ type ProviderConfigField = {
   placeholder: string;
   advanced: boolean;
   defaultValue?: ProviderFieldValue;
+  options?: Array<{ label: string; value: string }>;
 };
 
 type ProviderFieldValue = string | number | boolean;
@@ -79,6 +80,8 @@ type ProviderPreset = {
   testTitle?: string;
   testTopic?: string;
   testUrl?: string;
+  testLevel?: string;
+  testIcon?: string;
 };
 
 type ProviderRuntimeConfig = ProviderPreset & {
@@ -109,6 +112,8 @@ type ProviderRuntimeConfig = ProviderPreset & {
   testTitle: string;
   testTopic: string;
   testUrl: string;
+  testLevel: string;
+  testIcon: string;
 };
 
 export type ProviderRow = ProviderRecord & ProviderRuntimeConfig;
@@ -123,6 +128,13 @@ export type ProviderTestSendPreview = {
   request: ProviderTestRequestPreview;
   response: JSONValue;
 };
+
+const barkLevelOptions = [
+  { label: 'critical：重要警告，在静音模式下也会响铃', value: 'critical' },
+  { label: 'active：默认值，系统会立即亮屏显示通知', value: 'active' },
+  { label: 'timeSensitive：时效性通知，可在专注状态下显示通知', value: 'timeSensitive' },
+  { label: 'passive：仅将通知添加到通知列表，不会亮屏提醒', value: 'passive' },
+];
 
 const providerPresets: Record<ProviderKind, ProviderPreset> = {
   webhook: {
@@ -160,12 +172,12 @@ const providerPresets: Record<ProviderKind, ProviderPreset> = {
     testBody: '本平台级联测试消息',
   },
   pushplus: {
-    tokenEndpoint: '固定用户 Token',
-    tokenRequest: 'token',
+    tokenEndpoint: '接收人 PushPlus Token',
+    tokenRequest: '-',
     tokenResponsePath: '-',
-    tokenPlacement: 'body.token',
+    tokenPlacement: 'body.token（来自接收人）',
     sendEndpoint: 'POST https://www.pushplus.plus/send',
-    recipientMapping: '无需接收人；topic 由消息模板字段提供',
+    recipientMapping: '由路由接收人或人员平台身份 pushplus_token 提供；topic 由消息模板字段提供',
     bodyMapping: 'adapter 根据 content/title/topic 生成 JSON 请求体',
     qps: 10,
     concurrency: 4,
@@ -173,7 +185,7 @@ const providerPresets: Record<ProviderKind, ProviderPreset> = {
     retryPolicy: '2 次固定间隔',
     retryInterval: '3s / 10s',
     deadLetterPolicy: '全局默认：重试耗尽或上级错误进入死信',
-    testRecipient: '-',
+    testRecipient: '',
     testBody: 'PushPlus 测试消息',
   },
   wxpusher: {
@@ -197,12 +209,12 @@ const providerPresets: Record<ProviderKind, ProviderPreset> = {
     testUrl: 'https://wxpusher.zjiecode.com',
   },
   serverchan: {
-    tokenEndpoint: 'API URL',
+    tokenEndpoint: '接收人 SendKey',
     tokenRequest: '',
     tokenResponsePath: '-',
-    tokenPlacement: '-',
+    tokenPlacement: 'URL path（由 sendKey 推导 uid）',
     sendEndpoint: 'POST https://<uid>.push.ft07.com/send/<sendkey>.send',
-    recipientMapping: '无需接收人；API URL 绑定账号',
+    recipientMapping: '由路由接收人或人员平台身份 serverchan_sendkey 提供；渠道 URL 保留官方占位符',
     bodyMapping: 'adapter 根据 title/desp/short 生成 JSON 请求体',
     qps: 5,
     concurrency: 2,
@@ -210,7 +222,7 @@ const providerPresets: Record<ProviderKind, ProviderPreset> = {
     retryPolicy: '2 次固定间隔',
     retryInterval: '5s / 15s',
     deadLetterPolicy: '全局默认：重试耗尽或上级错误进入死信',
-    testRecipient: '-',
+    testRecipient: '',
     testBody: 'Server酱测试正文',
     testTitle: 'Server酱测试标题',
     testTopic: '',
@@ -250,13 +262,13 @@ const providerPresets: Record<ProviderKind, ProviderPreset> = {
     testBody: 'Gotify 测试消息',
   },
   bark: {
-    tokenEndpoint: '固定 Bark Device Key',
-    tokenRequest: 'device_key 或 device_keys',
+    tokenEndpoint: '无需渠道 Token',
+    tokenRequest: '-',
     tokenResponsePath: '-',
-    tokenPlacement: 'body.device_key',
+    tokenPlacement: 'body.device_key（来自接收人）',
     sendEndpoint: '内置 Bark adapter',
-    recipientMapping: 'device_key 可由渠道配置或 bark_device_key 身份解析',
-    bodyMapping: 'adapter 根据 title/body/subtitle/url/level 生成请求体',
+    recipientMapping: '由路由接收人或人员平台身份 bark_device_key 提供',
+    bodyMapping: 'adapter 根据 title/subtitle/body/markdown/url/group/sound/icon/image/level 生成请求体',
     qps: 5,
     concurrency: 2,
     timeoutMs: 5000,
@@ -265,14 +277,15 @@ const providerPresets: Record<ProviderKind, ProviderPreset> = {
     deadLetterPolicy: '全局默认：重试耗尽或上级错误进入死信',
     testRecipient: 'bark-device-key',
     testBody: 'Bark 测试消息',
+    testTopic: 'text',
   },
   pushme: {
-    tokenEndpoint: '固定 PushMe Push Key',
-    tokenRequest: 'push_key',
+    tokenEndpoint: '接收人 PushMe Push Key',
+    tokenRequest: '-',
     tokenResponsePath: '-',
-    tokenPlacement: 'body.push_key',
+    tokenPlacement: 'body.push_key（来自接收人）',
     sendEndpoint: '内置 PushMe adapter',
-    recipientMapping: '无需接收人；Push Key 绑定目标设备或账号',
+    recipientMapping: '由路由接收人或人员平台身份 pushme_push_key 提供',
     bodyMapping: 'adapter 根据 title/content/type 生成 POST JSON 请求体',
     qps: 2,
     concurrency: 2,
@@ -280,7 +293,7 @@ const providerPresets: Record<ProviderKind, ProviderPreset> = {
     retryPolicy: '3 次线性重试',
     retryInterval: '1s / 2s / 3s',
     deadLetterPolicy: '全局默认：重试耗尽或上级错误进入死信',
-    testRecipient: '-',
+    testRecipient: '',
     testBody: 'PushMe 测试消息',
     testTitle: 'PushMe 测试标题',
     testTopic: 'markdown',
@@ -556,13 +569,14 @@ export function providerCapabilityView(
 ): ProviderCapabilityView {
   const records = capabilities.filter((capability) => capability.provider_type === providerType);
   const primary = records[0];
-  const fields =
+  const extractedFields =
     providerType === 'serverchan'
       ? []
       : uniqueConfigFields([
           ...extractSchemaFields(primary?.credential_schema, 'auth_config'),
           ...extractSchemaFields(primary?.channel_config_schema, 'send_config'),
         ]);
+  const fields = providerVisibleConfigFields(providerType, extractedFields);
   const supportedMessageTypes = capabilityMessageTypes(providerType, records);
 
   return {
@@ -574,6 +588,17 @@ export function providerCapabilityView(
     fields: fields.length > 0 ? fields : fallbackProviderFields(providerType),
     capabilityRecords: records,
   };
+}
+
+function providerVisibleConfigFields(providerType: ProviderKind, fields: ProviderConfigField[]): ProviderConfigField[] {
+  const hiddenKeysByProvider: Partial<Record<ProviderKind, Set<string>>> = {
+    pushplus: new Set(['token', 'topic', 'template', 'channel']),
+    wxpusher: new Set(['spt', 'mode', 'content_type']),
+    bark: new Set(['device_key', 'device_keys']),
+    pushme: new Set(['push_key', 'temp_key', 'type', 'method', 'content_type']),
+  };
+  const hidden = hiddenKeysByProvider[providerType];
+  return hidden ? fields.filter((field) => !hidden.has(field.key)) : fields;
 }
 
 function capabilityMessageTypes(providerType: ProviderKind, records: ProviderCapabilityApiRecord[]): string[] {
@@ -665,17 +690,23 @@ function fieldFromSchemaRecord(value: JSONValue, fallbackTarget: ProviderFieldTa
     return null;
   }
   const target = providerFieldTarget(firstString(value.target, value.config_target, value.section) || fallbackTarget, fallbackTarget);
+  const options = Array.isArray(value.enum)
+    ? value.enum
+        .filter((item): item is string => typeof item === 'string')
+        .map((item) => ({ label: item, value: item }))
+    : undefined;
   return {
     key,
     label: firstString(value.label, value.title, value.description) || providerFieldLabel(key),
     target,
-    inputType: providerFieldInputType(firstString(value.input_type, value.inputType, value.widget, value.type)),
+    inputType: options?.length ? 'select' : providerFieldInputType(firstString(value.input_type, value.inputType, value.widget, value.type)),
     valueType: firstString(value.type),
     itemType: isRecord(value.items) ? firstString(value.items.type) : '',
     required: Boolean(value.required),
     placeholder: firstString(value.placeholder, value.example),
     advanced: Boolean(value.advanced),
     defaultValue: providerFieldDefaultValue(value.default),
+    options,
   };
 }
 
@@ -717,6 +748,9 @@ function providerFieldInputType(value: string): ProviderFieldInputType {
   }
   if (value === 'textarea' || value === 'json') {
     return 'textarea';
+  }
+  if (value === 'select') {
+    return 'select';
   }
   return 'text';
 }
@@ -808,7 +842,20 @@ function fallbackProviderFields(providerType: ProviderKind): ProviderConfigField
     defaultValue?: ProviderFieldValue,
     valueType = '',
     itemType = '',
-  ): ProviderConfigField => ({ key, label, target, inputType, valueType, itemType, required, placeholder, advanced: false, defaultValue });
+    options?: Array<{ label: string; value: string }>,
+  ): ProviderConfigField => ({
+    key,
+    label,
+    target,
+    inputType,
+    valueType,
+    itemType,
+    required,
+    placeholder,
+    advanced: false,
+    defaultValue,
+    options,
+  });
 
   if (providerType === 'email') {
     return [
@@ -895,9 +942,7 @@ function fallbackProviderFields(providerType: ProviderKind): ProviderConfigField
     ];
   }
   if (providerType === 'pushplus') {
-    return [
-      field('token', 'Token', 'auth_config', 'password', true),
-    ];
+    return [];
   }
   if (providerType === 'wxpusher') {
     return [
@@ -934,19 +979,11 @@ function fallbackProviderFields(providerType: ProviderKind): ProviderConfigField
   if (providerType === 'bark') {
     return [
       field('server_url', '服务地址', 'auth_config', 'text', true, 'https://api.day.app', 'https://api.day.app'),
-      field('device_key', 'Bark Device Key', 'auth_config', 'password'),
-      field('device_keys', 'Bark Device Key 列表', 'auth_config', 'textarea'),
-      field('group', '分组', 'send_config'),
-      field('sound', '提示音', 'send_config'),
-      field('level', '通知级别', 'send_config', 'text', false, 'active'),
-      field('icon', '图标 URL', 'send_config'),
-      field('url', '跳转链接', 'send_config'),
     ];
   }
   if (providerType === 'pushme') {
     return [
       field('server_url', '服务地址', 'auth_config', 'text', true, 'https://push.i-i.me', 'https://push.i-i.me'),
-      field('push_key', 'PushMe Push Key', 'auth_config', 'password', true),
     ];
   }
   if (providerType === 'wecom_robot') {
@@ -1334,6 +1371,32 @@ function providerTestBodyValue(value: ProviderRow): JSONValue {
       type: normalizedPushMeMessageType(value.testTopic),
     };
   }
+  if (value.providerType === 'bark') {
+    const body: Record<string, JSONValue> = {};
+    const title = value.testTitle.trim();
+    const message = value.testBody.trim();
+    const url = value.testUrl.trim();
+    const level = normalizedBarkLevel(value.testLevel);
+    const icon = value.testIcon.trim();
+    if (title) {
+      body.title = title;
+    }
+    if (normalizedBarkMessageType(value.testTopic) === 'markdown') {
+      body.markdown = message;
+    } else {
+      body.body = message;
+    }
+    if (url) {
+      body.url = url;
+    }
+    if (level) {
+      body.level = level;
+    }
+    if (icon) {
+      body.icon = icon;
+    }
+    return body;
+  }
   const trimmed = value.testBody.trim();
   if (!trimmed) {
     return {};
@@ -1353,6 +1416,15 @@ function providerTestNeedsRecipient(value: ProviderRow): boolean {
 }
 
 function normalizedProviderTestRecipient(value: ProviderRow): string {
+  if (
+    value.providerType === 'pushplus' ||
+    value.providerType === 'wxpusher' ||
+    value.providerType === 'serverchan' ||
+    value.providerType === 'bark' ||
+    value.providerType === 'pushme'
+  ) {
+    return '';
+  }
   if (!providerTestNeedsRecipient(value)) {
     return '';
   }
@@ -1391,8 +1463,20 @@ function parseNumericList(value: string): number[] {
 }
 
 function providerTestRecipients(value: ProviderRow, recipient: string): JSONValue[] {
+  if (value.providerType === 'pushplus') {
+    return splitListText(value.testRecipient).map((token) => ({ platform_ids: { pushplus_token: token } }));
+  }
   if (value.providerType === 'wxpusher') {
     return splitListText(value.testRecipient).map((uid) => ({ platform_ids: { wxpusher_uid: uid } }));
+  }
+  if (value.providerType === 'serverchan') {
+    return splitListText(value.testRecipient).map((sendKey) => ({ platform_ids: { serverchan_sendkey: sendKey } }));
+  }
+  if (value.providerType === 'bark') {
+    return splitListText(value.testRecipient).map((deviceKey) => ({ platform_ids: { bark_device_key: deviceKey } }));
+  }
+  if (value.providerType === 'pushme') {
+    return splitListText(value.testRecipient).map((pushKey) => ({ platform_ids: { pushme_push_key: pushKey } }));
   }
   return recipient ? [{ value: recipient }] : [];
 }
@@ -1400,6 +1484,15 @@ function providerTestRecipients(value: ProviderRow, recipient: string): JSONValu
 function normalizedPushMeMessageType(value: string): string {
   const normalized = value.trim().toLowerCase();
   return normalized === 'text' || normalized === 'html' || normalized === 'markdown' ? normalized : 'markdown';
+}
+
+function normalizedBarkMessageType(value: string): string {
+  return value.trim().toLowerCase() === 'markdown' ? 'markdown' : 'text';
+}
+
+function normalizedBarkLevel(value: string): string {
+  const normalized = value.trim();
+  return barkLevelOptions.some((option) => option.value === normalized) ? normalized : '';
 }
 
 export function providerTestPayload(value: ProviderRow, send: boolean, liveSendConfirmed = false): JSONValue {
@@ -1412,7 +1505,9 @@ export function providerTestPayload(value: ProviderRow, send: boolean, liveSendC
         ? 'markdown'
         : value.providerType === 'pushme'
           ? normalizedPushMeMessageType(value.testTopic)
-          : value.messageTypes[0] ?? 'text';
+          : value.providerType === 'bark'
+            ? normalizedBarkMessageType(value.testTopic)
+            : value.messageTypes[0] ?? 'text';
   const resolvedRecipients = providerTestRecipients(value, recipient);
   return {
     send,
@@ -1575,6 +1670,8 @@ function providerWithPreset(
     testTitle: preset.testTitle ?? '',
     testTopic: preset.testTopic ?? '',
     testUrl: preset.testUrl ?? '',
+    testLevel: preset.testLevel ?? '',
+    testIcon: preset.testIcon ?? '',
     authConfigJson: '{\n  "credential_ref": ""\n}',
     tokenConfigJson: '{\n  "token_endpoint": "' + preset.tokenEndpoint.replace(/"/g, '\\"') + '"\n}',
     sendConfigJson: '{\n  "send_endpoint": "' + preset.sendEndpoint.replace(/"/g, '\\"') + '"\n}',
@@ -1730,6 +1827,17 @@ function renderProviderFieldInput(
         value={typeof value === 'string' ? value : value === undefined ? '' : String(value)}
         placeholder={field.placeholder}
         onChange={(event) => onChange(field, event.target.value)}
+      />
+    );
+  }
+  if (field.options?.length || field.inputType === 'select') {
+    return (
+      <Select
+        allowClear={!field.required}
+        value={typeof value === 'string' && value ? value : undefined}
+        placeholder={field.placeholder}
+        options={field.options ?? []}
+        onChange={(nextValue) => onChange(field, nextValue ?? '')}
       />
     );
   }
@@ -2001,10 +2109,15 @@ export function ProviderTestPanel({
   const wxPusherTest = value.providerType === 'wxpusher';
   const serverChanTest = value.providerType === 'serverchan';
   const pushMeTest = value.providerType === 'pushme';
+  const barkTest = value.providerType === 'bark';
   const update = (patch: Partial<ProviderRow>) => onChange({ ...value, ...patch });
   const validateTestPayload = () => {
     if (pushPlusTest && !value.testBody.trim()) {
       message.error('请填写 content');
+      return false;
+    }
+    if (pushPlusTest && splitListText(value.testRecipient).length === 0) {
+      message.error('请填写 PushPlus Token');
       return false;
     }
     if (wxPusherTest && !value.testBody.trim()) {
@@ -2019,12 +2132,28 @@ export function ProviderTestPanel({
       message.error('请填写 title');
       return false;
     }
+    if (serverChanTest && splitListText(value.testRecipient).length === 0) {
+      message.error('请填写 Server酱 SendKey');
+      return false;
+    }
     if (pushMeTest && !value.testTitle.trim()) {
       message.error('请填写 title');
       return false;
     }
     if (pushMeTest && !value.testBody.trim()) {
       message.error('请填写 content');
+      return false;
+    }
+    if (pushMeTest && splitListText(value.testRecipient).length === 0) {
+      message.error('请填写 PushMe Push Key');
+      return false;
+    }
+    if (barkTest && providerTestNeedsRecipient(value) && splitListText(value.testRecipient).length === 0) {
+      message.error('请填写 Bark Device Key');
+      return false;
+    }
+    if (barkTest && !value.testBody.trim()) {
+      message.error('请填写 body / markdown');
       return false;
     }
     return true;
@@ -2060,6 +2189,9 @@ export function ProviderTestPanel({
     <Form layout="vertical">
       {pushPlusTest ? (
         <div className="two-column-form provider-test-form">
+          <Form.Item label="PushPlus Token" required className="form-item-full">
+            <Input value={value.testRecipient} onChange={(event) => update({ testRecipient: event.target.value })} />
+          </Form.Item>
           <Form.Item label="content" required className="form-item-full">
             <Input.TextArea
               rows={5}
@@ -2098,6 +2230,9 @@ export function ProviderTestPanel({
         </div>
       ) : serverChanTest ? (
         <div className="two-column-form provider-test-form">
+          <Form.Item label="Server酱 SendKey" required className="form-item-full">
+            <Input value={value.testRecipient} onChange={(event) => update({ testRecipient: event.target.value })} />
+          </Form.Item>
           <Form.Item label="title" required>
             <Input value={value.testTitle} onChange={(event) => update({ testTitle: event.target.value })} />
           </Form.Item>
@@ -2114,6 +2249,9 @@ export function ProviderTestPanel({
         </div>
       ) : pushMeTest ? (
         <div className="two-column-form provider-test-form">
+          <Form.Item label="PushMe Push Key" required className="form-item-full">
+            <Input value={value.testRecipient} onChange={(event) => update({ testRecipient: event.target.value })} />
+          </Form.Item>
           <Form.Item label="title" required>
             <Input value={value.testTitle} onChange={(event) => update({ testTitle: event.target.value })} />
           </Form.Item>
@@ -2134,6 +2272,48 @@ export function ProviderTestPanel({
               value={value.testBody}
               onChange={(event) => update({ testBody: event.target.value })}
             />
+          </Form.Item>
+        </div>
+      ) : barkTest ? (
+        <div className="two-column-form provider-test-form">
+          {providerTestNeedsRecipient(value) ? (
+            <Form.Item label="Bark Device Key" required>
+              <Input value={value.testRecipient} onChange={(event) => update({ testRecipient: event.target.value })} />
+            </Form.Item>
+          ) : null}
+          <Form.Item label="格式" required>
+            <Select
+              value={normalizedBarkMessageType(value.testTopic)}
+              options={[
+                { label: 'text', value: 'text' },
+                { label: 'markdown', value: 'markdown' },
+              ]}
+              onChange={(testTopic) => update({ testTopic })}
+            />
+          </Form.Item>
+          <Form.Item label="title（可选）">
+            <Input value={value.testTitle} onChange={(event) => update({ testTitle: event.target.value })} />
+          </Form.Item>
+          <Form.Item label="level（可选）">
+            <Select
+              allowClear
+              value={normalizedBarkLevel(value.testLevel) || undefined}
+              options={barkLevelOptions}
+              onChange={(testLevel) => update({ testLevel: testLevel ?? '' })}
+            />
+          </Form.Item>
+          <Form.Item label="body / markdown" required className="form-item-full" extra={normalizedBarkMessageType(value.testTopic) === 'markdown' ? '支持 Markdown' : undefined}>
+            <Input.TextArea
+              rows={5}
+              value={value.testBody}
+              onChange={(event) => update({ testBody: event.target.value })}
+            />
+          </Form.Item>
+          <Form.Item label="icon（可选）">
+            <Input value={value.testIcon} onChange={(event) => update({ testIcon: event.target.value })} />
+          </Form.Item>
+          <Form.Item label="url（可选）" className="form-item-full">
+            <Input value={value.testUrl} onChange={(event) => update({ testUrl: event.target.value })} />
           </Form.Item>
         </div>
       ) : (

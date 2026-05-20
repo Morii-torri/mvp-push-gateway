@@ -140,11 +140,12 @@ func TestOverviewStatisticsEndpointReturnsStableDashboardShape(t *testing.T) {
 		httpapi.WithStatisticsService(&fakeStatisticsService{
 			overview: statistics.Overview{
 				Summary: statistics.Summary{
-					TotalSent:   12,
-					Successful:  10,
-					Failed:      2,
-					SuccessRate: 83.33,
-					AverageQPS:  0.14,
+					TotalSent:     12,
+					Successful:    10,
+					Failed:        2,
+					SuccessRate:   83.33,
+					AverageQPS:    0.14,
+					TotalReceived: 15,
 				},
 				Trend:            []statistics.TrendPoint{{Sent: 1}},
 				PlatformRankings: []statistics.PlatformRanking{{Name: "Webhook A", Sent: 12}},

@@ -18,7 +18,7 @@ describe('dashboard data mapping', () => {
         failed: 30,
         success_rate: 87.5,
         average_qps: 0.28,
-        active_platforms: 3,
+        total_received: 300,
       },
       trend: [
         {
@@ -58,9 +58,11 @@ describe('dashboard data mapping', () => {
 
     const viewModel = buildOverviewViewModel(overview);
 
-    expect(viewModel.metrics[0]?.label).toBe('总发送量');
-    expect(viewModel.metrics[0]?.value).toBe('240 条');
-    expect(viewModel.metrics[1]?.value).toBe('87.50%');
+    expect(viewModel.metrics[0]?.label).toBe('总接收量');
+    expect(viewModel.metrics[0]?.value).toBe('300 条');
+    expect(viewModel.metrics[1]?.label).toBe('总发送量');
+    expect(viewModel.metrics[1]?.value).toBe('240 条');
+    expect(viewModel.metrics[4]?.value).toBe('87.50%');
     expect(viewModel.trendPoints).toEqual([12]);
     expect(buildOverviewViewModel(overview, '1h').trendLabels).toEqual(['18:00']);
     expect(viewModel.platformRanking[0]?.providerType).toBe('通用 Webhook');
@@ -171,5 +173,73 @@ describe('dashboard data mapping', () => {
       '待下一次执行',
       '当前批次后无剩余',
     ]);
+  });
+
+  it('gracefully handles missing, null, undefined, or NaN values by showing safe defaults', () => {
+    const malformedOverview: OverviewApiResponse = {
+      summary: {
+        total_sent: NaN,
+        successful: null as any,
+        failed: undefined as any,
+        success_rate: NaN,
+        average_qps: null as any,
+        total_received: undefined as any,
+      },
+      trend: [
+        {
+          bucket_start: 'invalid-date',
+          sent: NaN,
+          successful: null as any,
+          failed: undefined as any,
+          qps: NaN,
+        },
+      ],
+      platform_rankings: [
+        {
+          channel_id: 'channel-1',
+          name: 'Webhook A',
+          provider_type: 'webhook',
+          sent: NaN,
+          success_rate: null as any,
+          qps: undefined as any,
+          failures: NaN,
+          rate_limited: NaN,
+          avg_duration_ms: NaN,
+          p95_duration_ms: null as any,
+          last_error: '',
+        },
+      ],
+      failure_rankings: [{ reason: 'Error', count: NaN, ratio: null as any }],
+      recent_anomalies: [
+        {
+          level: 'high',
+          title: 'Webhook 异常',
+          time: 'invalid-date',
+          count: NaN,
+          ratio: undefined as any,
+        },
+      ],
+    };
+
+    const viewModel = buildOverviewViewModel(malformedOverview);
+
+    // Metrics fallback to 0 / 0.00% / 0 条 instead of NaN
+    expect(viewModel.metrics[0]?.value).toBe('0 条'); // total_received
+    expect(viewModel.metrics[1]?.value).toBe('0 条'); // total_sent
+    expect(viewModel.metrics[2]?.value).toBe('0 条'); // successful
+    expect(viewModel.metrics[3]?.value).toBe('0 条'); // failed
+    expect(viewModel.metrics[4]?.value).toBe('0.00%'); // success_rate
+    expect(viewModel.metrics[5]?.value).toBe('0'); // average_qps
+
+    // Rankings and other lists fallback safely too
+    expect(viewModel.platformRanking[0]?.sent).toBe('0');
+    expect(viewModel.platformRanking[0]?.success).toBe('0.00%');
+    expect(viewModel.platformRanking[0]?.qps).toBe('0');
+    expect(viewModel.platformRanking[0]?.failures).toBe('0');
+    expect(viewModel.platformRanking[0]?.latency).toBe('0 ms');
+    expect(viewModel.platformRanking[0]?.p95).toBe('0 ms');
+
+    expect(viewModel.failureReasons[0]?.count).toBe('0');
+    expect(viewModel.recentAnomalies[0]?.count).toBe('0');
   });
 });

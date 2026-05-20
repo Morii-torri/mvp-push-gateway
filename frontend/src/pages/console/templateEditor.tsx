@@ -37,6 +37,7 @@ export type TemplateSourceRow = {
 };
 
 export type TemplateContentMode = 'fields' | 'custom_json';
+type BarkBodyFormat = 'body' | 'markdown';
 
 type TemplateFieldDraft = {
   expression: string;
@@ -80,6 +81,7 @@ export type TemplateDraft = {
   customJsonText: string;
   messageBodySchemaText: string;
   samplePayloadText: string;
+  barkBodyFormat?: BarkBodyFormat;
 };
 
 export type TemplateFeedback = {
@@ -236,13 +238,25 @@ function pushMeNoticeFields(): TemplateContentField[] {
   ];
 }
 
+const barkLevelOptions = [
+  { label: 'critical：重要警告，在静音模式下也会响铃', value: 'critical' },
+  { label: 'active：默认值，系统会立即亮屏显示通知', value: 'active' },
+  { label: 'timeSensitive：时效性通知，可在专注状态下显示通知', value: 'timeSensitive' },
+  { label: 'passive：仅将通知添加到通知列表，不会亮屏提醒', value: 'passive' },
+];
+
 function barkNoticeFields(): TemplateContentField[] {
   return [
-    contentField('title', '标题', 'string', '通知', '{{ payload.title }}'),
-    contentField('subtitle', '副标题', 'string', '', '{{ payload.subtitle }}'),
-    contentField('body', '正文内容', 'string', '', '{{ payload.content }}'),
-    contentField('url', '跳转链接', 'string', '', '{{ payload.url }}'),
-    contentField('level', '通知级别', 'string', 'active', '{{ payload.level }}'),
+    contentField('title', 'title', 'string', '', '{{ payload.title }}', false),
+    contentField('subtitle', 'subtitle', 'string', '', '{{ payload.subtitle }}', false),
+    contentField('body', 'body', 'string', '', '{{ payload.content }}', false),
+    contentField('markdown', 'markdown', 'markdown', '', '{{ payload.markdown }}', false, '支持 Markdown'),
+    contentField('group', 'group', 'string', '', '{{ payload.group }}', false),
+    contentField('sound', 'sound', 'string', '', '{{ payload.sound }}', false),
+    contentField('level', 'level', 'string', '', '', false, undefined, barkLevelOptions),
+    contentField('icon', 'icon', 'string', '', '{{ payload.icon }}', false),
+    contentField('url', 'url', 'string', '', '{{ payload.url }}', false),
+    contentField('image', 'image', 'string', '', '{{ payload.image }}', false),
   ];
 }
 
@@ -663,10 +677,30 @@ function fallbackTemplateSchema(providerType: ProviderKind, messageType: string)
       }
       if (field.options?.length) {
         item.enum = field.options.map((option) => option.value);
+        const enumDescriptions = Object.fromEntries(
+          field.options
+            .map((option) => [option.value, enumDescriptionFromOption(option)] as const)
+            .filter(([, description]) => Boolean(description)),
+        );
+        if (Object.keys(enumDescriptions).length) {
+          item.enum_descriptions = enumDescriptions;
+        }
       }
       return item;
     }),
   };
+}
+
+function enumDescriptionFromOption(option: { label: string; value: string }): string {
+  const label = option.label.trim();
+  const value = option.value.trim();
+  if (!label || label === value) {
+    return '';
+  }
+  if (label.startsWith(`${value}：`) || label.startsWith(`${value}:`)) {
+    return label.slice(value.length + 1).trim();
+  }
+  return label;
 }
 
 function templateCapabilityView(
@@ -731,13 +765,37 @@ function extractTemplateFieldsFromSchema(schema: JSONValue | undefined): Templat
     const requiredKeys = Array.isArray(schema.required)
       ? new Set(schema.required.filter((item): item is string => typeof item === 'string'))
       : new Set<string>();
-    return Object.entries(schema.properties)
+    const orderedProperties = orderedTemplateProperties(schema.properties, schema.field_order);
+    return orderedProperties
       .map(([key, field]) =>
         templateFieldFromSchemaRecord({ ...(isRecord(field) ? field : {}), key, required: requiredKeys.has(key) }),
       )
       .filter((field): field is TemplateContentField => Boolean(field));
   }
   return [];
+}
+
+function orderedTemplateProperties(
+  properties: Record<string, JSONValue>,
+  fieldOrder: JSONValue | undefined,
+): Array<[string, JSONValue]> {
+  const entries = Object.entries(properties);
+  if (!Array.isArray(fieldOrder)) {
+    return entries;
+  }
+  const order = new Map(
+    fieldOrder
+      .filter((item): item is string => typeof item === 'string')
+      .map((item, index) => [item, index]),
+  );
+  return entries.sort(([left], [right]) => {
+    const leftIndex = order.get(left) ?? Number.MAX_SAFE_INTEGER;
+    const rightIndex = order.get(right) ?? Number.MAX_SAFE_INTEGER;
+    if (leftIndex !== rightIndex) {
+      return leftIndex - rightIndex;
+    }
+    return left.localeCompare(right);
+  });
 }
 
 function templateFieldFromSchemaRecord(value: JSONValue, fallbackKey = ''): TemplateContentField | null {
@@ -752,10 +810,14 @@ function templateFieldFromSchemaRecord(value: JSONValue, fallbackKey = ''): Temp
   const defaultValue = jsonScalarToText(value.default) || jsonScalarToText(value.default_value) || jsonScalarToText(value.fallback);
   const defaultExpression =
     firstString(value.expression, value.template, value.template_expression) || `{{ payload.${payloadKeyForContentField(key)} }}`;
+  const enumDescriptions = enumDescriptionRecord(value);
   const options = Array.isArray(value.enum)
     ? value.enum
         .filter((item): item is string => typeof item === 'string')
-        .map((item) => ({ label: item, value: item }))
+        .map((item) => {
+          const description = firstString(enumDescriptions[item]);
+          return { label: description ? `${item}：${description}` : item, value: item };
+        })
     : undefined;
   return {
     key,
@@ -768,6 +830,11 @@ function templateFieldFromSchemaRecord(value: JSONValue, fallbackKey = ''): Temp
     formatHint: firstString(value.format_hint, value.formatHint, value['x-format-hint']),
     options,
   };
+}
+
+function enumDescriptionRecord(value: Record<string, JSONValue>): Record<string, JSONValue> {
+  const descriptions = value.enum_descriptions ?? value.enumDescriptions ?? value['x-enum-descriptions'];
+  return isRecord(descriptions) ? descriptions : {};
 }
 
 function normalizeTemplateFieldKey(value: string): string {
@@ -889,11 +956,28 @@ export function samplePayloadTextFromSource(source: TemplateSourceRow | undefine
   return payload === null ? fallback : stringifyJSON(payload);
 }
 
-function templateBodyObjectFromFieldValues(values: TemplateFieldValues): Record<string, string> {
+function templateBodyObjectFromFieldValues(values: TemplateFieldValues, omittedKeys: Set<string> = new Set()): Record<string, string> {
   return Object.entries(values).reduce<Record<string, string>>((body, [key, value]) => {
+    if (omittedKeys.has(key)) {
+      return body;
+    }
     body[key] = templateExpressionWithDefault(value);
     return body;
   }, {});
+}
+
+function omittedTemplateFieldKeys(draft: TemplateDraft): Set<string> {
+  if (draft.targetProviderType !== 'bark') {
+    return new Set();
+  }
+  return selectedBarkBodyFormat(draft) === 'markdown' ? new Set(['body']) : new Set(['markdown']);
+}
+
+function selectedBarkBodyFormat(draft: TemplateDraft): BarkBodyFormat {
+  if (draft.barkBodyFormat === 'markdown' || draft.barkBodyFormat === 'body') {
+    return draft.barkBodyFormat;
+  }
+  return draft.fieldValues.markdown?.expression.trim() ? 'markdown' : 'body';
 }
 
 function templateExpressionWithDefault(value: TemplateFieldDraft): string {
@@ -922,14 +1006,14 @@ function escapeTemplateDefault(value: string): string {
   return value.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
 }
 
-function stringifyTemplateBodyFromFieldValues(values: TemplateFieldValues): string {
-  return JSON.stringify(templateBodyObjectFromFieldValues(values), null, 2);
+function stringifyTemplateBodyFromFieldValues(values: TemplateFieldValues, omittedKeys: Set<string> = new Set()): string {
+  return JSON.stringify(templateBodyObjectFromFieldValues(values, omittedKeys), null, 2);
 }
 
 export function templateBodyTextFromDraft(draft: TemplateDraft): string {
   return draft.contentMode === 'custom_json'
     ? draft.customJsonText
-    : stringifyTemplateBodyFromFieldValues(draft.fieldValues);
+    : stringifyTemplateBodyFromFieldValues(draft.fieldValues, omittedTemplateFieldKeys(draft));
 }
 
 function parseTemplateBodyRecord(value: string): Record<string, JSONValue> | null {
@@ -996,7 +1080,7 @@ export function createTemplateDraft(
   const view = templateCapabilityView(providerType, messageType, capabilities);
   const fieldValues = defaultTemplateFieldValues(view.fields);
   const fallbackSamplePayloadText = stringifyJSON(samplePayloadFromFields(view.fields));
-  return {
+  const draft: TemplateDraft = {
     name: '',
     description: '',
     sourceId: sourceRows[0]?.id ?? '',
@@ -1005,9 +1089,14 @@ export function createTemplateDraft(
     targetProviderType: providerType,
     contentMode: 'fields',
     fieldValues,
-    customJsonText: stringifyTemplateBodyFromFieldValues(fieldValues),
+    customJsonText: '',
     messageBodySchemaText: stringifyJSON(view.schema),
     samplePayloadText: samplePayloadTextFromSource(sourceRows[0], fallbackSamplePayloadText),
+    barkBodyFormat: providerType === 'bark' ? 'body' : undefined,
+  };
+  return {
+    ...draft,
+    customJsonText: templateBodyTextFromDraft(draft),
   };
 }
 
@@ -1037,9 +1126,15 @@ export function draftFromTemplate(
     targetProviderType,
     contentMode: parsedBody ? 'fields' : base.contentMode,
     fieldValues,
-    customJsonText: parsedBody ? stringifyJSON(parsedBody) : stringifyTemplateBodyFromFieldValues(fieldValues),
+    customJsonText: parsedBody ? stringifyJSON(parsedBody) : templateBodyTextFromDraft({ ...base, fieldValues }),
     messageBodySchemaText: stringifyJSON(schema),
     samplePayloadText: stringifyJSON(currentVersion?.sample_payload ?? record.raw?.sample_payload ?? parseJSONOrEmpty(base.samplePayloadText)),
+    barkBodyFormat:
+      targetProviderType === 'bark' && parsedBody && Object.prototype.hasOwnProperty.call(parsedBody, 'markdown')
+        ? 'markdown'
+        : targetProviderType === 'bark'
+          ? 'body'
+          : undefined,
   };
 }
 
@@ -1079,14 +1174,19 @@ export function switchTemplateProviderType(
 ): TemplateDraft {
   const view = templateCapabilityView(targetProviderType, undefined, capabilities);
   const fieldValues = defaultTemplateFieldValues(view.fields);
-  return {
+  const nextDraft: TemplateDraft = {
     ...draft,
     targetProviderType,
     messageType: view.messageType,
     fieldValues,
-    customJsonText: stringifyTemplateBodyFromFieldValues(fieldValues),
+    customJsonText: '',
     messageBodySchemaText: stringifyJSON(view.schema),
     samplePayloadText: draft.samplePayloadText || stringifyJSON(samplePayloadFromFields(view.fields)),
+    barkBodyFormat: targetProviderType === 'bark' ? 'body' : undefined,
+  };
+  return {
+    ...nextDraft,
+    customJsonText: templateBodyTextFromDraft(nextDraft),
   };
 }
 
@@ -1097,13 +1197,17 @@ export function switchTemplateMessageType(
 ): TemplateDraft {
   const view = templateCapabilityView(draft.targetProviderType, messageType, capabilities);
   const fieldValues = defaultTemplateFieldValues(view.fields, draft.fieldValues);
-  return {
+  const nextDraft = {
     ...draft,
     messageType: view.messageType,
     fieldValues,
-    customJsonText: stringifyTemplateBodyFromFieldValues(fieldValues),
+    customJsonText: '',
     messageBodySchemaText: stringifyJSON(view.schema),
     samplePayloadText: draft.samplePayloadText || stringifyJSON(samplePayloadFromFields(view.fields)),
+  };
+  return {
+    ...nextDraft,
+    customJsonText: templateBodyTextFromDraft(nextDraft),
   };
 }
 
@@ -1126,7 +1230,7 @@ export function switchTemplateContentMode(draft: TemplateDraft, contentMode: Tem
     contentMode,
     customJsonText:
       contentMode === 'custom_json' && !draft.customJsonText.trim()
-        ? stringifyTemplateBodyFromFieldValues(draft.fieldValues)
+        ? templateBodyTextFromDraft({ ...draft, contentMode: 'fields' })
         : draft.customJsonText,
   };
 }
@@ -1301,6 +1405,9 @@ function templatePreviewFormat(draft: TemplateDraft, rendered: JSONValue): Templ
       return format;
     }
   }
+  if (draft.targetProviderType === 'bark' && isRecord(rendered) && firstRenderedString(rendered, ['markdown'])) {
+    return 'markdown';
+  }
   return normalizeTemplateMessageFormat(draft.messageType);
 }
 
@@ -1441,6 +1548,21 @@ export function TemplateEditorForm({
 }) {
   const view = templateCapabilityView(value.targetProviderType, value.messageType, capabilities);
   const update = (patch: Partial<TemplateDraft>) => onChange({ ...value, ...patch });
+  const barkBodyFormat = selectedBarkBodyFormat(value);
+  const visibleFields =
+    value.targetProviderType === 'bark'
+      ? view.fields.filter((field) => field.key !== (barkBodyFormat === 'markdown' ? 'body' : 'markdown'))
+      : view.fields;
+  const updateBarkBodyFormat = (nextFormat: BarkBodyFormat) => {
+    const nextDraft = {
+      ...value,
+      barkBodyFormat: nextFormat,
+    };
+    onChange({
+      ...nextDraft,
+      customJsonText: value.contentMode === 'fields' ? templateBodyTextFromDraft(nextDraft) : value.customJsonText,
+    });
+  };
   const updateFieldValue = (field: TemplateContentField, patch: Partial<TemplateFieldDraft>) => {
     const currentValue = value.fieldValues[field.key] ?? {
       expression: '',
@@ -1455,7 +1577,7 @@ export function TemplateEditorForm({
     };
     update({
       fieldValues,
-      customJsonText: value.contentMode === 'fields' ? stringifyTemplateBodyFromFieldValues(fieldValues) : value.customJsonText,
+      customJsonText: value.contentMode === 'fields' ? templateBodyTextFromDraft({ ...value, fieldValues }) : value.customJsonText,
     });
   };
 
@@ -1499,17 +1621,30 @@ export function TemplateEditorForm({
       {value.contentMode === 'fields' ? (
         <>
           <Divider orientation="left">消息内容字段</Divider>
+          {value.targetProviderType === 'bark' ? (
+            <Form.Item label="正文格式" required>
+              <Select
+                value={barkBodyFormat}
+                options={[
+                  { label: 'body', value: 'body' },
+                  { label: 'markdown', value: 'markdown' },
+                ]}
+                onChange={(nextFormat) => updateBarkBodyFormat(nextFormat as BarkBodyFormat)}
+              />
+            </Form.Item>
+          ) : null}
           <div className="template-content-fields">
-            {view.fields.map((field) => {
+            {visibleFields.map((field) => {
               const fieldValue = value.fieldValues[field.key] ?? {
                 expression: '',
                 defaultValue: '',
               };
               const multiline = isMultilineTemplateField(field);
+              const required = field.required || (value.targetProviderType === 'bark' && field.key === barkBodyFormat);
               return (
                 <div className="template-content-field" key={field.key}>
                   <div className="template-content-field__controls">
-                    <Form.Item label={templateContentFieldLabel(field)} required={field.required} extra={templateFieldExtra(field)}>
+                    <Form.Item label={templateContentFieldLabel(field)} required={required} extra={templateFieldExtra(field)}>
                       {field.options?.length ? (
                         <Select
                           value={fieldValue.expression || undefined}

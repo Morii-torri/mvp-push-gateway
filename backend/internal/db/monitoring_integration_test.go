@@ -233,6 +233,9 @@ func TestRepositoryGetOverviewStatisticsBuildsStable24hDashboard(t *testing.T) {
 	if overview.Summary.TotalSent != 3 {
 		t.Fatalf("expected total sent 3, got %d", overview.Summary.TotalSent)
 	}
+	if overview.Summary.TotalReceived != 3 {
+		t.Fatalf("expected total received 3, got %d", overview.Summary.TotalReceived)
+	}
 	if overview.Summary.SuccessRate != 66.67 {
 		t.Fatalf("expected success rate 66.67, got %v", overview.Summary.SuccessRate)
 	}

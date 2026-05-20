@@ -354,8 +354,11 @@ func testSendRequiresRecipient(providerType ProviderType) bool {
 		ProviderDingTalk,
 		ProviderDingTalkWork,
 		ProviderGovCloud,
+		ProviderPushPlus,
 		ProviderWxPusher,
-		ProviderBark:
+		ProviderServerChan,
+		ProviderBark,
+		ProviderPushMe:
 		return true
 	default:
 		return false
@@ -389,12 +392,8 @@ func missingCredentialFields(channel Channel, token string) []string {
 		requireAny("级联 base_url", auth["base_url"], send["base_url"])
 		requireAny("级联 source_code", auth["source_code"], send["source_code"])
 		requireAny("级联 source_token/HMAC", auth["source_token"], auth["hmac_secret"], token)
-	case ProviderPushPlus:
-		requireAny("PushPlus token", auth["token"], send["token"], token)
 	case ProviderWxPusher:
 		requireAny("WxPusher appToken", auth["app_token"], auth["appToken"], send["app_token"], send["appToken"], token)
-	case ProviderServerChan:
-		requireAny("Server酱 API URL", send["url"], send["send_url"], send["api_url"], auth["url"])
 	case ProviderEmail:
 		requireAny("SMTP host", auth["host"], send["host"])
 		requireAny("SMTP from", auth["from"], send["from"])
@@ -442,20 +441,28 @@ func missingCredentialFields(channel Channel, token string) []string {
 		requireAny("Gotify app_token", auth["app_token"], send["app_token"], token)
 	case ProviderBark:
 		requireAny("Bark server_url", auth["server_url"], send["server_url"])
-		requireAny("Bark device_key", auth["device_key"], send["device_key"])
 	case ProviderPushMe:
 		requireAny("PushMe server_url", auth["server_url"], send["server_url"])
-		requireAny("PushMe push_key", auth["push_key"], send["push_key"], token)
 	}
 	return missing
 }
 
 func builtRequestHasProviderTarget(providerType ProviderType, built BuiltRequest) bool {
-	if providerType != ProviderWxPusher {
+	body := rawObject(built.Body)
+	switch providerType {
+	case ProviderPushPlus:
+		return stringConfig(body, "token") != ""
+	case ProviderWxPusher:
+		return len(listConfig(body, "uids")) > 0 || len(rawListConfig(body, "topicIds", "topic_ids")) > 0
+	case ProviderServerChan:
+		return strings.Contains(built.URL, ".push.ft07.com/send/") && strings.HasSuffix(strings.TrimSpace(built.URL), ".send")
+	case ProviderBark:
+		return stringConfig(body, "device_key") != "" || len(listConfig(body, "device_keys")) > 0
+	case ProviderPushMe:
+		return stringConfig(body, "push_key") != ""
+	default:
 		return false
 	}
-	body := rawObject(built.Body)
-	return len(listConfig(body, "uids")) > 0 || len(rawListConfig(body, "topicIds", "topic_ids")) > 0
 }
 
 func rawObject(raw json.RawMessage) map[string]any {
@@ -969,8 +976,14 @@ func providerIdentityKeys(providerType ProviderType) []string {
 		return []string{"dingtalk_userid", "userid", "user_id"}
 	case ProviderWxPusher:
 		return []string{"wxpusher_uid", "uid"}
+	case ProviderPushPlus:
+		return []string{"pushplus_token", "token"}
+	case ProviderServerChan:
+		return []string{"serverchan_sendkey", "sendkey", "send_key"}
 	case ProviderBark:
 		return []string{"bark_device_key", "device_key"}
+	case ProviderPushMe:
+		return []string{"pushme_push_key", "push_key"}
 	case ProviderGovCloud:
 		return []string{"gov_userid", "userid", "user_id"}
 	default:

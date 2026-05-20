@@ -1,14 +1,22 @@
 import {
+  AlertOutlined,
   ArrowDownOutlined,
   ArrowUpOutlined,
   BarChartOutlined,
+  CheckCircleOutlined,
   ClockCircleOutlined,
+  CloseCircleOutlined,
   CloudServerOutlined,
+  DashboardOutlined,
   DatabaseOutlined,
   ExclamationCircleOutlined,
+  HourglassOutlined,
+  InboxOutlined,
+  NodeIndexOutlined,
   PlusOutlined,
   SafetyCertificateOutlined,
   SendOutlined,
+  ThunderboltOutlined,
 } from '@ant-design/icons';
 import Button from 'antd/es/button';
 import Pagination from 'antd/es/pagination';
@@ -181,6 +189,97 @@ export function MetricCard({
     ) : (
       <CloudServerOutlined />
     );
+
+  // Premium, visually appropriate icons based on card label
+  const premiumIcon =
+    label === '总接收量' ? (
+      <InboxOutlined />
+    ) : label === '总发送量' ? (
+      <SendOutlined />
+    ) : label === '成功发送量' ? (
+      <CheckCircleOutlined />
+    ) : label === '失败发送量' ? (
+      <CloseCircleOutlined />
+    ) : label.includes('成功率') ? (
+      <DashboardOutlined />
+    ) : label === '平均 OPS' ? (
+      <ThunderboltOutlined />
+    ) : label === '路由规划积压' ? (
+      <NodeIndexOutlined />
+    ) : label === '出站发送积压' ? (
+      <SendOutlined />
+    ) : label === '最老任务等待' ? (
+      <ClockCircleOutlined />
+    ) : label.includes('平均耗时') ? (
+      <HourglassOutlined />
+    ) : label === '死信数量' ? (
+      <AlertOutlined />
+    ) : (
+      icon ?? fallbackIcon
+    );
+
+  // Minimalist micro SVG sparkline/ring based on card label to make the dashboard look highly premium
+  const renderMicroChart = () => {
+    if (label.includes('成功率') || label.includes('健康度')) {
+      return (
+        <div className="metric-donut-container" aria-hidden="true">
+          <svg className="metric-donut" viewBox="0 0 36 36">
+            <path
+              className="donut-ring"
+              d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"
+              fill="none"
+              stroke="rgba(var(--accent-rgb), 0.15)"
+              strokeWidth="3.2"
+            />
+            <path
+              className="donut-segment"
+              d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="3.2"
+              strokeDasharray="96, 100"
+              strokeLinecap="round"
+            />
+          </svg>
+        </div>
+      );
+    }
+
+    let dPath = "M0,25 Q15,10 30,20 T60,12 T90,25 T100,15"; // Default wave
+    if (label === '总接收量') {
+      dPath = "M0,25 Q20,5 40,20 T80,10 T100,18";
+    } else if (label === '总发送量') {
+      dPath = "M0,28 C20,25 40,5 60,12 C80,18 95,2 100,6";
+    } else if (label === '成功发送量') {
+      dPath = "M0,26 L20,22 L45,8 L70,10 L85,2 L100,0";
+    } else if (label === '失败发送量' || label === '死信数量') {
+      dPath = "M0,28 L30,28 L50,28 L70,6 L85,24 L100,28";
+    } else if (label === '平均 OPS') {
+      dPath = "M0,15 L10,10 L20,20 L30,5 L40,25 L50,8 L60,22 L70,12 L80,18 L90,6 L100,15";
+    } else if (label === '最老任务等待') {
+      dPath = "M0,28 L20,28 L40,28 L60,28 L80,28 L100,28";
+    } else if (label.includes('积压')) {
+      dPath = "M0,28 Q25,28 50,15 T100,25";
+    } else if (label.includes('平均耗时')) {
+      dPath = "M0,20 L15,18 L30,22 L55,10 L75,12 L100,8";
+    }
+
+    return (
+      <div className="metric-sparkline-container" aria-hidden="true">
+        <svg className="metric-sparkline" viewBox="0 0 100 30" preserveAspectRatio="none">
+          <path
+            d={dPath}
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2.5"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          />
+        </svg>
+      </div>
+    );
+  };
+
   return (
     <div className={`metric-card metric-card--${accent}`}>
       <div>
@@ -192,8 +291,9 @@ export function MetricCard({
         {footnote ? <span className="metric-footnote">{footnote}</span> : null}
       </div>
       <span className="metric-icon" aria-hidden="true">
-        {icon ?? fallbackIcon}
+        {premiumIcon}
       </span>
+      {renderMicroChart()}
     </div>
   );
 }
@@ -336,6 +436,9 @@ function pointLabelOffset(index: number, total: number): number {
 }
 
 function formatChartTick(value: number): string {
+  if (value === undefined || value === null || Number.isNaN(value) || typeof value !== 'number') {
+    return '0';
+  }
   if (Number.isInteger(value)) {
     return value.toLocaleString('zh-CN');
   }

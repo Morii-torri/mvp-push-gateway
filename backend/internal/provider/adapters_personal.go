@@ -1,12 +1,22 @@
 package provider
 
 import (
+	"regexp"
 	"strings"
 )
 
-func pushPlusRequestConfig(auth, send, content map[string]any) (requestConfig, error) {
+var (
+	serverChanSendKeyPattern = regexp.MustCompile(`^sctp(\d+)t`)
+	serverChanURLPattern     = regexp.MustCompile(`^https://([^.]+)\.push\.ft07\.com/send/([^.]+)\.send$`)
+)
+
+func pushPlusRequestConfig(_ map[string]any, send, content map[string]any, recipient any) (requestConfig, error) {
+	token := firstRecipientString(recipient)
+	if strings.TrimSpace(token) == "" {
+		return requestConfig{}, ErrInvalidInput
+	}
 	body := map[string]any{
-		"token":   firstString(stringConfig(auth, "token"), stringConfig(send, "token")),
+		"token":   token,
 		"content": messageBody(content),
 	}
 	copyStringField(body, "title", content, "title", "subject")
@@ -39,11 +49,34 @@ func wxPusherRequestConfig(auth, send, content map[string]any, recipient any) (r
 	return jsonRequest("POST", "https://wxpusher.zjiecode.com/api/send/message", body)
 }
 
-func serverChanRequestConfig(auth, send, content map[string]any) (requestConfig, error) {
-	requestURL := firstString(stringConfig(send, "url", "send_url", "api_url"), stringConfig(auth, "url", "send_url", "api_url"))
-	if strings.TrimSpace(requestURL) == "" {
+func serverChanRequestConfig(auth, send, content map[string]any, recipient any) (requestConfig, error) {
+	sendKey := firstRecipientString(recipient)
+	if strings.TrimSpace(sendKey) == "" {
 		return requestConfig{}, ErrInvalidInput
 	}
+	matches := serverChanSendKeyPattern.FindStringSubmatch(sendKey)
+	if len(matches) != 2 || strings.TrimSpace(matches[1]) == "" {
+		return requestConfig{}, ErrInvalidInput
+	}
+	requestURL := firstString(
+		stringConfig(send, "url", "send_url", "api_url"),
+		stringConfig(auth, "url", "send_url", "api_url"),
+		"https://<uid>.push.ft07.com/send/<sendkey>.send",
+	)
+
+	if strings.Contains(requestURL, "<uid>") || strings.Contains(requestURL, "{uid}") || strings.Contains(requestURL, "<sendkey>") || strings.Contains(requestURL, "{sendkey}") || strings.Contains(requestURL, "%3Cuid%3E") || strings.Contains(requestURL, "%3Csendkey%3E") {
+		requestURL = strings.NewReplacer(
+			"<uid>", matches[1],
+			"{uid}", matches[1],
+			"%3Cuid%3E", matches[1],
+			"<sendkey>", sendKey,
+			"{sendkey}", sendKey,
+			"%3Csendkey%3E", sendKey,
+		).Replace(requestURL)
+	} else if serverChanURLPattern.MatchString(requestURL) {
+		requestURL = serverChanURLPattern.ReplaceAllString(requestURL, "https://"+matches[1]+".push.ft07.com/send/"+sendKey+".send")
+	}
+
 	body := map[string]any{
 		"title": messageTitle(content),
 	}
@@ -56,32 +89,31 @@ func serverChanRequestConfig(auth, send, content map[string]any) (requestConfig,
 
 func barkRequestConfig(auth, send, content map[string]any, recipient any) (requestConfig, error) {
 	serverURL := firstString(stringConfig(send, "server_url"), stringConfig(auth, "server_url"), "https://api.day.app")
-	deviceKey := firstString(firstRecipientString(recipient), stringConfig(send, "device_key"), stringConfig(auth, "device_key"))
-	if deviceKey == "" {
-		if deviceKeys := listConfig(auth, "device_keys"); len(deviceKeys) > 0 {
-			deviceKey = deviceKeys[0]
-		}
-	}
-	if strings.TrimSpace(serverURL) == "" || strings.TrimSpace(deviceKey) == "" {
+	deviceKeys := recipientStrings(recipient)
+	if strings.TrimSpace(serverURL) == "" || len(deviceKeys) == 0 {
 		return requestConfig{}, ErrInvalidInput
 	}
-	body := map[string]any{
-		"device_key": deviceKey,
-		"title":      messageTitle(content),
-		"body":       messageBody(content),
+	body := map[string]any{}
+	if len(deviceKeys) > 1 {
+		body["device_keys"] = deviceKeys
+	} else {
+		body["device_key"] = deviceKeys[0]
 	}
-	for _, field := range []string{"subtitle", "url", "level"} {
+
+	for _, field := range []string{"title", "subtitle", "url", "group", "sound", "level", "icon", "image"} {
 		copyStringField(body, field, content, field)
 	}
-	for _, field := range []string{"group", "sound", "level", "icon", "url"} {
-		copyStringField(body, field, send, field)
+	if markdown := stringConfig(content, "markdown"); markdown != "" {
+		body["markdown"] = markdown
+	} else if message := messageBody(content); message != "" {
+		body["body"] = message
 	}
 	return jsonRequest("POST", joinURL(serverURL, "/push"), body)
 }
 
-func pushMeRequestConfig(auth, send, content map[string]any) (requestConfig, error) {
+func pushMeRequestConfig(auth, send, content map[string]any, recipient any) (requestConfig, error) {
 	serverURL := firstString(stringConfig(send, "server_url"), stringConfig(auth, "server_url"), "https://push.i-i.me")
-	pushKey := firstString(stringConfig(auth, "push_key"), stringConfig(send, "push_key"))
+	pushKey := firstRecipientString(recipient)
 	if strings.TrimSpace(serverURL) == "" || strings.TrimSpace(pushKey) == "" {
 		return requestConfig{}, ErrInvalidInput
 	}

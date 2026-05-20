@@ -38,7 +38,7 @@ func noticeContentSchema() json.RawMessage {
 }
 
 func barkContentSchema() json.RawMessage {
-	return rawJSON(`{"type":"object","required":["title","body"],"properties":{"title":{"type":"string","title":"Title","default":"{{ payload.title }}"},"subtitle":{"type":"string","title":"Subtitle"},"body":{"type":"string","title":"Body","default":"{{ payload.content }}"},"url":{"type":"string"},"level":{"type":"string","enum":["active","timeSensitive","passive","critical"]}}}`)
+	return rawJSON(`{"type":"object","field_order":["title","subtitle","body","markdown","group","sound","level","icon","url","image"],"properties":{"title":{"type":"string","title":"title","default":"{{ payload.title }}"},"subtitle":{"type":"string","title":"subtitle","default":"{{ payload.subtitle }}"},"body":{"type":"string","title":"body","default":"{{ payload.content }}"},"markdown":{"type":"string","title":"markdown","default":"{{ payload.markdown }}","format_hint":"支持 Markdown"},"group":{"type":"string","title":"group","default":"{{ payload.group }}"},"sound":{"type":"string","title":"sound","default":"{{ payload.sound }}"},"level":{"type":"string","title":"level","enum":["critical","active","timeSensitive","passive"],"enum_descriptions":{"critical":"重要警告，在静音模式下也会响铃","active":"默认值，系统会立即亮屏显示通知","timeSensitive":"时效性通知，可在专注状态下显示通知","passive":"仅将通知添加到通知列表，不会亮屏提醒"}},"icon":{"type":"string","title":"icon","default":"{{ payload.icon }}"},"url":{"type":"string","title":"url","default":"{{ payload.url }}"},"image":{"type":"string","title":"image","default":"{{ payload.image }}"}}}`)
 }
 
 func cascadeContentSchema() json.RawMessage {

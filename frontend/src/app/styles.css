@@ -15,6 +15,9 @@ body {
   overflow: hidden;
   color: #12213f;
   background: #eef5ff;
+  font-family: 'Outfit', 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }
 
 .auth-screen {
@@ -58,8 +61,11 @@ body {
   align-items: center;
   height: 64px;
   padding: 0 22px;
-  border-bottom: 1px solid #d7e3f4;
-  box-shadow: 0 8px 24px rgb(15 60 120 / 5%);
+  background: rgba(255, 255, 255, 0.8) !important;
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border-bottom: 1px solid rgba(215, 227, 244, 0.4) !important;
+  box-shadow: 0 8px 32px rgba(15, 60, 120, 0.03) !important;
 }
 
 .brand-area {
@@ -71,58 +77,77 @@ body {
   width: 38px;
   height: 38px;
   place-items: center;
-  background: #0f5fd5;
-  border-radius: 7px;
+  background: transparent;
+  border-radius: 8px;
 }
 
 .brand-mark svg {
   width: 26px;
   height: 26px;
-  fill: none;
-  stroke: #ffffff;
-  stroke-width: 2.5;
+  display: block;
 }
 
 .brand-title {
-  margin: 0;
-  line-height: 1.08;
-  letter-spacing: 0;
+  margin: 0 !important;
+  line-height: 1 !important;
+  display: flex;
+  align-items: center;
+  height: 38px;
+  font-size: 18px !important;
+  color: #101828 !important;
+  letter-spacing: -0.015em !important;
+  font-weight: 750 !important;
 }
 
 .workspace-tabs {
   min-width: 0;
-  align-self: end;
+  align-self: center;
+  margin-top: 2px;
 }
 
 .workspace-tabs .ant-tabs-nav {
   margin: 0;
 }
 
+.workspace-tabs .ant-tabs-nav::before {
+  display: none !important;
+}
+
 .workspace-tabs .ant-tabs-nav-list {
-  gap: 4px;
+  gap: 6px;
+  align-items: center;
+  height: 38px;
 }
 
 .workspace-tabs .ant-tabs-tab {
-  min-width: 94px;
-  padding: 6px 9px;
-  background: #f7faff;
-  border: 1px solid #d7e3f4;
-  border-bottom: 0;
-  border-radius: 6px 6px 0 0;
-  transition:
-    background 140ms ease,
-    border-color 140ms ease,
-    color 140ms ease;
+  min-width: 90px;
+  padding: 6px 12px !important;
+  background: transparent;
+  border: none !important;
+  border-radius: 6px;
+  margin: 0 !important;
+  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
-.workspace-tabs .ant-tabs-tab + .ant-tabs-tab {
-  margin-left: 0;
+.workspace-tabs .ant-tabs-tab:hover {
+  background: rgba(22, 119, 255, 0.04);
+  color: #0958d9 !important;
 }
 
 .workspace-tabs .ant-tabs-tab-active {
-  background: #ffffff;
-  border-color: #b8cff0;
-  box-shadow: 0 -2px 8px rgb(15 60 120 / 5%);
+  background: rgba(22, 119, 255, 0.08) !important;
+  border: none !important;
+  box-shadow: none !important;
+}
+
+.workspace-tabs .ant-tabs-tab-active .ant-tabs-tab-btn {
+  color: #1677ff !important;
+  font-weight: 600 !important;
+  text-shadow: none !important;
+}
+
+.workspace-tabs .ant-tabs-ink-bar {
+  display: none !important;
 }
 
 .workspace-tab-label {
@@ -143,11 +168,18 @@ body {
   background: transparent;
   border: 0;
   border-radius: 4px;
+  transition: all 0.2s ease;
+  opacity: 0.7;
+}
+
+.workspace-tabs .ant-tabs-tab:hover .workspace-tab-close,
+.workspace-tabs .ant-tabs-tab-active .workspace-tab-close {
+  opacity: 1;
 }
 
 .workspace-tab-close:hover {
-  color: #0958d9;
-  background: #e8f3ff;
+  color: #ff4d4f !important;
+  background: rgba(255, 77, 79, 0.1);
 }
 
 .header-actions {
@@ -316,29 +348,51 @@ body {
 }
 
 .workspace-page-tabs {
+  display: flex;
+  flex-direction: column;
   height: calc(100vh - 108px - var(--list-page-bottom-gap));
   min-height: 0;
-  display: grid;
-  grid-template-rows: auto minmax(0, 1fr);
 }
 
 .workspace-page-tabs > .ant-tabs-nav {
+  flex-shrink: 0;
   margin-bottom: 16px;
 }
 
-.workspace-page-tabs > .ant-tabs-content-holder,
-.workspace-page-tabs > .ant-tabs-content-holder > .ant-tabs-content,
-.workspace-page-tabs > .ant-tabs-content-holder > .ant-tabs-content > .ant-tabs-tabpane {
+.workspace-page-tabs .ant-tabs-content-holder {
+  flex: 1;
+  min-height: 0;
+  height: auto !important;
+}
+
+.workspace-page-tabs .ant-tabs-content,
+.workspace-page-tabs .ant-tabs-tabpane {
+  min-height: 0;
+  height: 100% !important;
+}
+
+.page-frame:has(.workspace-page-tabs) {
+  height: calc(100vh - 108px - var(--list-page-bottom-gap));
+  min-height: 0;
+  grid-template-rows: auto minmax(0, 1fr);
+  align-content: stretch;
+}
+
+.page-frame:has(.workspace-page-tabs) .workspace-page-tabs {
+  height: 100%;
+}
+
+.workspace-page-tabs .ant-tabs-tabpane {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  height: 100%;
   min-height: 0;
 }
 
-.workspace-page-tabs > .ant-tabs-content-holder > .ant-tabs-content,
-.workspace-page-tabs > .ant-tabs-content-holder > .ant-tabs-content > .ant-tabs-tabpane {
-  height: 100%;
-}
-
-.workspace-page-tabs .page-frame:has(.list-container--fill) {
-  height: 100%;
+.workspace-page-tabs .list-container--fill {
+  flex: 1;
+  min-height: 0;
 }
 
 .page-frame:has(.organization-subpage-tabs) {
@@ -348,21 +402,40 @@ body {
   align-content: stretch;
 }
 
-.organization-subpage-tabs {
-  display: grid;
-  grid-template-rows: auto minmax(0, 1fr);
-  min-height: 0;
-}
-
-.organization-subpage-tabs > .ant-tabs-content-holder,
-.organization-subpage-tabs > .ant-tabs-content-holder > .ant-tabs-content,
-.organization-subpage-tabs > .ant-tabs-content-holder > .ant-tabs-content > .ant-tabs-tabpane {
-  min-height: 0;
-}
-
-.organization-subpage-tabs > .ant-tabs-content-holder > .ant-tabs-content,
-.organization-subpage-tabs > .ant-tabs-content-holder > .ant-tabs-content > .ant-tabs-tabpane {
+.page-frame:has(.organization-subpage-tabs) .organization-subpage-tabs {
   height: 100%;
+}
+
+.organization-subpage-tabs {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+
+.organization-subpage-tabs > .ant-tabs-nav {
+  flex-shrink: 0;
+  margin-bottom: 16px;
+}
+
+.organization-subpage-tabs .ant-tabs-content-holder {
+  flex: 1;
+  min-height: 0;
+  height: auto !important;
+}
+
+.organization-subpage-tabs .ant-tabs-content,
+.organization-subpage-tabs .ant-tabs-tabpane {
+  min-height: 0;
+  height: 100% !important;
+}
+
+.organization-subpage-tabs .ant-tabs-tabpane {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  height: 100%;
+  min-height: 0;
 }
 
 .page-loading-state {
@@ -397,9 +470,14 @@ body {
   align-items: flex-start;
   justify-content: space-between;
   padding: 14px;
-  background: #ffffff;
-  border: 1px solid #d7e3f4;
+  background: rgba(255, 255, 255, 0.82) !important;
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  border: 1px solid rgba(215, 227, 244, 0.5) !important;
   border-radius: 8px;
+  box-shadow:
+    0 4px 18px rgba(15, 60, 120, 0.02),
+    0 12px 36px rgba(15, 60, 120, 0.05) !important;
 }
 
 .query-bar--compact {
@@ -440,9 +518,14 @@ body {
 .capability-panel,
 .template-modal-panel {
   min-width: 0;
-  background: #ffffff;
-  border: 1px solid #d7e3f4;
+  background: rgba(255, 255, 255, 0.82) !important;
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  border: 1px solid rgba(215, 227, 244, 0.5) !important;
   border-radius: 8px;
+  box-shadow:
+    0 4px 18px rgba(15, 60, 120, 0.02),
+    0 12px 36px rgba(15, 60, 120, 0.05) !important;
 }
 
 .list-container {
@@ -527,9 +610,22 @@ body {
   min-height: 118px;
   padding: 16px;
   overflow: hidden;
-  background: #ffffff;
-  border: 1px solid #d7e3f4;
+  background: rgba(255, 255, 255, 0.82) !important;
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  border: 1px solid rgba(215, 227, 244, 0.5) !important;
   border-radius: 8px;
+  box-shadow:
+    0 4px 18px rgba(15, 60, 120, 0.02),
+    0 12px 36px rgba(15, 60, 120, 0.05) !important;
+  transition: transform 0.3s cubic-bezier(0.25, 0.8, 0.25, 1), box-shadow 0.3s ease;
+}
+
+.metric-card:hover {
+  transform: translateY(-3px);
+  box-shadow:
+    0 8px 24px rgba(15, 60, 120, 0.05),
+    0 20px 48px rgba(15, 60, 120, 0.08) !important;
 }
 
 .metric-card strong {
@@ -579,33 +675,97 @@ body {
   width: 38px;
   height: 38px;
   place-items: center;
-  font-size: 22px;
-  background: currentColor;
-  border-radius: 8px;
+  font-size: 20px;
+  background: rgba(var(--accent-rgb), 0.12) !important;
+  color: var(--accent-color) !important;
+  border: 1px solid rgba(var(--accent-rgb), 0.22) !important;
+  border-radius: 10px;
+  transition: all 0.3s cubic-bezier(0.25, 0.8, 0.25, 1);
 }
 
 .metric-icon .anticon {
-  color: #ffffff;
+  color: inherit !important;
+}
+
+.metric-card:hover .metric-icon {
+  transform: scale(1.08);
+  background: rgba(var(--accent-rgb), 0.18) !important;
+  box-shadow: 0 4px 14px rgba(var(--accent-rgb), 0.18);
 }
 
 .metric-card--blue {
   color: #1677ff;
+  --accent-color: #1677ff;
+  --accent-rgb: 22, 119, 255;
 }
 
 .metric-card--green {
   color: #12b76a;
+  --accent-color: #12b76a;
+  --accent-rgb: 18, 183, 106;
 }
 
 .metric-card--orange {
   color: #f79009;
+  --accent-color: #f79009;
+  --accent-rgb: 247, 144, 9;
 }
 
 .metric-card--red {
   color: #f04438;
+  --accent-color: #f04438;
+  --accent-rgb: 240, 68, 56;
 }
 
 .metric-card--purple {
   color: #7a5af8;
+  --accent-color: #7a5af8;
+  --accent-rgb: 122, 90, 248;
+}
+
+/* Micro sparkline & donut charts styling */
+.metric-sparkline-container {
+  position: absolute;
+  bottom: 0;
+  right: 0;
+  width: 120px;
+  height: 46px;
+  pointer-events: none;
+  opacity: 0.18;
+  transition: all 0.3s cubic-bezier(0.25, 0.8, 0.25, 1);
+}
+
+.metric-card:hover .metric-sparkline-container {
+  opacity: 0.28;
+  transform: scale(1.05);
+}
+
+.metric-sparkline {
+  width: 100%;
+  height: 100%;
+  color: rgb(var(--accent-rgb));
+}
+
+.metric-donut-container {
+  position: absolute;
+  bottom: 12px;
+  right: 16px;
+  width: 42px;
+  height: 42px;
+  pointer-events: none;
+  opacity: 0.22;
+  transition: all 0.3s cubic-bezier(0.25, 0.8, 0.25, 1);
+}
+
+.metric-card:hover .metric-donut-container {
+  opacity: 0.35;
+  transform: scale(1.08) rotate(15deg);
+}
+
+.metric-donut {
+  width: 100%;
+  height: 100%;
+  color: rgb(var(--accent-rgb));
 }
 
 .dashboard-grid {
@@ -1049,6 +1209,18 @@ body {
   min-width: 0;
 }
 
+.split-layout--organization-management .list-stack {
+  height: 100%;
+  min-height: 0;
+  max-height: 100%;
+  grid-template-rows: auto minmax(0, 1fr);
+}
+
+.split-layout--organization-management .list-stack .list-container--fill {
+  min-height: 0;
+  height: 100%;
+}
+
 .side-filter,
 .capability-panel {
   height: calc(100vh - 146px - var(--list-page-bottom-gap));
@@ -1410,17 +1582,38 @@ body {
   grid-template-columns: minmax(300px, 0.82fr) minmax(420px, 1fr) minmax(340px, 0.92fr);
   gap: 14px;
   min-height: 0;
-  height: calc(min(78vh, 810px) - 150px);
+  height: 100%;
 }
 
 .template-wide-modal .ant-modal-content {
-  min-height: min(78vh, 810px);
+  min-height: min(82vh, 850px) !important;
+  height: min(82vh, 850px) !important;
+  display: flex !important;
+  flex-direction: column !important;
 }
 
 .template-wide-modal .ant-modal-body {
-  height: calc(min(78vh, 810px) - 116px);
-  max-height: calc(min(78vh, 810px) - 116px);
-  overflow: hidden;
+  flex: 1 !important;
+  min-height: 0 !important;
+  height: auto !important;
+  max-height: none !important;
+  overflow: hidden !important;
+  padding: 8px 24px 14px !important;
+  margin-bottom: 0 !important;
+}
+
+.template-wide-modal .ant-modal-footer {
+  margin-top: 4px !important;
+  padding-top: 8px !important;
+  padding-bottom: 12px !important;
+}
+
+.template-wide-modal .template-modal-grid {
+  height: 100% !important;
+}
+
+.template-wide-modal .template-modal-panel {
+  height: 100% !important;
 }
 
 .template-modal-panel {
@@ -1758,6 +1951,32 @@ body {
   padding-inline: 12px;
 }
 
+.identity-row--verified > .ant-table-cell {
+  background: #f6ffed;
+}
+
+.identity-provider-cell {
+  min-width: 220px;
+}
+
+.identity-value-cell {
+  width: 260px;
+}
+
+.identity-verified-cell {
+  width: 92px;
+}
+
+.identity-action-cell {
+  width: 48px;
+  text-align: center;
+}
+
+.identity-delete-icon-button.ant-btn {
+  width: 32px;
+  padding-inline: 0;
+}
+
 .two-column-form {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -1994,4 +2213,198 @@ body {
   .user-block {
     display: none;
   }
+}
+
+.provider-test-response-error {
+  max-width: 100%;
+  word-wrap: break-word;
+  word-break: break-all;
+  white-space: pre-wrap;
+  color: var(--ant-color-error);
+  margin-top: 8px;
+}
+
+/* ==========================================================================
+   ✨ PREMIUM VISUAL & THEME POLISH OVERRIDES
+   ========================================================================== */
+
+/* 1. 胶囊化无边框低饱和淡彩 Tag 与精致状态颜色规范 */
+.ant-tag {
+  border: none !important;
+  border-radius: 99px !important;
+  padding: 3px 12px !important;
+  font-weight: 500 !important;
+  font-size: 12px !important;
+}
+
+/* 柔和、护眼低饱和度的 Sage 绿，取代刺眼的高亮绿 */
+.ant-tag-success {
+  background: rgba(18, 127, 73, 0.09) !important;
+  color: #127f49 !important;
+}
+
+.ant-tag-processing,
+.ant-tag-blue {
+  background: rgba(22, 119, 255, 0.12) !important;
+  color: #0b57d0 !important;
+}
+
+.ant-tag-warning {
+  background: rgba(247, 144, 9, 0.12) !important;
+  color: #b25e00 !important;
+}
+
+.ant-tag-error {
+  background: rgba(240, 68, 56, 0.12) !important;
+  color: #c12a20 !important;
+}
+
+.ant-tag-default,
+.ant-tag:not([class*="ant-tag-"]) {
+  background: rgba(102, 112, 133, 0.1) !important;
+  color: #475467 !important;
+}
+
+/* 2. 气泡通知、下拉浮层高清晰磨砂毛玻璃效果 */
+.ant-popover-content .ant-popover-inner,
+.ant-dropdown-menu {
+  background: rgba(255, 255, 255, 0.88) !important;
+  backdrop-filter: blur(20px) !important;
+  -webkit-backdrop-filter: blur(20px) !important;
+  border: 1px solid rgba(215, 227, 244, 0.7) !important;
+  box-shadow: 0 12px 36px rgba(15, 60, 120, 0.12) !important;
+}
+
+/* 3. 模态弹窗与侧边抽屉磨砂毛玻璃效果 */
+.ant-modal-content,
+.ant-drawer-content {
+  background: rgba(255, 255, 255, 0.9) !important;
+  backdrop-filter: blur(16px) !important;
+  -webkit-backdrop-filter: blur(16px) !important;
+  border: 1px solid rgba(215, 227, 244, 0.4) !important;
+}
+
+/* 消除弹窗与抽屉头部/底部的实体背景白线，使其完美显现毛玻璃底面 */
+.ant-modal-header,
+.ant-modal-title,
+.ant-modal-footer,
+.ant-drawer-header,
+.ant-drawer-title,
+.ant-drawer-footer,
+.ant-modal .ant-modal-content .ant-modal-header,
+.ant-modal .ant-modal-content .ant-modal-title,
+.ant-modal .ant-modal-content .ant-modal-footer,
+.ant-drawer .ant-drawer-content .ant-drawer-header,
+.ant-drawer .ant-drawer-content .ant-drawer-title,
+.ant-drawer .ant-drawer-content .ant-drawer-footer {
+  background: transparent !important;
+  background-color: transparent !important;
+  border-bottom: none !important;
+  border-top: none !important;
+  box-shadow: none !important;
+}
+
+/* 4. 印刷级精细字间距调优 */
+.page-title {
+  letter-spacing: -0.02em !important;
+  font-weight: 600 !important;
+}
+
+.brand-title {
+  letter-spacing: -0.01em !important;
+  font-weight: 700 !important;
+}
+
+/* 5. 侧边栏菜单项精致化 Hover */
+.ant-menu-item {
+  transition: all 0.2s cubic-bezier(0.25, 0.8, 0.25, 1) !important;
+}
+
+.ant-menu-item:hover {
+  transform: translateX(2px);
+}
+
+/* ==========================================================================
+   💎 HIGH-END DATA TABLE POLISH & SCROLLBAR OVERRIDES
+   ========================================================================== */
+
+/* 1. 浮动列的毛玻璃渐变阴影 - 仅在横向滚动触发且处于边缘 (Pinged) 时显示，防未滚动时浮线与毛玻璃偏出 */
+.ant-table-ping-right .ant-table-cell-fix-right-first::after {
+  box-shadow: -8px 0 16px -4px rgba(15, 60, 120, 0.08) !important;
+  border-left: 1px solid rgba(215, 227, 244, 0.4) !important;
+}
+.ant-table-ping-left .ant-table-cell-fix-left-last::after {
+  box-shadow: 8px 0 16px -4px rgba(15, 60, 120, 0.08) !important;
+  border-right: 1px solid rgba(215, 227, 244, 0.4) !important;
+}
+
+/* 2. 极简 Apple 风格原生横向滚动条 (Minimalist Native Scrollbar) */
+.ant-table-content::-webkit-scrollbar,
+.ant-table-body::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+.ant-table-content::-webkit-scrollbar-thumb,
+.ant-table-body::-webkit-scrollbar-thumb {
+  background: rgba(15, 60, 120, 0.12) !important;
+  border-radius: 99px !important;
+}
+.ant-table-content::-webkit-scrollbar-thumb:hover,
+.ant-table-body::-webkit-scrollbar-thumb:hover {
+  background: rgba(15, 60, 120, 0.25) !important;
+}
+.ant-table-content::-webkit-scrollbar-track,
+.ant-table-body::-webkit-scrollbar-track {
+  background: transparent !important;
+}
+
+/* 3. 半透明酷炫表头 & 呼吸感悬停交互 (Glassy Row Interaction) */
+.ant-table-thead > tr > th {
+  background: rgba(244, 248, 255, 0.9) !important;
+  color: #344054 !important;
+  font-weight: 600 !important;
+  border-bottom: 1px solid rgba(215, 227, 244, 0.5) !important;
+}
+
+.ant-table-tbody > tr.ant-table-row:hover > td {
+  background: rgba(15, 95, 213, 0.032) !important;
+  transition: background 200ms cubic-bezier(0.25, 0.8, 0.25, 1);
+}
+
+/* 4. 单元格防折行保护 (No-Wrap Typography Protection) */
+.ant-table-cell {
+  white-space: nowrap !important;
+}
+
+/* 允许特定备注或代码文本换行，避免完全锁死 */
+.ant-table-cell.allow-wrap {
+  white-space: normal !important;
+}
+
+/* 5. 确保固定列（Sticky Columns）在滚动时拥有完全不透明的纯色背景，遮盖底层穿过的滚动文本 */
+.ant-table-cell-fix-left,
+.ant-table-cell-fix-right {
+  background: #ffffff !important;
+  opacity: 1 !important;
+}
+
+/* 对于表头中的固定列，采用不透明的淡冷蓝色，与整体表头色调一致 */
+.ant-table-thead > tr > th.ant-table-cell-fix-left,
+.ant-table-thead > tr > th.ant-table-cell-fix-right {
+  background: #f4f8ff !important;
+  opacity: 1 !important;
+}
+
+/* 当表格行被悬停时，其固定的单元格亦应同步变更为悬停淡蓝背景，确保整行动效一致 */
+.ant-table-tbody > tr.ant-table-row:hover > td.ant-table-cell-fix-left,
+.ant-table-tbody > tr.ant-table-row:hover > td.ant-table-cell-fix-right {
+  background: #f6f9fe !important;
+  opacity: 1 !important;
+}
+
+/* 6. 让数据表中的操作列链接按钮更紧凑，限制水平 Padding，彻底防宽度溢出 */
+.ant-table-cell .ant-btn-link {
+  padding-left: 6px !important;
+  padding-right: 6px !important;
+  height: auto !important;
 }

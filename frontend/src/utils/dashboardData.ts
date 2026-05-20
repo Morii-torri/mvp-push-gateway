@@ -9,7 +9,7 @@ export type OverviewApiResponse = {
     failed: number;
     success_rate: number;
     average_qps: number;
-    active_platforms: number;
+    total_received: number;
   };
   trend: Array<{
     bucket_start: string;
@@ -155,12 +155,12 @@ export type QueueMonitoringViewModel = {
 export function defaultOverviewViewModel(): OverviewViewModel {
   return {
     metrics: [
+      metricCard('received', '总接收量', '0 条', '入站消息总量', 'flat', 'blue'),
       metricCard('sent', '总发送量', '0 条', '24 小时窗口', 'flat', 'blue'),
-      metricCard('success', '成功率', '0.00%', '0 条成功', 'flat', 'green'),
-      metricCard('failed', '失败量', '0 条', '24 小时失败总量', 'flat', 'red'),
-      metricCard('qps', '平均 QPS', '0', '按 24 小时平均计算', 'flat', 'purple'),
-      metricCard('platforms', '活跃平台数', '0', '过去 24 小时有发送记录', 'flat', 'blue'),
       metricCard('successful', '成功发送量', '0 条', '用于总览成功吞吐', 'flat', 'green'),
+      metricCard('failed', '失败发送量', '0 条', '24 小时失败总量', 'flat', 'red'),
+      metricCard('success', '成功率', '0.00%', '0 条成功', 'flat', 'green'),
+      metricCard('ops', '平均 OPS', '0', '按 24 小时平均计算', 'flat', 'purple'),
     ],
     trendPoints: zeroTrendPoints(),
     trendLabels: zeroTrendLabels(),
@@ -196,12 +196,12 @@ export function defaultQueueMonitoringViewModel(): QueueMonitoringViewModel {
 export function buildOverviewViewModel(data: OverviewApiResponse, window: DashboardWindow = '24h'): OverviewViewModel {
   return {
     metrics: [
+      metricCard('received', '总接收量', `${formatInteger(data.summary.total_received)} 条`, '入站消息总量', 'flat', 'blue'),
       metricCard('sent', '总发送量', `${formatInteger(data.summary.total_sent)} 条`, '24 小时窗口', 'flat', 'blue'),
-      metricCard('success', '成功率', `${formatPercent(data.summary.success_rate)}`, `${formatInteger(data.summary.successful)} 条成功`, 'up', 'green'),
-      metricCard('failed', '失败量', `${formatInteger(data.summary.failed)} 条`, '24 小时失败总量', 'up', 'red'),
-      metricCard('qps', '平均 QPS', `${formatDecimal(data.summary.average_qps)}`, '按 24 小时平均计算', 'flat', 'purple'),
-      metricCard('platforms', '活跃平台数', `${formatInteger(data.summary.active_platforms)}`, '过去 24 小时有发送记录', 'flat', 'blue'),
       metricCard('successful', '成功发送量', `${formatInteger(data.summary.successful)} 条`, '用于总览成功吞吐', 'flat', 'green'),
+      metricCard('failed', '失败发送量', `${formatInteger(data.summary.failed)} 条`, '24 小时失败总量', 'up', 'red'),
+      metricCard('success', '成功率', `${formatPercent(data.summary.success_rate)}`, `${formatInteger(data.summary.successful)} 条成功`, 'up', 'green'),
+      metricCard('ops', '平均 OPS', `${formatDecimal(data.summary.average_qps)}`, '按 24 小时平均计算', 'flat', 'purple'),
     ],
     trendPoints: data.trend.map((item) => item.sent),
     trendLabels: trendBucketLabels(data.trend, window),
@@ -371,10 +371,16 @@ function formatTrendBucketLabel(value: string, window: DashboardWindow): string 
 }
 
 function formatInteger(value: number): string {
+  if (value === undefined || value === null || Number.isNaN(value) || typeof value !== 'number') {
+    return '0';
+  }
   return Math.max(0, Math.round(value)).toLocaleString('zh-CN');
 }
 
 function formatDecimal(value: number): string {
+  if (value === undefined || value === null || Number.isNaN(value) || typeof value !== 'number') {
+    return '0';
+  }
   return value.toLocaleString('zh-CN', {
     minimumFractionDigits: 0,
     maximumFractionDigits: 2,
@@ -382,6 +388,9 @@ function formatDecimal(value: number): string {
 }
 
 function formatPercent(value: number): string {
+  if (value === undefined || value === null || Number.isNaN(value) || typeof value !== 'number') {
+    return '0.00%';
+  }
   return `${value.toLocaleString('zh-CN', {
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,
@@ -389,10 +398,16 @@ function formatPercent(value: number): string {
 }
 
 function formatMilliseconds(value: number): string {
+  if (value === undefined || value === null || Number.isNaN(value) || typeof value !== 'number') {
+    return '0 ms';
+  }
   return `${formatInteger(value)} ms`;
 }
 
 function formatDurationSeconds(totalSeconds: number): string {
+  if (totalSeconds === undefined || totalSeconds === null || Number.isNaN(totalSeconds) || typeof totalSeconds !== 'number') {
+    return '0 秒';
+  }
   const seconds = Math.max(0, Math.round(totalSeconds));
   if (seconds >= 3600) {
     const hours = Math.floor(seconds / 3600);
@@ -406,6 +421,13 @@ function formatDurationSeconds(totalSeconds: number): string {
 }
 
 function formatTime(value: string): string {
+  if (!value) {
+    return '-';
+  }
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return '-';
+  }
   return new Intl.DateTimeFormat('zh-CN', {
     timeZone: 'Asia/Shanghai',
     month: '2-digit',
@@ -414,7 +436,7 @@ function formatTime(value: string): string {
     minute: '2-digit',
     second: '2-digit',
     hour12: false,
-  }).format(new Date(value));
+  }).format(date);
 }
 
 function mapHealthLabel(value: string): PlatformHealth['health'] {

@@ -198,6 +198,9 @@ export function getAuditActionLabel(value: AuditAction): string {
 }
 
 export function formatHitCount(value: number): string {
+  if (value === undefined || value === null || Number.isNaN(value) || typeof value !== 'number') {
+    return '0';
+  }
   return String(Math.min(Math.max(value, 0), 99999).toLocaleString('zh-CN'));
 }
 

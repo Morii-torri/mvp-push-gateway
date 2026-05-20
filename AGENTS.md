@@ -72,6 +72,20 @@
 - 纯视觉截图用于给用户检查观感时，在固定 viewport 的基础上额外将浏览器窗口最大化，避免 macOS 实际窗口偏窄造成误判。
 - 不使用窄窗口作为桌面端默认验收依据；如果验证移动端或窄屏响应式，需要在记录中明确 viewport 尺寸。
 
+## 前端当前 UI 基线
+
+截至 2026-05-20，管理台前端已完成一轮深度视觉与交互体验升级，后续修改应延续以下基线：
+
+- 所有列表列宽都要设置合理 `min-width`，窄屏通过横向滚动保留字段可读性；最右侧操作列必须可见，悬浮背景只包裹操作内容，不向外突兀延伸。
+- 列表字段展示保持紧凑轻量：路由大组的绑定来源单行用 `|` 分隔；来源编码使用普通文本；模板内容字段需要限制宽度并处理过长文本，避免遮挡验证状态徽标。
+- 来源和推送渠道等列表的启停滑块应优先放在列表外层或操作区域中直接可用；状态和策略胶囊颜色保持语义一致，例如死信策略使用与入站去重一致的蓝色风格。
+- 总览指标卡顺序固定为：总接收量、总发送量、成功发送量、失败发送量、成功率、平均 QPS；无数据时显示 `0`，不得出现 `NaN`。
+- 总览指标卡右上角使用语义化的微型可视化背景装饰，避免使用和指标含义不贴切的图形。
+- 顶部 Header 使用用户提供的品牌资产：`frontend/public/icon.png` 作为左上角 Logo，`frontend/public/favicon.ico` 作为 favicon；不要恢复旧的代码字母 SVG 图标。
+- 品牌 Logo 与 `MVP-PUSH` 标题必须通过 flex 布局垂直居中，标题不要被默认行高拉偏。
+- Workspace tabs 采用现代 SaaS 无边框胶囊风格；选中态为浅蓝胶囊背景，关闭按钮 hover 使用红色危险高亮微交互，不回退到传统带边框文件夹式标签页。
+- 新建/编辑模板弹窗内容较多时，内部卡片层级不得覆盖底部按钮操作区和阴影。
+
 ## 文档入口
 
 - 总索引：`docs/README.md`
@@ -91,6 +105,6 @@
 
 ## 当前阶段
 
-截至 2026-05-13，核心后端链路、provider capability registry、provider-aware template、route send action group、planning fan-out 和 delivery adapter boundary 已进入实现状态。管理台已收敛为八个主菜单，真实接口替代 demo/fallback，右上角通知、总览趋势、组织人员拆分和账户菜单已进入当前产品基线。文档描述应以当前源码和迁移为准，不再沿用“template node / 单模板多渠道 / 自定义 Token 平台作为主路径”的旧模型。
+截至 2026-05-20，核心后端链路、provider capability registry、provider-aware template、route send action group、planning fan-out 和 delivery adapter boundary 已进入实现状态。管理台已收敛为八个主菜单，真实接口替代 demo/fallback，右上角通知、总览趋势、组织人员拆分、账户菜单和 2026-05-20 前端 UI 基线已进入当前产品基线。文档描述应以当前源码和迁移为准，不再沿用“template node / 单模板多渠道 / 自定义 Token 平台作为主路径”的旧模型。
 
 第一批和 P2 provider defaults 已实现 build-request/mock 级别支持，但 PushPlus、WxPusher、Server酱、短信、企微、钉钉、飞书、SMTP/self/gov_cloud、ntfy、Gotify、Bark、PushMe 均不要写成已经真实联调成功；当前应标注为 implemented but not live-tested 或 configuration-dependent。

@@ -224,6 +224,7 @@ export function AppShell() {
         algorithm: theme.defaultAlgorithm,
         token: {
           colorPrimary: '#1677ff',
+          colorSuccess: '#127f49',
           colorBgLayout: '#eef5ff',
           colorText: '#12213f',
           colorTextSecondary: '#667085',
@@ -464,10 +465,7 @@ function ConsoleChrome() {
       <Header className="app-header">
         <Space align="center" size={12} className="brand-area">
           <div className="brand-mark" aria-hidden="true">
-            <svg viewBox="0 0 36 36" role="img">
-              <path d="M7 25V11h5l6 8 6-8h5v14h-5V18l-5 7h-2l-5-7v7H7Z" />
-              <path d="M6 29h24" />
-            </svg>
+            <img src="/icon.png" alt="Logo" style={{ width: '100%', height: '100%', objectFit: 'contain', borderRadius: '8px' }} />
           </div>
           <Typography.Title level={4} className="brand-title">
             MVP-PUSH

@@ -18,13 +18,13 @@ func builtInRequestConfig(channel Channel, input BuildRequestInput) (requestConf
 
 	switch channel.ProviderType {
 	case ProviderPushPlus:
-		config, err := pushPlusRequestConfig(auth, send, content)
+		config, err := pushPlusRequestConfig(auth, send, content, input.Recipient)
 		return config, true, err
 	case ProviderWxPusher:
 		config, err := wxPusherRequestConfig(auth, send, content, input.Recipient)
 		return config, true, err
 	case ProviderServerChan:
-		config, err := serverChanRequestConfig(auth, send, content)
+		config, err := serverChanRequestConfig(auth, send, content, input.Recipient)
 		return config, true, err
 	case ProviderNtfy:
 		config, err := ntfyRequestConfig(auth, send, content)
@@ -36,7 +36,7 @@ func builtInRequestConfig(channel Channel, input BuildRequestInput) (requestConf
 		config, err := barkRequestConfig(auth, send, content, input.Recipient)
 		return config, true, err
 	case ProviderPushMe:
-		config, err := pushMeRequestConfig(auth, send, content)
+		config, err := pushMeRequestConfig(auth, send, content, input.Recipient)
 		return config, true, err
 	case ProviderSelf:
 		config, err := selfRequestConfig(auth, send, content, input)

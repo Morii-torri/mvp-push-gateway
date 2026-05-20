@@ -96,7 +96,7 @@ describe('app shell logout confirmation', () => {
           failed: 2,
           success_rate: 80,
           average_qps: 0.1,
-          active_platforms: 1,
+          total_received: 12,
         },
         trend: [],
         platform_rankings: [],
