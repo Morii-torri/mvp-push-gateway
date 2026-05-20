@@ -2636,7 +2636,8 @@ body {
   display: flex;
   align-items: center;
   gap: 12px;
-  padding: 8px 12px;
+  padding: 0 12px;
+  height: 40px;
   margin-bottom: 6px;
   border-radius: 8px;
   background: #f8fbff;
@@ -2645,7 +2646,13 @@ body {
   transition: all 0.3s cubic-bezier(0.25, 0.8, 0.25, 1);
   overflow: hidden;
   user-select: none;
+  box-sizing: border-box;
 }
+
+.provider-type-groups > .sidebar-nav-card:first-child {
+  margin-bottom: 16px;
+}
+
 
 .sidebar-nav-card:hover {
   transform: translateX(4px);
@@ -2713,6 +2720,9 @@ body {
   color: #344054;
   transition: color 0.3s ease;
   flex-grow: 1;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  overflow: hidden;
 }
 
 .sidebar-nav-card.active .card-name {
