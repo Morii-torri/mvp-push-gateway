@@ -465,7 +465,7 @@ function ConsoleChrome() {
       <Header className="app-header">
         <Space align="center" size={12} className="brand-area">
           <div className="brand-mark" aria-hidden="true">
-            <img src="/icon.png" alt="Logo" style={{ width: '100%', height: '100%', objectFit: 'contain', borderRadius: '8px' }} />
+            <img src="/logo-ui.png" alt="Logo" style={{ width: '100%', height: '100%', objectFit: 'contain', borderRadius: '8px' }} />
           </div>
           <Typography.Title level={4} className="brand-title">
             MVP-PUSH
