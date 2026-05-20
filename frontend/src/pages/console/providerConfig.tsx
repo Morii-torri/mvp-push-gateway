@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react';
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import App from 'antd/es/app';
 import Button from 'antd/es/button';
 import Descriptions from 'antd/es/descriptions';
@@ -1812,9 +1812,6 @@ interface ProviderTypeCardSelectorProps {
 }
 
 export function ProviderTypeCardSelector({ value, onChange }: ProviderTypeCardSelectorProps) {
-  const [activeTab, setActiveTab] = useState<string>('全部');
-  const [searchQuery, setSearchQuery] = useState<string>('');
-
   const groups = [
     { label: '全部', values: providerTypeOptions.map(o => o.value) },
     { label: '企业协同', values: ['wecom_robot', 'wecom_app', 'dingtalk_robot', 'dingtalk_work', 'feishu_robot'] },
@@ -1823,6 +1820,28 @@ export function ProviderTypeCardSelector({ value, onChange }: ProviderTypeCardSe
     { label: '基础通道', values: ['webhook', 'self', 'custom_token'] },
     { label: '自建服务', values: ['gov_cloud', 'ntfy', 'gotify'] },
   ];
+
+  const [activeTab, setActiveTab] = useState<string>(() => {
+    if (value && value !== 'webhook') {
+      const matchedGroup = groups.slice(1).find(g => g.values.includes(value));
+      if (matchedGroup) return matchedGroup.label;
+    }
+    return '企业协同';
+  });
+  const [searchQuery, setSearchQuery] = useState<string>('');
+
+  useEffect(() => {
+    if (value && value !== 'webhook') {
+      const currentGroup = groups.find(g => g.label === activeTab);
+      if (currentGroup && currentGroup.values.includes(value)) {
+        return;
+      }
+      const matchedGroup = groups.slice(1).find(g => g.values.includes(value));
+      if (matchedGroup) {
+        setActiveTab(matchedGroup.label);
+      }
+    }
+  }, [value]);
 
   const currentGroup = groups.find(g => g.label === activeTab) || groups[0];
 
