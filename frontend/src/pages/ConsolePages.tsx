@@ -4058,9 +4058,9 @@ export function TemplatesPage({ lastUpdated, onRefresh }: ConsolePageProps) {
     },
     {
       title: '消息格式',
-      dataIndex: 'messageType',
+      dataIndex: 'messageFormat',
       width: 100,
-      render: (value: string) => getMessageTypeLabel(value),
+      render: (value: string | undefined, record) => getMessageTypeLabel(value || record.messageType),
     },
     {
       title: '内容字段',

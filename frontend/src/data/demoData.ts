@@ -473,6 +473,7 @@ export type TemplateRecord = {
   name: string;
   source: string;
   messageType: string;
+  messageFormat?: string;
   targetProviderType: ProviderType;
   targetField: string;
   content: string;

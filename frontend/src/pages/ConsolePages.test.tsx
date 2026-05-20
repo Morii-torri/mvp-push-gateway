@@ -2221,6 +2221,72 @@ describe('critical console pages', () => {
     expect(row.messageType).toBe('html');
   });
 
+  it('derives PushMe template list message format from the type field', () => {
+    const markdownRow = mapTemplateRow(
+      {
+        id: 'tpl-pushme-markdown',
+        name: 'PushMe Markdown 模板',
+        description: '',
+        source_id: 'src-1',
+        enabled: true,
+        current_version_id: 'tpl-version-1',
+        message_type: 'notice',
+        target_provider_type: 'pushme',
+        template_body: '{"title":"{{ payload.title }}","content":"{{ payload.content }}","type":"markdown"}',
+        message_body_schema: {},
+        sample_payload: { title: '标题', content: '正文' },
+        created_at: '2026-05-11T09:00:00+08:00',
+        updated_at: '2026-05-11T09:30:00+08:00',
+      },
+      [{ id: 'src-1', code: 'source-a', name: '来源 A' }],
+    );
+    const htmlRow = mapTemplateRow(
+      {
+        ...markdownRow.raw,
+        id: 'tpl-pushme-html',
+        template_body: '{"title":"{{ payload.title }}","content":"<strong>{{ payload.content }}</strong>","type":"html"}',
+      },
+      [{ id: 'src-1', code: 'source-a', name: '来源 A' }],
+    );
+
+    expect(markdownRow.messageType).toBe('notice');
+    expect(markdownRow.messageFormat).toBe('markdown');
+    expect(htmlRow.messageFormat).toBe('html');
+  });
+
+  it('derives Bark template list message format from body or markdown fields', () => {
+    const bodyRow = mapTemplateRow(
+      {
+        id: 'tpl-bark-body',
+        name: 'Bark 文本模板',
+        description: '',
+        source_id: 'src-1',
+        enabled: true,
+        current_version_id: 'tpl-version-1',
+        message_type: 'notice',
+        target_provider_type: 'bark',
+        template_body: '{"title":"{{ payload.title }}","body":"{{ payload.content }}"}',
+        message_body_schema: {},
+        sample_payload: { title: '标题', content: '正文' },
+        created_at: '2026-05-11T09:00:00+08:00',
+        updated_at: '2026-05-11T09:30:00+08:00',
+      },
+      [{ id: 'src-1', code: 'source-a', name: '来源 A' }],
+    );
+    const markdownRow = mapTemplateRow(
+      {
+        ...bodyRow.raw,
+        id: 'tpl-bark-markdown',
+        template_body: '{"title":"{{ payload.title }}","markdown":"**{{ payload.content }}**"}',
+      },
+      [{ id: 'src-1', code: 'source-a', name: '来源 A' }],
+    );
+
+    expect(bodyRow.messageType).toBe('notice');
+    expect(bodyRow.messageFormat).toBe('text');
+    expect(markdownRow.messageFormat).toBe('markdown');
+  });
+
   it('normalizes legacy JSON template rows to text message format', () => {
     const row = mapTemplateRow(
       {

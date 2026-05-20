@@ -605,6 +605,30 @@ export function getMessageTypeLabel(value: string): string {
   return messageTypeLabels[normalizeTemplateMessageFormat(value)];
 }
 
+function literalMessageFormat(value: JSONValue | undefined): string {
+  if (typeof value !== 'string') {
+    return '';
+  }
+  const normalized = value.trim().toLowerCase();
+  return normalized === 'text' || normalized === 'markdown' || normalized === 'html' ? normalized : '';
+}
+
+function templateListMessageFormat(providerType: ProviderKind, messageType: string, templateBody: string): string {
+  const parsed = parseTemplateBodyRecord(templateBody);
+  if (providerType === 'pushme') {
+    return literalMessageFormat(parsed?.type) || messageType;
+  }
+  if (providerType === 'bark') {
+    if (parsed && Object.prototype.hasOwnProperty.call(parsed, 'markdown')) {
+      return 'markdown';
+    }
+    if (parsed && Object.prototype.hasOwnProperty.call(parsed, 'body')) {
+      return 'text';
+    }
+  }
+  return messageType;
+}
+
 function schemaForMessage(schema: JSONValue | undefined, messageType: string): JSONValue | undefined {
   if (!schema || !isRecord(schema)) {
     return schema;
@@ -1525,6 +1549,7 @@ export function mapTemplateRow(
     source: source ? `${source.name} / ${source.code}` : template.source_id || '-',
     targetProviderType,
     messageType,
+    messageFormat: templateListMessageFormat(targetProviderType, messageType, templateBody),
     targetField: templateContentFieldSummary(schema, templateBody),
     content: templateBody,
     validationStatus,
