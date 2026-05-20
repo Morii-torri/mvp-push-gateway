@@ -1403,7 +1403,8 @@ describe('critical console pages', () => {
     expect(markup).toContain('提供模板编辑、字段复制、实时预览和保存前校验。');
     expect(markup).toContain('模板列表');
     expect(markup).toContain('推送渠道类型');
-    expect(markup).toContain('消息格式');
+    expect(markup).toContain('内容格式');
+    expect(markup).not.toContain('消息格式');
     expect(markup).not.toContain('消息类型');
     expect(markup).toContain('校验状态');
   });

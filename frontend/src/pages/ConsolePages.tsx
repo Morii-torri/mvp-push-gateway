@@ -4057,7 +4057,7 @@ export function TemplatesPage({ lastUpdated, onRefresh }: ConsolePageProps) {
       render: (value: TemplateRecord['targetProviderType']) => getProviderTypeLabel(value),
     },
     {
-      title: '消息格式',
+      title: '内容格式',
       dataIndex: 'messageFormat',
       width: 100,
       render: (value: string | undefined, record) => getMessageTypeLabel(value || record.messageType),
