@@ -12,6 +12,7 @@ import Space from 'antd/es/space';
 import Switch from 'antd/es/switch';
 import Tabs from 'antd/es/tabs';
 import Typography from 'antd/es/typography';
+import Segmented from 'antd/es/segmented';
 
 import {
   consoleApi,
@@ -29,6 +30,8 @@ import {
   showUserFacingError,
   stringifyJSON,
   type ProviderKind,
+  providerBrandMeta,
+  defaultBrandMeta,
 } from './shared';
 
 type ProviderFieldTarget = 'auth_config' | 'token_config' | 'send_config';
@@ -1797,6 +1800,121 @@ function renderProviderFieldInput(
   );
 }
 
+const CheckIcon = () => (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" style={{ width: 10, height: 10, display: 'block' }}>
+    <polyline points="20 6 9 17 4 12" />
+  </svg>
+);
+
+interface ProviderTypeCardSelectorProps {
+  value: ProviderKind;
+  onChange: (value: ProviderKind) => void;
+}
+
+export function ProviderTypeCardSelector({ value, onChange }: ProviderTypeCardSelectorProps) {
+  const [activeTab, setActiveTab] = useState<string>('全部');
+  const [searchQuery, setSearchQuery] = useState<string>('');
+
+  const groups = [
+    { label: '全部', values: providerTypeOptions.map(o => o.value) },
+    { label: '企业协同', values: ['wecom_robot', 'wecom_app', 'dingtalk_robot', 'dingtalk_work', 'feishu_robot'] },
+    { label: '个人推送', values: ['pushplus', 'wxpusher', 'serverchan', 'bark', 'pushme'] },
+    { label: '邮件短信', values: ['email', 'aliyun_sms', 'tencent_sms', 'baidu_sms'] },
+    { label: '基础通道', values: ['webhook', 'self', 'custom_token'] },
+    { label: '自建服务', values: ['gov_cloud', 'ntfy', 'gotify'] },
+  ];
+
+  const currentGroup = groups.find(g => g.label === activeTab) || groups[0];
+
+  const filteredOptions = providerTypeOptions.filter(option => {
+    const isMatchedGroup = currentGroup.values.includes(option.value);
+    if (!isMatchedGroup) return false;
+    
+    if (!searchQuery.trim()) return true;
+
+    const brandMeta = providerBrandMeta[option.value] || defaultBrandMeta;
+    const searchLower = searchQuery.toLowerCase();
+    return (
+      option.label.toLowerCase().includes(searchLower) ||
+      option.value.toLowerCase().includes(searchLower) ||
+      brandMeta.desc.toLowerCase().includes(searchLower)
+    );
+  });
+
+  return (
+    <div className="provider-type-card-selector">
+      <div className="selector-control-bar">
+        <Segmented
+          value={activeTab}
+          onChange={(val) => setActiveTab(String(val))}
+          options={groups.map(g => g.label)}
+          className="premium-segmented"
+        />
+        <Input
+          placeholder="智能搜索渠道..."
+          allowClear
+          value={searchQuery}
+          onChange={(e) => setSearchQuery(e.target.value)}
+          className="premium-search-input"
+          style={{ width: 220 }}
+        />
+      </div>
+
+      <div className="provider-bento-grid">
+        {filteredOptions.map(option => {
+          const brandMeta = providerBrandMeta[option.value] || defaultBrandMeta;
+          const isSelected = value === option.value;
+          const brandColor = brandMeta.color;
+          const brandRgb = brandMeta.rgb;
+
+          return (
+            <div
+              key={option.value}
+              className={`provider-bento-card ${isSelected ? 'active' : ''}`}
+              style={{
+                '--brand-color': brandColor,
+                '--brand-color-rgb': brandRgb,
+              } as React.CSSProperties}
+              onClick={() => onChange(option.value)}
+            >
+              {isSelected && (
+                <div className="card-selected-badge">
+                  <CheckIcon />
+                </div>
+              )}
+
+              <div className="card-logo-wrapper">
+                {brandMeta.icon}
+              </div>
+
+              <div className="card-details">
+                <div className="card-label-title">
+                  {option.label}
+                </div>
+                <div className="card-description-text">
+                  {brandMeta.desc}
+                </div>
+                <div className="card-tag-group">
+                  {brandMeta.tags.map(tag => (
+                    <span key={tag} className="premium-mini-badge-tag">
+                      {tag}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            </div>
+          );
+        })}
+        {filteredOptions.length === 0 && (
+          <div className="provider-selector-empty">
+            没有找到匹配的推送渠道类型
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 export function ProviderConfigForm({
   value,
   onChange,
@@ -1830,10 +1948,9 @@ export function ProviderConfigForm({
                 <Input value={value.name} onChange={(event) => update({ name: event.target.value })} />
               </Form.Item>
               <Form.Item label="推送渠道类型">
-                <Select
+                <ProviderTypeCardSelector
                   value={value.providerType}
                   onChange={(providerType) => onChange(switchProviderType(value, providerType, capabilities))}
-                  options={providerTypeOptions}
                 />
               </Form.Item>
               <Divider orientation="left">基础配置字段</Divider>

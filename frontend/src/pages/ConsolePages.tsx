@@ -196,7 +196,7 @@ import {
   type TemplateReceivedPreview,
 } from './console/templateEditor';
 import { MessageLogAttemptBlocks } from './console/messageLogDetail';
-import { providerTypeOptions, recipientIdentityProviderOptions } from './console/shared';
+import { providerTypeOptions, recipientIdentityProviderOptions, providerBrandMeta, defaultBrandMeta } from './console/shared';
 
 export {
   ProviderConfigForm,
@@ -2011,6 +2011,13 @@ export function ProvidersPage({ lastUpdated, onRefresh }: ConsolePageProps) {
   const [capabilityOpen, setCapabilityOpen] = useState(false);
   const [providerTestOpen, setProviderTestOpen] = useState(false);
 
+  const getActiveCount = (type: string) => {
+    if (type === 'all') {
+      return providerRows.filter((r) => r.enabled).length;
+    }
+    return providerRows.filter((r) => r.providerType === type && r.enabled).length;
+  };
+
   const loadProviders = useCallback(async () => {
     setLoadState({ loading: true, error: '' });
     try {
@@ -2191,17 +2198,20 @@ export function ProvidersPage({ lastUpdated, onRefresh }: ConsolePageProps) {
             推送渠道类型
           </Typography.Title>
           <div className="provider-type-groups">
-            <Button
-              className="provider-type-option"
-              type={providerQuery.applied.providerType === 'all' ? 'primary' : 'default'}
-              block
+            <div
+              className={`sidebar-nav-card ${providerQuery.applied.providerType === 'all' ? 'active' : ''}`}
               onClick={() => {
                 providerQuery.applyPatch({ providerType: 'all' });
                 message.info('推送渠道类型已切换为：全部渠道');
               }}
             >
-              全部渠道
-            </Button>
+              <div className="active-bar" />
+              <div className="side-logo-container all-channels-logo">
+                <span className="all-channels-icon" style={{ fontSize: '13px', lineHeight: 1 }}>🌍</span>
+              </div>
+              <span className="card-name">全部渠道</span>
+              <div className="instance-badge">{getActiveCount('all')}</div>
+            </div>
             {providerTypeGroups.map((group) => (
               <div className="provider-type-group" key={group.label}>
                 <div className="provider-type-group__label">
@@ -2211,20 +2221,34 @@ export function ProvidersPage({ lastUpdated, onRefresh }: ConsolePageProps) {
                 {group.values
                   .map((value) => providerTypeOptions.find((item) => item.value === value))
                   .filter((item): item is (typeof providerTypeOptions)[number] => Boolean(item))
-                  .map((item) => (
-                    <Button
-                      key={item.value}
-                      className="provider-type-option"
-                      type={providerQuery.applied.providerType === item.value ? 'primary' : 'default'}
-                      block
-                      onClick={() => {
-                        providerQuery.applyPatch({ providerType: item.value });
-                        message.info(`推送渠道类型已切换为：${item.label}`);
-                      }}
-                    >
-                      <span>{item.label}</span>
-                    </Button>
-                  ))}
+                  .map((item) => {
+                    const meta = providerBrandMeta[item.value] || defaultBrandMeta;
+                    const isSelected = providerQuery.applied.providerType === item.value;
+                    const activeCount = getActiveCount(item.value);
+                    return (
+                      <div
+                        key={item.value}
+                        className={`sidebar-nav-card ${isSelected ? 'active' : ''}`}
+                        style={{
+                          '--brand-color': meta.color,
+                          '--brand-color-rgb': meta.rgb,
+                        } as React.CSSProperties}
+                        onClick={() => {
+                          providerQuery.applyPatch({ providerType: item.value });
+                          message.info(`推送渠道类型已切换为：${item.label}`);
+                        }}
+                      >
+                        <div className="active-bar" />
+                        <div className="side-logo-container">
+                          {meta.icon}
+                        </div>
+                        <span className="card-name">{item.label}</span>
+                        {activeCount > 0 && (
+                          <div className="instance-badge">{activeCount}</div>
+                        )}
+                      </div>
+                    );
+                  })}
               </div>
             ))}
           </div>
