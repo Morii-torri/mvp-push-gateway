@@ -47,174 +47,98 @@ export const providerBrandMeta: Record<ProviderKind, ProviderBrandDetail> = {
     rgb: '4, 190, 2',
     desc: '企业微信群聊机器人消息投递，支持 markdown 与文本格式。',
     tags: ['Markdown', '群聊报警'],
-    icon: (
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" className="svg-logo">
-        <path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z" />
-        <circle cx="10" cy="11" r="1" fill="currentColor" />
-        <circle cx="14" cy="11" r="1" fill="currentColor" />
-      </svg>
-    )
+    icon: <img src="/icons/wecom-robot.ico" alt="" />
   },
   wecom_app: {
     color: '#1677FF',
     rgb: '22, 119, 255',
     desc: '企业微信应用消息，通过工作台以卡片或文本形式点对点触达。',
     tags: ['应用卡片', '工作台'],
-    icon: (
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" className="svg-logo">
-        <rect x="3" y="3" width="18" height="18" rx="2" ry="2" />
-        <line x1="9" y1="9" x2="15" y2="9" />
-        <line x1="9" y1="13" x2="15" y2="13" />
-        <line x1="9" y1="17" x2="13" y2="17" />
-      </svg>
-    )
+    icon: <img src="/icons/wecom-app.ico" alt="" />
   },
   dingtalk_robot: {
     color: '#0079F2',
     rgb: '0, 121, 242',
     desc: '钉钉群安全机器人，支持加签防注入、IP白名单双重安全保护。',
     tags: ['Markdown', '安全加签'],
-    icon: (
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" className="svg-logo">
-        <line x1="22" y1="2" x2="11" y2="13" />
-        <polygon points="22 2 15 22 11 13 2 9 22 2" />
-      </svg>
-    )
+    icon: <img src="/icons/dingtalk-robot.ico" alt="" />
   },
   dingtalk_work: {
     color: '#0055E6',
     rgb: '0, 85, 230',
     desc: '钉钉官方工作通知，通过专属通知流直接投递给组织人员。',
     tags: ['通知卡片', '单人投递'],
-    icon: (
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" className="svg-logo">
-        <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
-        <path d="M9 11l2 2 4-4" />
-      </svg>
-    )
+    icon: <img src="/icons/dingtalk-work.ico" alt="" />
   },
   feishu_robot: {
     color: '#00D2BE',
     rgb: '0, 210, 190',
     desc: '飞书群聊及个人应用机器人，提供极其美观的可交互富文本卡片。',
     tags: ['富文本卡片', '交互组件'],
-    icon: (
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" className="svg-logo">
-        <path d="M20.24 12.24a6 6 0 0 0-8.49-8.49L5 10.5V19h8.5z" />
-        <line x1="16" y1="8" x2="2" y2="22" />
-        <line x1="17.5" y1="15" x2="9" y2="15" />
-      </svg>
-    )
+    icon: <img src="/icons/feishu.png" alt="" />
   },
   pushplus: {
     color: '#05C160',
     rgb: '5, 193, 96',
     desc: '一键将 HTML/文本消息派发到个人微信，极简微信通知服务。',
     tags: ['微信模板', 'HTML格式'],
-    icon: (
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" className="svg-logo">
-        <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
-        <line x1="12" y1="8" x2="12" y2="12" />
-        <line x1="10" y1="10" x2="14" y2="10" />
-      </svg>
-    )
+    icon: <img src="/icons/pushplus.ico" alt="" />
   },
   wxpusher: {
     color: '#09BB07',
     rgb: '9, 187, 7',
     desc: '支持扫码自动绑定、通过公众号将通知推送至订阅人的微信。',
     tags: ['动态扫码', '公众号接收'],
-    icon: (
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" className="svg-logo">
-        <rect x="3" y="3" width="18" height="18" rx="2" />
-        <path d="M12 7v10M7 12h10" />
-        <circle cx="12" cy="12" r="2" />
-      </svg>
-    )
+    icon: <img src="/icons/wxpusher.ico" alt="" />
   },
   serverchan: {
     color: '#FF5E5B',
     rgb: '255, 94, 91',
     desc: 'Server酱微信推送，支持微信公众号、企业微信等多端接收备份。',
     tags: ['微信通知', 'Markdown'],
-    icon: (
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" className="svg-logo">
-        <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5" />
-      </svg>
-    )
+    icon: <img src="/icons/serverchan.ico" alt="" />
   },
   bark: {
     color: '#FF4D4F',
     rgb: '255, 77, 79',
     desc: 'Bark iOS 苹果设备极速通道，支持自定义铃声、弹窗与跳转链接。',
     tags: ['iOS专属', '低延迟'],
-    icon: (
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" className="svg-logo">
-        <rect x="5" y="2" width="14" height="20" rx="2" ry="2" />
-        <line x1="12" y1="18" x2="12.01" y2="18" />
-      </svg>
-    )
+    icon: <img src="/icons/bark.png" alt="" />
   },
   pushme: {
     color: '#FA8C16',
     rgb: '250, 140, 22',
     desc: 'PushMe 极简消息发送服务，秒级响应并安全存储推送通知。',
     tags: ['自建API', '纯文本'],
-    icon: (
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" className="svg-logo">
-        <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9M13.73 21a2 2 0 0 1-3.46 0" />
-      </svg>
-    )
+    icon: <img src="/icons/pushme.ico" alt="" />
   },
   email: {
     color: '#E6A23C',
     rgb: '230, 162, 60',
     desc: 'SMTP 规范电子邮件，完美对接企业邮箱，支持 HTML 富文本与附件。',
     tags: ['HTML格式', '附件发送'],
-    icon: (
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" className="svg-logo">
-        <path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z" />
-        <polyline points="22,6 12,13 2,6" />
-      </svg>
-    )
+    icon: <img src="/icons/email.ico" alt="" />
   },
   aliyun_sms: {
     color: '#FF6A00',
     rgb: '255, 106, 0',
     desc: '阿里云高并发企业短信通道，提供极速下发的验证码及业务通知。',
     tags: ['模板短信', '高并发'],
-    icon: (
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" className="svg-logo">
-        <rect x="3" y="3" width="18" height="18" rx="2" />
-        <path d="M7 8h10M7 12h7M7 16h10" />
-      </svg>
-    )
+    icon: <img src="/icons/aliyun-sms.ico" alt="" />
   },
   tencent_sms: {
     color: '#00A4FF',
     rgb: '0, 164, 255',
     desc: '腾讯云行业专属短信服务，支持国内与跨国通道的高效通信保障。',
     tags: ['模板短信', '国际通道'],
-    icon: (
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" className="svg-logo">
-        <rect x="3" y="3" width="18" height="18" rx="2" />
-        <circle cx="9" cy="9" r="2" />
-        <path d="M7 15h10M13 9h4" />
-      </svg>
-    )
+    icon: <img src="/icons/tencent-sms.ico" alt="" />
   },
   baidu_sms: {
     color: '#389E0D',
     rgb: '56, 158, 13',
     desc: '百度智能云通道，主打系统预警提示、高到达低延迟模板短信。',
     tags: ['稳定预警', '系统通知'],
-    icon: (
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" className="svg-logo">
-        <rect x="3" y="3" width="18" height="18" rx="2" />
-        <line x1="7" y1="7" x2="17" y2="17" />
-        <line x1="17" y1="7" x2="7" y2="17" />
-      </svg>
-    )
+    icon: <img src="/icons/baidu-sms.ico" alt="" />
   },
   webhook: {
     color: '#1890FF',
@@ -270,23 +194,14 @@ export const providerBrandMeta: Record<ProviderKind, ProviderBrandDetail> = {
     rgb: '250, 84, 28',
     desc: '基于 Pub/Sub 的 ntfy 轻量自建推送订阅，无需注册即可拉取通知。',
     tags: ['免登自建', '订阅流'],
-    icon: (
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" className="svg-logo">
-        <path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6" />
-      </svg>
-    )
+    icon: <img src="/icons/ntfy.ico" alt="" />
   },
   gotify: {
     color: '#52C41A',
     rgb: '82, 196, 26',
     desc: '自建轻量 Gotify 实时推送服务器，支持 WebSocket 双向低耗轮询。',
     tags: ['Websocket', '极简私有'],
-    icon: (
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" className="svg-logo">
-        <path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z" />
-        <line x1="4" y1="22" x2="4" y2="15" />
-      </svg>
-    )
+    icon: <img src="/icons/gotify.png" alt="" />
   }
 };
 

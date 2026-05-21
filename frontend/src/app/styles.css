@@ -2574,6 +2574,13 @@ body {
   fill: currentColor;
 }
 
+.card-logo-wrapper img {
+  width: 22px;
+  height: 22px;
+  object-fit: contain;
+}
+
+
 /* 6. Card details layout */
 .card-details {
   display: flex;
@@ -2704,6 +2711,14 @@ body {
   fill: currentColor;
   transition: all 0.3s ease;
 }
+
+.sidebar-nav-card .side-logo-container img {
+  width: 14px;
+  height: 14px;
+  object-fit: contain;
+  transition: all 0.3s ease;
+}
+
 
 .sidebar-nav-card:hover .side-logo-container {
   background: rgba(var(--brand-color-rgb, 22, 119, 255), 0.12);
