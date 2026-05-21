@@ -20,7 +20,9 @@ func (r Repository) SeedProviderCapabilities(ctx context.Context, capabilities [
 	defer tx.Rollback(ctx)
 
 	seededMessageTypes := map[provider.ProviderType]map[string]struct{}{}
+	seededProviderTypes := map[provider.ProviderType]struct{}{}
 	for _, capability := range capabilities {
+		seededProviderTypes[capability.ProviderType] = struct{}{}
 		if seededMessageTypes[capability.ProviderType] == nil {
 			seededMessageTypes[capability.ProviderType] = map[string]struct{}{}
 		}
@@ -158,6 +160,36 @@ func (r Repository) SeedProviderCapabilities(ctx context.Context, capabilities [
 				AND message_type NOT IN (%s)
 		`, strings.Join(placeholders, ", ")), args...); err != nil {
 			return fmt.Errorf("prune stale provider capabilities for %s: %w", providerType, err)
+		}
+	}
+
+	providerTypeArgs := make([]any, 0, len(seededProviderTypes))
+	providerTypePlaceholders := make([]string, 0, len(seededProviderTypes))
+	for providerType := range seededProviderTypes {
+		providerTypeArgs = append(providerTypeArgs, providerType)
+		providerTypePlaceholders = append(providerTypePlaceholders, fmt.Sprintf("$%d", len(providerTypeArgs)))
+	}
+	if len(providerTypeArgs) > 0 {
+		seededList := strings.Join(providerTypePlaceholders, ", ")
+		if _, err := tx.Exec(ctx, fmt.Sprintf(`
+			DELETE FROM provider_capabilities
+			WHERE provider_type IN (
+				SELECT provider_type
+				FROM provider_types
+				WHERE built_in = true
+					AND provider_type NOT IN (%s)
+			)
+		`, seededList), providerTypeArgs...); err != nil {
+			return fmt.Errorf("prune removed built-in provider capabilities: %w", err)
+		}
+		if _, err := tx.Exec(ctx, fmt.Sprintf(`
+			UPDATE provider_types
+			SET built_in = false,
+				updated_at = now()
+			WHERE built_in = true
+				AND provider_type NOT IN (%s)
+		`, seededList), providerTypeArgs...); err != nil {
+			return fmt.Errorf("mark removed built-in provider types stale: %w", err)
 		}
 	}
 

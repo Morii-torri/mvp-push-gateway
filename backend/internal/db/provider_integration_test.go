@@ -75,7 +75,12 @@ func TestProviderCapabilitySeedIsIdempotent(t *testing.T) {
 	stale := capabilities[0]
 	stale.ID = ""
 	stale.MessageType = "legacy_stale"
-	if err := repository.SeedProviderCapabilities(ctx, append(append([]provider.Capability{}, capabilities...), stale)); err != nil {
+	removedProviderType := provider.ProviderType("removed_provider")
+	removedProvider := capabilities[0]
+	removedProvider.ID = ""
+	removedProvider.ProviderType = removedProviderType
+	removedProvider.MessageType = "text"
+	if err := repository.SeedProviderCapabilities(ctx, append(append([]provider.Capability{}, capabilities...), stale, removedProvider)); err != nil {
 		t.Fatalf("seed provider capabilities with stale row: %v", err)
 	}
 	if err := repository.SeedProviderCapabilities(ctx, capabilities); err != nil {
@@ -95,6 +100,20 @@ func TestProviderCapabilitySeedIsIdempotent(t *testing.T) {
 	}
 	if staleCount != 0 {
 		t.Fatalf("expected stale capability %s/%s to be pruned, got %d", stale.ProviderType, stale.MessageType, staleCount)
+	}
+	var removedProviderCapabilityCount int
+	if err := pool.QueryRow(ctx, `SELECT count(*)::integer FROM provider_capabilities WHERE provider_type = $1`, removedProviderType).Scan(&removedProviderCapabilityCount); err != nil {
+		t.Fatalf("count removed provider capabilities: %v", err)
+	}
+	if removedProviderCapabilityCount != 0 {
+		t.Fatalf("expected removed provider capabilities to be pruned, got %d", removedProviderCapabilityCount)
+	}
+	var removedProviderBuiltIn bool
+	if err := pool.QueryRow(ctx, `SELECT built_in FROM provider_types WHERE provider_type = $1`, removedProviderType).Scan(&removedProviderBuiltIn); err != nil {
+		t.Fatalf("load removed provider type: %v", err)
+	}
+	if removedProviderBuiltIn {
+		t.Fatal("expected removed provider type to be marked non-built-in")
 	}
 
 	listed, err := repository.ListProviderCapabilities(ctx)
