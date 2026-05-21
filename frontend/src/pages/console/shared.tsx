@@ -157,12 +157,7 @@ export const providerBrandMeta: Record<ProviderKind, ProviderBrandDetail> = {
     rgb: '114, 46, 209',
     desc: '网关级联，将规划后的推送任务作为入站消息直接路由至下级网关。',
     tags: ['平台级联', '网关间通信'],
-    icon: (
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" className="svg-logo">
-        <rect x="4" y="4" width="16" height="16" rx="2" />
-        <rect x="9" y="9" width="11" height="11" rx="2" fill="rgba(114, 46, 209, 0.1)" />
-      </svg>
-    )
+    icon: <img src="/icons/mvp-push.ico" alt="" />
   },
   custom_token: {
     color: '#13C2C2',
