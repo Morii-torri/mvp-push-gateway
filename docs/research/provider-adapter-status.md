@@ -18,7 +18,8 @@
 | 企业微信应用消息 | `wecom_app` / legacy `wecom` | 企业应用 | 已完成应用消息 body、token strategy metadata、recipient 映射 | corpid、corpsecret、agentid、测试用户、token/cache 真实联调 |
 | 钉钉群机器人 | `dingtalk_robot` | 企业 IM 机器人 | 已完成 webhook/secret 签名 adapter、at 配置、errcode 规则 | webhook、secret、手机号/atAll 策略 |
 | 钉钉工作消息 | `dingtalk_work` / legacy `dingtalk` | 企业应用 | 已完成工作消息 body、token strategy metadata、recipient 映射 | appKey/appSecret、agentId、测试用户、真实 token 联调 |
-| 飞书机器人 | `feishu_robot` / legacy `feishu` | 企业 IM 机器人 | 已完成 webhook/secret 签名 adapter、success/retry metadata | webhook、secret、真实群测试 |
+| 飞书应用机器人 | `feishu_robot` | 企业应用机器人 | 已完成 tenant_access_token、open_id 文本消息 adapter、success/retry metadata | app_id、app_secret、open_id、真实应用机器人测试 |
+| 飞书群消息 | `feishu_group` | 企业 IM 群机器人 | 已完成 webhook token 接收人、可选签名 adapter、success/retry metadata | webhook token、secret、真实群测试 |
 | 随申办政务云 | `gov_cloud` | 政务云消息平台 | 已完成 text 消息、token strategy、错误分类、base URL 配置 | 当前开发环境不可访问；需可访问网络、corpsecret、测试接收人、IP 白名单确认 |
 | ntfy | `ntfy` | 自托管/公共通知 | 已完成 build-request adapter、Basic/Bearer 配置、notice schema | ntfy.sh topic 或自托管 server；真实限制需按目标服务确认 |
 | Gotify | `gotify` | 自托管通知 | 已完成 build-request adapter、app token、priority/extras | Gotify server、app token、客户端订阅 |
@@ -44,12 +45,11 @@
 | Telegram Bot | 未实现 | 当前未列入第一批/P2 |
 | 微信公众号模板消息 | 当前不做 | 已从第二批去除 |
 | 微信小程序订阅消息 | 当前不做 | 已从第二批去除 |
-| 飞书应用消息 | 当前不做 | 已从第二批去除；当前只做飞书机器人/legacy robot |
+| 飞书应用消息 | `feishu_robot` | 当前以文本消息接入；富文本/卡片后续扩展 |
 | 个推/安卓 Push 通知栏 | 当前不做 | 已从第二批去除 |
 | Meow 鸿蒙推送 | 未实现 | 当前未列入第一批/P2 |
 | 息知 | 未实现 | 当前未列入第一批/P2 |
 | PushDeer | 未实现 | 当前未列入第一批/P2，且原项目已停止维护 |
 | iGot | 未实现 | 当前未列入第一批/P2 |
 | 群晖 Chat Incoming Webhook | 未实现 | 可后续按 webhook preset 增补 |
-| 飞书应用工作消息/开放平台应用消息 | 未实现 | 当前只完成 `feishu_robot` |
-
+| 飞书应用工作消息/开放平台应用消息 | `feishu_robot` | 当前只完成文本消息与 open_id 投递 |

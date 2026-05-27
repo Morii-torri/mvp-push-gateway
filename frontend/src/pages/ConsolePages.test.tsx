@@ -89,7 +89,8 @@ describe('critical console pages', () => {
     ['wecom_app', '企业微信应用消息'],
     ['dingtalk_robot', '钉钉群机器人'],
     ['dingtalk_work', '钉钉工作消息'],
-    ['feishu_robot', '飞书机器人'],
+    ['feishu_robot', '飞书应用机器人'],
+    ['feishu_group', '飞书群消息'],
     ['gov_cloud', '随申办政务云'],
     ['custom_token', '自定义 Token 平台'],
     ['ntfy', 'ntfy'],
@@ -472,6 +473,7 @@ describe('critical console pages', () => {
       'dingtalk_robot',
       'dingtalk_work',
       'feishu_robot',
+      'feishu_group',
       'pushplus',
       'wxpusher',
       'serverchan',
@@ -745,7 +747,9 @@ describe('critical console pages', () => {
     );
 
     expect(markup).toContain('AccessToken 状态');
-    expect(markup).toContain('飞书 OpenID');
+    expect(markup).toContain('飞书 OpenID（填入手机号后点击转换按钮自动转换）');
+    expect(markup).toContain('手机号转 OpenID');
+    expect(markup).toContain('provider-test-resolve-feishu-button');
     expect(markup).toContain('text');
     expect(markup).toContain('模拟请求');
     expect(markup).toContain('真实发送');
@@ -1121,9 +1125,34 @@ describe('critical console pages', () => {
     const body = JSON.parse(input.template_body) as Record<string, string>;
     expect(input.message_type).toBe('text');
     expect(Object.keys(body)).toEqual(['text']);
-    expect(templateMarkup).toContain('飞书机器人');
+    expect(templateMarkup).toContain('飞书应用机器人');
     expect(templateMarkup).toContain('text');
     expect(templateMarkup).not.toContain('Markdown 内容');
+    expect(templateMarkup).not.toContain('markdown');
+  });
+
+  it('uses Feishu group message webhook fields and text-only template', () => {
+    const providerMarkup = renderPage(
+      <ProviderConfigForm value={createProviderDraft('feishu_group', 1)} onChange={() => undefined} capabilities={[]} />,
+    );
+    expect(providerMarkup).toContain('基础 API');
+    expect(providerMarkup).toContain('签名密钥');
+    expect(providerMarkup).toContain('https://open.feishu.cn/open-apis');
+    expect(providerMarkup).not.toContain('飞书 App ID');
+    expect(providerMarkup).not.toContain('飞书 App Secret');
+    expect(providerMarkup).not.toContain('机器人 Hook Token');
+
+    const templateDraft = createTemplateDraft([], [], 'feishu_group', 'text');
+    const templateMarkup = renderPage(
+      <TemplateEditorForm value={templateDraft} onChange={() => undefined} sourceRows={[]} capabilities={[]} />,
+    );
+    const input = templateVersionInputFromDraft(templateDraft);
+    const body = JSON.parse(input.template_body) as Record<string, string>;
+    expect(input.message_type).toBe('text');
+    expect(Object.keys(body)).toEqual(['msgtype', 'text']);
+    expect(body.msgtype).toBe('text');
+    expect(templateMarkup).toContain('飞书群消息');
+    expect(templateMarkup).toContain('text');
     expect(templateMarkup).not.toContain('markdown');
   });
 
@@ -2093,7 +2122,7 @@ describe('critical console pages', () => {
       />,
     );
 
-    expect(markup).toContain('飞书机器人');
+    expect(markup).toContain('飞书应用机器人');
     expect(markup).not.toContain('Feishu robot message');
   });
 
@@ -2740,7 +2769,7 @@ describe('critical console pages', () => {
       <IdentityEditor
         identities={[
           {
-            platform: '飞书机器人',
+            platform: '飞书应用机器人',
             channelId: 'channel-feishu-work',
             fieldName: 'feishu_open_id',
             value: '13011111111',

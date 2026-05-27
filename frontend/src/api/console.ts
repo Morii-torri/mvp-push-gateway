@@ -70,6 +70,7 @@ export type ProviderType =
   | 'dingtalk_robot'
   | 'dingtalk_work'
   | 'feishu_robot'
+  | 'feishu_group'
   | 'gov_cloud'
   | 'custom_token';
 

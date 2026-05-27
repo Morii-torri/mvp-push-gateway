@@ -24,6 +24,7 @@ func builtInCapabilities() []Capability {
 		dingTalkRobotCapability(),
 		dingTalkWorkCapability(ProviderDingTalkWork, "DingTalk work message"),
 		feishuRobotCapability(),
+		feishuGroupCapability(),
 		govCloudCapability(),
 		customTokenCapability(),
 	}
@@ -43,6 +44,10 @@ func cascadeContentSchema() json.RawMessage {
 
 func robotTextContentSchema() json.RawMessage {
 	return rawJSON(`{"type":"object","required":["content"],"properties":{"title":{"type":"string","default":"{{ payload.title }}"},"body":{"type":"string","default":"{{ payload.content }}"},"content":{"type":"string","default":"{{ payload.content }}"},"markdown":{"type":"string"}}}`)
+}
+
+func feishuGroupContentSchema() json.RawMessage {
+	return rawJSON(`{"type":"object","required":["msgtype","text"],"properties":{"msgtype":{"type":"string","enum":["text"],"default":"text"},"text":{"type":"string","title":"text","default":"{{ payload.content }}"}}}`)
 }
 
 func weComRobotContentSchema() json.RawMessage {

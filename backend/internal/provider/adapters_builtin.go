@@ -59,6 +59,9 @@ func builtInRequestConfig(channel Channel, input BuildRequestInput) (requestConf
 	case ProviderFeishuRobot:
 		config, err := feishuRobotRequestConfig(auth, send, content, input.Recipient)
 		return config, true, err
+	case ProviderFeishuGroup:
+		config, err := feishuGroupRequestConfig(auth, send, content, input.Recipient)
+		return config, true, err
 	case ProviderGovCloud:
 		config, err := govCloudRequestConfig(auth, send, content, input.Recipient)
 		return config, true, err

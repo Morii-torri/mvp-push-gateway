@@ -178,6 +178,7 @@ func TestProviderTypeRegistryMigrationRemovesHardCodedProviderTypeChecks(t *test
 		"'gotify'",
 		"'bark'",
 		"'pushme'",
+		"'feishu_group'",
 	}
 
 	for _, snippet := range required {

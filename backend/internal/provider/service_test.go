@@ -81,6 +81,7 @@ func TestDefaultCapabilitiesExposeFirstBatchBuiltInProviders(t *testing.T) {
 		{ProviderDingTalkRobot, "text", "mobile"},
 		{ProviderDingTalkWork, "text", "dingtalk_userid"},
 		{ProviderFeishuRobot, "text", "feishu_open_id"},
+		{ProviderFeishuGroup, "text", "feishu_webhook_token"},
 		{ProviderGovCloud, "text", "gov_userid"},
 	}
 
@@ -137,6 +138,25 @@ func TestFeishuRobotCapabilityUsesTenantTokenAndOpenID(t *testing.T) {
 	if strings.Join(strategy.Request.BodyFields, ",") != "app_id,app_secret" {
 		t.Fatalf("expected app_id/app_secret body fields, got %+v", strategy.Request.BodyFields)
 	}
+}
+
+func TestFeishuGroupCapabilityUsesWebhookTokenRecipientAndOptionalSignSecret(t *testing.T) {
+	capability := findCapability(t, ProviderFeishuGroup, "text")
+
+	if !capability.RecipientRequired || capability.AllowNoRecipient || capability.IdentityKind != "feishu_webhook_token" {
+		t.Fatalf("expected required Feishu webhook token recipient, got required=%v allow=%v identity=%q", capability.RecipientRequired, capability.AllowNoRecipient, capability.IdentityKind)
+	}
+	if capability.RecipientFieldName != "token" || capability.RecipientLocation != PlacementPath {
+		t.Fatalf("expected Feishu group token in path, got field=%q location=%q", capability.RecipientFieldName, capability.RecipientLocation)
+	}
+	if capability.TokenLocation != PlacementNone {
+		t.Fatalf("expected Feishu group to have no access token placement, got %q", capability.TokenLocation)
+	}
+	assertJSONField(t, capability.CredentialSchema, "properties.sign_secret.format", "password")
+	assertJSONField(t, capability.ChannelConfigSchema, "properties.base_url.default", "https://open.feishu.cn/open-apis")
+	assertJSONField(t, capability.MessageSchema, "properties.msgtype.default", "text")
+	assertJSONField(t, capability.MessageSchema, "properties.text.type", "string")
+	assertJSONField(t, capability.SendAPI, "url", "https://open.feishu.cn/open-apis/bot/v2/hook/{token}")
 }
 
 func TestServiceResolvesFeishuOpenIDByMobileWithTenantToken(t *testing.T) {
@@ -899,6 +919,26 @@ func TestBuildDeliveryRequestUsesBuiltInProviderDefaultsWithoutLegacyURL(t *test
 				}
 				if content["text"] != "hello feishu" {
 					t.Fatalf("expected text content, got %+v", content)
+				}
+			},
+		},
+		{
+			name: "feishu group message webhook",
+			channel: Channel{
+				ProviderType: ProviderFeishuGroup,
+				AuthConfig:   json.RawMessage(`{"sign_secret":"secret"}`),
+				SendConfig:   json.RawMessage(`{"base_url":"https://open.feishu.cn/open-apis"}`),
+			},
+			message:    json.RawMessage(`{"msgtype":"text","text":"hello group"}`),
+			recipients: []ResolvedRecipient{{PlatformIDs: map[string]string{"feishu_webhook_token": "hook-token-1"}}},
+			assert: func(t *testing.T, request BuiltRequest) {
+				requireRequest(t, request, "POST", "https://open.feishu.cn/open-apis/bot/v2/hook/hook-token-1")
+				body := decodeRequestBody(t, request)
+				requireBodyField(t, body, "msg_type", "text")
+				content := requireObjectField(t, body, "content")
+				requireBodyField(t, content, "text", "hello group")
+				if body["timestamp"] == "" || body["sign"] == "" {
+					t.Fatalf("expected signed Feishu group request, got %+v", body)
 				}
 			},
 		},

@@ -1,9 +1,14 @@
 package provider
 
 import (
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"net/url"
 	"strings"
+	"time"
 )
 
 func weComRobotRequestConfig(auth, send, content map[string]any, recipient any) (requestConfig, error) {
@@ -138,6 +143,45 @@ func feishuRobotRequestConfig(auth, send, content map[string]any, recipient any)
 	config.Token = placementConfig{Location: PlacementHeader, FieldName: "Authorization", Prefix: "Bearer "}
 	config.Recipient = placementConfig{Location: PlacementBody, Path: "receive_id", Format: "string"}
 	return config, nil
+}
+
+func feishuGroupRequestConfig(auth, send, content map[string]any, recipient any) (requestConfig, error) {
+	baseURL := firstString(stringConfig(send, "base_url"), stringConfig(auth, "base_url"), "https://open.feishu.cn/open-apis")
+	token := firstRecipientString(recipient)
+	if token == "" {
+		return requestConfig{}, ErrInvalidInput
+	}
+	body := map[string]any{
+		"msg_type": "text",
+		"content": map[string]any{
+			"text": messageBody(content),
+		},
+	}
+	if secret := firstString(stringConfig(auth, "sign_secret"), stringConfig(send, "sign_secret"), stringConfig(auth, "secret")); secret != "" {
+		timestamp := time.Now().Unix()
+		sign, err := feishuGroupSign(secret, timestamp)
+		if err != nil {
+			return requestConfig{}, ErrInvalidInput
+		}
+		body["timestamp"] = fmt.Sprintf("%d", timestamp)
+		body["sign"] = sign
+	}
+	requestURL := joinURL(baseURL, "/bot/v2/hook/"+url.PathEscape(token))
+	config, err := jsonRequest("POST", requestURL, body)
+	if err != nil {
+		return requestConfig{}, err
+	}
+	config.Recipient = placementConfig{Location: PlacementPath, FieldName: "token", Format: "string"}
+	return config, nil
+}
+
+func feishuGroupSign(secret string, timestamp int64) (string, error) {
+	stringToSign := fmt.Sprintf("%d", timestamp) + "\n" + secret
+	h := hmac.New(sha256.New, []byte(stringToSign))
+	if _, err := h.Write(nil); err != nil {
+		return "", err
+	}
+	return base64.StdEncoding.EncodeToString(h.Sum(nil)), nil
 }
 
 func govCloudRequestConfig(auth, send, content map[string]any, recipient any) (requestConfig, error) {

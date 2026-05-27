@@ -55,9 +55,9 @@
 - 前端实时通知：右上角通知入口只跳转“日志与监控”，不新增独立日志页；通知数字和列表必须来自后端统计或日志接口。
 - 总览趋势：时间筛选是最近 N 分钟/小时/天滚动窗口，X 轴跟随后端 `bucket_start`，不要固定 0-24。
 - 账户菜单：管理员头像菜单支持修改密码、修改账户别名和退出登录；新密码不少于 10 位且需二次确认；退出登录需要二次确认。
-- 推送渠道：第一批内置 `webhook`、`self`、`pushplus`、`wxpusher`、`serverchan`、`email`、`aliyun_sms`、`tencent_sms`、`baidu_sms`、`wecom_robot`、`wecom_app`、`dingtalk_robot`、`dingtalk_work`、`feishu_robot`、`gov_cloud`；第二批 build-request/mock 内置 `ntfy`、`gotify`、`bark`、`pushme`；高级模式保留 `custom_token`。不要再新增或恢复 legacy `wecom`、`dingtalk`、`feishu`、`sms` 兼容渠道。
+- 推送渠道：第一批内置 `webhook`、`self`、`pushplus`、`wxpusher`、`serverchan`、`email`、`aliyun_sms`、`tencent_sms`、`baidu_sms`、`wecom_robot`、`wecom_app`、`dingtalk_robot`、`dingtalk_work`、`feishu_robot`、`feishu_group`、`gov_cloud`；第二批 build-request/mock 内置 `ntfy`、`gotify`、`bark`、`pushme`；高级模式保留 `custom_token`。不要再新增或恢复 legacy `wecom`、`dingtalk`、`feishu`、`sms` 兼容渠道。
 - 平台能力：消息类型、凭证配置、渠道配置、消息内容 schema、Token 换取、Token 放置位置、接收人身份、成功/重试规则、默认限流/超时/并发/重试。
-- 组织人员：组织树、人员、平台身份字段，例如手机号、邮箱、企微 userid、飞书 open_id。
+- 组织人员：组织树、人员、平台身份字段，例如手机号、邮箱、企微 userid、飞书 open_id、飞书 webhook token。
 - 匹配组：IP 组、业务值组、系统值组，用于条件判断。
 - 路由：唯一来源起点，多条件分支，命中后执行一个发送动作组；动作组内每个 target 绑定一个渠道实例和一个兼容模板版本，按顺序第一条命中即停止。
 - 模板：绑定 provider type + message type，只保存消息内容，不保存接收人字段或最终 HTTP body；字段支持 `{{ payload.summary | default('通知') }}` 这类 Jinja-like 表达式。

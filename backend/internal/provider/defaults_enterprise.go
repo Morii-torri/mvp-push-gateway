@@ -125,7 +125,7 @@ func dingTalkWorkCapability(providerType ProviderType, displayName string) Capab
 func feishuRobotCapability() Capability {
 	return capability(capabilitySpec{
 		ProviderType:         ProviderFeishuRobot,
-		DisplayName:          "Feishu group robot",
+		DisplayName:          "Feishu app robot",
 		Category:             "enterprise_app",
 		MessageType:          "text",
 		MessageSchema:        robotTextContentSchema(),
@@ -149,6 +149,36 @@ func feishuRobotCapability() Capability {
 		DefaultTimeoutMS:     5000,
 		DefaultRetryPolicy:   rawJSON(`{"max_attempts":3,"delay_ms":1500,"backoff":"linear"}`),
 		RequestExamples:      rawJSON(`{"receive_id":"ou_xxx","msg_type":"text","content":"{\"text\":\"Disk 95%\"}"}`),
+		CustomBodyAllowed:    false,
+	})
+}
+
+func feishuGroupCapability() Capability {
+	return capability(capabilitySpec{
+		ProviderType:         ProviderFeishuGroup,
+		DisplayName:          "Feishu group message",
+		Category:             "enterprise_robot",
+		MessageType:          "text",
+		MessageSchema:        feishuGroupContentSchema(),
+		CredentialSchema:     rawJSON(`{"type":"object","properties":{"sign_secret":{"type":"string","title":"签名密钥","format":"password"}}}`),
+		ChannelConfigSchema:  rawJSON(`{"type":"object","properties":{"base_url":{"type":"string","title":"基础 API","default":"https://open.feishu.cn/open-apis"}}}`),
+		RecipientRequired:    true,
+		RecipientRequirement: "system",
+		RecipientFieldName:   "token",
+		RecipientLocation:    PlacementPath,
+		RecipientPath:        "token",
+		RecipientFormat:      "string",
+		IdentityKind:         "feishu_webhook_token",
+		TokenLocation:        PlacementNone,
+		TokenStrategy:        rawJSON(`{"strategy":"webhook_token","cacheable":false,"placement":{"location":"path","field_name":"token"},"signing":{"algorithm":"HMAC-SHA256","fields":["timestamp","sign"],"secret_field":"sign_secret"}}`),
+		SendAPI:              rawJSON(`{"method":"POST","url":"https://open.feishu.cn/open-apis/bot/v2/hook/{token}","content_type":"application/json","live_test_status":"implemented_but_not_live_tested","notes":"Feishu group webhook token is resolved from route recipients or personnel platform identity."}`),
+		SuccessRule:          rawJSON(`{"type":"json_field","status_codes":[200],"field":"code","equals":0}`),
+		RetryRule:            rawJSON(`{"status_codes":[408,429,500,502,503,504],"network_errors":true,"retryable_json_codes":[9499],"non_retryable_json_codes":[19021]}`),
+		DefaultRateLimit:     rawJSON(`{"qps":1}`),
+		DefaultConcurrency:   1,
+		DefaultTimeoutMS:     5000,
+		DefaultRetryPolicy:   rawJSON(`{"max_attempts":3,"delay_ms":1500,"backoff":"linear"}`),
+		RequestExamples:      rawJSON(`{"msg_type":"text","content":{"text":"request example"}}`),
 		CustomBodyAllowed:    false,
 	})
 }

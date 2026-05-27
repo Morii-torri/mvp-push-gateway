@@ -15,7 +15,7 @@ import Typography from 'antd/es/typography';
 import Segmented from 'antd/es/segmented';
 import Tag from 'antd/es/tag';
 import Alert from 'antd/es/alert';
-import { ReloadOutlined } from '@ant-design/icons';
+import { ReloadOutlined, SyncOutlined } from '@ant-design/icons';
 
 
 import {
@@ -461,6 +461,23 @@ const providerPresets: Record<ProviderKind, ProviderPreset> = {
     testRecipient: 'ou_12a8',
     testBody: '飞书机器人测试消息',
   },
+  feishu_group: {
+    tokenEndpoint: '无 AccessToken',
+    tokenRequest: 'base_url + optional sign_secret',
+    tokenResponsePath: '-',
+    tokenPlacement: 'URL path token（来自接收人）',
+    sendEndpoint: 'POST /bot/v2/hook/{token}',
+    recipientMapping: 'webhook token 来自人员平台身份 feishu_webhook_token',
+    bodyMapping: 'adapter 固定生成 text 群消息；启用签名密钥时自动追加 timestamp/sign',
+    qps: 20,
+    concurrency: 8,
+    timeoutMs: 3000,
+    retryPolicy: '2 次固定间隔',
+    retryInterval: '2s / 5s',
+    deadLetterPolicy: '全局默认：重试耗尽或上级错误进入死信',
+    testRecipient: '',
+    testBody: '飞书群消息测试',
+  },
   gov_cloud: {
     tokenEndpoint: 'GET /gettoken?corpsecret=...',
     tokenRequest: 'corpsecret',
@@ -744,7 +761,7 @@ export function providerFieldLabel(key: string): string {
     secret_key: 'SecretKey',
     send_url: '发送 URL',
     send_key: 'Server酱 SendKey',
-    sign_secret: '签名 Secret',
+    sign_secret: '签名密钥',
     sign_name: '短信签名',
     signature_id: '签名 ID',
     sms_sdk_app_id: '短信 SDK App ID',
@@ -964,6 +981,12 @@ function fallbackProviderFields(providerType: ProviderKind): ProviderConfigField
       field('base_url', 'API 基础地址', 'send_config', 'text', true, 'https://open.feishu.cn/open-apis', 'https://open.feishu.cn/open-apis'),
       field('app_id', '飞书 App ID', 'auth_config', 'text', true),
       field('app_secret', '飞书 App Secret', 'auth_config', 'password', true),
+    ];
+  }
+  if (providerType === 'feishu_group') {
+    return [
+      field('base_url', '基础 API', 'send_config', 'text', true, 'https://open.feishu.cn/open-apis', 'https://open.feishu.cn/open-apis'),
+      field('sign_secret', '签名密钥', 'auth_config', 'password'),
     ];
   }
   if (providerType === 'self') {
@@ -1313,6 +1336,12 @@ function providerTestBodyValue(value: ProviderRow): JSONValue {
       text: value.testBody.trim(),
     };
   }
+  if (value.providerType === 'feishu_group') {
+    return {
+      msgtype: 'text',
+      text: value.testBody.trim(),
+    };
+  }
   if (value.providerType === 'pushme') {
     return {
       title: value.testTitle.trim(),
@@ -1371,6 +1400,7 @@ function normalizedProviderTestRecipient(value: ProviderRow): string {
     value.providerType === 'serverchan' ||
     value.providerType === 'wecom_robot' ||
     value.providerType === 'feishu_robot' ||
+    value.providerType === 'feishu_group' ||
     value.providerType === 'bark' ||
     value.providerType === 'pushme'
   ) {
@@ -1429,6 +1459,9 @@ function providerTestRecipients(value: ProviderRow, recipient: string): JSONValu
   if (value.providerType === 'feishu_robot') {
     return splitListText(value.testRecipient).map((openID) => ({ platform_ids: { feishu_open_id: openID } }));
   }
+  if (value.providerType === 'feishu_group') {
+    return splitListText(value.testRecipient).map((token) => ({ platform_ids: { feishu_webhook_token: token } }));
+  }
   if (value.providerType === 'bark') {
     return splitListText(value.testRecipient).map((deviceKey) => ({ platform_ids: { bark_device_key: deviceKey } }));
   }
@@ -1468,11 +1501,13 @@ export function providerTestPayload(value: ProviderRow, send: boolean, liveSendC
           ? normalizedWeComRobotMessageType(value.testTopic)
           : value.providerType === 'feishu_robot'
             ? 'text'
-            : value.providerType === 'pushme'
-              ? normalizedPushMeMessageType(value.testTopic)
-              : value.providerType === 'bark'
-                ? normalizedBarkMessageType(value.testTopic)
-                : value.messageTypes[0] ?? 'text';
+            : value.providerType === 'feishu_group'
+              ? 'text'
+              : value.providerType === 'pushme'
+                ? normalizedPushMeMessageType(value.testTopic)
+                : value.providerType === 'bark'
+                  ? normalizedBarkMessageType(value.testTopic)
+                  : value.messageTypes[0] ?? 'text';
   const resolvedRecipients = providerTestRecipients(value, recipient);
   return {
     send,
@@ -1876,7 +1911,7 @@ interface ProviderTypeCardSelectorProps {
 export function ProviderTypeCardSelector({ value, onChange }: ProviderTypeCardSelectorProps) {
   const groups = [
     { label: '全部', values: providerTypeOptions.map(o => o.value) },
-    { label: '企业协同', values: ['wecom_robot', 'wecom_app', 'dingtalk_robot', 'dingtalk_work', 'feishu_robot'] },
+    { label: '企业协同', values: ['wecom_robot', 'wecom_app', 'dingtalk_robot', 'dingtalk_work', 'feishu_robot', 'feishu_group'] },
     { label: '个人推送', values: ['pushplus', 'wxpusher', 'serverchan', 'bark', 'pushme'] },
     { label: '邮件短信', values: ['email', 'aliyun_sms', 'tencent_sms', 'baidu_sms'] },
     { label: '基础通道', values: ['webhook', 'self', 'custom_token'] },
@@ -2221,6 +2256,7 @@ export function ProviderTestPanel({
   const [testResult, setTestResult] = useState<JSONValue | null>(null);
   const [testResultMode, setTestResultMode] = useState<'simulate' | 'send' | null>(null);
   const [refreshing, setRefreshing] = useState(false);
+  const [resolvingFeishuOpenID, setResolvingFeishuOpenID] = useState(false);
 
   const handleRefresh = async () => {
     setRefreshing(true);
@@ -2243,9 +2279,37 @@ export function ProviderTestPanel({
   const serverChanTest = value.providerType === 'serverchan';
   const weComRobotTest = value.providerType === 'wecom_robot';
   const feishuRobotTest = value.providerType === 'feishu_robot';
+  const feishuGroupTest = value.providerType === 'feishu_group';
   const pushMeTest = value.providerType === 'pushme';
   const barkTest = value.providerType === 'bark';
   const update = (patch: Partial<ProviderRow>) => onChange({ ...value, ...patch });
+  const resolveFeishuOpenID = async () => {
+    const mobile = value.testRecipient.trim();
+    if (!value.id) {
+      message.warning('请先保存飞书渠道实例');
+      return;
+    }
+    if (!mobile) {
+      message.warning('请先填写手机号');
+      return;
+    }
+    setResolvingFeishuOpenID(true);
+    try {
+      const result = await consoleApi.resolveFeishuOpenId(value.id, [mobile]);
+      const resolved = result.items.find((item) => item.mobile === mobile && item.open_id);
+      if (!resolved) {
+        const error = result.items.find((item) => item.mobile === mobile)?.error || result.errors?.[0] || '手机号未匹配到飞书用户';
+        message.error(error);
+        return;
+      }
+      update({ testRecipient: resolved.open_id });
+      message.success('已转换为飞书 OpenID');
+    } catch (error) {
+      showUserFacingError(message, error);
+    } finally {
+      setResolvingFeishuOpenID(false);
+    }
+  };
   const validateTestPayload = () => {
     if (pushPlusTest && !value.testBody.trim()) {
       message.error('请填写 content');
@@ -2284,6 +2348,14 @@ export function ProviderTestPanel({
       return false;
     }
     if (feishuRobotTest && !value.testBody.trim()) {
+      message.error('请填写 text');
+      return false;
+    }
+    if (feishuGroupTest && splitListText(value.testRecipient).length === 0) {
+      message.error('请填写飞书 Webhook Token');
+      return false;
+    }
+    if (feishuGroupTest && !value.testBody.trim()) {
       message.error('请填写 text');
       return false;
     }
@@ -2460,7 +2532,30 @@ export function ProviderTestPanel({
         </div>
       ) : feishuRobotTest ? (
         <div className="two-column-form provider-test-form">
-          <Form.Item label="飞书 OpenID" required className="form-item-full">
+          <Form.Item label="飞书 OpenID（填入手机号后点击转换按钮自动转换）" required className="form-item-full">
+            <Space.Compact className="full-width">
+              <Input value={value.testRecipient} onChange={(event) => update({ testRecipient: event.target.value })} />
+              <Button
+                aria-label="手机号转 OpenID"
+                title="手机号转 OpenID"
+                className="provider-test-resolve-feishu-button"
+                icon={<SyncOutlined />}
+                loading={resolvingFeishuOpenID}
+                onClick={() => void resolveFeishuOpenID()}
+              />
+            </Space.Compact>
+          </Form.Item>
+          <Form.Item label="text" required className="form-item-full">
+            <Input.TextArea
+              rows={5}
+              value={value.testBody}
+              onChange={(event) => update({ testBody: event.target.value })}
+            />
+          </Form.Item>
+        </div>
+      ) : feishuGroupTest ? (
+        <div className="two-column-form provider-test-form">
+          <Form.Item label="飞书 Webhook Token" required className="form-item-full">
             <Input value={value.testRecipient} onChange={(event) => update({ testRecipient: event.target.value })} />
           </Form.Item>
           <Form.Item label="text" required className="form-item-full">

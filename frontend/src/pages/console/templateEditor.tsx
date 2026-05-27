@@ -475,6 +475,17 @@ const fallbackTemplateSchemas: Record<ProviderKind, Record<string, { label: stri
       fields: [contentField('text', '正文内容', 'string', '通知', '{{ payload.content }}')],
     },
   },
+  feishu_group: {
+    text: {
+      label: '文本',
+      fields: [
+        contentField('msgtype', 'msgtype', 'string', 'text', 'text', true, undefined, [
+          { label: 'text', value: 'text' },
+        ]),
+        contentField('text', 'text', 'string', '通知', '{{ payload.content }}'),
+      ],
+    },
+  },
   gov_cloud: {
     text: {
       label: '文本',

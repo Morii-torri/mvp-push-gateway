@@ -10,7 +10,8 @@ export const providerTypeOptions: Array<{ label: string; value: ProviderKind }> 
   { label: '企业微信应用消息', value: 'wecom_app' },
   { label: '钉钉群机器人', value: 'dingtalk_robot' },
   { label: '钉钉工作消息', value: 'dingtalk_work' },
-  { label: '飞书机器人', value: 'feishu_robot' },
+  { label: '飞书应用机器人', value: 'feishu_robot' },
+  { label: '飞书群消息', value: 'feishu_group' },
   { label: 'PushPlus', value: 'pushplus' },
   { label: 'WxPusher', value: 'wxpusher' },
   { label: 'Server酱', value: 'serverchan' },
@@ -75,6 +76,13 @@ export const providerBrandMeta: Record<ProviderKind, ProviderBrandDetail> = {
     rgb: '0, 210, 190',
     desc: '飞书应用机器人，通过 tenant_access_token 向组织人员发送文本通知。',
     tags: ['应用机器人', 'OpenID'],
+    icon: <img src="/icons/feishu.png" alt="" />
+  },
+  feishu_group: {
+    color: '#00C2A8',
+    rgb: '0, 194, 168',
+    desc: '飞书群自定义机器人，通过 webhook token 向群聊发送文本消息。',
+    tags: ['群机器人', 'Webhook'],
     icon: <img src="/icons/feishu.png" alt="" />
   },
   pushplus: {
@@ -233,6 +241,7 @@ const fallbackMessageTypesByProvider: Record<ProviderKind, string[]> = {
   dingtalk_robot: ['text', 'markdown'],
   dingtalk_work: ['text', 'card'],
   feishu_robot: ['text'],
+  feishu_group: ['text'],
   gov_cloud: ['text', 'card'],
   custom_token: ['text'],
 };

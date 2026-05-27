@@ -31,8 +31,9 @@
 | 第一批 | 钉钉群机器人 | `dingtalk_robot` | 群机器人 | 已实现 build-request/mock；未真实联调 |
 | 第一批 | 钉钉工作消息 | `dingtalk_work` | 企业应用 | 已实现 build-request/mock；未真实联调 |
 | 第一批兼容 | 钉钉旧类型 | `dingtalk` | legacy work notice | 保留兼容；新配置优先使用 `dingtalk_work` / `dingtalk_robot` |
-| 第一批 | 飞书机器人 | `feishu_robot` | 群机器人 | 已实现 build-request/mock；未真实联调 |
-| 第一批兼容 | 飞书旧类型 | `feishu` | legacy robot | 保留兼容；新配置优先使用 `feishu_robot` |
+| 第一批 | 飞书应用机器人 | `feishu_robot` | 企业应用机器人 | 已实现 build-request/mock；未真实联调 |
+| 第一批 | 飞书群消息 | `feishu_group` | 群机器人 webhook | 已实现 build-request/mock；未真实联调 |
+| 第一批兼容 | 飞书旧类型 | `feishu` | legacy robot | 已移除；新配置使用 `feishu_robot` / `feishu_group` |
 | 第一批 | 随申办政务云 | `gov_cloud` | 政务云消息平台 | 已实现 build-request/mock 和错误分类；开发环境不可访问，未真实联调 |
 | 高级保留 | 高级 custom_token | `custom_token` | advanced HTTP | 保留高级映射，不作为普通用户主路径 |
 | P2 | ntfy | `ntfy` | 自托管通知 | 已实现 build-request/mock；目标服务依赖用户配置，未真实联调 |
@@ -263,21 +264,21 @@ Delivery adapter 输出 final request。日志快照记录 `target_context`、`r
 | adapter 配置模型 | `credentials={webhook_url, secret}`；`recipient={required:false, identity_kind:mobile}` |
 | 模板内容 schema | `text:{title?, body}`；`markdown:{title, markdown}` |
 
-### 3.8 飞书机器人
+### 3.8 飞书群消息
 
 | 项 | 内容 |
 |---|---|
-| 支持消息类型 | 第一版 `text`、`interactive` 卡片；可用卡片承载 markdown |
-| 用户填写配置 | webhook URL、可选 secret、超时、限流 |
-| 接收人身份字段 | 默认无；可选 `feishu_open_id` 用于文本中 at |
+| 支持消息类型 | 第一版 `text` |
+| 用户填写配置 | 基础 API、可选签名密钥、超时、限流 |
+| 接收人身份字段 | `feishu_webhook_token`，对应 webhook URL 中 `/bot/v2/hook/{token}` 的 token 段 |
 | Token 获取方式 | 无；secret 用于签名 |
 | 发送 API | `POST https://open.feishu.cn/open-apis/bot/v2/hook/{token}` |
 | 请求体结构 | `{"msg_type":"text","content":{"text":"..."}}`；签名模式增加 `timestamp/sign` |
 | 成功判定 | JSON `code == 0` |
 | 错误码和重试建议 | webhook/secret/关键词错误不重试；限流和 `5xx/timeout` 可重试 |
 | 限流/频率限制 | 需接入时核对飞书自定义机器人最新限制；本地建议默认低 QPS |
-| adapter 配置模型 | `credentials={webhook_url, secret}`；`recipient={required:false, identity_kind:feishu_open_id}` |
-| 模板内容 schema | `text:{title?, body}`；`card:{title, markdown, url?}` |
+| adapter 配置模型 | `auth={sign_secret?}`、`send={base_url}`、`recipient={required:true, identity_kind:feishu_webhook_token}` |
+| 模板内容 schema | `text:{msgtype:"text", text}` |
 
 ### 3.9 邮件
 

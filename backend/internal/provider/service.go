@@ -24,6 +24,7 @@ const (
 	ProviderFeishuRobot   ProviderType = "feishu_robot"
 	ProviderDingTalkWork  ProviderType = "dingtalk_work"
 	ProviderDingTalkRobot ProviderType = "dingtalk_robot"
+	ProviderFeishuGroup   ProviderType = "feishu_group"
 	ProviderEmail         ProviderType = "email"
 	ProviderAliyunSMS     ProviderType = "aliyun_sms"
 	ProviderTencentSMS    ProviderType = "tencent_sms"
@@ -662,6 +663,7 @@ func validProviderType(providerType ProviderType) bool {
 	case ProviderWeComApp,
 		ProviderWeComRobot,
 		ProviderFeishuRobot,
+		ProviderFeishuGroup,
 		ProviderDingTalkWork,
 		ProviderDingTalkRobot,
 		ProviderEmail,
@@ -1008,6 +1010,8 @@ func providerIdentityKeys(providerType ProviderType) []string {
 		return []string{"wecom_robot_key", "robot_key", "key"}
 	case ProviderFeishuRobot:
 		return []string{"feishu_open_id", "feishu_user_id", "open_id", "user_id"}
+	case ProviderFeishuGroup:
+		return []string{"feishu_webhook_token", "feishu_hook_token", "hook_token", "token"}
 	case ProviderDingTalkWork:
 		return []string{"dingtalk_userid", "userid", "user_id"}
 	case ProviderWxPusher:

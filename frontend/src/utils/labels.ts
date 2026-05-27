@@ -23,6 +23,7 @@ export type ProviderType =
   | 'dingtalk_robot'
   | 'dingtalk_work'
   | 'feishu_robot'
+  | 'feishu_group'
   | 'gov_cloud'
   | 'custom_token';
 export type InboundStatus =
@@ -91,7 +92,8 @@ const providerTypeLabels: Record<ProviderType, string> = {
   wecom_app: '企业微信应用消息',
   dingtalk_robot: '钉钉群机器人',
   dingtalk_work: '钉钉工作消息',
-  feishu_robot: '飞书机器人',
+  feishu_robot: '飞书应用机器人',
+  feishu_group: '飞书群消息',
   gov_cloud: '随申办政务云',
   custom_token: '自定义 Token 平台',
 };
