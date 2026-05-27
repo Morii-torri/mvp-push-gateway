@@ -434,7 +434,8 @@ func missingCredentialFields(channel Channel, token string) []string {
 		requireAny("WxPusher appToken", auth["app_token"], auth["appToken"], send["app_token"], send["appToken"], token)
 	case ProviderEmail:
 		requireAny("SMTP host", auth["host"], send["host"])
-		requireAny("SMTP from", auth["from"], send["from"])
+		requireAny("SMTP username", auth["username"], send["username"])
+		requireAny("SMTP password", auth["password"], send["password"])
 	case ProviderAliyunSMS:
 		requireAny("阿里云 access_key_id", auth["access_key_id"])
 		requireAny("阿里云 access_key_secret", auth["access_key_secret"])

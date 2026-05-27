@@ -247,6 +247,10 @@ const providerTypeGroups: ProviderTypeGroup[] = [
   { label: '自建服务', tone: 'orange', values: ['gov_cloud', 'ntfy', 'gotify'] },
 ];
 
+export function providerShowsTokenCacheStatus(providerType: string): boolean {
+  return ['wecom_app', 'dingtalk_work', 'feishu_robot', 'gov_cloud'].includes(providerType);
+}
+
 export type ConsolePageProps = {
   lastUpdated: Date;
   onRefresh: () => void;
@@ -2255,7 +2259,7 @@ export function ProvidersPage({ lastUpdated, onRefresh }: ConsolePageProps) {
             checkedChildren="启用"
             unCheckedChildren="停用"
           />
-          {['wecom_app', 'dingtalk_work', 'gov_cloud'].includes(record.providerType) && (
+          {providerShowsTokenCacheStatus(record.providerType) && (
             record.is_cached ? (
               <StatusTag meta={{ label: '已缓存', color: 'success' }} />
             ) : (

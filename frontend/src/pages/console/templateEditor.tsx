@@ -1486,12 +1486,12 @@ function previewBodyKeys(format: TemplatePreviewFormat): string[] {
   if (format === 'markdown') {
     return ['markdown', 'desp', 'content', 'body', 'message', 'description', 'html'];
   }
-  return ['body', 'content', 'message', 'description', 'desp', 'html', 'markdown'];
+  return ['body', 'content', 'message', 'description', 'desp', 'text', 'html', 'markdown'];
 }
 
 function fallbackRenderedBody(rendered: Record<string, JSONValue>): string {
   return (
-    firstRenderedString(rendered, ['body', 'content', 'message', 'markdown', 'html', 'description', 'desp']) ||
+    firstRenderedString(rendered, ['body', 'content', 'message', 'markdown', 'html', 'description', 'desp', 'text']) ||
     stringifyJSON(rendered)
   );
 }

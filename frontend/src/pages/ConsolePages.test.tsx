@@ -62,11 +62,12 @@ import {
   providerTestRequestPreview,
   providerTestSendPreview,
   providerTestPayload,
+  providerShowsTokenCacheStatus,
 } from './ConsolePages';
 import type { ChannelApiRecord, OrgUnitApiRecord, ProviderCapabilityApiRecord, TemplateApiRecord, TemplateVersionApiRecord } from '../api/console';
 import { getProviderTypeLabel } from '../utils/labels';
 import { providerTypeOptions, recipientIdentityProviderOptions } from './console/shared';
-import { mapChannelRow, providerCapabilityView, providerWithCapability } from './console/providerConfig';
+import { mapChannelRow, providerCapabilityView, providerFieldValuesAfterChange, providerWithCapability } from './console/providerConfig';
 
 const lastUpdated = new Date('2026-05-11T09:30:00+08:00');
 
@@ -775,6 +776,12 @@ describe('critical console pages', () => {
     expect(payload.resolved_recipients).toEqual([{ platform_ids: { feishu_open_id: 'ou_123' } }]);
   });
 
+  it('shows token cache status in provider list for Feishu app robot', () => {
+    expect(providerShowsTokenCacheStatus('wecom_app')).toBe(true);
+    expect(providerShowsTokenCacheStatus('feishu_robot')).toBe(true);
+    expect(providerShowsTokenCacheStatus('feishu_group')).toBe(false);
+  });
+
   it('uses ServerChan v3 URL-only fields and Markdown template fallback', () => {
     const providers = [
       ['serverchan', 'API URL'],
@@ -1129,6 +1136,14 @@ describe('critical console pages', () => {
     expect(templateMarkup).toContain('text');
     expect(templateMarkup).not.toContain('Markdown 内容');
     expect(templateMarkup).not.toContain('markdown');
+    const previewDraft = {
+      ...templateDraft,
+      fieldValues: {
+        ...templateDraft.fieldValues,
+        text: { expression: '飞书文本预览', defaultValue: '通知' },
+      },
+    };
+    expect(templateUserFacingPreview(previewDraft)).toBe('飞书文本预览');
   });
 
   it('uses Feishu group message webhook fields and text-only template', () => {
@@ -1154,6 +1169,14 @@ describe('critical console pages', () => {
     expect(templateMarkup).toContain('飞书群消息');
     expect(templateMarkup).toContain('text');
     expect(templateMarkup).not.toContain('markdown');
+    const previewDraft = {
+      ...templateDraft,
+      fieldValues: {
+        ...templateDraft.fieldValues,
+        text: { expression: '飞书群文本预览', defaultValue: '通知' },
+      },
+    };
+    expect(templateUserFacingPreview(previewDraft)).toBe('飞书群文本预览');
   });
 
   it('renders provider capability driven fields without raw capability summary or advanced JSON', () => {
@@ -1292,6 +1315,87 @@ describe('critical console pages', () => {
     expect(markup).toContain('SMTP 端口');
     expect(markup).toContain('发件人');
     expect(markup).not.toContain('企业 ID');
+  });
+
+  it('uses email service presets and encrypted SMTP settings', () => {
+    const draft = createProviderDraft('email', 1, []);
+    const serviceField = draft.configFields.find((field) => field.key === 'service_provider');
+    if (!serviceField) {
+      throw new Error('missing email service provider field');
+    }
+    const defaultMarkup = renderPage(
+      <ProviderConfigForm value={draft} onChange={() => undefined} capabilities={[]} />,
+    );
+    const customMarkup = renderPage(
+      <ProviderConfigForm
+        value={{
+          ...draft,
+          fieldValues: {
+            ...draft.fieldValues,
+            'auth_config.service_provider': 'custom',
+          },
+        }}
+        onChange={() => undefined}
+        capabilities={[]}
+      />,
+    );
+    const outlookValues = providerFieldValuesAfterChange(
+      'email',
+      draft.configFields,
+      draft.fieldValues,
+      serviceField,
+      'outlook',
+    );
+    const input = channelInputFromProvider({
+      ...draft,
+      fieldValues: {
+        ...outlookValues,
+        'auth_config.username': 'ops@example.com',
+        'auth_config.password': 'app-password',
+        'send_config.from': 'MVP Push <ops@example.com>',
+        'send_config.cc': 'team@example.com, audit@example.com',
+        'send_config.bcc': 'security@example.com',
+        'send_config.reply_to': 'reply@example.com',
+      },
+    });
+
+    expect(serviceField.options?.map((option) => option.label)).toEqual([
+      'QQ邮箱',
+      '腾讯企业邮箱',
+      '163邮箱',
+      '126邮箱',
+      'Gmail',
+      'Outlook',
+      'Office 365',
+      '自定义',
+    ]);
+    expect(defaultMarkup).toContain('邮箱服务商');
+    expect(defaultMarkup).toContain('用户名');
+    expect(defaultMarkup).toContain('授权码 / 密码');
+    expect(defaultMarkup).toContain('发件人地址');
+    expect(defaultMarkup).toContain('抄送收件人地址');
+    expect(defaultMarkup).toContain('密送收件人地址');
+    expect(defaultMarkup).toContain('指定回复地址');
+    expect(defaultMarkup).not.toContain('SMTP 主机地址');
+    expect(defaultMarkup).not.toContain('启用 SSL/TLS');
+    expect(defaultMarkup).not.toContain('start_tls');
+    expect(customMarkup).toContain('SMTP 主机地址');
+    expect(customMarkup).toContain('SMTP 端口');
+    expect(customMarkup).toContain('加密方式');
+    expect(input.auth_config).toEqual({
+      service_provider: 'outlook',
+      host: 'smtp-mail.outlook.com',
+      port: 587,
+      security: 'STARTTLS',
+      username: 'ops@example.com',
+      password: 'app-password',
+    });
+    expect(input.send_config).toEqual({
+      from: 'MVP Push <ops@example.com>',
+      cc: ['team@example.com', 'audit@example.com'],
+      bcc: ['security@example.com'],
+      reply_to: 'reply@example.com',
+    });
   });
 
   it('renders route page guardrails and hit counts without exposing raw english enums', () => {

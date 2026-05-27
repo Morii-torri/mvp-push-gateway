@@ -145,6 +145,33 @@ const barkLevelOptions = [
   { label: 'passive：仅将通知添加到通知列表，不会亮屏提醒', value: 'passive' },
 ];
 
+type EmailServiceProviderKey = 'qq' | 'tencent_exmail' | 'netease_163' | 'netease_126' | 'gmail' | 'outlook' | 'office365' | 'custom';
+
+type EmailServicePreset = {
+  value: EmailServiceProviderKey;
+  label: string;
+  host: string;
+  port: number;
+  security: 'SSL' | 'STARTTLS';
+};
+
+const emailServicePresets: EmailServicePreset[] = [
+  { value: 'qq', label: 'QQ邮箱', host: 'smtp.qq.com', port: 465, security: 'SSL' },
+  { value: 'tencent_exmail', label: '腾讯企业邮箱', host: 'smtp.exmail.qq.com', port: 465, security: 'SSL' },
+  { value: 'netease_163', label: '163邮箱', host: 'smtp.163.com', port: 465, security: 'SSL' },
+  { value: 'netease_126', label: '126邮箱', host: 'smtp.126.com', port: 465, security: 'SSL' },
+  { value: 'gmail', label: 'Gmail', host: 'smtp.gmail.com', port: 465, security: 'SSL' },
+  { value: 'outlook', label: 'Outlook', host: 'smtp-mail.outlook.com', port: 587, security: 'STARTTLS' },
+  { value: 'office365', label: 'Office 365', host: 'smtp.office365.com', port: 587, security: 'STARTTLS' },
+  { value: 'custom', label: '自定义', host: '', port: 465, security: 'SSL' },
+];
+
+const emailServiceProviderOptions = emailServicePresets.map(({ label, value }) => ({ label, value }));
+const emailSecurityOptions = [
+  { label: 'SSL', value: 'SSL' },
+  { label: 'STARTTLS', value: 'STARTTLS' },
+];
+
 const providerPresets: Record<ProviderKind, ProviderPreset> = {
   webhook: {
     tokenEndpoint: '无令牌或固定 Header',
@@ -650,11 +677,7 @@ function fieldFromSchemaRecord(value: JSONValue, fallbackTarget: ProviderFieldTa
     return null;
   }
   const target = providerFieldTarget(firstString(value.target, value.config_target, value.section) || fallbackTarget, fallbackTarget);
-  const options = Array.isArray(value.enum)
-    ? value.enum
-        .filter((item): item is string => typeof item === 'string')
-        .map((item) => ({ label: item, value: item }))
-    : undefined;
+  const options = providerFieldOptionsFromSchema(value);
   return {
     key,
     label: firstString(value.label, value.title, value.description) || providerFieldLabel(key),
@@ -668,6 +691,40 @@ function fieldFromSchemaRecord(value: JSONValue, fallbackTarget: ProviderFieldTa
     defaultValue: providerFieldDefaultValue(value.default),
     options,
   };
+}
+
+function providerFieldOptionsFromSchema(value: Record<string, JSONValue>): Array<{ label: string; value: string }> | undefined {
+  if (Array.isArray(value.options)) {
+    const options = value.options
+      .map((option) => {
+        if (typeof option === 'string') {
+          return { label: option, value: option };
+        }
+        if (!isRecord(option)) {
+          return null;
+        }
+        const optionValue = firstString(option.value, option.key);
+        if (!optionValue) {
+          return null;
+        }
+        return {
+          label: firstString(option.label, option.title, option.name) || optionValue,
+          value: optionValue,
+        };
+      })
+      .filter((option): option is { label: string; value: string } => Boolean(option));
+    return options.length ? options : undefined;
+  }
+  if (!Array.isArray(value.enum)) {
+    return undefined;
+  }
+  const enumLabels = isRecord(value.enum_labels) ? value.enum_labels : isRecord(value.enumLabels) ? value.enumLabels : {};
+  return value.enum
+    .filter((item): item is string => typeof item === 'string')
+    .map((item) => ({
+      label: typeof enumLabels[item] === 'string' ? enumLabels[item] : item,
+      value: item,
+    }));
 }
 
 function providerFieldDefaultValue(value: JSONValue | undefined): ProviderFieldValue | undefined {
@@ -733,32 +790,36 @@ export function providerFieldLabel(key: string): string {
     base_url: 'API 基础地址',
     bearer_token: 'Bearer Token',
     body_template: 'Body 映射模板',
+    bcc: '密送收件人地址',
     channel: '推送渠道',
     content_type: '内容类型',
     corpid: '企业 ID',
     corpsecret: '应用 Secret',
+    cc: '抄送收件人地址',
     device_key: 'Device Key',
     device_keys: 'Device Key 列表',
     endpoint: 'Endpoint',
-    from: '发件人',
+    from: '发件人地址',
     headers: '请求 Header',
     hook_token: '机器人 Hook Token',
-    host: 'SMTP 主机',
+    host: 'SMTP 主机地址',
     icon: '图标 URL',
     level: '通知级别',
     markdown: 'Markdown 开关',
     method: '请求方法',
     mode: '推送模式',
     openid: 'OpenID',
-    password: '密码',
-    port: '端口',
+    password: '授权码 / 密码',
+    port: 'SMTP 端口',
     priority: '优先级',
     push_key: 'Push Key',
     region: 'Region',
+    reply_to: '指定回复地址',
     robot_secret: '机器人签名 Secret',
     secret_access_key: 'Secret Access Key',
     secret_id: 'SecretId',
     secret_key: 'SecretKey',
+    security: '加密方式',
     send_url: '发送 URL',
     send_key: 'Server酱 SendKey',
     sign_secret: '签名密钥',
@@ -766,6 +827,7 @@ export function providerFieldLabel(key: string): string {
     signature_id: '签名 ID',
     sms_sdk_app_id: '短信 SDK App ID',
     server_url: '服务地址',
+    service_provider: '邮箱服务商',
     source_code: '上级来源编码',
     source_token: '上级来源 Token',
     spt: 'WxPusher SPT',
@@ -819,13 +881,16 @@ function fallbackProviderFields(providerType: ProviderKind): ProviderConfigField
 
   if (providerType === 'email') {
     return [
-      field('host', 'SMTP 主机', 'auth_config', 'text', true),
-      field('port', 'SMTP 端口', 'auth_config', 'number', true, '465 / 587'),
-      field('secure', '启用 SSL/TLS', 'send_config'),
-      field('username', '用户名', 'auth_config'),
-      field('password', '密码', 'auth_config', 'password'),
-      field('from', '发件人', 'send_config', 'text', true),
-      field('reply_to', '回复地址', 'send_config'),
+      field('service_provider', '邮箱服务商', 'auth_config', 'select', true, '', 'qq', 'string', '', emailServiceProviderOptions),
+      field('host', 'SMTP 主机地址', 'auth_config', 'text', true, '', 'smtp.qq.com'),
+      field('port', 'SMTP 端口', 'auth_config', 'number', true, '465 / 587', 465),
+      field('security', '加密方式', 'auth_config', 'select', true, '', 'SSL', 'string', '', emailSecurityOptions),
+      field('username', '用户名', 'auth_config', 'text', true),
+      field('password', '授权码 / 密码', 'auth_config', 'password', true),
+      field('from', '发件人地址', 'send_config'),
+      field('cc', '抄送收件人地址', 'send_config', 'text', false, '多个地址用英文逗号或竖线分隔', undefined, 'array', 'string'),
+      field('bcc', '密送收件人地址', 'send_config', 'text', false, '多个地址用英文逗号或竖线分隔', undefined, 'array', 'string'),
+      field('reply_to', '指定回复地址', 'send_config'),
     ];
   }
   if (providerType === 'aliyun_sms') {
@@ -1017,6 +1082,48 @@ function providerFieldValueKey(field: Pick<ProviderConfigField, 'target' | 'key'
   return `${field.target}.${field.key}`;
 }
 
+export function providerFieldValuesAfterChange(
+  providerType: ProviderKind,
+  fields: ProviderConfigField[],
+  fieldValues: ProviderFieldValues,
+  field: ProviderConfigField,
+  nextValue: ProviderFieldValue,
+): ProviderFieldValues {
+  const nextValues: ProviderFieldValues = {
+    ...fieldValues,
+    [providerFieldValueKey(field)]: nextValue,
+  };
+  if (providerType !== 'email' || field.target !== 'auth_config' || field.key !== 'service_provider') {
+    return nextValues;
+  }
+  const preset = emailServicePresets.find((item) => item.value === nextValue);
+  if (!preset) {
+    return nextValues;
+  }
+  const setFieldValue = (key: string, value: ProviderFieldValue) => {
+    const targetField = fields.find((item) => item.target === 'auth_config' && item.key === key);
+    if (targetField) {
+      nextValues[providerFieldValueKey(targetField)] = value;
+    }
+  };
+  setFieldValue('host', preset.host);
+  setFieldValue('port', preset.port);
+  setFieldValue('security', preset.security);
+  return nextValues;
+}
+
+function visibleProviderConfigFields(value: ProviderRow): ProviderConfigField[] {
+  if (value.providerType !== 'email') {
+    return value.configFields;
+  }
+  if (!value.configFields.some((field) => field.target === 'auth_config' && field.key === 'service_provider')) {
+    return value.configFields;
+  }
+  const serviceProvider = value.fieldValues['auth_config.service_provider'];
+  const showCustomFields = serviceProvider === 'custom';
+  return value.configFields.filter((field) => showCustomFields || !['host', 'port', 'security'].includes(field.key));
+}
+
 function fieldValuesFromConfigs(
   fields: ProviderConfigField[],
   authConfig: JSONValue,
@@ -1094,7 +1201,7 @@ function providerFieldUsesDelimitedList(field: ProviderConfigField): boolean {
   if (field.valueType === 'array') {
     return true;
   }
-  return ['topic_ids', 'device_keys', 'mentioned_list', 'tags', 'keywords'].includes(field.key);
+  return ['topic_ids', 'device_keys', 'mentioned_list', 'tags', 'keywords', 'cc', 'bcc'].includes(field.key);
 }
 
 function delimitedFieldValueToList(value: ProviderFieldValue, field: ProviderConfigField): JSONValue[] {
@@ -2044,12 +2151,10 @@ export function ProviderConfigForm({
   const update = (patch: Partial<ProviderRow>) => onChange({ ...value, ...patch });
   const updateFieldValue = (field: ProviderConfigField, nextValue: ProviderFieldValue) => {
     update({
-      fieldValues: {
-        ...value.fieldValues,
-        [providerFieldValueKey(field)]: nextValue,
-      },
+      fieldValues: providerFieldValuesAfterChange(value.providerType, value.configFields, value.fieldValues, field, nextValue),
     });
   };
+  const visibleConfigFields = visibleProviderConfigFields(value);
 
   return (
     <Tabs
@@ -2071,7 +2176,7 @@ export function ProviderConfigForm({
               </Form.Item>
               <Divider orientation="left">基础配置字段</Divider>
               <div className="two-column-form provider-field-grid">
-                {value.configFields.map((field) => (
+                {visibleConfigFields.map((field) => (
                   <Form.Item
                     key={providerFieldValueKey(field)}
                     label={field.label}

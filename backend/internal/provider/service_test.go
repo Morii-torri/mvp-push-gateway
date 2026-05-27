@@ -99,6 +99,44 @@ func TestDefaultCapabilitiesExposeFirstBatchBuiltInProviders(t *testing.T) {
 	}
 }
 
+func TestEmailCapabilityUsesProviderPresetsAndEncryptedSecurity(t *testing.T) {
+	capability := findCapability(t, ProviderEmail, "email")
+
+	assertJSONField(t, capability.CredentialSchema, "properties.service_provider.default", "qq")
+	assertJSONField(t, capability.CredentialSchema, "properties.host.default", "smtp.qq.com")
+	assertJSONField(t, capability.CredentialSchema, "properties.port.default", float64(465))
+	assertJSONField(t, capability.CredentialSchema, "properties.security.default", "SSL")
+	assertJSONField(t, capability.CredentialSchema, "properties.secure", nil)
+	assertJSONField(t, capability.CredentialSchema, "properties.start_tls", nil)
+	assertJSONField(t, capability.CredentialSchema, "properties.password.title", "授权码 / 密码")
+	assertJSONField(t, capability.ChannelConfigSchema, "properties.from.title", "发件人地址")
+	assertJSONField(t, capability.ChannelConfigSchema, "properties.cc.title", "抄送收件人地址")
+	assertJSONField(t, capability.ChannelConfigSchema, "properties.bcc.title", "密送收件人地址")
+	assertJSONField(t, capability.ChannelConfigSchema, "properties.reply_to.title", "指定回复地址")
+
+	var schema struct {
+		Required   []string `json:"required"`
+		Properties map[string]struct {
+			Enum []string `json:"enum"`
+		} `json:"properties"`
+	}
+	if err := json.Unmarshal(capability.CredentialSchema, &schema); err != nil {
+		t.Fatalf("decode email credential schema: %v", err)
+	}
+	required := map[string]bool{}
+	for _, item := range schema.Required {
+		required[item] = true
+	}
+	for _, key := range []string{"service_provider", "host", "port", "security", "username", "password"} {
+		if !required[key] {
+			t.Fatalf("expected email credential schema to require %q, got %#v", key, schema.Required)
+		}
+	}
+	if got := schema.Properties["security"].Enum; len(got) != 2 || got[0] != "SSL" || got[1] != "STARTTLS" {
+		t.Fatalf("expected encrypted SMTP security options only, got %#v", got)
+	}
+}
+
 func TestLegacyCompatibilityProviderTypesAreUnsupported(t *testing.T) {
 	for _, providerType := range []ProviderType{"sms", "wecom", "dingtalk", "feishu"} {
 		if validProviderType(providerType) {
