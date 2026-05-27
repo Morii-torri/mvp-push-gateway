@@ -355,13 +355,29 @@ func (r Repository) ResolveSystemRecipients(ctx context.Context, params planning
 						AND excluded_membership.org_id IN (SELECT id FROM excluded_orgs)
 				)
 		)
-		SELECT DISTINCT identity.identity_value
-		FROM filtered_users
-		JOIN user_identities AS identity ON identity.user_id = filtered_users.id
-		WHERE identity.identity_kind = $5
-			AND (identity.provider_type = $6 OR identity.provider_type = 'common')
-		ORDER BY identity.identity_value
-	`, setValues(userIDs), setValues(orgIDs), setValues(excludedUserIDs), setValues(excludedOrgIDs), params.IdentityKind, string(params.ProviderType))
+		ranked_identities AS (
+			SELECT
+				identity.identity_value,
+				row_number() OVER (
+					PARTITION BY identity.user_id
+					ORDER BY CASE WHEN identity.channel_id = nullif($7, '')::uuid THEN 0 ELSE 1 END
+				) AS priority
+			FROM filtered_users
+			JOIN user_identities AS identity ON identity.user_id = filtered_users.id
+			WHERE identity.identity_kind = $5
+				AND (
+					identity.channel_id = nullif($7, '')::uuid
+					OR (
+						identity.channel_id IS NULL
+						AND (identity.provider_type = $6 OR identity.provider_type = 'common')
+					)
+				)
+		)
+		SELECT DISTINCT identity_value
+		FROM ranked_identities
+		WHERE priority = 1
+		ORDER BY identity_value
+	`, setValues(userIDs), setValues(orgIDs), setValues(excludedUserIDs), setValues(excludedOrgIDs), params.IdentityKind, string(params.ProviderType), params.ChannelID)
 	if err != nil {
 		return nil, fmt.Errorf("resolve system recipients: %w", err)
 	}

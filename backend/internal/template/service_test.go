@@ -118,7 +118,7 @@ func TestTemplateValidateUsesProviderDefaultSchemaRequiredFields(t *testing.T) {
 	if result.Status != "invalid" {
 		t.Fatalf("expected missing provider schema field to be invalid, got %+v", result)
 	}
-	assertValidationError(t, result.Errors, "MGP-TPL-REQUIRED", "content")
+	assertValidationError(t, result.Errors, "MGP-TPL-REQUIRED", "msgtype")
 }
 
 func TestPublishValidProviderAwareJSONTemplate(t *testing.T) {
@@ -126,7 +126,7 @@ func TestPublishValidProviderAwareJSONTemplate(t *testing.T) {
 	version, err := NewService(store).Publish(context.Background(), "template-1", VersionInput{
 		MessageType:        " text ",
 		TargetProviderType: " wecom_app ",
-		TemplateBody:       `{"content":"{{ payload.summary | default('通知') }}"}`,
+		TemplateBody:       `{"msgtype":"text","content":"{{ payload.summary | default('通知') }}"}`,
 		SamplePayload:      json.RawMessage(`{}`),
 	})
 	if err != nil {
@@ -135,7 +135,7 @@ func TestPublishValidProviderAwareJSONTemplate(t *testing.T) {
 	if version.ValidationStatus != "valid" || store.publishParams.MessageType != "text" || store.publishParams.TargetProviderType != "wecom_app" {
 		t.Fatalf("expected normalized valid publish, version=%+v params=%+v", version, store.publishParams)
 	}
-	if string(store.publishParams.CompiledPreview) != `{"rendered":"{\"content\":\"通知\"}"}` {
+	if string(store.publishParams.CompiledPreview) != `{"rendered":"{\"msgtype\":\"text\",\"content\":\"通知\"}"}` {
 		t.Fatalf("unexpected compiled preview: %s", store.publishParams.CompiledPreview)
 	}
 }

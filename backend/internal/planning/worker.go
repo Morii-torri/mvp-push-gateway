@@ -116,6 +116,7 @@ type FinishPlanningParams struct {
 
 type ResolveSystemRecipientsParams struct {
 	ProviderType      provider.ProviderType
+	ChannelID         string
 	IdentityKind      string
 	UserIDs           []string
 	OrgIDs            []string
@@ -470,6 +471,7 @@ func (w *Worker) resolveRecipient(ctx context.Context, raw json.RawMessage, payl
 		}
 		values, err := w.repo.ResolveSystemRecipients(ctx, ResolveSystemRecipientsParams{
 			ProviderType:      channel.ProviderType,
+			ChannelID:         channel.ID,
 			IdentityKind:      capability.IdentityKind,
 			UserIDs:           strategy.UserIDs,
 			OrgIDs:            strategy.OrgIDs,

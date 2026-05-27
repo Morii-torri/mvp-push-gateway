@@ -274,6 +274,12 @@ function ConsoleChrome() {
   const { admin, logout, refreshMe } = useAuth();
   const [activePage, setActivePage] = useState<PageKey>('overview');
   const [openPages, setOpenPages] = useState<PageKey[]>(['overview']);
+  const [activeSubTabs, setActiveSubTabs] = useState<Record<string, string>>({
+    routes: 'route-groups',
+    monitoring: 'messages',
+    organization: 'users',
+    settings: 'parameters',
+  });
   const [lastUpdated, setLastUpdated] = useState(() => new Date());
   const [profileOpen, setProfileOpen] = useState(false);
   const [passwordOpen, setPasswordOpen] = useState(false);
@@ -342,6 +348,21 @@ function ConsoleChrome() {
       if (!navigationMap.has(nextPage)) {
         return;
       }
+
+      // Sync the sub-tab selection based on the requested sub-page before resolution
+      if (page === 'matchGroups') {
+        setActiveSubTabs((prev) => ({ ...prev, routes: 'match-groups' }));
+      } else if (page === 'routes') {
+        setActiveSubTabs((prev) => ({ ...prev, routes: 'route-groups' }));
+      } else if (page === 'logs') {
+        setActiveSubTabs((prev) => ({ ...prev, monitoring: 'messages' }));
+      } else if (page === 'queue') {
+        setActiveSubTabs((prev) => ({ ...prev, monitoring: 'queues' }));
+      } else if (page === 'audit') {
+        setActiveSubTabs((prev) => ({ ...prev, monitoring: 'audit' }));
+      }
+
+      setLastUpdated(new Date());
       setOpenPages((current) => (current.includes(nextPage) ? current : [...current, nextPage]));
       setActivePage(nextPage);
     },
@@ -560,7 +581,28 @@ function ConsoleChrome() {
               </div>
             }
           >
-            <CurrentPage lastUpdated={lastUpdated} onRefresh={refresh} />
+            {openPages.map((pageKey) => {
+              const PageComponent = lazyPages[pageKey];
+              const isActive = pageKey === activePage;
+              return (
+                <div
+                  key={pageKey}
+                  style={{ display: isActive ? 'block' : 'none', height: '100%' }}
+                >
+                  <PageComponent
+                    lastUpdated={lastUpdated}
+                    onRefresh={refresh}
+                    activeSubTab={activeSubTabs[pageKey]}
+                    onSubTabChange={(key) => {
+                      setActiveSubTabs((prev) => ({
+                        ...prev,
+                        [pageKey]: key,
+                      }));
+                    }}
+                  />
+                </div>
+              );
+            })}
           </Suspense>
         </Content>
       </Layout>

@@ -1,6 +1,7 @@
 package provider
 
 import (
+	"encoding/json"
 	"net/url"
 	"strings"
 )
@@ -8,31 +9,69 @@ import (
 func weComRobotRequestConfig(auth, send, content map[string]any, recipient any) (requestConfig, error) {
 	requestURL := firstString(stringConfig(auth, "webhook_url", "webhookUrl"), stringConfig(send, "webhook_url", "webhookUrl"))
 	if requestURL == "" {
-		key := firstString(stringConfig(auth, "key"), stringConfig(send, "key"))
-		if key == "" {
-			return requestConfig{}, ErrInvalidInput
+		requestURL = "https://qyapi.weixin.qq.com/cgi-bin/webhook/send"
+	}
+	if firstRecipientString(recipient) == "" {
+		if key := firstString(stringConfig(auth, "key"), stringConfig(send, "key")); key != "" {
+			parsed, err := url.Parse(requestURL)
+			if err != nil {
+				return requestConfig{}, ErrInvalidInput
+			}
+			values := parsed.Query()
+			values.Set("key", key)
+			parsed.RawQuery = values.Encode()
+			requestURL = parsed.String()
 		}
-		baseURL := firstString(stringConfig(send, "base_url"), stringConfig(auth, "base_url"), "https://qyapi.weixin.qq.com")
-		requestURL = joinURL(baseURL, "/cgi-bin/webhook/send") + "?key=" + url.QueryEscape(key)
 	}
-	text := map[string]any{"content": messageBody(content)}
-	if recipients := recipientStrings(recipient); len(recipients) > 0 {
-		text["mentioned_list"] = recipients
+	msgType := firstString(stringConfig(content, "msgtype", "msg_type"), "text")
+	body := map[string]any{"msgtype": msgType}
+	switch msgType {
+	case "markdown":
+		body["markdown"] = map[string]any{"content": firstString(stringConfig(content, "content"), stringConfig(content, "markdown"), messageBody(content))}
+	default:
+		body["msgtype"] = "text"
+		body["text"] = map[string]any{"content": firstString(stringConfig(content, "content"), messageBody(content))}
 	}
-	body := map[string]any{"msgtype": "text", "text": text}
-	return jsonRequest("POST", requestURL, body)
+	config, err := jsonRequest("POST", requestURL, body)
+	if err != nil {
+		return requestConfig{}, err
+	}
+	config.Recipient = placementConfig{Location: PlacementQuery, FieldName: "key"}
+	return config, nil
 }
 
 func weComAppRequestConfig(auth, send, content map[string]any, recipient any) (requestConfig, error) {
 	baseURL := firstString(stringConfig(send, "base_url"), stringConfig(auth, "base_url"), "https://qyapi.weixin.qq.com")
+	msgType := firstString(stringConfig(content, "msgtype", "msg_type"), stringConfig(send, "msgtype", "msg_type"), "text")
 	body := map[string]any{
 		"touser":  strings.Join(recipientStrings(recipient), "|"),
-		"msgtype": "text",
+		"msgtype": msgType,
 		"agentid": firstValue(send, auth, "agentid", "agent_id"),
-		"text":    map[string]any{"content": messageBody(content)},
+	}
+	switch msgType {
+	case "markdown":
+		body["markdown"] = map[string]any{"content": firstString(stringConfig(content, "markdown"), messageBody(content))}
+	case "textcard":
+		textcard := map[string]any{
+			"title":       firstString(stringConfig(content, "title"), messageTitle(content)),
+			"description": firstString(stringConfig(content, "description"), messageBody(content)),
+			"url":         firstString(stringConfig(content, "url"), stringConfig(send, "url")),
+		}
+		if btntxt := firstString(stringConfig(content, "btntxt", "btn_txt"), stringConfig(send, "btntxt", "btn_txt")); btntxt != "" {
+			textcard["btntxt"] = btntxt
+		}
+		body["textcard"] = textcard
+	default:
+		body["msgtype"] = "text"
+		body["text"] = map[string]any{"content": messageBody(content)}
 	}
 	if value, ok := send["safe"]; ok {
 		body["safe"] = value
+	}
+	for _, key := range []string{"enable_id_trans", "enable_duplicate_check", "duplicate_check_interval"} {
+		if value, ok := send[key]; ok {
+			body[key] = value
+		}
 	}
 	return tokenQueryJSONRequest("POST", joinURL(baseURL, "/cgi-bin/message/send"), "access_token", body)
 }
@@ -73,21 +112,32 @@ func dingTalkWorkRequestConfig(auth, send, content map[string]any, recipient any
 	return tokenQueryJSONRequest("POST", joinURL(baseURL, "/topapi/message/corpconversation/asyncsend_v2"), "access_token", body)
 }
 
-func feishuRobotRequestConfig(auth, send, content map[string]any) (requestConfig, error) {
-	requestURL := firstString(stringConfig(auth, "webhook_url", "webhookUrl"), stringConfig(send, "webhook_url", "webhookUrl"))
-	if requestURL == "" {
-		token := firstString(stringConfig(auth, "token"), stringConfig(send, "token"))
-		if token == "" {
-			return requestConfig{}, ErrInvalidInput
-		}
-		baseURL := firstString(stringConfig(send, "base_url"), stringConfig(auth, "base_url"), "https://open.feishu.cn")
-		requestURL = joinURL(baseURL, "/open-apis/bot/v2/hook/"+url.PathEscape(token))
+func feishuRobotRequestConfig(auth, send, content map[string]any, recipient any) (requestConfig, error) {
+	baseURL := firstString(stringConfig(send, "base_url"), stringConfig(auth, "base_url"), "https://open.feishu.cn/open-apis")
+	contentString, err := json.Marshal(map[string]string{"text": messageBody(content)})
+	if err != nil {
+		return requestConfig{}, ErrInvalidInput
 	}
 	body := map[string]any{
-		"msg_type": "text",
-		"content":  map[string]any{"text": messageBody(content)},
+		"receive_id": firstRecipientString(recipient),
+		"msg_type":   "text",
+		"content":    string(contentString),
 	}
-	return jsonRequest("POST", requestURL, body)
+	requestURL := joinURL(baseURL, "/im/v1/messages")
+	parsed, err := url.Parse(requestURL)
+	if err != nil {
+		return requestConfig{}, ErrInvalidInput
+	}
+	values := parsed.Query()
+	values.Set("receive_id_type", "open_id")
+	parsed.RawQuery = values.Encode()
+	config, err := jsonRequest("POST", parsed.String(), body)
+	if err != nil {
+		return requestConfig{}, err
+	}
+	config.Token = placementConfig{Location: PlacementHeader, FieldName: "Authorization", Prefix: "Bearer "}
+	config.Recipient = placementConfig{Location: PlacementBody, Path: "receive_id", Format: "string"}
+	return config, nil
 }
 
 func govCloudRequestConfig(auth, send, content map[string]any, recipient any) (requestConfig, error) {

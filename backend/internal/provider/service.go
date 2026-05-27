@@ -105,6 +105,10 @@ type Channel struct {
 	DeadLetterPolicy json.RawMessage
 	CreatedAt        time.Time
 	UpdatedAt        time.Time
+	IsCached         bool
+	TokenRefreshedAt string
+	TokenExpiresAt   string
+	TokenLastError   string
 }
 
 type CreateChannelInput struct {
@@ -125,6 +129,19 @@ type UpdateChannelInput = CreateChannelInput
 type CreateChannelParams = CreateChannelInput
 type UpdateChannelParams = UpdateChannelInput
 
+type FeishuOpenIDResolveItem struct {
+	Mobile string `json:"mobile"`
+	OpenID string `json:"open_id"`
+	Status string `json:"status"`
+	Error  string `json:"error,omitempty"`
+}
+
+type FeishuOpenIDResolveResult struct {
+	Success bool                      `json:"success"`
+	Items   []FeishuOpenIDResolveItem `json:"items"`
+	Errors  []string                  `json:"errors,omitempty"`
+}
+
 type Store interface {
 	SeedProviderCapabilities(ctx context.Context, capabilities []Capability) error
 	ListProviderCapabilities(ctx context.Context) ([]Capability, error)
@@ -136,11 +153,16 @@ type Store interface {
 }
 
 type Service struct {
-	store Store
+	store        Store
+	tokenManager *TokenManager
 }
 
 func NewService(store Store) *Service {
-	return &Service{store: store}
+	var tokenStore TokenCacheStore
+	if candidate, ok := store.(TokenCacheStore); ok {
+		tokenStore = candidate
+	}
+	return &Service{store: store, tokenManager: NewTokenManager(tokenStore)}
 }
 
 func (s *Service) SeedProviderCapabilities(ctx context.Context) error {
@@ -161,7 +183,14 @@ func (s *Service) ListChannels(ctx context.Context) ([]Channel, error) {
 	if s.store == nil {
 		return nil, ErrNotFound
 	}
-	return s.store.ListChannels(ctx)
+	channels, err := s.store.ListChannels(ctx)
+	if err != nil {
+		return nil, err
+	}
+	for i := range channels {
+		channels[i] = s.withTokenStatus(ctx, channels[i])
+	}
+	return channels, nil
 }
 
 func (s *Service) CreateChannel(ctx context.Context, input CreateChannelInput) (Channel, error) {
@@ -176,7 +205,11 @@ func (s *Service) GetChannel(ctx context.Context, id string) (Channel, error) {
 	if strings.TrimSpace(id) == "" {
 		return Channel{}, ErrInvalidInput
 	}
-	return s.store.GetChannel(ctx, id)
+	channel, err := s.store.GetChannel(ctx, id)
+	if err != nil {
+		return Channel{}, err
+	}
+	return s.withTokenStatus(ctx, channel), nil
 }
 
 func (s *Service) UpdateChannel(ctx context.Context, id string, input UpdateChannelInput) (Channel, error) {
@@ -202,6 +235,11 @@ func (s *Service) BuildRequest(ctx context.Context, channelID string, input Buil
 	if err != nil {
 		return BuiltRequest{}, err
 	}
+	if strings.TrimSpace(input.Token) == "" && RequiresTokenResolution(channel.ProviderType) {
+		if token, err := s.autoResolveToken(ctx, channel); err == nil && token != "" {
+			input.Token = token
+		}
+	}
 	return BuildRequest(channel, input)
 }
 
@@ -210,6 +248,11 @@ func (s *Service) BuildDeliveryRequest(ctx context.Context, channelID string, in
 	if err != nil {
 		return BuiltRequest{}, err
 	}
+	if strings.TrimSpace(input.Token) == "" && RequiresTokenResolution(channel.ProviderType) {
+		if token, err := s.autoResolveToken(ctx, channel); err == nil && token != "" {
+			input.Token = token
+		}
+	}
 	return BuildDeliveryRequest(channel, input)
 }
 
@@ -217,6 +260,11 @@ func (s *Service) TestSend(ctx context.Context, channelID string, input TestSend
 	channel, err := s.GetChannel(ctx, channelID)
 	if err != nil {
 		return TestSendResult{}, err
+	}
+	if strings.TrimSpace(input.Token) == "" && RequiresTokenResolution(channel.ProviderType) {
+		if token, err := s.autoResolveToken(ctx, channel); err == nil && token != "" {
+			input.Token = token
+		}
 	}
 	deliveryInput := testSendDeliveryInput(channel, input)
 	built, err := BuildDeliveryRequest(channel, deliveryInput)
@@ -228,19 +276,13 @@ func (s *Service) TestSend(ctx context.Context, channelID string, input TestSend
 	}
 	result := TestSendResult{
 		Status:             "dry_run",
-		Request:            built,
+		Request:            RedactBuiltRequest(built),
 		TargetContext:      deliveryInput.TargetContext,
 		RenderedMessage:    deliveryInput.RenderedMessage,
 		ResolvedRecipients: deliveryInput.ResolvedRecipients,
 	}
 	requestSnapshot, err := marshalJSON(map[string]any{
-		"final_request": map[string]any{
-			"method":  built.Method,
-			"url":     built.URL,
-			"headers": built.Headers,
-			"query":   built.Query,
-			"body":    jsonValue(built.Body),
-		},
+		"final_request":       redactedRequestSnapshot(built),
 		"target_context":      deliveryInput.TargetContext,
 		"rendered_message":    deliveryInput.RenderedMessage,
 		"resolved_recipients": deliveryInput.ResolvedRecipients,
@@ -345,8 +387,10 @@ func testSendRequiresRecipient(providerType ProviderType) bool {
 		ProviderTencentSMS,
 		ProviderBaiduSMS,
 		ProviderWeComApp,
+		ProviderFeishuRobot,
 		ProviderDingTalkWork,
 		ProviderGovCloud,
+		ProviderWeComRobot,
 		ProviderPushPlus,
 		ProviderWxPusher,
 		ProviderServerChan,
@@ -410,7 +454,7 @@ func missingCredentialFields(channel Channel, token string) []string {
 		}
 		requireAny("企业微信 agentid", auth["agentid"], auth["agent_id"], send["agentid"], send["agent_id"])
 	case ProviderWeComRobot:
-		requireAny("企业微信机器人 webhook/key", auth["webhook_url"], auth["key"], send["webhook_url"], send["key"])
+		requireAny("企业微信机器人 Webhook 地址", auth["webhook_url"], send["webhook_url"])
 	case ProviderDingTalkWork:
 		requireAny("钉钉 access_token 或 app_key/app_secret", token, auth["access_token"], auth["app_key"])
 		if isEmptyValue(token) && isEmptyValue(auth["access_token"]) {
@@ -420,7 +464,8 @@ func missingCredentialFields(channel Channel, token string) []string {
 	case ProviderDingTalkRobot:
 		requireAny("钉钉机器人 webhook", auth["webhook_url"], send["webhook_url"])
 	case ProviderFeishuRobot:
-		requireAny("飞书机器人 webhook", auth["webhook_url"], send["webhook_url"])
+		requireAny("飞书 app_id", auth["app_id"])
+		requireAny("飞书 app_secret", auth["app_secret"])
 	case ProviderGovCloud:
 		requireAny("政务云 access_token 或 corpsecret", token, auth["access_token"], auth["corpsecret"])
 	case ProviderNtfy:
@@ -446,6 +491,9 @@ func builtRequestHasProviderTarget(providerType ProviderType, built BuiltRequest
 		return len(listConfig(body, "uids")) > 0 || len(rawListConfig(body, "topicIds", "topic_ids")) > 0
 	case ProviderServerChan:
 		return strings.Contains(built.URL, ".push.ft07.com/send/") && strings.HasSuffix(strings.TrimSpace(built.URL), ".send")
+	case ProviderWeComRobot:
+		parsed, err := url.Parse(built.URL)
+		return err == nil && strings.TrimSpace(parsed.Query().Get("key")) != ""
 	case ProviderBark:
 		return stringConfig(body, "device_key") != "" || len(listConfig(body, "device_keys")) > 0
 	case ProviderPushMe:
@@ -897,7 +945,7 @@ func resolvedRecipientFromMap(value map[string]any) ResolvedRecipient {
 			}
 		}
 	}
-	for _, key := range []string{"wecom_userid", "feishu_open_id", "feishu_user_id", "dingtalk_userid", "wxpusher_uid", "bark_device_key", "gov_userid", "gov_party_id", "gov_tag_id", "userid", "open_id"} {
+	for _, key := range []string{"wecom_robot_key", "wecom_userid", "feishu_open_id", "feishu_user_id", "dingtalk_userid", "wxpusher_uid", "bark_device_key", "gov_userid", "gov_party_id", "gov_tag_id", "userid", "open_id"} {
 		if stringValue := stringFromMap(value, key); stringValue != "" {
 			recipient.PlatformIDs[key] = stringValue
 		}
@@ -954,8 +1002,10 @@ func recipientIdentityValue(providerType ProviderType, recipient ResolvedRecipie
 
 func providerIdentityKeys(providerType ProviderType) []string {
 	switch providerType {
-	case ProviderWeComApp, ProviderWeComRobot:
+	case ProviderWeComApp:
 		return []string{"wecom_userid", "userid"}
+	case ProviderWeComRobot:
+		return []string{"wecom_robot_key", "robot_key", "key"}
 	case ProviderFeishuRobot:
 		return []string{"feishu_open_id", "feishu_user_id", "open_id", "user_id"}
 	case ProviderDingTalkWork:
@@ -1049,6 +1099,64 @@ func jsonValue(raw []byte) any {
 		return string(raw)
 	}
 	return value
+}
+
+func RedactBuiltRequest(request BuiltRequest) BuiltRequest {
+	return BuiltRequest{
+		Method:  request.Method,
+		URL:     redactURL(request.URL),
+		Headers: redactHeaders(request.Headers),
+		Query:   redactQuery(request.Query),
+		Body:    request.Body,
+	}
+}
+
+func redactedRequestSnapshot(request BuiltRequest) map[string]any {
+	redacted := RedactBuiltRequest(request)
+	return map[string]any{
+		"method":  redacted.Method,
+		"url":     redacted.URL,
+		"headers": redacted.Headers,
+		"query":   redacted.Query,
+		"body":    jsonValue(redacted.Body),
+	}
+}
+
+func redactHeaders(headers map[string]string) map[string]string {
+	redacted := map[string]string{}
+	for key, value := range headers {
+		if sensitiveTokenField(key) {
+			redacted[key] = "***"
+			continue
+		}
+		if strings.EqualFold(key, "Authorization") && strings.TrimSpace(value) != "" {
+			redacted[key] = "Bearer ***"
+			continue
+		}
+		redacted[key] = value
+	}
+	return redacted
+}
+
+func redactQuery(query map[string]string) map[string]string {
+	redacted := map[string]string{}
+	for key, value := range query {
+		if sensitiveTokenField(key) {
+			redacted[key] = "***"
+			continue
+		}
+		redacted[key] = value
+	}
+	return redacted
+}
+
+func sensitiveTokenField(key string) bool {
+	switch strings.ToLower(strings.TrimSpace(key)) {
+	case "access_token", "authorization", "token", "corpsecret", "secret", "appsecret":
+		return true
+	default:
+		return false
+	}
 }
 
 func requestConfigFrom(channel Channel, input BuildRequestInput) (requestConfig, error) {
@@ -1260,4 +1368,262 @@ func isEmptyValue(value any) bool {
 	default:
 		return false
 	}
+}
+
+func (s *Service) autoResolveToken(ctx context.Context, channel Channel) (string, error) {
+	capabilities := DefaultCapabilities()
+	for _, capability := range capabilities {
+		if capability.ProviderType == channel.ProviderType {
+			resolution, err := s.tokenManager.Resolve(ctx, capability, channel, false)
+			return resolution.Token, err
+		}
+	}
+	return "", nil
+}
+
+func (s *Service) RefreshToken(ctx context.Context, id string) (TokenCacheStatus, error) {
+	channel, err := s.GetChannel(ctx, id)
+	if err != nil {
+		return TokenCacheStatus{}, err
+	}
+	if !RequiresTokenResolution(channel.ProviderType) {
+		return TokenCacheStatus{}, fmt.Errorf("channel type does not require token resolution")
+	}
+	capabilities := DefaultCapabilities()
+	for _, capability := range capabilities {
+		if capability.ProviderType == channel.ProviderType {
+			resolution, err := s.tokenManager.Resolve(ctx, capability, channel, true)
+			if err != nil {
+				return TokenCacheStatus{}, err
+			}
+			status := TokenCacheStatus{IsCached: true}
+			if !resolution.ExpiresAt.IsZero() {
+				status.ExpiresAt = resolution.ExpiresAt.Format(time.RFC3339)
+			}
+			current, err := s.tokenManager.Status(ctx, capability, channel)
+			if err != nil {
+				return status, nil
+			}
+			return current.withFallback(status), nil
+		}
+	}
+	return TokenCacheStatus{}, fmt.Errorf("no capability found for channel provider type")
+}
+
+func (s *Service) ResolveFeishuOpenID(ctx context.Context, channelID string, mobiles []string) (FeishuOpenIDResolveResult, error) {
+	channel, err := s.GetChannel(ctx, channelID)
+	if err != nil {
+		return FeishuOpenIDResolveResult{}, err
+	}
+	if channel.ProviderType != ProviderFeishuRobot {
+		return FeishuOpenIDResolveResult{}, fmt.Errorf("%w: channel is not feishu_robot", ErrInvalidInput)
+	}
+	cleanMobiles := cleanResolveMobiles(mobiles)
+	if len(cleanMobiles) == 0 {
+		return FeishuOpenIDResolveResult{}, fmt.Errorf("%w: mobiles is required", ErrInvalidInput)
+	}
+	if len(cleanMobiles) > 50 {
+		return FeishuOpenIDResolveResult{}, fmt.Errorf("%w: mobiles supports at most 50 items", ErrInvalidInput)
+	}
+	capability := findDefaultCapability(channel.ProviderType, "text")
+	if capability.ProviderType == "" {
+		return FeishuOpenIDResolveResult{}, fmt.Errorf("%w: feishu capability not found", ErrNotFound)
+	}
+	resolver := feishuTenantAccessTokenResolver(channel)
+	resolution, err := s.tokenManager.ResolveWithResolver(ctx, TokenResolveInput{
+		Capability: capability,
+		Channel:    channel,
+		Resolver:   resolver,
+		Strategy:   "tenant_access_token",
+	})
+	if err != nil {
+		return FeishuOpenIDResolveResult{}, err
+	}
+	result, code, err := s.requestFeishuOpenID(ctx, channel, resolution.Token, cleanMobiles)
+	if err != nil {
+		return FeishuOpenIDResolveResult{}, err
+	}
+	if !feishuTokenRefreshCode(code) {
+		return result, nil
+	}
+	_ = s.tokenManager.Invalidate(ctx, resolution.CacheKey, "feishu open id resolve token refresh code")
+	refreshed, refreshErr := s.tokenManager.ResolveWithResolver(ctx, TokenResolveInput{
+		Capability:   capability,
+		Channel:      channel,
+		Resolver:     resolver,
+		Strategy:     "tenant_access_token",
+		ForceRefresh: true,
+	})
+	if refreshErr != nil {
+		return FeishuOpenIDResolveResult{}, refreshErr
+	}
+	result, _, err = s.requestFeishuOpenID(ctx, channel, refreshed.Token, cleanMobiles)
+	return result, err
+}
+
+func (s *Service) requestFeishuOpenID(ctx context.Context, channel Channel, token string, mobiles []string) (FeishuOpenIDResolveResult, int, error) {
+	baseURL := firstString(stringConfig(rawObject(channel.SendConfig), "base_url"), stringConfig(rawObject(channel.AuthConfig), "base_url"), "https://open.feishu.cn/open-apis")
+	requestURL := joinURL(baseURL, "/contact/v3/users/batch_get_id")
+	parsed, err := url.Parse(requestURL)
+	if err != nil {
+		return FeishuOpenIDResolveResult{}, 0, ErrInvalidInput
+	}
+	values := parsed.Query()
+	values.Set("user_id_type", "open_id")
+	parsed.RawQuery = values.Encode()
+	body := map[string]any{
+		"mobiles":          mobiles,
+		"include_resigned": false,
+	}
+	rawBody, err := json.Marshal(body)
+	if err != nil {
+		return FeishuOpenIDResolveResult{}, 0, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, parsed.String(), bytes.NewReader(rawBody))
+	if err != nil {
+		return FeishuOpenIDResolveResult{}, 0, err
+	}
+	req.Header.Set("Content-Type", "application/json; charset=utf-8")
+	req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(token))
+	timeout := time.Duration(channel.TimeoutMS) * time.Millisecond
+	if timeout <= 0 {
+		timeout = 5 * time.Second
+	}
+	resp, err := (&http.Client{Timeout: timeout}).Do(req)
+	if err != nil {
+		return FeishuOpenIDResolveResult{}, 0, err
+	}
+	defer resp.Body.Close()
+	responseBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return FeishuOpenIDResolveResult{}, 0, err
+	}
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		return FeishuOpenIDResolveResult{}, 0, fmt.Errorf("feishu resolve open_id returned status %d", resp.StatusCode)
+	}
+	var decoded struct {
+		Code int    `json:"code"`
+		Msg  string `json:"msg"`
+		Data struct {
+			UserList []struct {
+				Mobile string `json:"mobile"`
+				UserID string `json:"user_id"`
+				OpenID string `json:"open_id"`
+			} `json:"user_list"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(responseBody, &decoded); err != nil {
+		return FeishuOpenIDResolveResult{}, 0, err
+	}
+	if decoded.Code != 0 {
+		return FeishuOpenIDResolveResult{Success: false, Errors: []string{decoded.Msg}}, decoded.Code, nil
+	}
+	itemsByMobile := map[string]FeishuOpenIDResolveItem{}
+	for _, item := range decoded.Data.UserList {
+		openID := firstString(item.UserID, item.OpenID)
+		if strings.TrimSpace(item.Mobile) == "" || strings.TrimSpace(openID) == "" {
+			continue
+		}
+		itemsByMobile[item.Mobile] = FeishuOpenIDResolveItem{
+			Mobile: item.Mobile,
+			OpenID: openID,
+			Status: "resolved",
+		}
+	}
+	result := FeishuOpenIDResolveResult{Success: true, Items: make([]FeishuOpenIDResolveItem, 0, len(mobiles))}
+	for _, mobile := range mobiles {
+		if item, ok := itemsByMobile[mobile]; ok {
+			result.Items = append(result.Items, item)
+			continue
+		}
+		result.Success = false
+		result.Items = append(result.Items, FeishuOpenIDResolveItem{
+			Mobile: mobile,
+			Status: "failed",
+			Error:  "手机号未匹配到飞书用户",
+		})
+	}
+	return result, decoded.Code, nil
+}
+
+func feishuTenantAccessTokenResolver(channel Channel) TokenResolverConfig {
+	baseURL := firstString(stringConfig(rawObject(channel.SendConfig), "base_url"), stringConfig(rawObject(channel.AuthConfig), "base_url"), "https://open.feishu.cn/open-apis")
+	return TokenResolverConfig{
+		Request: TokenRequestConfig{
+			Method: http.MethodPost,
+			URL:    joinURL(baseURL, "/auth/v3/tenant_access_token/internal"),
+			Body: mustJSON(map[string]any{
+				"app_id":     credentialValue(channel.AuthConfig, "app_id"),
+				"app_secret": credentialValue(channel.AuthConfig, "app_secret"),
+			}),
+		},
+		ResponsePath:  "tenant_access_token",
+		ExpiresInPath: "expire",
+		Placement:     rawJSON(`{"location":"header","field_name":"Authorization","prefix":"Bearer "}`),
+		Cacheable:     true,
+		RefreshCodes:  []any{99991663, 99991664, 99991665},
+	}
+}
+
+func cleanResolveMobiles(values []string) []string {
+	seen := map[string]bool{}
+	cleaned := make([]string, 0, len(values))
+	for _, value := range values {
+		mobile := strings.TrimSpace(value)
+		if mobile == "" || seen[mobile] {
+			continue
+		}
+		seen[mobile] = true
+		cleaned = append(cleaned, mobile)
+	}
+	return cleaned
+}
+
+func feishuTokenRefreshCode(code int) bool {
+	switch code {
+	case 99991663, 99991664, 99991665:
+		return true
+	default:
+		return false
+	}
+}
+
+func findDefaultCapability(providerType ProviderType, messageType string) Capability {
+	for _, capability := range DefaultCapabilities() {
+		if capability.ProviderType == providerType && capability.MessageType == messageType {
+			return capability
+		}
+	}
+	return Capability{}
+}
+
+func (s *Service) withTokenStatus(ctx context.Context, channel Channel) Channel {
+	if s == nil || s.tokenManager == nil || !RequiresTokenResolution(channel.ProviderType) {
+		return channel
+	}
+	for _, capability := range DefaultCapabilities() {
+		if capability.ProviderType != channel.ProviderType {
+			continue
+		}
+		status, err := s.tokenManager.Status(ctx, capability, channel)
+		if err != nil {
+			return channel
+		}
+		channel.IsCached = status.IsCached
+		channel.TokenRefreshedAt = status.TokenRefreshed
+		channel.TokenExpiresAt = status.ExpiresAt
+		channel.TokenLastError = status.LastError
+		return channel
+	}
+	return channel
+}
+
+func (status TokenCacheStatus) withFallback(fallback TokenCacheStatus) TokenCacheStatus {
+	if status.IsCached {
+		return status
+	}
+	if fallback.IsCached {
+		return fallback
+	}
+	return status
 }

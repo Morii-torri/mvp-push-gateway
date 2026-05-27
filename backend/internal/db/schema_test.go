@@ -191,6 +191,53 @@ func TestProviderTypeRegistryMigrationRemovesHardCodedProviderTypeChecks(t *test
 	}
 }
 
+func TestProviderTokenCacheMigrationContainsSharedCacheTable(t *testing.T) {
+	migration, err := os.ReadFile("../../migrations/000012_provider_token_cache.sql")
+	if err != nil {
+		t.Fatalf("read provider token cache migration: %v", err)
+	}
+	content := string(migration)
+	required := []string{
+		"CREATE TABLE IF NOT EXISTS provider_token_cache",
+		"cache_key text NOT NULL UNIQUE",
+		"access_token text NOT NULL",
+		"expires_at timestamptz NOT NULL",
+		"refresh_after_at timestamptz NOT NULL",
+		"refresh_lock_until timestamptz",
+		"refresh_lock_owner text",
+		"last_error text",
+		"CREATE INDEX IF NOT EXISTS idx_provider_token_cache_channel",
+	}
+
+	for _, snippet := range required {
+		if !strings.Contains(content, snippet) {
+			t.Fatalf("provider token cache migration missing snippet: %s", snippet)
+		}
+	}
+}
+
+func TestUserIdentitiesChannelScopeMigration(t *testing.T) {
+	migration, err := os.ReadFile("../../migrations/000013_user_identity_channel_scope.sql")
+	if err != nil {
+		t.Fatalf("read user identity channel scope migration: %v", err)
+	}
+	content := string(migration)
+	required := []string{
+		"ADD COLUMN IF NOT EXISTS channel_id uuid",
+		"REFERENCES delivery_channels(id) ON DELETE SET NULL",
+		"DROP CONSTRAINT IF EXISTS user_identities_provider_type_identity_kind_identity_value_key",
+		"idx_user_identities_channel_lookup",
+		"ux_user_identities_type_default",
+		"ux_user_identities_channel_value",
+	}
+
+	for _, snippet := range required {
+		if !strings.Contains(content, snippet) {
+			t.Fatalf("user identity channel scope migration missing snippet: %s", snippet)
+		}
+	}
+}
+
 func readInitialMigration(t *testing.T) string {
 	t.Helper()
 

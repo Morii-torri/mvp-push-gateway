@@ -67,7 +67,7 @@ func TestTemplatePublishHandlerPublishesProviderAwareTemplate(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/templates/template-1/publish", strings.NewReader(`{
 		"message_type":" text ",
 		"target_provider_type":" wecom_app ",
-		"template_body":"{\"content\":\"{{ payload.summary | default('通知') }}\"}",
+		"template_body":"{\"msgtype\":\"text\",\"content\":\"{{ payload.summary | default('通知') }}\"}",
 		"sample_payload":{}
 	}`))
 	req.Header.Set("Authorization", "Bearer admin-session")
@@ -95,7 +95,7 @@ func TestTemplatePublishHandlerPublishesProviderAwareTemplate(t *testing.T) {
 	if body.Version.MessageType != "text" || body.Version.TargetProviderType != "wecom_app" || body.Version.ValidationStatus != "valid" {
 		t.Fatalf("unexpected template version response: %+v", body.Version)
 	}
-	if string(body.Version.CompiledPreview) != `{"rendered":"{\"content\":\"通知\"}"}` {
+	if string(body.Version.CompiledPreview) != `{"rendered":"{\"msgtype\":\"text\",\"content\":\"通知\"}"}` {
 		t.Fatalf("unexpected compiled preview: %s", body.Version.CompiledPreview)
 	}
 }

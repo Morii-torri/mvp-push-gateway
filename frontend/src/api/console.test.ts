@@ -315,6 +315,7 @@ describe('console api wrappers', () => {
       fetchMock,
     );
     await consoleApi.deleteUserIdentity('identity-1', fetchMock);
+    await consoleApi.resolveFeishuOpenId('channel-feishu', ['13011111111'], fetchMock);
     await consoleApi.createRecipientGroup(
       {
         name: '值班组',
@@ -377,6 +378,7 @@ describe('console api wrappers', () => {
         }),
       ],
       ['/api/v1/user-identities/identity-1', 'DELETE', undefined],
+      ['/api/v1/channels/channel-feishu/feishu/resolve-open-id', 'POST', JSON.stringify({ mobiles: ['13011111111'] })],
       [
         '/api/v1/recipient-groups',
         'POST',

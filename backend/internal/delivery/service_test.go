@@ -272,11 +272,11 @@ func TestWorkerProcessOneBuildsRequestResolvesTokenAndStoresSnapshots(t *testing
 	if store.jobs[job.ID].Status != queue.JobStatusDone {
 		t.Fatalf("expected job done, got %s", store.jobs[job.ID].Status)
 	}
-	if !jsonContains(t, attempt.RequestSnapshot, `"resolved_token":"resolved-token"`) {
-		t.Fatalf("expected request snapshot to keep resolved token clear text, got %s", attempt.RequestSnapshot)
+	if jsonContains(t, attempt.RequestSnapshot, `"resolved-token"`) {
+		t.Fatalf("expected request snapshot to redact resolved token, got %s", attempt.RequestSnapshot)
 	}
-	if !jsonContains(t, attempt.RequestSnapshot, `"Authorization":"Bearer resolved-token"`) {
-		t.Fatalf("expected request snapshot to keep outbound headers, got %s", attempt.RequestSnapshot)
+	if jsonContains(t, attempt.RequestSnapshot, `"Authorization":"Bearer resolved-token"`) {
+		t.Fatalf("expected request snapshot to redact outbound headers, got %s", attempt.RequestSnapshot)
 	}
 	var requestSnapshot map[string]any
 	if err := json.Unmarshal(attempt.RequestSnapshot, &requestSnapshot); err != nil {
@@ -391,6 +391,209 @@ func TestWorkerUsesCapabilityTokenPlacementWhenChannelHasNoExplicitPlacement(t *
 	tokenBehavior, ok := snapshot["token_behavior"].(map[string]any)
 	if !ok || tokenBehavior["source"] != "capability.token_strategy" {
 		t.Fatalf("expected token behavior source from capability, got %+v", snapshot)
+	}
+}
+
+func TestWorkerCachesCapabilityTokenAndRefreshesOnInvalidTokenCode(t *testing.T) {
+	var tokenRequests int32
+	var sendRequests int32
+	var sendTokens []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/token":
+			count := atomic.AddInt32(&tokenRequests, 1)
+			if r.URL.Query().Get("corpid") != "corp-1" || r.URL.Query().Get("corpsecret") != "secret-1" {
+				t.Fatalf("unexpected token query: %s", r.URL.RawQuery)
+			}
+			_, _ = w.Write([]byte(fmt.Sprintf(`{"errcode":0,"access_token":"token-%d","expires_in":7200}`, count)))
+		case "/cgi-bin/message/send":
+			count := atomic.AddInt32(&sendRequests, 1)
+			sendTokens = append(sendTokens, r.URL.Query().Get("access_token"))
+			if count == 2 {
+				_, _ = w.Write([]byte(`{"errcode":41001,"errmsg":"access_token missing"}`))
+				return
+			}
+			_, _ = w.Write([]byte(`{"errcode":0,"errmsg":"ok"}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	store := newMemoryRepository()
+	store.channels["channel-wecom"] = provider.Channel{
+		ID:               "channel-wecom",
+		ProviderType:     provider.ProviderWeComApp,
+		Name:             "WeCom App",
+		Enabled:          true,
+		ConcurrencyLimit: 1,
+		TimeoutMS:        1000,
+		AuthConfig:       json.RawMessage(`{"corpid":"corp-1","corpsecret":"secret-1"}`),
+		SendConfig:       json.RawMessage(`{"base_url":"` + server.URL + `","agentid":1000001}`),
+	}
+	store.capabilities[capabilityKey(provider.ProviderWeComApp, "text")] = provider.Capability{
+		ProviderType:     provider.ProviderWeComApp,
+		MessageType:      "text",
+		TokenStrategy:    json.RawMessage(`{"strategy":"client_credentials","cacheable":true,"token_url":"` + server.URL + `/token","request":{"method":"GET","query_fields":["corpid","corpsecret"]},"response_token_path":"access_token","response_expires_in_path":"expires_in","placement":{"location":"query","field_name":"access_token"},"refresh_on_json_codes":[41001,40014,42001]}`),
+		SuccessRule:      json.RawMessage(`{"type":"json_field","status_codes":[200],"field":"errcode","equals":0}`),
+		RetryRule:        json.RawMessage(`{"refresh_token_codes":[41001,40014,42001],"retryable_json_codes":[-1]}`),
+		DefaultRateLimit: json.RawMessage(`{"qps":20}`),
+	}
+	for i := 1; i <= 3; i++ {
+		attemptID := fmt.Sprintf("attempt-%d", i)
+		jobID := fmt.Sprintf("job-%d", i)
+		store.addAttempt(Attempt{ID: attemptID, MessageID: fmt.Sprintf("message-%d", i), ChannelID: "channel-wecom", Status: StatusQueued})
+		store.addJob(newSendJob(jobID, "channel-wecom", 3, time.Now().Add(-time.Second), SendMessageJobPayload{
+			DeliveryAttemptID: attemptID,
+			MessageType:       "text",
+			Recipient:         []any{"zhangsan"},
+			Body:              json.RawMessage(`{"msgtype":"text","content":"hello"}`),
+		}))
+	}
+
+	worker := NewWorker(store,
+		WithWorkerID("sender-1"),
+		WithHTTPClientFactory(func(timeout time.Duration) *http.Client {
+			client := server.Client()
+			client.Timeout = timeout
+			return client
+		}),
+	)
+	for i := 1; i <= 3; i++ {
+		jobID := fmt.Sprintf("job-%d", i)
+		if err := worker.ProcessOne(context.Background(), store.jobs[jobID]); err != nil {
+			t.Fatalf("process %s: %v", jobID, err)
+		}
+		if got := store.attempts[fmt.Sprintf("attempt-%d", i)].Status; got != StatusSent {
+			t.Fatalf("expected attempt %d sent, got %s", i, got)
+		}
+	}
+	if tokenRequests != 2 {
+		t.Fatalf("expected first token to be cached and refreshed once, got %d token requests", tokenRequests)
+	}
+	wantTokens := []string{"token-1", "token-1", "token-2", "token-2"}
+	if strings.Join(sendTokens, ",") != strings.Join(wantTokens, ",") {
+		t.Fatalf("unexpected send tokens: got %v want %v", sendTokens, wantTokens)
+	}
+	if !jsonContains(t, store.attempts["attempt-2"].ResponseSnapshot, `"token_refreshed":true`) {
+		t.Fatalf("expected token refresh snapshot, got %s", store.attempts["attempt-2"].ResponseSnapshot)
+	}
+}
+
+func TestWorkerSendsFeishuTextWithCachedTenantTokenAndRefreshRetry(t *testing.T) {
+	var tokenRequests int32
+	var sendRequests int32
+	var sendAuthHeaders []string
+	var sendBodies []map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/open-apis/auth/v3/tenant_access_token/internal":
+			count := atomic.AddInt32(&tokenRequests, 1)
+			var body map[string]string
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				t.Fatalf("decode token body: %v", err)
+			}
+			if body["app_id"] != "cli_1" || body["app_secret"] != "secret-1" {
+				t.Fatalf("unexpected token body: %+v", body)
+			}
+			_, _ = w.Write([]byte(fmt.Sprintf(`{"code":0,"msg":"ok","tenant_access_token":"tenant-%d","expire":7200}`, count)))
+		case "/open-apis/im/v1/messages":
+			count := atomic.AddInt32(&sendRequests, 1)
+			if r.URL.Query().Get("receive_id_type") != "open_id" {
+				t.Fatalf("expected open_id receive_id_type, got %s", r.URL.RawQuery)
+			}
+			sendAuthHeaders = append(sendAuthHeaders, r.Header.Get("Authorization"))
+			var body map[string]any
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				t.Fatalf("decode send body: %v", err)
+			}
+			sendBodies = append(sendBodies, body)
+			if count == 2 {
+				_, _ = w.Write([]byte(`{"code":99991663,"msg":"token invalid"}`))
+				return
+			}
+			_, _ = w.Write([]byte(`{"code":0,"msg":"ok","data":{"message_id":"om_1"}}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	store := newMemoryRepository()
+	store.channels["channel-feishu"] = provider.Channel{
+		ID:               "channel-feishu",
+		ProviderType:     provider.ProviderFeishuRobot,
+		Name:             "Feishu App Robot",
+		Enabled:          true,
+		ConcurrencyLimit: 1,
+		TimeoutMS:        1000,
+		AuthConfig:       json.RawMessage(`{"app_id":"cli_1","app_secret":"secret-1"}`),
+		SendConfig:       json.RawMessage(`{"base_url":"` + server.URL + `/open-apis"}`),
+	}
+	store.capabilities[capabilityKey(provider.ProviderFeishuRobot, "text")] = provider.Capability{
+		ProviderType:     provider.ProviderFeishuRobot,
+		MessageType:      "text",
+		TokenStrategy:    json.RawMessage(`{"strategy":"tenant_access_token","cacheable":true,"token_url":"` + server.URL + `/open-apis/auth/v3/tenant_access_token/internal","request":{"method":"POST","body_fields":["app_id","app_secret"]},"response_token_path":"tenant_access_token","response_expires_in_path":"expire","placement":{"location":"header","field_name":"Authorization","prefix":"Bearer "},"refresh_on_json_codes":[99991663,99991664]}`),
+		SuccessRule:      json.RawMessage(`{"type":"json_field","status_codes":[200],"field":"code","equals":0}`),
+		RetryRule:        json.RawMessage(`{"refresh_token_codes":[99991663,99991664],"retryable_json_codes":[99991663]}`),
+		DefaultRateLimit: json.RawMessage(`{"qps":20}`),
+	}
+	for i := 1; i <= 3; i++ {
+		attemptID := fmt.Sprintf("attempt-feishu-%d", i)
+		jobID := fmt.Sprintf("job-feishu-%d", i)
+		store.addAttempt(Attempt{ID: attemptID, MessageID: fmt.Sprintf("message-feishu-%d", i), ChannelID: "channel-feishu", Status: StatusQueued})
+		store.addJob(newSendJob(jobID, "channel-feishu", 3, time.Now().Add(-time.Second), SendMessageJobPayload{
+			DeliveryAttemptID: attemptID,
+			MessageType:       "text",
+			Recipient:         []any{map[string]any{"platform_ids": map[string]any{"feishu_open_id": "ou_123"}}},
+			Body:              json.RawMessage(`{"text":"hello feishu"}`),
+		}))
+	}
+
+	worker := NewWorker(store,
+		WithWorkerID("sender-feishu"),
+		WithHTTPClientFactory(func(timeout time.Duration) *http.Client {
+			client := server.Client()
+			client.Timeout = timeout
+			return client
+		}),
+	)
+	for i := 1; i <= 3; i++ {
+		jobID := fmt.Sprintf("job-feishu-%d", i)
+		if err := worker.ProcessOne(context.Background(), store.jobs[jobID]); err != nil {
+			t.Fatalf("process %s: %v", jobID, err)
+		}
+		if got := store.attempts[fmt.Sprintf("attempt-feishu-%d", i)].Status; got != StatusSent {
+			t.Fatalf("expected attempt %d sent, got %s", i, got)
+		}
+	}
+	if tokenRequests != 2 {
+		t.Fatalf("expected Feishu tenant token cached and refreshed once, got %d token requests", tokenRequests)
+	}
+	wantHeaders := []string{"Bearer tenant-1", "Bearer tenant-1", "Bearer tenant-2", "Bearer tenant-2"}
+	if strings.Join(sendAuthHeaders, ",") != strings.Join(wantHeaders, ",") {
+		t.Fatalf("unexpected auth headers: got %v want %v", sendAuthHeaders, wantHeaders)
+	}
+	for _, body := range sendBodies {
+		if body["receive_id"] != "ou_123" || body["msg_type"] != "text" {
+			t.Fatalf("unexpected Feishu send body: %+v", body)
+		}
+		contentString, ok := body["content"].(string)
+		if !ok {
+			t.Fatalf("expected serialized Feishu content string, got %#v", body["content"])
+		}
+		var content map[string]string
+		if err := json.Unmarshal([]byte(contentString), &content); err != nil {
+			t.Fatalf("decode Feishu content string: %v", err)
+		}
+		if content["text"] != "hello feishu" {
+			t.Fatalf("unexpected Feishu text content: %+v", content)
+		}
+	}
+	if !jsonContains(t, store.attempts["attempt-feishu-2"].ResponseSnapshot, `"token_refreshed":true`) {
+		t.Fatalf("expected token refresh snapshot, got %s", store.attempts["attempt-feishu-2"].ResponseSnapshot)
 	}
 }
 

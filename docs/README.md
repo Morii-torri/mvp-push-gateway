@@ -16,13 +16,14 @@
 10. `research/provider-adapter-status.md`：上级平台 adapter 已完成/未完成状态表。
 11. `operations/end-to-end-smoke.md`：本地和 Docker Compose 端到端验收 Runbook。
 12. `operations/2026-05-12-route-send-action-group-ui-smoke.md`：route send action group 真实本地 UI smoke 记录。
-13. `operations/operator-guide.md`：按新产品模型编写的操作员指南。
-14. `plans/2026-05-07-mvp-push-gateway-implementation-plan.md`：实施计划。
-15. `plans/2026-05-07-ai-execution-roadmap.md`：下一步交给 AI 分阶段执行的路线图。
-16. `plans/2026-05-11-product-simplification-and-template-adapter-plan.md`：产品收敛、模板内容模型和平台适配器重构计划。
-17. `plans/2026-05-12-route-send-action-group-plan.md`：路由发送动作组改造计划。
-18. `plans/2026-05-12-console-menu-convergence-design.md`：管理台菜单/页面合并设计。
-19. `plans/2026-05-12-legacy-route-action-fields-cleanup-assessment.md`：legacy route action 字段清理评估。
+13. `operations/2026-05-21-console-ui-token-refresh-record.md`：管理台 UI、Keep-Alive、推送渠道品牌化和 AccessToken 强刷改造记录。
+14. `operations/operator-guide.md`：按新产品模型编写的操作员指南。
+15. `plans/2026-05-07-mvp-push-gateway-implementation-plan.md`：实施计划。
+16. `plans/2026-05-07-ai-execution-roadmap.md`：下一步交给 AI 分阶段执行的路线图。
+17. `plans/2026-05-11-product-simplification-and-template-adapter-plan.md`：产品收敛、模板内容模型和平台适配器重构计划。
+18. `plans/2026-05-12-route-send-action-group-plan.md`：路由发送动作组改造计划。
+19. `plans/2026-05-12-console-menu-convergence-design.md`：管理台菜单/页面合并设计。
+20. `plans/2026-05-12-legacy-route-action-fields-cleanup-assessment.md`：legacy route action 字段清理评估。
 
 ## 已确认决策
 
@@ -40,6 +41,7 @@
 - 模板字段复制统一复制 `{{ payload.title }}` 这类 Jinja-like 变量，内部路径仍保存 `payload.title`。
 - 来源最近 payload 样例来自“鉴权通过且 JSON 合法的最近入站 payload”，不要求路由、模板或接收人配置成功。
 - 推送渠道实例支持主动限流、独立并发上限、超时、重试和死信策略。
+- AccessToken 类渠道由后端统一获取、缓存和刷新；管理台可通过渠道测试区触发强制刷新，但不得接收或保存明文 token。
 - Provider capability registry 已数据化，包含 credential schema、channel config schema、message schema、recipient identity、token strategy、send API、success/retry rule、默认限流、超时、并发和重试。
 - 第一批 provider defaults 已实现 build-request/mock 级别支持：`webhook`、`self`、`pushplus`、`wxpusher`、`serverchan`、`email`、`aliyun_sms`、`tencent_sms`、`baidu_sms`、`wecom_robot`、`wecom_app`、`dingtalk_robot`、`dingtalk_work`、`feishu_robot`、`gov_cloud` 和高级 `custom_token`；legacy `wecom`、`dingtalk`、`feishu`、`sms` 已移除。
 - P2 provider defaults 已实现 build-request/mock 级别支持：`ntfy`、`gotify`、`bark`、`pushme`。
@@ -54,6 +56,7 @@
 - Delivery adapter 输入渠道配置、渲染后消息、解析后接收人、target context 和 token，输出 final request；Webhook/custom 保留高级映射。
 - 日志快照包含 `target_context`、`rendered_message`、`resolved_recipients`、`final_request`、`upstream_response`，并兼容旧 `send` snapshot。
 - 队列监控是独立功能模块，展示积压、P95、平台限流、死信、慢规则和端到端耗时。
+- 管理台 UI 基线包含总览安全格式化、推送渠道品牌化类型卡片、Bento Grid 类型选择器、受控子 Tab、Workspace Keep-Alive、长文本 Tooltip 截断、磨砂玻璃 sticky 表头和人员平台身份低噪声标签。
 - worker 崩溃后的 processing job 由 maintenance worker 根据心跳和超时阈值回收。
 - 入站同步返回只覆盖接收阶段；路由、模板、接收人和发送错误属于异步日志结果。
 - 去除 SSE，仅保留 5 秒轮询和手动刷新。

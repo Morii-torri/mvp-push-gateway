@@ -120,6 +120,7 @@ SHA256_HEX(raw_body)
 | `GET` / `PUT` / `DELETE` | `/channels/{id}` | 渠道实例详情 |
 | `PUT` | `/channels/{id}/rate-limit` | 修改渠道实例主动限流、并发、超时和重试策略 |
 | `POST` | `/channels/{id}/test-token` | 测试换 token |
+| `POST` | `/channels/{id}/refresh-token` | 强制刷新渠道 AccessToken，同步更新后端缓存和渠道状态 |
 | `POST` | `/channels/{id}/test-send` | 测试发送 |
 
 `/provider-capabilities` 返回数据化 capability：credential schema、channel config schema、message schema、recipient requirement、identity kind、token strategy、send API、success/retry rule、默认限流、超时、并发和重试策略。前端渠道表单、模板表单和路由 target 兼容性筛选都应使用该 registry。
@@ -127,6 +128,8 @@ SHA256_HEX(raw_body)
 第一批 provider defaults 已实现 build-request/mock 级别支持：`webhook`、`self`、`pushplus`、`wxpusher`、`serverchan`、`email`、`aliyun_sms`、`tencent_sms`、`baidu_sms`、`wecom_robot`、`wecom_app`、`dingtalk_robot`、`dingtalk_work`、`feishu_robot`、`gov_cloud` 和高级 `custom_token`。legacy `wecom`、`dingtalk`、`feishu`、`sms` 已移除，不再作为 API 可配置 provider type。PushPlus、WxPusher、Server酱、短信、企微、钉钉、飞书、SMTP/self/gov_cloud 当前为 implemented but not live-tested 或 configuration-dependent；接口文档不要写成已真实发送成功。
 
 `/channels/{id}/rate-limit` 配置由发送 worker 主动执行，不能只依赖上游返回限流错误。
+
+`/channels/{id}/refresh-token` 只允许后端调用上级 token 接口。前端只能触发刷新动作并展示加载状态、是否来自缓存和最近刷新时间，不能接收或保存明文 `access_token`。刷新成功后，后端需要覆盖当前渠道的 token 缓存状态；刷新失败时返回中文可解释错误和上级响应摘要，避免前端自行拼接 token 请求。
 
 ## 组织人员
 
@@ -140,6 +143,8 @@ SHA256_HEX(raw_body)
 | `GET` / `PUT` / `DELETE` | `/users/{id}` |
 | `POST` | `/users/import` |
 | `GET` | `/users/import-template` |
+
+用户平台身份支持 `channel_id` 可选字段。`channel_id` 为空表示该 provider type 的默认身份；填写后表示绑定到具体推送渠道实例。发送规划按目标渠道实例优先匹配，找不到实例级身份时再回退到类型级默认身份。
 
 ## 匹配组和接收人组
 

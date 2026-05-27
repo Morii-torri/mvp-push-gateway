@@ -54,6 +54,7 @@ type userIdentityResponse struct {
 	ID            string `json:"id"`
 	UserID        string `json:"user_id"`
 	ProviderType  string `json:"provider_type"`
+	ChannelID     string `json:"channel_id"`
 	IdentityKind  string `json:"identity_kind"`
 	IdentityValue string `json:"identity_value"`
 	Verified      bool   `json:"verified"`
@@ -331,6 +332,7 @@ func (h *Handler) userIdentityLookupHandler(w http.ResponseWriter, r *http.Reque
 	item, err := h.recipients.FindUserIdentity(
 		r.Context(),
 		r.URL.Query().Get("provider_type"),
+		r.URL.Query().Get("channel_id"),
 		r.URL.Query().Get("identity_kind"),
 		r.URL.Query().Get("identity_value"),
 	)
@@ -486,7 +488,7 @@ func toUserResponse(item recipient.User) userResponse {
 }
 
 func toUserIdentityResponse(item recipient.UserIdentity) userIdentityResponse {
-	return userIdentityResponse{ID: item.ID, UserID: item.UserID, ProviderType: item.ProviderType, IdentityKind: item.IdentityKind, IdentityValue: item.IdentityValue, Verified: item.Verified, CreatedAt: formatTime(item.CreatedAt), UpdatedAt: formatTime(item.UpdatedAt)}
+	return userIdentityResponse{ID: item.ID, UserID: item.UserID, ProviderType: item.ProviderType, ChannelID: item.ChannelID, IdentityKind: item.IdentityKind, IdentityValue: item.IdentityValue, Verified: item.Verified, CreatedAt: formatTime(item.CreatedAt), UpdatedAt: formatTime(item.UpdatedAt)}
 }
 
 func toRecipientGroupResponse(item recipient.RecipientGroup) recipientGroupResponse {

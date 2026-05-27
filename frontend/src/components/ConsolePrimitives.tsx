@@ -1,3 +1,4 @@
+import { useState, type ReactNode, type MouseEvent } from 'react';
 import {
   AlertOutlined,
   ArrowDownOutlined,
@@ -7,6 +8,8 @@ import {
   ClockCircleOutlined,
   CloseCircleOutlined,
   CloudServerOutlined,
+  CopyOutlined,
+  CheckOutlined,
   DashboardOutlined,
   DatabaseOutlined,
   ExclamationCircleOutlined,
@@ -23,7 +26,7 @@ import Pagination from 'antd/es/pagination';
 import Space from 'antd/es/space';
 import Tag from 'antd/es/tag';
 import Typography from 'antd/es/typography';
-import type { ReactNode } from 'react';
+import message from 'antd/es/message';
 
 import type { TagMeta } from '../utils/labels';
 
@@ -152,7 +155,66 @@ export function ListContainer({
 }
 
 export function StatusTag({ meta }: { meta: TagMeta }) {
-  return <Tag color={meta.color}>{meta.label}</Tag>;
+  const colorClass = `status-tag--${meta.color || 'default'}`;
+  return (
+    <span className={`premium-status-tag ${colorClass}`}>
+      <span className="status-dot" />
+      <span className="status-label">{meta.label}</span>
+    </span>
+  );
+}
+
+export function CopyableIdentifier({
+  value,
+  code = false,
+  maxWidth = 180,
+}: {
+  value: string;
+  code?: boolean;
+  maxWidth?: number;
+}) {
+  const [copied, setCopied] = useState(false);
+
+  const handleCopy = async (e: MouseEvent) => {
+    e.stopPropagation();
+    try {
+      await navigator.clipboard.writeText(value);
+      setCopied(true);
+      void message.success({ content: '已复制到剪贴板', duration: 1.5 });
+      setTimeout(() => setCopied(false), 2000);
+    } catch (err) {
+      const textArea = document.createElement('textarea');
+      textArea.value = value;
+      document.body.appendChild(textArea);
+      textArea.select();
+      try {
+        document.execCommand('copy');
+        setCopied(true);
+        void message.success({ content: '已复制到剪贴板', duration: 1.5 });
+        setTimeout(() => setCopied(false), 2000);
+      } catch (copyErr) {
+        console.error('Failed to copy text: ', copyErr);
+      }
+      document.body.removeChild(textArea);
+    }
+  };
+
+  if (!value) return <span>-</span>;
+
+  return (
+    <span className="copyable-identifier-wrapper" style={{ maxWidth }}>
+      <Typography.Text
+        code={code}
+        ellipsis={{ tooltip: value }}
+        style={{ display: 'inline-block', maxWidth: maxWidth - 24, verticalAlign: 'middle', margin: 0 }}
+      >
+        {value}
+      </Typography.Text>
+      <span className="copy-action-trigger" onClick={handleCopy} title="复制">
+        {copied ? <CheckOutlined style={{ color: '#52c41a' }} /> : <CopyOutlined />}
+      </span>
+    </span>
+  );
 }
 
 export function MetricCard({

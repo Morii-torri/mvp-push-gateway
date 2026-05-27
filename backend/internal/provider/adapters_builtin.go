@@ -57,7 +57,7 @@ func builtInRequestConfig(channel Channel, input BuildRequestInput) (requestConf
 		config, err := dingTalkWorkRequestConfig(auth, send, content, input.Recipient)
 		return config, true, err
 	case ProviderFeishuRobot:
-		config, err := feishuRobotRequestConfig(auth, send, content)
+		config, err := feishuRobotRequestConfig(auth, send, content, input.Recipient)
 		return config, true, err
 	case ProviderGovCloud:
 		config, err := govCloudRequestConfig(auth, send, content, input.Recipient)

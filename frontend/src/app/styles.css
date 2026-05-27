@@ -354,6 +354,17 @@ body {
   min-height: 0;
 }
 
+.workspace-page-tabs--auto-height {
+  height: auto !important;
+}
+
+.workspace-page-tabs--auto-height .ant-tabs-content,
+.workspace-page-tabs--auto-height .ant-tabs-tabpane:not(.ant-tabs-tabpane-hidden) {
+  height: auto !important;
+  min-height: 0;
+  overflow: visible !important;
+}
+
 .workspace-page-tabs > .ant-tabs-nav {
   flex-shrink: 0;
   margin-bottom: 16px;
@@ -366,7 +377,7 @@ body {
 }
 
 .workspace-page-tabs .ant-tabs-content,
-.workspace-page-tabs .ant-tabs-tabpane {
+.workspace-page-tabs .ant-tabs-tabpane:not(.ant-tabs-tabpane-hidden) {
   min-height: 0;
   height: 100% !important;
 }
@@ -382,12 +393,14 @@ body {
   height: 100%;
 }
 
-.workspace-page-tabs .ant-tabs-tabpane {
+.workspace-page-tabs .ant-tabs-tabpane:not(.ant-tabs-tabpane-hidden) {
   display: flex;
   flex-direction: column;
   gap: 14px;
   height: 100%;
   min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
 }
 
 .workspace-page-tabs .list-container--fill {
@@ -425,17 +438,19 @@ body {
 }
 
 .organization-subpage-tabs .ant-tabs-content,
-.organization-subpage-tabs .ant-tabs-tabpane {
+.organization-subpage-tabs .ant-tabs-tabpane:not(.ant-tabs-tabpane-hidden) {
   min-height: 0;
   height: 100% !important;
 }
 
-.organization-subpage-tabs .ant-tabs-tabpane {
+.organization-subpage-tabs .ant-tabs-tabpane:not(.ant-tabs-tabpane-hidden) {
   display: flex;
   flex-direction: column;
   gap: 14px;
   height: 100%;
   min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
 }
 
 .page-loading-state {
@@ -1946,25 +1961,27 @@ body {
   margin: 0;
 }
 
+.identity-editor-table-shell {
+  max-width: 100%;
+  min-width: 0;
+  overflow-x: auto;
+}
+
 .identity-add-button.ant-btn-sm {
   min-height: 30px;
   padding-inline: 12px;
 }
 
-.identity-row--verified > .ant-table-cell {
-  background: #f6ffed;
+.identity-channel-cell {
+  min-width: 300px;
 }
 
-.identity-provider-cell {
-  min-width: 220px;
+.identity-kind-cell {
+  min-width: 120px;
 }
 
 .identity-value-cell {
-  width: 260px;
-}
-
-.identity-verified-cell {
-  width: 92px;
+  width: 220px;
 }
 
 .identity-action-cell {
@@ -2278,10 +2295,40 @@ body {
 /* 3. 模态弹窗与侧边抽屉磨砂毛玻璃效果 */
 .ant-modal-content,
 .ant-drawer-content {
-  background: rgba(255, 255, 255, 0.9) !important;
+  background: rgba(250, 252, 255, 0.97) !important;
   backdrop-filter: blur(16px) !important;
   -webkit-backdrop-filter: blur(16px) !important;
-  border: 1px solid rgba(215, 227, 244, 0.4) !important;
+  border: 1px solid rgba(203, 213, 225, 0.5) !important;
+}
+
+/* 消除弹窗与抽屉的双重阴影，提供极轻、柔和的冷色单阴影 */
+.ant-modal-content {
+  box-shadow: 0 20px 25px -5px rgba(15, 23, 42, 0.06), 0 8px 10px -6px rgba(15, 23, 42, 0.03) !important;
+}
+
+.ant-drawer-content-wrapper {
+  box-shadow: -12px 0 24px -4px rgba(15, 23, 42, 0.04) !important;
+}
+
+/* 柔化背景遮罩 (Modal Mask & Drawer Mask)，仅在处于激活/打开态时应用，防闭态遮挡及拦截点击 */
+.ant-modal-root .ant-modal-mask:not(.ant-modal-mask-hidden),
+.ant-drawer-open .ant-drawer-mask {
+  background-color: rgba(15, 23, 42, 0.18) !important;
+  backdrop-filter: blur(6px) !important;
+  -webkit-backdrop-filter: blur(6px) !important;
+  pointer-events: auto !important;
+}
+
+/* 显式保证关闭/隐藏态的遮罩完全不占位、不拦截交互且不触发模糊滤镜 */
+.ant-modal-mask-hidden,
+.ant-drawer-mask-hidden,
+.ant-drawer:not(.ant-drawer-open) .ant-drawer-mask,
+.ant-modal-wrap-hidden {
+  display: none !important;
+  opacity: 0 !important;
+  pointer-events: none !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
 }
 
 /* 消除弹窗与抽屉头部/底部的实体背景白线，使其完美显现毛玻璃底面 */
@@ -2360,7 +2407,12 @@ body {
 
 /* 3. 半透明酷炫表头 & 呼吸感悬停交互 (Glassy Row Interaction) */
 .ant-table-thead > tr > th {
+  position: sticky !important;
+  top: 0;
+  z-index: 9 !important;
   background: rgba(244, 248, 255, 0.9) !important;
+  backdrop-filter: blur(8px) !important;
+  -webkit-backdrop-filter: blur(8px) !important;
   color: #344054 !important;
   font-weight: 600 !important;
   border-bottom: 1px solid rgba(215, 227, 244, 0.5) !important;
@@ -2391,6 +2443,9 @@ body {
 /* 对于表头中的固定列，采用不透明的淡冷蓝色，与整体表头色调一致 */
 .ant-table-thead > tr > th.ant-table-cell-fix-left,
 .ant-table-thead > tr > th.ant-table-cell-fix-right {
+  position: sticky !important;
+  top: 0;
+  z-index: 10 !important;
   background: #f4f8ff !important;
   opacity: 1 !important;
 }
@@ -2776,3 +2831,371 @@ body {
   color: #1677ff;
 }
 
+/* 7. 开启全局表格容器的溢出可见，允许 thead 固定的 position: sticky 在父级滚动容器中生效 */
+.ant-table-container,
+.ant-table-content {
+  overflow: visible !important;
+}
+
+/* ==========================================================================
+   📐 8. GLOBAL CELL PADDING & DENSITY & CONTRAST OVERRIDES
+   ========================================================================== */
+
+.ant-table-cell {
+  padding: 10px 16px !important;
+  font-size: 13.5px !important;
+  color: #344054 !important;
+}
+
+.ant-table-thead > tr > th {
+  padding: 10px 16px !important;
+  font-size: 13.5px !important;
+}
+
+/* ==========================================================================
+   🎨 9. PREMIUM BREATHING LED STATUS CAPSULES
+   ========================================================================== */
+
+.premium-status-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 10px;
+  font-size: 12px;
+  font-weight: 550;
+  border-radius: 99px;
+  line-height: 1.2;
+  white-space: nowrap;
+  border: 1px solid transparent;
+  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.status-dot {
+  display: none !important;
+}
+
+/* Color Mappings & Custom RGB/HSL palettes */
+.status-tag--success {
+  background: rgba(18, 183, 106, 0.08) !important;
+  color: #12b76a !important;
+  border-color: rgba(18, 183, 106, 0.15) !important;
+}
+.status-tag--success .status-dot {
+  background: #12b76a;
+  box-shadow: 0 0 6px rgba(18, 183, 106, 0.6);
+}
+
+.status-tag--error {
+  background: rgba(240, 68, 56, 0.08) !important;
+  color: #f04438 !important;
+  border-color: rgba(240, 68, 56, 0.15) !important;
+}
+.status-tag--error .status-dot {
+  background: #f04438;
+  box-shadow: 0 0 6px rgba(240, 68, 56, 0.6);
+}
+
+.status-tag--warning {
+  background: rgba(247, 144, 9, 0.08) !important;
+  color: #f79009 !important;
+  border-color: rgba(247, 144, 9, 0.15) !important;
+}
+.status-tag--warning .status-dot {
+  background: #f79009;
+  box-shadow: 0 0 6px rgba(247, 144, 9, 0.6);
+}
+
+.status-tag--default {
+  background: rgba(102, 112, 133, 0.08) !important;
+  color: #667085 !important;
+  border-color: rgba(102, 112, 133, 0.15) !important;
+}
+.status-tag--default .status-dot {
+  background: #667085;
+}
+
+/* Active / Processing / Breathing colors with keyframe animation */
+@keyframes led-pulse {
+  0% {
+    transform: scale(0.9);
+    opacity: 0.6;
+    box-shadow: 0 0 0 0px var(--pulse-color);
+  }
+  50% {
+    transform: scale(1.1);
+    opacity: 1;
+    box-shadow: 0 0 8px 3px var(--pulse-color);
+  }
+  100% {
+    transform: scale(0.9);
+    opacity: 0.6;
+    box-shadow: 0 0 0 0px var(--pulse-color);
+  }
+}
+
+.status-tag--processing {
+  --pulse-color: rgba(22, 119, 255, 0.6);
+  background: rgba(22, 119, 255, 0.08) !important;
+  color: #1677ff !important;
+  border-color: rgba(22, 119, 255, 0.15) !important;
+}
+.status-tag--processing .status-dot {
+  background: #1677ff;
+  animation: led-pulse 2s infinite ease-in-out;
+}
+
+.status-tag--purple {
+  --pulse-color: rgba(122, 90, 248, 0.6);
+  background: rgba(122, 90, 248, 0.08) !important;
+  color: #7a5af8 !important;
+  border-color: rgba(122, 90, 248, 0.15) !important;
+}
+.status-tag--purple .status-dot {
+  background: #7a5af8;
+  animation: led-pulse 2s infinite ease-in-out;
+}
+
+.status-tag--cyan {
+  --pulse-color: rgba(0, 180, 216, 0.6);
+  background: rgba(0, 180, 216, 0.08) !important;
+  color: #00b4d8 !important;
+  border-color: rgba(0, 180, 216, 0.15) !important;
+}
+.status-tag--cyan .status-dot {
+  background: #00b4d8;
+  animation: led-pulse 2s infinite ease-in-out;
+}
+
+.status-tag--orange {
+  --pulse-color: rgba(247, 144, 9, 0.6);
+  background: rgba(247, 144, 9, 0.08) !important;
+  color: #f79009 !important;
+  border-color: rgba(247, 144, 9, 0.15) !important;
+}
+.status-tag--orange .status-dot {
+  background: #f79009;
+  animation: led-pulse 2s infinite ease-in-out;
+}
+
+/* ==========================================================================
+   📋 10. HOVER COPYABLE IDENTIFIERS
+   ========================================================================== */
+
+.copyable-identifier-wrapper {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  position: relative;
+  vertical-align: middle;
+}
+
+.copy-action-trigger {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 4px;
+  color: #8c9bab;
+  cursor: pointer;
+  opacity: 0;
+  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+  background: transparent;
+  flex-shrink: 0;
+}
+
+.copyable-identifier-wrapper:hover .copy-action-trigger {
+  opacity: 1;
+}
+
+.copy-action-trigger:hover {
+  color: #1677ff;
+  background: rgba(22, 119, 255, 0.08);
+}
+
+/* ==========================================================================
+   🏷️ 11. GLOBAL TABLE TAG UNIFORMITY OVERRIDES
+   ========================================================================== */
+
+/* Ensure standard Ant Design Tags in table cells align with the new borderless premium capsule aesthetic */
+.ant-table-cell .ant-tag {
+  border: 1px solid transparent !important;
+  border-radius: 99px !important;
+  padding: 3px 10px !important; /* Updated to symmetric padding without the dot offset */
+  font-size: 12px !important;
+  font-weight: 550 !important;
+  line-height: 1.2 !important;
+  margin: 2px !important;
+  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1) !important;
+  display: inline-flex !important;
+  align-items: center !important;
+  gap: 5px !important;
+}
+
+/* Base status dot for table tags */
+.ant-table-cell .ant-tag::before {
+  content: "" !important;
+  display: none !important; /* Globally hidden the dot inside standard tags */
+}
+
+/* Default standard tags (e.g. lists, static items) */
+.ant-table-cell .ant-tag:not([class*="ant-tag-"]) {
+  background: rgba(102, 112, 133, 0.08) !important;
+  color: #667085 !important;
+  border-color: rgba(102, 112, 133, 0.15) !important;
+}
+.ant-table-cell .ant-tag:not([class*="ant-tag-"])::before {
+  background: #667085 !important;
+}
+
+/* Primary/Blue/Processing tags */
+.ant-table-cell .ant-tag-blue,
+.ant-table-cell .ant-tag-processing {
+  background: rgba(22, 119, 255, 0.08) !important;
+  color: #1677ff !important;
+  border-color: rgba(22, 119, 255, 0.15) !important;
+}
+.ant-table-cell .ant-tag-blue::before,
+.ant-table-cell .ant-tag-processing::before {
+  background: #1677ff !important;
+  --pulse-color: rgba(22, 119, 255, 0.6);
+  animation: led-pulse 2s infinite ease-in-out !important;
+}
+
+/* Success/Green tags */
+.ant-table-cell .ant-tag-green,
+.ant-table-cell .ant-tag-success {
+  background: rgba(18, 183, 106, 0.08) !important;
+  color: #12b76a !important;
+  border-color: rgba(18, 183, 106, 0.15) !important;
+}
+.ant-table-cell .ant-tag-green::before,
+.ant-table-cell .ant-tag-success::before {
+  background: #12b76a !important;
+  box-shadow: 0 0 6px rgba(18, 183, 106, 0.6) !important;
+}
+
+/* Warning/Orange tags */
+.ant-table-cell .ant-tag-orange,
+.ant-table-cell .ant-tag-warning {
+  background: rgba(247, 144, 9, 0.08) !important;
+  color: #f79009 !important;
+  border-color: rgba(247, 144, 9, 0.15) !important;
+}
+.ant-table-cell .ant-tag-orange::before,
+.ant-table-cell .ant-tag-warning::before {
+  background: #f79009 !important;
+  box-shadow: 0 0 6px rgba(247, 144, 9, 0.6) !important;
+  --pulse-color: rgba(247, 144, 9, 0.6);
+  animation: led-pulse 2s infinite ease-in-out !important;
+}
+
+/* Error/Red tags */
+.ant-table-cell .ant-tag-red,
+.ant-table-cell .ant-tag-error {
+  background: rgba(240, 68, 56, 0.08) !important;
+  color: #f04438 !important;
+  border-color: rgba(240, 68, 56, 0.15) !important;
+}
+.ant-table-cell .ant-tag-red::before,
+.ant-table-cell .ant-tag-error::before {
+  background: #f04438 !important;
+  box-shadow: 0 0 6px rgba(240, 68, 56, 0.6) !important;
+}
+
+/* Purple tags */
+.ant-table-cell .ant-tag-purple {
+  background: rgba(122, 90, 248, 0.08) !important;
+  color: #7a5af8 !important;
+  border-color: rgba(122, 90, 248, 0.15) !important;
+}
+.ant-table-cell .ant-tag-purple::before {
+  background: #7a5af8 !important;
+  --pulse-color: rgba(122, 90, 248, 0.6);
+  animation: led-pulse 2s infinite ease-in-out !important;
+}
+
+/* Cyan tags */
+.ant-table-cell .ant-tag-cyan {
+  background: rgba(0, 180, 216, 0.08) !important;
+  color: #00b4d8 !important;
+  border-color: rgba(0, 180, 216, 0.15) !important;
+}
+.ant-table-cell .ant-tag-cyan::before {
+  background: #00b4d8 !important;
+  --pulse-color: rgba(0, 180, 216, 0.6);
+  animation: led-pulse 2s infinite ease-in-out !important;
+}
+
+/* ==========================================================================
+   🌫️ 12. DYNAMIC SCROLL-SHADOWS (吸顶渐变投影)
+   ========================================================================== */
+.ant-table-ping-top .ant-table-thead > tr > th {
+  box-shadow: 0 4px 16px rgba(15, 60, 120, 0.05) !important;
+  border-bottom: 1px solid rgba(22, 119, 255, 0.12) !important;
+}
+
+/* ==========================================================================
+   💀 13. SHIMMER LOADING SKELETONS (微光渐变骨架屏)
+   ========================================================================== */
+/* Hide default spinner */
+.ant-spin-nested-loading .ant-spin {
+  display: none !important;
+}
+
+/* Keep container opaque & click-safe during load */
+.ant-spin-nested-loading:has(.ant-spin-spinning) .ant-spin-container {
+  opacity: 1 !important;
+  filter: none !important;
+  pointer-events: none !important;
+}
+
+/* Shimmer skeleton cells during loading */
+.ant-spin-nested-loading:has(.ant-spin-spinning) .ant-table-tbody .ant-table-cell {
+  position: relative !important;
+}
+
+.ant-spin-nested-loading:has(.ant-spin-spinning) .ant-table-tbody .ant-table-cell > * {
+  opacity: 0 !important;
+  pointer-events: none !important;
+}
+
+.ant-spin-nested-loading:has(.ant-spin-spinning) .ant-table-tbody .ant-table-cell::after {
+  content: "" !important;
+  position: absolute !important;
+  left: 16px !important;
+  right: 16px !important;
+  top: 50% !important;
+  transform: translateY(-50%) !important;
+  height: 10px !important;
+  border-radius: 4px !important;
+  background: linear-gradient(
+    90deg,
+    rgba(235, 240, 247, 0.8) 25%,
+    rgba(255, 255, 255, 0.95) 37%,
+    rgba(235, 240, 247, 0.8) 63
+  ) !important;
+  background-size: 400% 100% !important;
+  animation: shimmer-skeleton 1.4s ease infinite !important;
+  z-index: 2 !important;
+  display: block !important;
+}
+
+@keyframes shimmer-skeleton {
+  0% {
+    background-position: 100% 50%;
+  }
+  100% {
+    background-position: 0% 50%;
+  }
+}
+
+/* ==========================================================================
+   📏 14. MICRO-TYPOGRAPHY & CONTRAST (次要字段排版)
+   ========================================================================== */
+.premium-secondary-text {
+  color: #667085 !important;
+  font-size: 12px !important;
+  font-family: 'Outfit', 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", sans-serif !important;
+  font-weight: 400 !important;
+}

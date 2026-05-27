@@ -65,6 +65,8 @@ type channelResponse struct {
 	DeadLetterPolicy json.RawMessage       `json:"dead_letter_policy"`
 	CreatedAt        string                `json:"created_at"`
 	UpdatedAt        string                `json:"updated_at"`
+	IsCached         bool                  `json:"is_cached"`
+	TokenRefreshedAt string                `json:"token_refreshed_at,omitempty"`
 }
 
 type channelRequest struct {
@@ -91,6 +93,10 @@ type buildRequestResponse struct {
 
 type testSendResponse struct {
 	Result provider.TestSendResult `json:"result"`
+}
+
+type feishuResolveOpenIDRequest struct {
+	Mobiles []string `json:"mobiles"`
 }
 
 func (h *Handler) providerCapabilitiesHandler(w http.ResponseWriter, r *http.Request) {
@@ -184,6 +190,14 @@ func (h *Handler) channelDetailHandler(w http.ResponseWriter, r *http.Request) {
 		h.channelTestSendHandler(w, r, channelID)
 		return
 	}
+	if len(parts) == 2 && parts[1] == "refresh-token" {
+		h.channelRefreshTokenHandler(w, r, channelID)
+		return
+	}
+	if len(parts) == 3 && parts[1] == "feishu" && parts[2] == "resolve-open-id" {
+		h.channelFeishuResolveOpenIDHandler(w, r, channelID)
+		return
+	}
 	if len(parts) != 1 {
 		writeAPIError(w, http.StatusNotFound, "MGP-CHN-001", "平台实例不存在")
 		return
@@ -243,7 +257,7 @@ func (h *Handler) channelBuildRequestHandler(w http.ResponseWriter, r *http.Requ
 		writeAPIError(w, status, code, message)
 		return
 	}
-	writeJSON(w, http.StatusOK, buildRequestResponse{Request: built})
+	writeJSON(w, http.StatusOK, buildRequestResponse{Request: provider.RedactBuiltRequest(built)})
 }
 
 func (h *Handler) channelTestSendHandler(w http.ResponseWriter, r *http.Request, channelID string) {
@@ -263,6 +277,43 @@ func (h *Handler) channelTestSendHandler(w http.ResponseWriter, r *http.Request,
 		return
 	}
 	writeJSON(w, http.StatusOK, testSendResponse{Result: result})
+}
+
+func (h *Handler) channelFeishuResolveOpenIDHandler(w http.ResponseWriter, r *http.Request, channelID string) {
+	if r.Method != http.MethodPost {
+		methodNotAllowed(w, http.MethodPost)
+		return
+	}
+	var request feishuResolveOpenIDRequest
+	if err := decodeJSON(r, &request); err != nil {
+		writeAPIError(w, http.StatusBadRequest, "MGP-REQ-001", "请求 JSON 不合法")
+		return
+	}
+	result, err := h.providers.ResolveFeishuOpenID(r.Context(), channelID, request.Mobiles)
+	if err != nil {
+		status, code, message := providerErrorStatus(err)
+		writeAPIError(w, status, code, message)
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
+}
+
+func (h *Handler) channelRefreshTokenHandler(w http.ResponseWriter, r *http.Request, channelID string) {
+	if r.Method != http.MethodPost {
+		methodNotAllowed(w, http.MethodPost)
+		return
+	}
+	status, err := h.providers.RefreshToken(r.Context(), channelID)
+	if err != nil {
+		statusErr, code, message := providerErrorStatus(err)
+		writeAPIError(w, statusErr, code, message)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"status":             "ok",
+		"is_cached":          status.IsCached,
+		"token_refreshed_at": status.TokenRefreshed,
+	})
 }
 
 func (r channelRequest) toInput() provider.CreateChannelInput {
@@ -336,6 +387,8 @@ func toChannelResponse(channel provider.Channel) channelResponse {
 		DeadLetterPolicy: defaultRawJSON(channel.DeadLetterPolicy),
 		CreatedAt:        formatTime(channel.CreatedAt),
 		UpdatedAt:        formatTime(channel.UpdatedAt),
+		IsCached:         channel.IsCached,
+		TokenRefreshedAt: channel.TokenRefreshedAt,
 	}
 }
 

@@ -40,6 +40,7 @@ type UserIdentity struct {
 	ID            string
 	UserID        string
 	ProviderType  string
+	ChannelID     string
 	IdentityKind  string
 	IdentityValue string
 	Verified      bool
@@ -76,6 +77,7 @@ type UserInput struct {
 type UserIdentityInput struct {
 	UserID        string `json:"user_id"`
 	ProviderType  string `json:"provider_type"`
+	ChannelID     string `json:"channel_id"`
 	IdentityKind  string `json:"identity_kind"`
 	IdentityValue string `json:"identity_value"`
 	Verified      bool   `json:"verified"`
@@ -116,7 +118,7 @@ type Store interface {
 	CreateUserIdentity(ctx context.Context, params CreateUserIdentityParams) (UserIdentity, error)
 	UpdateUserIdentity(ctx context.Context, id string, params UpdateUserIdentityParams) (UserIdentity, error)
 	DeleteUserIdentity(ctx context.Context, id string) error
-	FindUserIdentity(ctx context.Context, providerType string, identityKind string, identityValue string) (UserIdentity, error)
+	FindUserIdentity(ctx context.Context, providerType string, channelID string, identityKind string, identityValue string) (UserIdentity, error)
 
 	ListRecipientGroups(ctx context.Context) ([]RecipientGroup, error)
 	CreateRecipientGroup(ctx context.Context, params CreateRecipientGroupParams) (RecipientGroup, error)
@@ -240,14 +242,15 @@ func (s *Service) DeleteUserIdentity(ctx context.Context, id string) error {
 	return s.store.DeleteUserIdentity(ctx, id)
 }
 
-func (s *Service) FindUserIdentity(ctx context.Context, providerType string, identityKind string, identityValue string) (UserIdentity, error) {
+func (s *Service) FindUserIdentity(ctx context.Context, providerType string, channelID string, identityKind string, identityValue string) (UserIdentity, error) {
 	providerType = strings.TrimSpace(providerType)
+	channelID = strings.TrimSpace(channelID)
 	identityKind = strings.TrimSpace(identityKind)
 	identityValue = strings.TrimSpace(identityValue)
 	if providerType == "" || identityKind == "" || identityValue == "" {
 		return UserIdentity{}, ErrInvalidInput
 	}
-	return s.store.FindUserIdentity(ctx, providerType, identityKind, identityValue)
+	return s.store.FindUserIdentity(ctx, providerType, channelID, identityKind, identityValue)
 }
 
 func (s *Service) ListRecipientGroups(ctx context.Context) ([]RecipientGroup, error) {
@@ -314,6 +317,7 @@ func normalizeUser(input UserInput) (CreateUserParams, error) {
 func normalizeUserIdentity(input UserIdentityInput) (CreateUserIdentityParams, error) {
 	input.UserID = strings.TrimSpace(input.UserID)
 	input.ProviderType = strings.TrimSpace(input.ProviderType)
+	input.ChannelID = strings.TrimSpace(input.ChannelID)
 	input.IdentityKind = strings.TrimSpace(input.IdentityKind)
 	input.IdentityValue = strings.TrimSpace(input.IdentityValue)
 	if input.UserID == "" || input.ProviderType == "" || input.IdentityKind == "" || input.IdentityValue == "" {

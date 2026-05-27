@@ -45,6 +45,14 @@ func robotTextContentSchema() json.RawMessage {
 	return rawJSON(`{"type":"object","required":["content"],"properties":{"title":{"type":"string","default":"{{ payload.title }}"},"body":{"type":"string","default":"{{ payload.content }}"},"content":{"type":"string","default":"{{ payload.content }}"},"markdown":{"type":"string"}}}`)
 }
 
+func weComRobotContentSchema() json.RawMessage {
+	return rawJSON(`{"type":"object","required":["msgtype","content"],"properties":{"msgtype":{"type":"string","enum":["text","markdown"],"enum_descriptions":{"text":"文本消息","markdown":"Markdown 消息"},"default":"text"},"content":{"type":"string","title":"content","default":"{{ payload.content }}"}}}`)
+}
+
+func weComAppContentSchema() json.RawMessage {
+	return rawJSON(`{"type":"object","required":["msgtype"],"properties":{"msgtype":{"type":"string","enum":["text","markdown","textcard"],"enum_descriptions":{"text":"文本消息","markdown":"Markdown 消息","textcard":"文本卡片消息"},"default":"text"},"content":{"type":"string","title":"Text content","default":"{{ payload.content }}"},"markdown":{"type":"string","title":"Markdown content","default":"{{ payload.content }}"},"title":{"type":"string","title":"Card title","default":"{{ payload.title }}"},"description":{"type":"string","title":"Card description","default":"{{ payload.content }}"},"url":{"type":"string","title":"Card URL","default":"{{ payload.url }}"},"btntxt":{"type":"string","title":"Button text","default":"详情"}}}`)
+}
+
 func smsTemplateContentSchema() json.RawMessage {
 	return rawJSON(`{"type":"object","required":["template_params"],"properties":{"template_params":{"type":["object","array"],"title":"Template parameters"},"out_id":{"type":"string"},"sign_name":{"type":"string"},"template_id":{"type":"string"}}}`)
 }

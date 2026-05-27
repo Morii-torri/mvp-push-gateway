@@ -122,6 +122,30 @@ Provider type registry，避免每新增一个 provider 都扩展 `delivery_chan
 
 `delivery_channels.provider_type` 和 `provider_capabilities.provider_type` 通过 FK 指向 `provider_types`。
 
+### `provider_token_cache`
+
+推送渠道 AccessToken 持久缓存。用于企业微信应用、钉钉工作消息、政务云等需要服务端换取 access token 的渠道，保证多实例、多 worker 共享同一份 token 状态。
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `id` | uuid pk | 缓存记录 ID |
+| `provider_type` | text | provider type，例如 `wecom_app` |
+| `strategy` | text | token strategy，例如 `client_credentials` |
+| `cache_key` | text unique | 根据 provider、strategy、token URL、请求方法、headers、body 和凭证解析结果生成的哈希 key；不得明文包含 `corpsecret` |
+| `channel_id` | uuid null | 最近写入该缓存的渠道实例，用于排障，不作为唯一缓存维度 |
+| `token_url` | text | 脱敏后的 token URL |
+| `access_token` | text | 后端持久缓存的 access token；不返回前端 |
+| `expires_at` | timestamptz | token 实际过期时间 |
+| `refresh_after_at` | timestamptz | 建议刷新时间，通常比 `expires_at` 提前 5 分钟 |
+| `refreshed_at` | timestamptz | 最近成功刷新时间 |
+| `invalidated_at` / `invalidated_reason` | timestamptz / text | 因上级返回 token 失效码而标记失效 |
+| `refresh_lock_until` / `refresh_lock_owner` | timestamptz / text | 多实例刷新锁，避免同时频繁调用上级 gettoken |
+| `last_error` | text | 最近一次刷新错误 |
+| `metadata` | jsonb | 脱敏排障信息，例如 `corpid`、渠道 ID、脱敏 token URL |
+| `created_at` / `updated_at` | timestamptz | 时间 |
+
+企业微信应用 token 必须按 `corpid + corpsecret` 区分缓存。多个渠道实例若使用同一组企业微信应用凭证，可以共享同一个 `cache_key`；不同应用 Secret 必须生成不同缓存记录。
+
 ## 组织人员
 
 ### `org_units`
@@ -170,10 +194,14 @@ Provider type registry，避免每新增一个 provider 都扩展 `delivery_chan
 | `id` | uuid pk | 身份 ID |
 | `user_id` | uuid | 人员 |
 | `provider_type` | text | provider type，可为 `common` |
+| `channel_id` | uuid null | 推送渠道实例；为空表示该 provider type 的默认身份 |
 | `identity_kind` | text | mobile、email、wecom_userid、dingtalk_userid、feishu_open_id、wxpusher_uid、gov_userid、gov_party_id、gov_tag_id 等 |
 | `identity_value` | text | 实际值 |
 | `verified` | boolean | 是否校验 |
-| `unique(provider_type, identity_kind, identity_value)` | index | 防重复 |
+| `ux_user_identities_type_default` | unique partial index | `channel_id is null` 时防止类型级默认身份重复 |
+| `ux_user_identities_channel_value` | unique partial index | `channel_id is not null` 时防止同一渠道实例身份重复 |
+
+身份值按“渠道实例优先、类型默认兜底”解析。同一人员可以为同一种 provider type 配置多个渠道实例身份，例如两个企业微信企业、两个飞书租户、不同邮件渠道或不同短信渠道下使用不同邮箱/手机号。发送规划拿到目标 `channel_id` 后，先查 `channel_id + identity_kind`，找不到再回退到 `channel_id is null` 且 `provider_type/common` 匹配的默认身份。
 
 ## 分组与模板
 
@@ -473,7 +501,8 @@ worker、队列和平台实例运行指标。
 - `dead_letter_jobs(channel_id, dead_lettered_at desc)`
 - `dedupe_keys(scope, source_id, dedupe_key)` where `scope='inbound'`
 - `dedupe_keys(scope, channel_id, dedupe_key)` where `scope='send'`
-- `user_identities(provider_type, identity_kind, identity_value)`
+- `user_identities(provider_type, identity_kind, identity_value)` where `channel_id is null`
+- `user_identities(channel_id, identity_kind, identity_value)` where `channel_id is not null`
 - `route_flows(source_id)` unique where `enabled=true`
 - `route_rules(flow_id, version_id, sort_order)`
 - `route_rule_counters(flow_id, rule_key)`

@@ -2,6 +2,7 @@ import Alert from 'antd/es/alert';
 import App from 'antd/es/app';
 import Badge from 'antd/es/badge';
 import Button from 'antd/es/button';
+import Cascader from 'antd/es/cascader';
 import Descriptions from 'antd/es/descriptions';
 import Divider from 'antd/es/divider';
 import Drawer from 'antd/es/drawer';
@@ -29,6 +30,7 @@ import {
   NodeIndexOutlined,
   PlayCircleOutlined,
   PlusOutlined,
+  SyncOutlined,
 } from '@ant-design/icons';
 import {
   Background,
@@ -54,6 +56,7 @@ import {
   PageFrame,
   QueryBar,
   StatusTag,
+  CopyableIdentifier,
 } from '../components/ConsolePrimitives';
 import {
   type AuditLog,
@@ -247,6 +250,8 @@ const providerTypeGroups: ProviderTypeGroup[] = [
 export type ConsolePageProps = {
   lastUpdated: Date;
   onRefresh: () => void;
+  activeSubTab?: string;
+  onSubTabChange?: (key: string) => void;
 };
 
 type DrawerState = {
@@ -1363,13 +1368,17 @@ export function SourceConfigForm({
 
 export function IdentityEditor({
   identities,
+  channelOptions = [],
   onChange,
   readOnly = false,
 }: {
   identities: UserIdentityDraft[];
+  channelOptions?: IdentityChannelOption[];
   onChange?: (identities: UserIdentityDraft[]) => void;
   readOnly?: boolean;
 }) {
+  const { message } = App.useApp();
+  const [resolvingFeishuKeys, setResolvingFeishuKeys] = useState<Set<string>>(() => new Set());
   const rows = identities.map((item, index) => ({ ...item, id: `identity-${index}` }));
   const updateIdentity = (index: number, patch: Partial<UserIdentityDraft>) => {
     onChange?.(identities.map((item, itemIndex) => (itemIndex === index ? { ...item, ...patch } : item)));
@@ -1380,58 +1389,111 @@ export function IdentityEditor({
       ...identities,
       {
         platform,
+        channelId: '',
         fieldName: defaultIdentityKindForPlatform(platform),
         value: '',
-        verified: false,
+        verified: true,
       },
     ]);
   };
   const deleteIdentity = (index: number) => {
     onChange?.(identities.filter((_item, itemIndex) => itemIndex !== index));
   };
+  const resolveFeishuIdentity = async (index: number, record: UserIdentityDraft) => {
+    const mobile = record.value.trim();
+    if (!record.channelId) {
+      message.warning('请先选择具体飞书渠道实例');
+      return;
+    }
+    if (!mobile) {
+      message.warning('请先填写手机号');
+      return;
+    }
+    const key = `${record.channelId}-${index}`;
+    setResolvingFeishuKeys((current) => new Set(current).add(key));
+    try {
+      const result = await consoleApi.resolveFeishuOpenId(record.channelId, [mobile]);
+      const resolved = result.items.find((item) => item.mobile === mobile && item.open_id);
+      if (!resolved) {
+        const error = result.items.find((item) => item.mobile === mobile)?.error || result.errors?.[0] || '手机号未匹配到飞书用户';
+        message.error(error);
+        return;
+      }
+      updateIdentity(index, { value: resolved.open_id, fieldName: 'feishu_open_id' });
+      message.success('已转换为飞书 OpenID');
+    } catch (error) {
+      showError(message, error);
+    } finally {
+      setResolvingFeishuKeys((current) => {
+        const next = new Set(current);
+        next.delete(key);
+        return next;
+      });
+    }
+  };
+  const channelCascaderOptions = identityChannelCascaderOptions(channelOptions);
   const identityColumns: TableProps<(UserIdentityDraft & { id: string })>['columns'] = [
     {
-      title: '推送渠道类型',
-      dataIndex: 'platform',
-      className: 'identity-provider-cell',
-      width: 220,
-      render: (value, _record, index) =>
-        readOnly ? (
-          value
-        ) : (
-          <Select
+      title: '推送渠道实例',
+      dataIndex: 'channelId',
+      className: 'identity-channel-cell',
+      width: 300,
+      render: (_value: string, record, index) => {
+        if (readOnly) {
+          return identityChannelDisplay(record, channelOptions);
+        }
+        return (
+          <Cascader
             className="full-width"
-            value={value}
-            options={recipientIdentityProviderOptions.map((item) => ({ label: item.label, value: item.label }))}
-            onChange={(platform) => updateIdentity(index, { platform, fieldName: defaultIdentityKindForPlatform(platform) })}
+            value={identityChannelCascaderValue(record)}
+            options={channelCascaderOptions}
+            allowClear={false}
+            expandTrigger={identityChannelExpandTrigger}
+            displayRender={identityChannelDisplayRender}
+            placeholder="选择推送渠道实例"
+            onChange={(value) => updateIdentity(index, identityDraftPatchFromChannelValue(value))}
           />
-        ),
+        );
+      },
+    },
+    {
+      title: '字段',
+      dataIndex: 'fieldName',
+      className: 'identity-kind-cell',
+      width: 120,
+      render: (value: string, record) => (
+        <Tag color="default">{identityFieldDisplayName(value || defaultIdentityKindForPlatform(record.platform))}</Tag>
+      ),
     },
     {
       title: '身份值',
       dataIndex: 'value',
       className: 'identity-value-cell',
-      width: 260,
-      render: (value, _record, index) =>
-        readOnly ? value : <Input value={value} onChange={(event) => updateIdentity(index, { value: event.target.value })} />,
-    },
-    {
-      title: '验证状态',
-      dataIndex: 'verified',
-      className: 'identity-verified-cell',
-      width: 92,
-      render: (verified: boolean, _record, index) =>
-        readOnly ? (
-          <Tag color={verified ? 'success' : 'default'}>{verified ? '通过' : ''}</Tag>
-        ) : (
-          <Switch
-            checked={verified}
-            checkedChildren="通过"
-            unCheckedChildren=" "
-            aria-label="验证状态"
-            onChange={(nextVerified) => updateIdentity(index, { verified: nextVerified })}
-          />
-        ),
+      width: 220,
+      render: (value, record, index) => {
+        if (readOnly) {
+          return value;
+        }
+        const isFeishu = providerValueFromLabel(record.platform) === 'feishu_robot';
+        const resolveKey = `${record.channelId}-${index}`;
+        const input = <Input value={value} onChange={(event) => updateIdentity(index, { value: event.target.value })} />;
+        if (!isFeishu) {
+          return input;
+        }
+        return (
+          <Space.Compact className="full-width">
+            {input}
+            <Button
+              aria-label="手机号转 OpenID"
+              title="手机号转 OpenID"
+              className="identity-resolve-feishu-button"
+              icon={<SyncOutlined />}
+              loading={resolvingFeishuKeys.has(resolveKey)}
+              onClick={() => void resolveFeishuIdentity(index, record)}
+            />
+          </Space.Compact>
+        );
+      },
     },
   ];
   if (!readOnly) {
@@ -1461,14 +1523,17 @@ export function IdentityEditor({
           </Button>
         ) : null}
       </div>
-      <Table
-        rowKey="id"
-        size="small"
-        pagination={false}
-        dataSource={rows}
-        columns={identityColumns}
-        rowClassName={(record) => (record.verified ? 'identity-row--verified' : '')}
-      />
+      <div className="identity-editor-table-shell">
+        <Table
+          rowKey="id"
+          size="small"
+          pagination={false}
+          dataSource={rows}
+          columns={identityColumns}
+          scroll={{ x: readOnly ? 640 : 688 }}
+          sticky
+        />
+      </div>
     </Space>
   );
 }
@@ -1477,10 +1542,14 @@ export function OverviewPage({ lastUpdated, onRefresh }: ConsolePageProps) {
   const [viewModel, setViewModel] = useState<OverviewViewModel>(() => defaultOverviewViewModel());
   const [windowValue, setWindowValue] = useState<DashboardWindow>('24h');
   const [loadState, setLoadState] = useState<ApiLoadState>(emptyLoadState);
+  const isFirstLoad = useRef(true);
 
   useEffect(() => {
     let cancelled = false;
-    setLoadState({ loading: true, error: '' });
+    if (isFirstLoad.current) {
+      setLoadState({ loading: true, error: '' });
+      isFirstLoad.current = false;
+    }
     fetchOverviewData(windowValue)
       .then((data) => {
         if (!cancelled) {
@@ -1595,6 +1664,7 @@ export function OverviewPage({ lastUpdated, onRefresh }: ConsolePageProps) {
           columns={rankingColumns}
           dataSource={platformRankingPage.rows}
           scroll={{ x: 1122 }}
+          sticky
         />
       </ListContainer>
     </PageFrame>
@@ -1606,6 +1676,7 @@ export function SourcesPage({ lastUpdated, onRefresh }: ConsolePageProps) {
   const { drawer, openDrawer, closeDrawer } = useCreateDrawer('新增来源');
   const [sourceRows, setSourceRows] = useState<SourceRow[]>([]);
   const [loadState, setLoadState] = useState<ApiLoadState>(emptyLoadState);
+  const isFirstLoad = useRef(true);
   const [sourceDraft, setSourceDraft] = useState<SourceDraft>(() => createSourceDraft());
   const [payloadViewSource, setPayloadViewSource] = useState<SourceRow | null>(null);
   const sourceQuery = useAppliedFilters<SourceListQuery>({
@@ -1621,8 +1692,10 @@ export function SourcesPage({ lastUpdated, onRefresh }: ConsolePageProps) {
   const [inboundSending, setInboundSending] = useState(false);
   const [pendingSourceEnabledIds, setPendingSourceEnabledIds] = useState<Set<string>>(new Set());
 
-  const loadSources = useCallback(async () => {
-    setLoadState({ loading: true, error: '' });
+  const loadSources = useCallback(async (silent = false) => {
+    if (!silent) {
+      setLoadState({ loading: true, error: '' });
+    }
     try {
       const result = await consoleApi.listSources();
       setSourceRows(result.sources.map(mapSourceRow));
@@ -1634,7 +1707,11 @@ export function SourcesPage({ lastUpdated, onRefresh }: ConsolePageProps) {
   }, []);
 
   useEffect(() => {
-    void loadSources();
+    const silent = !isFirstLoad.current;
+    if (isFirstLoad.current) {
+      isFirstLoad.current = false;
+    }
+    void loadSources(silent);
   }, [loadSources, lastUpdated]);
 
   const toggleSourceEnabled = async (record: SourceRow, enabled: boolean) => {
@@ -1770,6 +1847,7 @@ export function SourcesPage({ lastUpdated, onRefresh }: ConsolePageProps) {
       title: '来源编码',
       dataIndex: 'code',
       width: 120,
+      render: (value: string) => <CopyableIdentifier value={value} code maxWidth={120} />,
     },
     { title: '来源名称', dataIndex: 'name', width: 160 },
     {
@@ -1912,6 +1990,7 @@ export function SourcesPage({ lastUpdated, onRefresh }: ConsolePageProps) {
           dataSource={sourcePage.rows}
           loading={loadState.loading}
           scroll={{ x: 1120 }}
+          sticky
         />
       </ListContainer>
 
@@ -1998,6 +2077,7 @@ export function ProvidersPage({ lastUpdated, onRefresh }: ConsolePageProps) {
   const [providerRows, setProviderRows] = useState<ProviderRow[]>([]);
   const [providerCapabilities, setProviderCapabilities] = useState<ProviderCapabilityApiRecord[]>([]);
   const [loadState, setLoadState] = useState<ApiLoadState>(emptyLoadState);
+  const isFirstLoad = useRef(true);
   const [selected, setSelected] = useState<ProviderRow | null>(null);
   const [providerDraft, setProviderDraft] = useState<ProviderRow>(() => createProviderDraft('gov_cloud', 1));
   const [providerTestDraft, setProviderTestDraft] = useState<ProviderRow>(() => createProviderDraft('webhook', 1));
@@ -2018,8 +2098,10 @@ export function ProvidersPage({ lastUpdated, onRefresh }: ConsolePageProps) {
     return providerRows.filter((r) => r.providerType === type && r.enabled).length;
   };
 
-  const loadProviders = useCallback(async () => {
-    setLoadState({ loading: true, error: '' });
+  const loadProviders = useCallback(async (silent = false) => {
+    if (!silent) {
+      setLoadState({ loading: true, error: '' });
+    }
     try {
       const [channelResult, capabilityResult] = await Promise.allSettled([
         consoleApi.listChannels(),
@@ -2043,7 +2125,11 @@ export function ProvidersPage({ lastUpdated, onRefresh }: ConsolePageProps) {
   }, []);
 
   useEffect(() => {
-    void loadProviders();
+    const silent = !isFirstLoad.current;
+    if (isFirstLoad.current) {
+      isFirstLoad.current = false;
+    }
+    void loadProviders(silent);
   }, [loadProviders, lastUpdated]);
 
   const filteredRows = filterProviderRowsByQuery(providerRows, providerQuery.applied);
@@ -2138,7 +2224,9 @@ export function ProvidersPage({ lastUpdated, onRefresh }: ConsolePageProps) {
       title: '推送渠道类型',
       dataIndex: 'providerType',
       width: 140,
-      render: (value: ProviderRow['providerType']) => <Tag color="blue">{getProviderTypeLabel(value)}</Tag>,
+      render: (value: ProviderRow['providerType']) => (
+        <StatusTag meta={{ label: getProviderTypeLabel(value), color: 'processing' }} />
+      ),
     },
     { title: '推送渠道名称', dataIndex: 'name', width: 180 },
     { title: '主动限流', dataIndex: 'rateLimit', width: 120 },
@@ -2149,21 +2237,32 @@ export function ProvidersPage({ lastUpdated, onRefresh }: ConsolePageProps) {
       width: 110,
       render: (_, record) => {
         const enabled = providerDeadLetterEnabled(record);
-        return <Tag color={enabled ? 'processing' : 'default'}>{enabled ? '开启' : '关闭'}</Tag>;
+        return (
+          <StatusTag meta={{ label: enabled ? '开启' : '关闭', color: enabled ? 'processing' : 'default' }} />
+        );
       },
     },
     {
       title: '状态',
       dataIndex: 'enabled',
-      width: 90,
+      width: 170,
       render: (enabled: boolean, record) => (
-        <Switch
-          checked={enabled}
-          loading={pendingProviderEnabledIds.has(record.id)}
-          onChange={(checked) => void toggleProviderEnabled(record, checked)}
-          checkedChildren="启用"
-          unCheckedChildren="停用"
-        />
+        <Space size="middle">
+          <Switch
+            checked={enabled}
+            loading={pendingProviderEnabledIds.has(record.id)}
+            onChange={(checked) => void toggleProviderEnabled(record, checked)}
+            checkedChildren="启用"
+            unCheckedChildren="停用"
+          />
+          {['wecom_app', 'dingtalk_work', 'gov_cloud'].includes(record.providerType) && (
+            record.is_cached ? (
+              <StatusTag meta={{ label: '已缓存', color: 'success' }} />
+            ) : (
+              <StatusTag meta={{ label: '未缓存', color: 'default' }} />
+            )
+          )}
+        </Space>
       ),
     },
     {
@@ -2311,6 +2410,7 @@ export function ProvidersPage({ lastUpdated, onRefresh }: ConsolePageProps) {
               dataSource={providerPage.rows}
               loading={loadState.loading}
               scroll={{ x: 1140 }}
+              sticky
             />
           </ListContainer>
         </div>
@@ -2498,6 +2598,7 @@ export function RoutesPage({ lastUpdated, onRefresh }: ConsolePageProps) {
   const { drawer: ruleDrawer, openDrawer: openRuleDrawer, closeDrawer: closeRuleDrawer } = useCreateDrawer('新增路由规则');
   const [mode, setMode] = useState<'canvas' | 'table'>('canvas');
   const [loadState, setLoadState] = useState<ApiLoadState>(emptyLoadState);
+  const isFirstLoad = useRef(true);
   const [sourceRows, setSourceRows] = useState<SourceRow[]>([]);
   const [channelRows, setChannelRows] = useState<ProviderRow[]>([]);
   const [templateRows, setTemplateRows] = useState<Array<TemplateRecord & { raw?: TemplateApiRecord }>>([]);
@@ -2537,8 +2638,10 @@ export function RoutesPage({ lastUpdated, onRefresh }: ConsolePageProps) {
   const [flowNodes, setFlowNodes, onFlowNodesChange] = useNodesState<RouteFlowNode>([]);
   const [flowEdges, setFlowEdges, onFlowEdgesChange] = useEdgesState<RouteFlowEdge>([]);
   const nodeTypes = useMemo(() => ({ routeNode: RouteFlowNodeView }), []);
-  const loadRouteData = useCallback(async () => {
-    setLoadState({ loading: true, error: '' });
+  const loadRouteData = useCallback(async (silent = false) => {
+    if (!silent) {
+      setLoadState({ loading: true, error: '' });
+    }
     try {
       const [sourceResult, channelResult, templateResult, flowResult, matchGroupResult, recipientGroupResult, userResult] =
         await Promise.allSettled([
@@ -2611,7 +2714,11 @@ export function RoutesPage({ lastUpdated, onRefresh }: ConsolePageProps) {
   }, []);
 
   useEffect(() => {
-    void loadRouteData();
+    const silent = !isFirstLoad.current;
+    if (isFirstLoad.current) {
+      isFirstLoad.current = false;
+    }
+    void loadRouteData(silent);
   }, [loadRouteData, lastUpdated]);
 
   const filteredGroups = filterRouteGroupsByQuery(groupRows, routeGroupQuery.applied);
@@ -3154,10 +3261,37 @@ export function RoutesPage({ lastUpdated, onRefresh }: ConsolePageProps) {
         </Space>
       ),
     },
-    { title: '规则名称', dataIndex: 'name', width: 180 },
+    {
+      title: '规则名称',
+      dataIndex: 'name',
+      width: 180,
+      render: (value: string) => (
+        <Typography.Text ellipsis={{ tooltip: value }} style={{ display: 'inline-block', maxWidth: 160 }}>
+          {value || '-'}
+        </Typography.Text>
+      ),
+    },
     { title: '来源', dataIndex: 'source', width: 140 },
-    { title: '条件', dataIndex: 'condition', width: 240 },
-    { title: '发送动作组', dataIndex: 'sendGroupSummary', width: 320 },
+    {
+      title: '条件',
+      dataIndex: 'condition',
+      width: 240,
+      render: (value: string) => (
+        <Typography.Text ellipsis={{ tooltip: value }} style={{ display: 'inline-block', maxWidth: 220 }}>
+          {value || '-'}
+        </Typography.Text>
+      ),
+    },
+    {
+      title: '发送动作组',
+      dataIndex: 'sendGroupSummary',
+      width: 320,
+      render: (value: string) => (
+        <Typography.Text ellipsis={{ tooltip: value }} style={{ display: 'inline-block', maxWidth: 300 }}>
+          {value || '-'}
+        </Typography.Text>
+      ),
+    },
     { title: '接收人策略', dataIndex: 'recipientStrategy', width: 140 },
     { title: '发送前去重', dataIndex: 'dedupe', width: 150 },
     {
@@ -3282,6 +3416,7 @@ export function RoutesPage({ lastUpdated, onRefresh }: ConsolePageProps) {
             dataSource={routeGroupPage.rows}
             loading={loadState.loading}
             scroll={{ x: 1350 }}
+            sticky
           />
         </ListContainer>
         <CreateDrawer title={groupDrawer.title} open={groupDrawer.open} onClose={closeGroupEditor} onSave={saveGroup}>
@@ -3475,6 +3610,7 @@ export function RoutesPage({ lastUpdated, onRefresh }: ConsolePageProps) {
               columns={columns}
               dataSource={routeRulePage.rows}
               scroll={{ x: 1618 }}
+              sticky
             />
           </ListContainer>
         </>
@@ -3716,7 +3852,7 @@ export function TemplateVersionHistoryContent({
       render: (value: number, version) => (
         <Space>
           <Typography.Text strong>v{value}</Typography.Text>
-          {version.id === currentVersionId ? <Tag color="success">当前</Tag> : null}
+          {version.id === currentVersionId ? <StatusTag meta={{ label: '当前', color: 'success' }} /> : null}
         </Space>
       ),
     },
@@ -3765,6 +3901,7 @@ export function TemplateVersionHistoryContent({
         columns={columns}
         dataSource={versions}
         loading={loading}
+        sticky
         expandable={{
           rowExpandable: () => true,
           expandedRowRender: (version) => (
@@ -3853,6 +3990,7 @@ export function TemplatesPage({ lastUpdated, onRefresh }: ConsolePageProps) {
   const [templateDraft, setTemplateDraft] = useState<TemplateDraft>(() => createTemplateDraft([]));
   const [templateFeedback, setTemplateFeedback] = useState<TemplateFeedback>(() => createTemplateFeedback());
   const [loadState, setLoadState] = useState<ApiLoadState>(emptyLoadState);
+  const isFirstLoad = useRef(true);
   const templateQuery = useAppliedFilters<TemplateListQuery>({
     keyword: '',
     source: 'all',
@@ -3861,8 +3999,10 @@ export function TemplatesPage({ lastUpdated, onRefresh }: ConsolePageProps) {
   });
   const filteredTemplates = filterTemplateRowsByQuery(templateRows, templateQuery.applied);
   const templatePage = usePagedRows(filteredTemplates);
-  const loadTemplates = useCallback(async () => {
-    setLoadState({ loading: true, error: '' });
+  const loadTemplates = useCallback(async (silent = false) => {
+    if (!silent) {
+      setLoadState({ loading: true, error: '' });
+    }
     try {
       const [sourceResult, templateResult, capabilityResult] = await Promise.allSettled([
         consoleApi.listSources(),
@@ -3888,7 +4028,11 @@ export function TemplatesPage({ lastUpdated, onRefresh }: ConsolePageProps) {
   }, []);
 
   useEffect(() => {
-    void loadTemplates();
+    const silent = !isFirstLoad.current;
+    if (isFirstLoad.current) {
+      isFirstLoad.current = false;
+    }
+    void loadTemplates(silent);
   }, [loadTemplates, lastUpdated]);
 
   const createBlankTemplate = (): TemplateRecord & { raw?: TemplateApiRecord } => {
@@ -4068,7 +4212,7 @@ export function TemplatesPage({ lastUpdated, onRefresh }: ConsolePageProps) {
       dataIndex: 'name',
       width: 140,
       render: (value: string) => (
-        <Typography.Text ellipsis={{ tooltip: value }} style={{ maxWidth: 120 }}>
+        <Typography.Text ellipsis={{ tooltip: value }} style={{ display: 'inline-block', maxWidth: 120 }}>
           {value}
         </Typography.Text>
       ),
@@ -4091,7 +4235,7 @@ export function TemplatesPage({ lastUpdated, onRefresh }: ConsolePageProps) {
       dataIndex: 'targetField',
       width: 140,
       render: (value: string) => (
-        <Typography.Text ellipsis={{ tooltip: value }} style={{ maxWidth: 120 }}>
+        <Typography.Text ellipsis={{ tooltip: value }} style={{ display: 'inline-block', maxWidth: 120 }}>
           {value || '-'}
         </Typography.Text>
       ),
@@ -4223,6 +4367,7 @@ export function TemplatesPage({ lastUpdated, onRefresh }: ConsolePageProps) {
           dataSource={templatePage.rows}
           loading={loadState.loading}
           scroll={{ x: 1020 }}
+          sticky
         />
       </ListContainer>
 
@@ -4255,6 +4400,7 @@ export function TemplatesPage({ lastUpdated, onRefresh }: ConsolePageProps) {
                 pagination={false}
                 columns={fieldColumns}
                 dataSource={selectedPayloadFields}
+                sticky
               />
             </div>
           </section>
@@ -4328,8 +4474,91 @@ export function TemplatesPage({ lastUpdated, onRefresh }: ConsolePageProps) {
 
 type UserIdentityDraft = UserIdentity & {
   apiId?: string;
+  channelId?: string;
   verified: boolean;
 };
+
+type IdentityChannelOption = {
+  label: string;
+  value: string;
+  providerType: string;
+};
+
+type IdentityChannelCascaderOption = {
+  label: string;
+  value: string;
+  children?: IdentityChannelCascaderOption[];
+};
+
+const identityAllInstancesValue = '__all_instances__';
+export const identityChannelExpandTrigger = 'click';
+
+export function identityChannelDisplayRender(labels: ReactNode[]): ReactNode {
+  return labels[labels.length - 1] ?? '';
+}
+
+export function identityChannelCascaderOptions(channelOptions: IdentityChannelOption[]): IdentityChannelCascaderOption[] {
+  const optionsByProvider = new Map<string, IdentityChannelOption[]>();
+  for (const option of channelOptions) {
+    optionsByProvider.set(option.providerType, [...(optionsByProvider.get(option.providerType) ?? []), option]);
+  }
+  return recipientIdentityProviderOptions.map((provider) => {
+    const instances = optionsByProvider.get(provider.value) ?? [];
+    return {
+      label: `${provider.label}【${instances.length}】`,
+      value: provider.value,
+      children: [
+        { label: `全部实例（${provider.label}）`, value: identityAllInstancesValue },
+        ...instances.map((instance) => ({ label: instance.label, value: instance.value })),
+      ],
+    };
+  });
+}
+
+function identityChannelCascaderValue(identity: UserIdentityDraft): string[] {
+  return [providerValueFromLabel(identity.platform), identity.channelId || identityAllInstancesValue];
+}
+
+function identityDraftPatchFromChannelValue(value: Array<string | number>): Partial<UserIdentityDraft> {
+  const providerType = String(value[0] ?? 'webhook');
+  const channelId = String(value[1] ?? identityAllInstancesValue);
+  const platform = providerLabelFromValue(providerType);
+  return {
+    platform,
+    channelId: channelId === identityAllInstancesValue ? '' : channelId,
+    fieldName: defaultIdentityKindForPlatform(platform),
+  };
+}
+
+export function identityChannelDisplay(identity: UserIdentityDraft, channelOptions: IdentityChannelOption[]): string {
+  const providerType = providerValueFromLabel(identity.platform);
+  const platform = providerLabelFromValue(providerType);
+  if (!identity.channelId) {
+    return `全部实例（${platform}）`;
+  }
+  const instance = channelOptions.find((option) => option.value === identity.channelId);
+  return instance?.label ?? identity.channelId;
+}
+
+export function identityFieldDisplayName(identityKind: string): string {
+  const normalizedKind = identityKind.trim();
+  const labels: Record<string, string> = {
+    email: 'Email',
+    mobile: '手机号',
+    wxpusher_uid: 'UID',
+    pushplus_token: 'Token',
+    serverchan_sendkey: 'SendKey',
+    bark_device_key: 'Device Key',
+    pushme_push_key: 'Push Key',
+    gov_userid: 'UserID',
+    wecom_robot_key: 'Key',
+    wecom_userid: 'UserID',
+    dingtalk_userid: 'UserID',
+    feishu_open_id: 'OpenID',
+    identity: 'Identity',
+  };
+  return labels[normalizedKind] ?? (normalizedKind || '-');
+}
 
 type UserContactRow = Omit<UserContact, 'identities'> & {
   identities: UserIdentityDraft[];
@@ -4567,6 +4796,7 @@ function mapUserIdentityDraft(identity: UserIdentityApiRecord): UserIdentityDraf
   return {
     apiId: identity.id,
     platform: providerLabelFromValue(identity.provider_type),
+    channelId: identity.channel_id,
     fieldName: identity.identity_kind,
     value: identity.identity_value,
     verified: identity.verified,
@@ -4594,6 +4824,7 @@ function userIdentityInputFromDraft(userId: string, identity: UserIdentityDraft)
   return {
     user_id: userId,
     provider_type: providerValueFromLabel(identity.platform),
+    channel_id: identity.channelId || '',
     identity_kind: identity.fieldName || defaultIdentityKindForPlatform(identity.platform),
     identity_value: identity.value,
     verified: identity.verified ?? true,
@@ -4648,7 +4879,10 @@ function defaultIdentityKindForPlatform(platform: string): string {
   if (providerType === 'gov_cloud') {
     return 'gov_userid';
   }
-  if (providerType === 'wecom_app' || providerType === 'wecom_robot') {
+  if (providerType === 'wecom_robot') {
+    return 'wecom_robot_key';
+  }
+  if (providerType === 'wecom_app') {
     return 'wecom_userid';
   }
   if (providerType === 'dingtalk_work') {
@@ -4666,10 +4900,12 @@ function defaultIdentityKindForPlatform(platform: string): string {
 export function UserProfileForm({
   value,
   orgOptions,
+  channelOptions = [],
   onChange,
 }: {
   value: UserDraft;
   orgOptions: Array<{ label: string; value: string }>;
+  channelOptions?: IdentityChannelOption[];
   onChange: (value: UserDraft) => void;
 }) {
   return (
@@ -4692,6 +4928,7 @@ export function UserProfileForm({
       </Form.Item>
       <IdentityEditor
         identities={value.identities}
+        channelOptions={channelOptions}
         onChange={(identities) => onChange({ ...value, identities })}
       />
     </Form>
@@ -4854,15 +5091,17 @@ function normalizeJobStatus(value: string): AuditLog['status'] {
   return allowed.includes(value as AuditLog['status']) ? (value as AuditLog['status']) : 'done';
 }
 
-export function OrganizationPage({ lastUpdated, onRefresh }: ConsolePageProps) {
+export function OrganizationPage({ lastUpdated, onRefresh, activeSubTab, onSubTabChange }: ConsolePageProps) {
   const { message, modal } = App.useApp();
   const { drawer: userDrawer, openDrawer: openUserDrawer, closeDrawer: closeUserDrawer } = useCreateDrawer('新增人员');
   const { drawer: orgDrawer, openDrawer: openOrgDrawer, closeDrawer: closeOrgDrawer } = useCreateDrawer('新增组织');
   const { drawer: groupDrawer, openDrawer: openGroupDrawer, closeDrawer: closeGroupDrawer } = useCreateDrawer('新增接收人组');
   const [rows, setRows] = useState<UserContactRow[]>([]);
   const [orgRows, setOrgRows] = useState<OrgUnitApiRecord[]>([]);
+  const [channelRows, setChannelRows] = useState<ChannelApiRecord[]>([]);
   const [recipientGroupRows, setRecipientGroupRows] = useState<RecipientGroupApiRecord[]>([]);
   const [loadState, setLoadState] = useState<ApiLoadState>(emptyLoadState);
+  const isFirstLoad = useRef(true);
   const [selected, setSelected] = useState<UserContactRow | null>(null);
   const [userDraft, setUserDraft] = useState<UserDraft>(() => createUserDraft(1));
   const [pendingUserStatusIds, setPendingUserStatusIds] = useState<Set<string>>(() => new Set());
@@ -4897,19 +5136,31 @@ export function OrganizationPage({ lastUpdated, onRefresh }: ConsolePageProps) {
     () => orgRows.map((item) => ({ label: `${item.name}（${item.code}）`, value: item.id })),
     [orgRows],
   );
+  const identityChannelOptions = useMemo<IdentityChannelOption[]>(
+    () =>
+      channelRows.map((item) => ({
+        label: `${item.name}（${getProviderTypeLabel(item.provider_type)}）`,
+        value: item.id,
+        providerType: item.provider_type,
+      })),
+    [channelRows],
+  );
   const selectedOrg = orgRows.find((item) => item.id === selectedOrgId);
 
   useEffect(() => {
     setSelectedOrgId((current) => (current === 'all' || orgRows.some((item) => item.id === current) ? current : 'all'));
   }, [orgRows]);
 
-  const loadOrganization = useCallback(async () => {
-    setLoadState({ loading: true, error: '' });
+  const loadOrganization = useCallback(async (silent = false) => {
+    if (!silent) {
+      setLoadState({ loading: true, error: '' });
+    }
     try {
-      const [orgResult, userResult, groupResult] = await Promise.all([
+      const [orgResult, userResult, groupResult, channelResult] = await Promise.all([
         consoleApi.listOrgUnits(),
         consoleApi.listUsers(),
         consoleApi.listRecipientGroups(),
+        consoleApi.listChannels(),
       ]);
       const nextOrgRows = orgResult.org_units;
       const identitiesByUser = new Map<string, UserIdentityApiRecord[]>();
@@ -4924,11 +5175,13 @@ export function OrganizationPage({ lastUpdated, onRefresh }: ConsolePageProps) {
         }),
       );
       setOrgRows(nextOrgRows);
+      setChannelRows(channelResult.channels);
       setRows(userResult.users.map((user) => mapUserRow(user, identitiesByUser.get(user.id) ?? [], nextOrgRows)));
       setRecipientGroupRows(groupResult.groups);
       setLoadState(emptyLoadState);
     } catch (error) {
       setOrgRows([]);
+      setChannelRows([]);
       setRows([]);
       setRecipientGroupRows([]);
       setLoadState({ loading: false, error: userFacingError(error) });
@@ -4936,7 +5189,11 @@ export function OrganizationPage({ lastUpdated, onRefresh }: ConsolePageProps) {
   }, []);
 
   useEffect(() => {
-    void loadOrganization();
+    const silent = !isFirstLoad.current;
+    if (isFirstLoad.current) {
+      isFirstLoad.current = false;
+    }
+    void loadOrganization(silent);
   }, [loadOrganization, lastUpdated]);
 
   const saveOrgUnit = async () => {
@@ -5128,15 +5385,15 @@ export function OrganizationPage({ lastUpdated, onRefresh }: ConsolePageProps) {
     { title: '手机号', dataIndex: 'mobile', width: 130 },
     { title: '邮箱', dataIndex: 'email', width: 170 },
     {
-      title: '平台身份字段（验证状态）',
+      title: '平台身份字段',
       dataIndex: 'identities',
       width: 220,
       className: 'allow-wrap',
       render: (items: UserIdentityDraft[]) =>
         items.map((item) => (
-          <Tag key={`${item.platform}-${item.fieldName}`} color={item.verified ? 'success' : 'default'}>
-            {item.platform}
-          </Tag>
+          <span style={{ marginRight: 6, display: 'inline-block' }} key={`${item.platform}-${item.channelId || 'default'}-${item.fieldName}`}>
+            <StatusTag meta={{ label: item.platform, color: 'default' }} />
+          </span>
         )),
     },
     {
@@ -5232,7 +5489,8 @@ export function OrganizationPage({ lastUpdated, onRefresh }: ConsolePageProps) {
     >
       <Tabs
         className="organization-subpage-tabs"
-        defaultActiveKey="users"
+        activeKey={activeSubTab ?? 'users'}
+        onChange={onSubTabChange}
         items={[
           {
             key: 'users',
@@ -5325,6 +5583,7 @@ export function OrganizationPage({ lastUpdated, onRefresh }: ConsolePageProps) {
                       dataSource={userPage.rows}
                       loading={loadState.loading}
                       scroll={{ x: 1070 }}
+                      sticky
                     />
                   </ListContainer>
                 </div>
@@ -5389,6 +5648,7 @@ export function OrganizationPage({ lastUpdated, onRefresh }: ConsolePageProps) {
                     dataSource={organizationRecipientGroupPage.rows}
                     loading={loadState.loading}
                     scroll={{ x: 1050 }}
+                    sticky
                   />
                 </ListContainer>
               </div>
@@ -5424,7 +5684,7 @@ export function OrganizationPage({ lastUpdated, onRefresh }: ConsolePageProps) {
         </Form>
       </CreateDrawer>
       <CreateDrawer title={userDrawer.title} open={userDrawer.open} onClose={closeUserDrawer} onSave={saveUser} width={760}>
-        <UserProfileForm value={userDraft} orgOptions={orgOptions} onChange={setUserDraft} />
+        <UserProfileForm value={userDraft} orgOptions={orgOptions} channelOptions={identityChannelOptions} onChange={setUserDraft} />
       </CreateDrawer>
       <Drawer title="人员详情" width={620} open={detailOpen} onClose={() => setDetailOpen(false)} destroyOnHidden>
         {selected ? (
@@ -5435,7 +5695,7 @@ export function OrganizationPage({ lastUpdated, onRefresh }: ConsolePageProps) {
               <Descriptions.Item label="手机号">{selected.mobile}</Descriptions.Item>
               <Descriptions.Item label="邮箱">{selected.email}</Descriptions.Item>
             </Descriptions>
-            <IdentityEditor identities={selected.identities} readOnly />
+            <IdentityEditor identities={selected.identities} channelOptions={identityChannelOptions} readOnly />
           </Space>
         ) : null}
       </Drawer>
@@ -5504,6 +5764,7 @@ export function RecipientGroupsPage({ lastUpdated, onRefresh }: ConsolePageProps
   const [orgRows, setOrgRows] = useState<OrgUnitApiRecord[]>([]);
   const [rows, setRows] = useState<RecipientGroupApiRecord[]>([]);
   const [loadState, setLoadState] = useState<ApiLoadState>(emptyLoadState);
+  const isFirstLoad = useRef(true);
   const [editing, setEditing] = useState<RecipientGroupApiRecord | null>(null);
   const [draft, setDraft] = useState<RecipientGroupDraft>(() => createRecipientGroupDraft());
   const recipientGroupQuery = useAppliedFilters<RecipientGroupListQuery>({ keyword: '', status: 'all' });
@@ -5518,8 +5779,10 @@ export function RecipientGroupsPage({ lastUpdated, onRefresh }: ConsolePageProps
     [orgRows],
   );
 
-  const loadRecipientGroups = useCallback(async () => {
-    setLoadState({ loading: true, error: '' });
+  const loadRecipientGroups = useCallback(async (silent = false) => {
+    if (!silent) {
+      setLoadState({ loading: true, error: '' });
+    }
     try {
       const [userResult, orgResult, groupResult] = await Promise.all([
         consoleApi.listUsers(),
@@ -5539,7 +5802,11 @@ export function RecipientGroupsPage({ lastUpdated, onRefresh }: ConsolePageProps
   }, []);
 
   useEffect(() => {
-    void loadRecipientGroups();
+    const silent = !isFirstLoad.current;
+    if (isFirstLoad.current) {
+      isFirstLoad.current = false;
+    }
+    void loadRecipientGroups(silent);
   }, [loadRecipientGroups, lastUpdated]);
 
   const openCreateRecipientGroup = () => {
@@ -5676,6 +5943,7 @@ export function RecipientGroupsPage({ lastUpdated, onRefresh }: ConsolePageProps
           dataSource={recipientGroupPage.rows}
           loading={loadState.loading}
           scroll={{ x: 1050 }}
+          sticky
         />
       </ListContainer>
       <CreateDrawer title={drawer.title} open={drawer.open} onClose={closeDrawer} onSave={saveRecipientGroup} width={720}>
@@ -5738,6 +6006,7 @@ export function MatchGroupsPage({ lastUpdated, onRefresh }: ConsolePageProps) {
   const { drawer, openDrawer, closeDrawer } = useCreateDrawer('新增匹配组');
   const [rows, setRows] = useState<MatchGroupRow[]>([]);
   const [loadState, setLoadState] = useState<ApiLoadState>(emptyLoadState);
+  const isFirstLoad = useRef(true);
   const [selected, setSelected] = useState<MatchGroupRow | null>(null);
   const [matchGroupDraft, setMatchGroupDraft] = useState<MatchGroupDraft>(() => createMatchGroupDraft());
   const [itemRows, setItemRows] = useState<MatchGroupItemApiRecord[]>([]);
@@ -5753,8 +6022,10 @@ export function MatchGroupsPage({ lastUpdated, onRefresh }: ConsolePageProps) {
   const filteredRows = filterMatchGroupsByQuery(rows, matchGroupQuery.applied);
   const matchGroupPage = usePagedRows(filteredRows);
 
-  const loadMatchGroups = useCallback(async () => {
-    setLoadState({ loading: true, error: '' });
+  const loadMatchGroups = useCallback(async (silent = false) => {
+    if (!silent) {
+      setLoadState({ loading: true, error: '' });
+    }
     try {
       const result = await consoleApi.listMatchGroups();
       setRows(result.match_groups.map(mapMatchGroup));
@@ -5780,7 +6051,11 @@ export function MatchGroupsPage({ lastUpdated, onRefresh }: ConsolePageProps) {
   };
 
   useEffect(() => {
-    void loadMatchGroups();
+    const silent = !isFirstLoad.current;
+    if (isFirstLoad.current) {
+      isFirstLoad.current = false;
+    }
+    void loadMatchGroups(silent);
   }, [loadMatchGroups, lastUpdated]);
 
   const saveMatchGroup = async () => {
@@ -6024,6 +6299,7 @@ export function MatchGroupsPage({ lastUpdated, onRefresh }: ConsolePageProps) {
           dataSource={matchGroupPage.rows}
           loading={loadState.loading}
           scroll={{ x: 1010 }}
+          sticky
         />
       </ListContainer>
       <CreateDrawer title={drawer.title} open={drawer.open} onClose={closeDrawer} onSave={saveMatchGroup} width={640}>
@@ -6084,6 +6360,7 @@ export function MatchGroupsPage({ lastUpdated, onRefresh }: ConsolePageProps) {
             dataSource={itemRows}
             loading={itemsLoading}
             scroll={{ x: 640 }}
+            sticky
           />
         </Space>
       </CreateDrawer>
@@ -6134,6 +6411,7 @@ export function MessageLogsPage({ lastUpdated, onRefresh }: ConsolePageProps) {
   const [selectedDetail, setSelectedDetail] = useState<MessageDetailApiRecord | null>(null);
   const [rows, setRows] = useState<MessageLog[]>([]);
   const [loadState, setLoadState] = useState<ApiLoadState>(emptyLoadState);
+  const isFirstLoad = useRef(true);
   const messageLogQuery = useAppliedFilters<MessageLogListQuery>({
     traceId: '',
     keyword: '',
@@ -6144,8 +6422,10 @@ export function MessageLogsPage({ lastUpdated, onRefresh }: ConsolePageProps) {
   });
   const filteredRows = filterMessageLogsByQuery(rows, messageLogQuery.applied);
   const messageLogPage = usePagedRows(filteredRows);
-  const loadMessageLogs = useCallback(async () => {
-    setLoadState({ loading: true, error: '' });
+  const loadMessageLogs = useCallback(async (silent = false) => {
+    if (!silent) {
+      setLoadState({ loading: true, error: '' });
+    }
     try {
       const result = await consoleApi.listMessageLogs();
       setRows(result.messages.map(mapMessageLog));
@@ -6157,7 +6437,11 @@ export function MessageLogsPage({ lastUpdated, onRefresh }: ConsolePageProps) {
   }, []);
 
   useEffect(() => {
-    void loadMessageLogs();
+    const silent = !isFirstLoad.current;
+    if (isFirstLoad.current) {
+      isFirstLoad.current = false;
+    }
+    void loadMessageLogs(silent);
   }, [loadMessageLogs, lastUpdated]);
 
   const openMessageDetail = async (record: MessageLog) => {
@@ -6171,7 +6455,12 @@ export function MessageLogsPage({ lastUpdated, onRefresh }: ConsolePageProps) {
     }
   };
   const columns: TableProps<MessageLog>['columns'] = [
-    { title: 'Trace ID', dataIndex: 'traceId', width: 190 },
+    {
+      title: 'Trace ID',
+      dataIndex: 'traceId',
+      width: 200,
+      render: (value: string) => <CopyableIdentifier value={value} maxWidth={190} />,
+    },
     { title: '来源', dataIndex: 'source', width: 130 },
     { title: '入站时间', dataIndex: 'receivedAt', width: 170 },
     {
@@ -6180,7 +6469,7 @@ export function MessageLogsPage({ lastUpdated, onRefresh }: ConsolePageProps) {
       width: 110,
       render: (value: MessageLog['status']) => <StatusTag meta={getInboundStatusMeta(value)} />,
     },
-    { title: '命中路由', dataIndex: 'matchedRoute', width: 130 },
+    { title: '命中路由', dataIndex: 'matchedRoute', width: 150 },
     {
       title: '出站状态',
       dataIndex: 'outboundStatus',
@@ -6188,13 +6477,13 @@ export function MessageLogsPage({ lastUpdated, onRefresh }: ConsolePageProps) {
       render: (value?: MessageLog['outboundStatus']) =>
         value ? <StatusTag meta={getOutboundStatusMeta(value)} /> : '-',
     },
-    { title: '目标平台', dataIndex: 'targetProvider', width: 130, render: (value?: string) => value ?? '-' },
-    { title: '耗时', dataIndex: 'duration', width: 90 },
-    { title: '错误码', dataIndex: 'errorCode', width: 100, render: (value?: string) => value ?? '-' },
+    { title: '目标平台', dataIndex: 'targetProvider', width: 150, render: (value?: string) => value ?? '-' },
+    { title: '耗时', dataIndex: 'duration', width: 100 },
+    { title: '错误码', dataIndex: 'errorCode', width: 110, render: (value?: string) => value ?? '-' },
     {
       title: '操作',
       fixed: 'right',
-      width: 90,
+      width: 100,
       render: (_, record) => (
         <Button type="link" onClick={() => void openMessageDetail(record)}>
           详情
@@ -6321,7 +6610,8 @@ export function MessageLogsPage({ lastUpdated, onRefresh }: ConsolePageProps) {
           columns={columns}
           dataSource={messageLogPage.rows}
           loading={loadState.loading}
-          scroll={{ x: 1260 }}
+          scroll={{ x: 1330 }}
+          sticky
         />
       </ListContainer>
 
@@ -6370,10 +6660,14 @@ export function QueueMonitorPage({ lastUpdated, onRefresh }: ConsolePageProps) {
   );
   const [windowValue, setWindowValue] = useState<DashboardWindow>('24h');
   const [loadState, setLoadState] = useState<ApiLoadState>(emptyLoadState);
+  const isFirstLoad = useRef(true);
 
   useEffect(() => {
     let cancelled = false;
-    setLoadState({ loading: true, error: '' });
+    if (isFirstLoad.current) {
+      setLoadState({ loading: true, error: '' });
+      isFirstLoad.current = false;
+    }
     fetchQueueMonitoringData(windowValue)
       .then((data) => {
         if (!cancelled) {
@@ -6440,7 +6734,6 @@ export function QueueMonitorPage({ lastUpdated, onRefresh }: ConsolePageProps) {
           <MetricCard
             key={key}
             {...metric}
-            footnote={jobType ? `任务类型：${getJobTypeLabel(jobType)}` : undefined}
           />
         ))}
       </div>
@@ -6477,6 +6770,7 @@ export function QueueMonitorPage({ lastUpdated, onRefresh }: ConsolePageProps) {
             pagination={false}
             columns={healthColumns}
             dataSource={platformHealthPage.rows}
+            sticky
           />
         </ListContainer>
       </div>
@@ -6507,7 +6801,7 @@ export function QueueMonitorPage({ lastUpdated, onRefresh }: ConsolePageProps) {
         currentPage={slowRulePage.currentPage}
         onPageChange={slowRulePage.onPageChange}
       >
-        <Table rowKey="id" size="middle" pagination={false} columns={slowColumns} dataSource={slowRulePage.rows} />
+        <Table rowKey="id" size="middle" pagination={false} columns={slowColumns} dataSource={slowRulePage.rows} sticky />
       </ListContainer>
     </PageFrame>
   );
@@ -6518,6 +6812,7 @@ export function AuditPage({ lastUpdated, onRefresh }: ConsolePageProps) {
   const [selected, setSelected] = useState<AuditLogRow | null>(null);
   const [rows, setRows] = useState<AuditLogRow[]>([]);
   const [loadState, setLoadState] = useState<ApiLoadState>(emptyLoadState);
+  const isFirstLoad = useRef(true);
   const auditQuery = useAppliedFilters<AuditLogListQuery>({
     actor: '',
     action: 'all',
@@ -6526,8 +6821,10 @@ export function AuditPage({ lastUpdated, onRefresh }: ConsolePageProps) {
   });
   const filteredRows = filterAuditLogsByQuery(rows, auditQuery.applied);
   const auditPage = usePagedRows(filteredRows);
-  const loadAuditLogs = useCallback(async () => {
-    setLoadState({ loading: true, error: '' });
+  const loadAuditLogs = useCallback(async (silent = false) => {
+    if (!silent) {
+      setLoadState({ loading: true, error: '' });
+    }
     try {
       const result = await consoleApi.listAuditLogs();
       setRows(result.audit_logs.map(mapAuditLog));
@@ -6539,21 +6836,35 @@ export function AuditPage({ lastUpdated, onRefresh }: ConsolePageProps) {
   }, []);
 
   useEffect(() => {
-    void loadAuditLogs();
+    const silent = !isFirstLoad.current;
+    if (isFirstLoad.current) {
+      isFirstLoad.current = false;
+    }
+    void loadAuditLogs(silent);
   }, [loadAuditLogs, lastUpdated]);
   const columns: TableProps<AuditLogRow>['columns'] = [
     { title: '操作人', dataIndex: 'actor', width: 120 },
     { title: '操作角色', dataIndex: 'role', width: 120 },
     { title: '操作', dataIndex: 'action', width: 110, render: (value: AuditLog['action']) => getAuditActionLabel(value) },
     { title: '资源类型', dataIndex: 'resourceType', width: 130 },
-    { title: '资源名称', dataIndex: 'resourceName', width: 180 },
+    {
+      title: '资源名称',
+      dataIndex: 'resourceName',
+      width: 180,
+      render: (value: string) => <CopyableIdentifier value={value} maxWidth={160} />,
+    },
     {
       title: '状态',
       dataIndex: 'status',
       width: 100,
       render: (value: AuditLog['status']) => <StatusTag meta={getJobStatusMeta(value)} />,
     },
-    { title: 'IP', dataIndex: 'ip', width: 130 },
+    {
+      title: 'IP',
+      dataIndex: 'ip',
+      width: 130,
+      render: (value: string) => <CopyableIdentifier value={value} maxWidth={120} />,
+    },
     { title: '创建时间', dataIndex: 'createdAt', width: 170 },
     {
       title: '操作',
@@ -6657,6 +6968,7 @@ export function AuditPage({ lastUpdated, onRefresh }: ConsolePageProps) {
           dataSource={auditPage.rows}
           loading={loadState.loading}
           scroll={{ x: 1150 }}
+          sticky
         />
       </ListContainer>
       <Drawer
@@ -6687,18 +6999,21 @@ export function AuditPage({ lastUpdated, onRefresh }: ConsolePageProps) {
   );
 }
 
-export function SettingsPage({ lastUpdated, onRefresh }: ConsolePageProps) {
+export function SettingsPage({ lastUpdated, onRefresh, activeSubTab, onSubTabChange }: ConsolePageProps) {
   const { message } = App.useApp();
   const settingQuery = useAppliedFilters<SettingListQuery>({ keyword: '', category: 'all' });
   const [settingRows, setSettingRows] = useState<SettingApiRecord[]>([]);
   const [loadState, setLoadState] = useState<ApiLoadState>(emptyLoadState);
+  const isFirstLoad = useRef(true);
   const [editingSetting, setEditingSetting] = useState<SettingApiRecord | null>(null);
   const [editingValue, setEditingValue] = useState('');
   const [performanceMessageCount, setPerformanceMessageCount] = useState(200);
   const [performanceLoading, setPerformanceLoading] = useState(false);
   const [performanceResult, setPerformanceResult] = useState<PerformanceTestResult | null>(null);
-  const loadSettings = useCallback(async () => {
-    setLoadState({ loading: true, error: '' });
+  const loadSettings = useCallback(async (silent = false) => {
+    if (!silent) {
+      setLoadState({ loading: true, error: '' });
+    }
     try {
       const result = await consoleApi.listSettings();
       setSettingRows(result.settings);
@@ -6710,7 +7025,11 @@ export function SettingsPage({ lastUpdated, onRefresh }: ConsolePageProps) {
   }, []);
 
   useEffect(() => {
-    void loadSettings();
+    const silent = !isFirstLoad.current;
+    if (isFirstLoad.current) {
+      isFirstLoad.current = false;
+    }
+    void loadSettings(silent);
   }, [loadSettings, lastUpdated]);
   const filteredRows = filterSettingsByQuery(settingRows, settingQuery.applied);
   const settingsPage = usePagedRows(filteredRows);
@@ -6743,7 +7062,7 @@ export function SettingsPage({ lastUpdated, onRefresh }: ConsolePageProps) {
   const columns: TableProps<SettingApiRecord>['columns'] = [
     { title: '参数键', dataIndex: 'key', width: 180 },
     { title: '参数说明', dataIndex: 'description', width: 260 },
-    { title: '分类', dataIndex: 'category', width: 120, render: (value: string) => <Tag color="blue">{value}</Tag> },
+    { title: '分类', dataIndex: 'category', width: 120, render: (value: string) => <StatusTag meta={{ label: value, color: 'processing' }} /> },
     { title: '当前值', dataIndex: 'value', width: 220, render: (value: JSONValue) => <Typography.Text code>{stringifyJSON(value, '-')}</Typography.Text> },
     { title: '更新时间', dataIndex: 'updated_at', width: 170, render: (value: string) => formatApiTime(value) },
     {
@@ -6774,7 +7093,8 @@ export function SettingsPage({ lastUpdated, onRefresh }: ConsolePageProps) {
     >
       <Tabs
         className="workspace-page-tabs"
-        defaultActiveKey="parameters"
+        activeKey={activeSubTab ?? 'parameters'}
+        onChange={onSubTabChange}
         items={[
           {
             key: 'parameters',
@@ -6830,6 +7150,7 @@ export function SettingsPage({ lastUpdated, onRefresh }: ConsolePageProps) {
                     dataSource={settingsPage.rows}
                     loading={loadState.loading}
                     scroll={{ x: 1050 }}
+                    sticky
                   />
                 </ListContainer>
                 <Modal
@@ -6897,7 +7218,8 @@ export function RouteStrategyPage(props: ConsolePageProps) {
   return (
     <Tabs
       className="workspace-page-tabs"
-      defaultActiveKey="route-groups"
+      activeKey={props.activeSubTab ?? 'route-groups'}
+      onChange={props.onSubTabChange}
       items={[
         {
           key: 'route-groups',
@@ -6915,10 +7237,12 @@ export function RouteStrategyPage(props: ConsolePageProps) {
 }
 
 export function MonitoringPage(props: ConsolePageProps) {
+  const activeKey = props.activeSubTab ?? 'messages';
   return (
     <Tabs
-      className="workspace-page-tabs"
-      defaultActiveKey="messages"
+      className={`workspace-page-tabs${activeKey === 'queues' ? ' workspace-page-tabs--auto-height' : ''}`}
+      activeKey={activeKey}
+      onChange={props.onSubTabChange}
       items={[
         {
           key: 'messages',

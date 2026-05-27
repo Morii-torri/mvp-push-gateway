@@ -144,6 +144,8 @@ type Worker struct {
 	mu         sync.Mutex
 	semaphores map[string]chan struct{}
 	limiters   map[string]*channelLimiter
+
+	tokenManager *provider.TokenManager
 }
 
 type WorkerOption func(*Worker)
@@ -189,6 +191,16 @@ func NewWorker(repo Repository, opts ...WorkerOption) *Worker {
 	for _, opt := range opts {
 		opt(worker)
 	}
+	var tokenStore provider.TokenCacheStore
+	if candidate, ok := repo.(provider.TokenCacheStore); ok {
+		tokenStore = candidate
+	}
+	worker.tokenManager = provider.NewTokenManager(
+		tokenStore,
+		provider.WithTokenManagerNow(worker.now),
+		provider.WithTokenManagerOwner(worker.workerID),
+		provider.WithTokenManagerHTTPClientFactory(worker.httpClientFactory),
+	)
 	return worker
 }
 
@@ -368,14 +380,22 @@ func (w *Worker) ProcessOne(ctx context.Context, job queue.Job) error {
 		effectiveChannel.TokenConfig = tokenBehavior.Placement
 	}
 
+	var resolvedTokenCacheKey string
 	if tokenBehavior.Resolver != nil {
-		token, tokenRequestSnapshot, tokenResponseSnapshot, err := w.resolveToken(ctx, channel, *tokenBehavior.Resolver)
-		requestSnapshot["token_exchange"] = tokenRequestSnapshot
-		responseSnapshot["token_exchange"] = tokenResponseSnapshot
+		resolution, err := w.tokenManager.ResolveWithResolver(ctx, provider.TokenResolveInput{
+			Capability:   capability,
+			Channel:      channel,
+			Resolver:     *tokenBehavior.Resolver,
+			Strategy:     tokenBehavior.Strategy,
+			ForceRefresh: false,
+		})
+		requestSnapshot["token_exchange"] = resolution.RequestSnapshot
+		responseSnapshot["token_exchange"] = resolution.ResponseSnapshot
 		if err != nil {
 			return w.failAttempt(ctx, job, attempt, attemptNo, startedAt, "MGP-TOKEN-002", err.Error(), requestSnapshot, responseSnapshot, retryPolicyFrom(channel.RetryPolicy), retryableFailure())
 		}
-		resolvedToken = token
+		resolvedToken = resolution.Token
+		resolvedTokenCacheKey = resolution.CacheKey
 	}
 
 	builtRequest, err := w.buildRequest(effectiveChannel, provider.BuildDeliveryRequestInput{
@@ -392,24 +412,44 @@ func (w *Worker) ProcessOne(ctx context.Context, job queue.Job) error {
 		return w.failAttempt(ctx, job, attempt, attemptNo, startedAt, "MGP-SEND-001", err.Error(), requestSnapshot, responseSnapshot, retryPolicyFrom(channel.RetryPolicy), retryableFailure())
 	}
 
-	requestSnapshot["resolved_token"] = resolvedToken
-	requestSnapshot["final_request"] = map[string]any{
-		"method":  builtRequest.Method,
-		"url":     builtRequest.URL,
-		"headers": builtRequest.Headers,
-		"query":   builtRequest.Query,
-		"body":    snapshotValue(builtRequest.Body),
-	}
-	requestSnapshot["send"] = map[string]any{
-		"method":    builtRequest.Method,
-		"url":       builtRequest.URL,
-		"headers":   builtRequest.Headers,
-		"query":     builtRequest.Query,
-		"recipient": payload.Recipient,
-		"body":      snapshotValue(builtRequest.Body),
-	}
+	requestSnapshot["final_request"] = redactedBuiltRequestSnapshot(builtRequest, nil)
+	requestSnapshot["send"] = redactedBuiltRequestSnapshot(builtRequest, payload.Recipient)
 
 	statusCode, responseHeaders, responseBody, sendErr := w.send(ctx, channel, builtRequest)
+	if sendErr == nil && tokenBehavior.Resolver != nil && shouldRefreshToken(responseBody, capability, capabilitySource, tokenBehavior.Resolver.RefreshCodes) {
+		_ = w.tokenManager.Invalidate(ctx, resolvedTokenCacheKey, "upstream token refresh code")
+		resolution, tokenErr := w.tokenManager.ResolveWithResolver(ctx, provider.TokenResolveInput{
+			Capability:   capability,
+			Channel:      channel,
+			Resolver:     *tokenBehavior.Resolver,
+			Strategy:     tokenBehavior.Strategy,
+			ForceRefresh: true,
+		})
+		requestSnapshot["token_refresh_exchange"] = resolution.RequestSnapshot
+		responseSnapshot["token_refresh_exchange"] = resolution.ResponseSnapshot
+		if tokenErr != nil {
+			return w.failAttempt(ctx, job, attempt, attemptNo, startedAt, "MGP-TOKEN-003", tokenErr.Error(), requestSnapshot, responseSnapshot, retryPolicyFrom(channel.RetryPolicy), retryableFailure())
+		}
+		resolvedToken = resolution.Token
+		resolvedTokenCacheKey = resolution.CacheKey
+		builtRequest, err = w.buildRequest(effectiveChannel, provider.BuildDeliveryRequestInput{
+			Token: resolvedToken,
+			RenderedMessage: provider.RenderedMessage{
+				ProviderType: channel.ProviderType,
+				MessageType:  messageType,
+				Content:      payload.Body,
+			},
+			ResolvedRecipients: provider.ResolvedRecipientsFromValue(payload.Recipient),
+			TargetContext:      targetContext,
+		})
+		if err != nil {
+			return w.failAttempt(ctx, job, attempt, attemptNo, startedAt, "MGP-SEND-001", err.Error(), requestSnapshot, responseSnapshot, retryPolicyFrom(channel.RetryPolicy), retryableFailure())
+		}
+		requestSnapshot["final_request"] = redactedBuiltRequestSnapshot(builtRequest, nil)
+		requestSnapshot["send"] = redactedBuiltRequestSnapshot(builtRequest, payload.Recipient)
+		statusCode, responseHeaders, responseBody, sendErr = w.send(ctx, channel, builtRequest)
+		responseSnapshot["token_refreshed"] = true
+	}
 	upstreamResponse := map[string]any{
 		"status_code": statusCode,
 		"headers":     responseHeaders,
@@ -565,56 +605,6 @@ func retryableFailure() failureClassification {
 	return failureClassification{Retryable: true}
 }
 
-func (w *Worker) resolveToken(ctx context.Context, channel provider.Channel, config tokenResolverConfig) (string, map[string]any, map[string]any, error) {
-	method := strings.ToUpper(strings.TrimSpace(config.Request.Method))
-	if method == "" {
-		method = http.MethodPost
-	}
-	body := config.Request.Body
-	if len(bytes.TrimSpace(body)) == 0 {
-		body = json.RawMessage(`{}`)
-	}
-	requestSnapshot := map[string]any{
-		"method":  method,
-		"url":     config.Request.URL,
-		"headers": config.Request.Headers,
-		"body":    snapshotValue(body),
-	}
-
-	req, err := http.NewRequestWithContext(ctx, method, strings.TrimSpace(config.Request.URL), bytes.NewReader(body))
-	if err != nil {
-		return "", requestSnapshot, map[string]any{"error": err.Error()}, err
-	}
-	for key, value := range config.Request.Headers {
-		req.Header.Set(key, value)
-	}
-	if req.Header.Get("Content-Type") == "" {
-		req.Header.Set("Content-Type", "application/json")
-	}
-
-	statusCode, headers, responseBody, err := w.doRequest(channel.TimeoutMS, req)
-	responseSnapshot := map[string]any{
-		"status_code": statusCode,
-		"headers":     headers,
-		"body":        snapshotValue(responseBody),
-	}
-	if err != nil {
-		responseSnapshot["error"] = err.Error()
-		return "", requestSnapshot, responseSnapshot, err
-	}
-	if statusCode < http.StatusOK || statusCode >= http.StatusMultipleChoices {
-		return "", requestSnapshot, responseSnapshot, fmt.Errorf("token endpoint returned status %d", statusCode)
-	}
-
-	token, err := extractJSONPath(responseBody, config.ResponsePath)
-	if err != nil {
-		responseSnapshot["error"] = err.Error()
-		return "", requestSnapshot, responseSnapshot, err
-	}
-	responseSnapshot["resolved_token"] = token
-	return token, requestSnapshot, responseSnapshot, nil
-}
-
 func (w *Worker) send(ctx context.Context, channel provider.Channel, built provider.BuiltRequest) (int, map[string][]string, []byte, error) {
 	body := built.Body
 	if len(bytes.TrimSpace(body)) == 0 {
@@ -695,18 +685,8 @@ func decodePayload(raw json.RawMessage) (SendMessageJobPayload, error) {
 	return payload, nil
 }
 
-type tokenResolverConfig struct {
-	Request      tokenRequestConfig `json:"request"`
-	ResponsePath string             `json:"response_path"`
-	Placement    json.RawMessage    `json:"placement"`
-}
-
-type tokenRequestConfig struct {
-	Method  string            `json:"method"`
-	URL     string            `json:"url"`
-	Headers map[string]string `json:"headers"`
-	Body    json.RawMessage   `json:"body"`
-}
+type tokenResolverConfig = provider.TokenResolverConfig
+type tokenRequestConfig = provider.TokenRequestConfig
 
 type tokenBehavior struct {
 	Resolver  *tokenResolverConfig
@@ -803,11 +783,15 @@ func decodeResolver(raw json.RawMessage) (*tokenResolverConfig, error) {
 }
 
 type capabilityTokenStrategyConfig struct {
-	Strategy          string                 `json:"strategy"`
-	TokenURL          string                 `json:"token_url"`
-	ResponseTokenPath string                 `json:"response_token_path"`
-	Request           capabilityTokenRequest `json:"request"`
-	Placement         json.RawMessage        `json:"placement"`
+	Strategy              string                 `json:"strategy"`
+	TokenURL              string                 `json:"token_url"`
+	Cacheable             bool                   `json:"cacheable"`
+	ResponseTokenPath     string                 `json:"response_token_path"`
+	ResponseExpiresInPath string                 `json:"response_expires_in_path"`
+	ExpiresInSeconds      int                    `json:"expires_in_seconds"`
+	RefreshTokenCodes     []any                  `json:"refresh_on_json_codes"`
+	Request               capabilityTokenRequest `json:"request"`
+	Placement             json.RawMessage        `json:"placement"`
 }
 
 type capabilityTokenRequest struct {
@@ -820,78 +804,7 @@ type capabilityTokenRequest struct {
 }
 
 func decodeCapabilityResolver(raw json.RawMessage, channel provider.Channel) (*tokenResolverConfig, string, error) {
-	if len(bytes.TrimSpace(raw)) == 0 {
-		return nil, "", nil
-	}
-	if resolver, err := decodeResolver(raw); err != nil {
-		return nil, "", err
-	} else if resolver != nil {
-		return resolver, capabilityStrategy(raw), nil
-	}
-	var config capabilityTokenStrategyConfig
-	if err := json.Unmarshal(raw, &config); err != nil {
-		return nil, "", fmt.Errorf("decode capability token strategy: %w", err)
-	}
-	if strings.TrimSpace(config.TokenURL) == "" || strings.TrimSpace(config.ResponseTokenPath) == "" {
-		return nil, strings.TrimSpace(config.Strategy), nil
-	}
-	credentials := mergeCredentialMaps(channel.AuthConfig, channel.TokenConfig)
-	method := strings.ToUpper(strings.TrimSpace(config.Request.Method))
-	if method == "" {
-		method = http.MethodGet
-	}
-	tokenURL := strings.TrimSpace(config.TokenURL)
-	bodyMap := map[string]any{}
-	if len(bytes.TrimSpace(config.Request.Body)) > 0 {
-		_ = json.Unmarshal(config.Request.Body, &bodyMap)
-	}
-	if len(config.Request.QueryFields) > 0 || strings.TrimSpace(config.Request.QuerySecretField) != "" {
-		parsed, err := url.Parse(tokenURL)
-		if err != nil {
-			return nil, strings.TrimSpace(config.Strategy), err
-		}
-		values := parsed.Query()
-		for _, field := range config.Request.QueryFields {
-			if value, ok := credentials[strings.TrimSpace(field)]; ok && strings.TrimSpace(fmt.Sprint(value)) != "" {
-				values.Set(strings.TrimSpace(field), fmt.Sprint(value))
-			}
-		}
-		if field := strings.TrimSpace(config.Request.QuerySecretField); field != "" {
-			if value, ok := credentials[field]; ok && strings.TrimSpace(fmt.Sprint(value)) != "" {
-				values.Set(field, fmt.Sprint(value))
-			}
-		}
-		parsed.RawQuery = values.Encode()
-		tokenURL = parsed.String()
-	}
-	for _, field := range config.Request.BodyFields {
-		field = strings.TrimSpace(field)
-		if value, ok := credentials[field]; ok && field != "" {
-			bodyMap[field] = value
-		}
-	}
-	body := json.RawMessage(`{}`)
-	if len(bodyMap) > 0 {
-		encoded, err := json.Marshal(bodyMap)
-		if err != nil {
-			return nil, strings.TrimSpace(config.Strategy), err
-		}
-		body = encoded
-	}
-	headers := config.Request.Headers
-	if headers == nil {
-		headers = map[string]string{}
-	}
-	return &tokenResolverConfig{
-		Request: tokenRequestConfig{
-			Method:  method,
-			URL:     tokenURL,
-			Headers: headers,
-			Body:    body,
-		},
-		ResponsePath: config.ResponseTokenPath,
-		Placement:    append(json.RawMessage(nil), bytes.TrimSpace(config.Placement)...),
-	}, strings.TrimSpace(config.Strategy), nil
+	return provider.DecodeCapabilityResolver(raw, channel)
 }
 
 func capabilityStrategy(raw json.RawMessage) string {
@@ -1274,6 +1187,21 @@ func responseJSONCode(raw []byte, preferredField string) (any, string) {
 	return nil, ""
 }
 
+func shouldRefreshToken(responseBody []byte, capability provider.Capability, capabilitySource string, resolverCodes []any) bool {
+	candidates := append([]any(nil), resolverCodes...)
+	var field string
+	if capabilitySource == "capability" {
+		rule := decodeRetryRule(capability.RetryRule)
+		field = rule.Field
+		candidates = append(candidates, rule.RefreshTokenCodes...)
+	}
+	if len(candidates) == 0 {
+		return false
+	}
+	jsonCode, _ := responseJSONCode(responseBody, field)
+	return jsonCodeMatches(jsonCode, candidates)
+}
+
 func jsonCodeMatches(value any, candidates []any) bool {
 	if value == nil || len(candidates) == 0 {
 		return false
@@ -1512,6 +1440,77 @@ func snapshotValue(raw []byte) any {
 		return value
 	}
 	return string(raw)
+}
+
+func redactedBuiltRequestSnapshot(built provider.BuiltRequest, recipient any) map[string]any {
+	snapshot := map[string]any{
+		"method":  built.Method,
+		"url":     redactSnapshotURL(built.URL),
+		"headers": redactSnapshotHeaders(built.Headers),
+		"query":   redactSnapshotQuery(built.Query),
+		"body":    snapshotValue(built.Body),
+	}
+	if recipient != nil {
+		snapshot["recipient"] = recipient
+	}
+	return snapshot
+}
+
+func redactSnapshotHeaders(headers map[string]string) map[string]string {
+	redacted := map[string]string{}
+	for key, value := range headers {
+		if isSensitiveTokenField(key) {
+			redacted[key] = "***"
+			continue
+		}
+		if strings.EqualFold(key, "Authorization") && strings.TrimSpace(value) != "" {
+			redacted[key] = "Bearer ***"
+			continue
+		}
+		redacted[key] = value
+	}
+	return redacted
+}
+
+func redactSnapshotQuery(query map[string]string) map[string]string {
+	redacted := map[string]string{}
+	for key, value := range query {
+		if isSensitiveTokenField(key) {
+			redacted[key] = "***"
+			continue
+		}
+		redacted[key] = value
+	}
+	return redacted
+}
+
+func redactSnapshotURL(rawURL string) string {
+	parsed, err := url.Parse(rawURL)
+	if err != nil {
+		return rawURL
+	}
+	values := parsed.Query()
+	changed := false
+	for key := range values {
+		if isSensitiveTokenField(key) {
+			values.Set(key, "***")
+			changed = true
+		}
+	}
+	if changed {
+		parsed.RawQuery = values.Encode()
+	}
+	return parsed.String()
+}
+
+func isSensitiveTokenField(key string) bool {
+	normalized := strings.ToLower(strings.TrimSpace(key))
+	return normalized == "access_token" ||
+		normalized == "authorization" ||
+		normalized == "token" ||
+		normalized == "corpsecret" ||
+		normalized == "secret" ||
+		normalized == "appsecret"
 }
 
 func marshalSnapshot(snapshot map[string]any) (json.RawMessage, error) {

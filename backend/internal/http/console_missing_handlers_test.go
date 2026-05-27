@@ -536,3 +536,11 @@ func (f *fakeProviderService) TestSend(_ context.Context, _ string, input provid
 	f.testSendInput = input
 	return f.testSendResult, nil
 }
+
+func (f *fakeProviderService) RefreshToken(context.Context, string) (provider.TokenCacheStatus, error) {
+	return provider.TokenCacheStatus{IsCached: true, TokenRefreshed: time.Now().Format(time.RFC3339)}, nil
+}
+
+func (f *fakeProviderService) ResolveFeishuOpenID(context.Context, string, []string) (provider.FeishuOpenIDResolveResult, error) {
+	return provider.FeishuOpenIDResolveResult{}, nil
+}

@@ -68,6 +68,8 @@ type providerService interface {
 	DeleteChannel(context.Context, string) error
 	BuildRequest(context.Context, string, provider.BuildRequestInput) (provider.BuiltRequest, error)
 	TestSend(context.Context, string, provider.TestSendInput) (provider.TestSendResult, error)
+	RefreshToken(context.Context, string) (provider.TokenCacheStatus, error)
+	ResolveFeishuOpenID(context.Context, string, []string) (provider.FeishuOpenIDResolveResult, error)
 }
 
 type recipientService interface {
@@ -85,7 +87,7 @@ type recipientService interface {
 	CreateUserIdentity(context.Context, recipient.UserIdentityInput) (recipient.UserIdentity, error)
 	UpdateUserIdentity(context.Context, string, recipient.UserIdentityInput) (recipient.UserIdentity, error)
 	DeleteUserIdentity(context.Context, string) error
-	FindUserIdentity(context.Context, string, string, string) (recipient.UserIdentity, error)
+	FindUserIdentity(context.Context, string, string, string, string) (recipient.UserIdentity, error)
 	ListRecipientGroups(context.Context) ([]recipient.RecipientGroup, error)
 	CreateRecipientGroup(context.Context, recipient.RecipientGroupInput) (recipient.RecipientGroup, error)
 	GetRecipientGroup(context.Context, string) (recipient.RecipientGroup, error)

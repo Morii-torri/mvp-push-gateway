@@ -54,6 +54,11 @@ import {
   templateVersionSamplePayload,
   templateUserFacingPreview,
   templateVersionInputFromDraft,
+  identityChannelCascaderOptions,
+  identityChannelDisplay,
+  identityChannelDisplayRender,
+  identityChannelExpandTrigger,
+  identityFieldDisplayName,
   providerTestRequestPreview,
   providerTestSendPreview,
   providerTestPayload,
@@ -101,7 +106,20 @@ describe('critical console pages', () => {
       content_schema: {
         text: {
           fields: [
-            { key: 'content', label: '正文内容', required: true, default: '通知' },
+            {
+              key: 'msgtype',
+              label: '消息类型',
+              required: true,
+              default: 'text',
+              enum: ['text', 'markdown', 'textcard'],
+              enum_descriptions: { text: '文本消息', markdown: 'Markdown 消息', textcard: '文本卡片消息' },
+            },
+            { key: 'content', label: '文本内容', required: true, default: '通知' },
+            { key: 'markdown', label: 'Markdown 内容', required: false, default: '' },
+            { key: 'title', label: '卡片标题', required: false, default: '通知' },
+            { key: 'description', label: '卡片描述', required: false, default: '' },
+            { key: 'url', label: '跳转链接', required: false, default: '' },
+            { key: 'btntxt', label: '按钮文字', required: false, default: '详情' },
           ],
         },
         markdown: {
@@ -139,8 +157,8 @@ describe('critical console pages', () => {
     expect(overviewMarkup).toContain('总发送量');
     expect(queueMarkup).toContain('队列监控');
     expect(queueMarkup).toContain('保留期清理状态');
-    expect(queueMarkup).toContain('任务类型：路由规划');
-    expect(queueMarkup).toContain('任务类型：出站发送');
+    expect(queueMarkup).not.toContain('任务类型：路由规划');
+    expect(queueMarkup).not.toContain('任务类型：出站发送');
   });
 
   it('renders source and provider pages with chinese status and platform mappings', () => {
@@ -720,6 +738,39 @@ describe('critical console pages', () => {
     expect(payload.resolved_recipients).toEqual([{ value: 'userid_001' }]);
   });
 
+  it('renders Feishu robot test panel with OpenID and text payload', () => {
+    const draft = createProviderDraft('feishu_robot', 1);
+    const markup = renderPage(
+      <ProviderTestPanel value={draft} onChange={() => undefined} />,
+    );
+
+    expect(markup).toContain('AccessToken 状态');
+    expect(markup).toContain('飞书 OpenID');
+    expect(markup).toContain('text');
+    expect(markup).toContain('模拟请求');
+    expect(markup).toContain('真实发送');
+    expect(markup).not.toContain('测试消息体');
+
+    const payload = providerTestPayload(
+      { ...draft, testRecipient: 'ou_123', testBody: '飞书文本消息' },
+      false,
+    ) as {
+      recipient: string;
+      body: Record<string, unknown>;
+      rendered_message: { provider_type: string; message_type: string; content: Record<string, unknown> };
+      resolved_recipients: Array<{ platform_ids: Record<string, string> }>;
+    };
+
+    expect(payload.recipient).toBe('');
+    expect(payload.body).toEqual({ text: '飞书文本消息' });
+    expect(payload.rendered_message).toEqual({
+      provider_type: 'feishu_robot',
+      message_type: 'text',
+      content: payload.body,
+    });
+    expect(payload.resolved_recipients).toEqual([{ platform_ids: { feishu_open_id: 'ou_123' } }]);
+  });
+
   it('uses ServerChan v3 URL-only fields and Markdown template fallback', () => {
     const providers = [
       ['serverchan', 'API URL'],
@@ -844,6 +895,64 @@ describe('critical console pages', () => {
     expect(templateMarkup).not.toContain('format');
   });
 
+  it('uses WeCom robot webhook-only channel fields and recipient key message content', () => {
+    const providerDraft = createProviderDraft('wecom_robot', 1);
+    const providerMarkup = renderPage(
+      <ProviderConfigForm
+        value={providerDraft}
+        onChange={() => undefined}
+        capabilities={[]}
+      />,
+    );
+
+    expect(providerMarkup).toContain('Webhook URL');
+    expect(providerMarkup).not.toContain('机器人 Key');
+    expect(providerMarkup).not.toContain('提醒成员列表');
+    expect(providerMarkup).not.toContain('允许 @all');
+
+    const providerInput = channelInputFromProvider({
+      ...providerDraft,
+      fieldValues: {
+        'auth_config.webhook_url': 'https://qyapi.weixin.qq.com/cgi-bin/webhook/send',
+      },
+    });
+    expect(providerInput.auth_config).toEqual({
+      webhook_url: 'https://qyapi.weixin.qq.com/cgi-bin/webhook/send',
+    });
+    expect(providerInput.send_config).toEqual({});
+
+    const templateDraft = createTemplateDraft([], [], 'wecom_robot', 'text');
+    const templateMarkup = renderPage(
+      <TemplateEditorForm
+        value={templateDraft}
+        onChange={() => undefined}
+        sourceRows={[]}
+        capabilities={[]}
+      />,
+    );
+    const templateInput = templateVersionInputFromDraft(templateDraft);
+    const templateBody = JSON.parse(templateInput.template_body) as Record<string, string>;
+    const schema = templateInput.message_body_schema as { fields: Array<{ key: string; enum?: string[] }> };
+
+    expect(templateInput.message_type).toBe('text');
+    expect(Object.keys(templateBody)).toEqual(['msgtype', 'content']);
+    expect(schema.fields.find((field) => field.key === 'msgtype')?.enum).toEqual(['text', 'markdown']);
+    expect(templateMarkup).toContain('msgtype');
+    expect(templateMarkup).toContain('content');
+    expect(templateMarkup).not.toContain('Markdown 内容');
+
+    const markdownPreview = templateReceivedPreview({
+      ...templateDraft,
+      fieldValues: {
+        ...templateDraft.fieldValues,
+        msgtype: { expression: 'markdown', defaultValue: 'markdown' },
+        content: { expression: '**hello**', defaultValue: '' },
+      },
+    });
+    expect(markdownPreview.format).toBe('markdown');
+    expect(markdownPreview.body).toBe('**hello**');
+  });
+
   it('uses Bark recipient-only channel fields and message-level option fields', () => {
     const providerDraft = createProviderDraft('bark', 1);
     const providerMarkup = renderPage(
@@ -954,7 +1063,6 @@ describe('critical console pages', () => {
     const robotTypes = [
       ['wecom_robot', '企业微信群机器人'],
       ['dingtalk_robot', '钉钉群机器人'],
-      ['feishu_robot', '飞书机器人'],
     ] as const;
     const appTypes = [
       ['wecom_app', '企业微信应用消息'],
@@ -993,6 +1101,30 @@ describe('critical console pages', () => {
       expect(input.template_body).toContain('"title"');
       expect(input.template_body).toContain('"url"');
     }
+  });
+
+  it('uses Feishu app robot text-only template and app credentials', () => {
+    const providerMarkup = renderPage(
+      <ProviderConfigForm value={createProviderDraft('feishu_robot', 1)} onChange={() => undefined} capabilities={[]} />,
+    );
+    expect(providerMarkup).toContain('飞书 App ID');
+    expect(providerMarkup).toContain('飞书 App Secret');
+    expect(providerMarkup).toContain('API 基础地址');
+    expect(providerMarkup).not.toContain('机器人 Hook Token');
+    expect(providerMarkup).not.toContain('签名 Secret');
+
+    const templateDraft = createTemplateDraft([], [], 'feishu_robot', 'text');
+    const templateMarkup = renderPage(
+      <TemplateEditorForm value={templateDraft} onChange={() => undefined} sourceRows={[]} capabilities={[]} />,
+    );
+    const input = templateVersionInputFromDraft(templateDraft);
+    const body = JSON.parse(input.template_body) as Record<string, string>;
+    expect(input.message_type).toBe('text');
+    expect(Object.keys(body)).toEqual(['text']);
+    expect(templateMarkup).toContain('飞书机器人');
+    expect(templateMarkup).toContain('text');
+    expect(templateMarkup).not.toContain('Markdown 内容');
+    expect(templateMarkup).not.toContain('markdown');
   });
 
   it('renders provider capability driven fields without raw capability summary or advanced JSON', () => {
@@ -1477,6 +1609,35 @@ describe('critical console pages', () => {
     expect(payload.resolved_recipients).toEqual([{ platform_ids: { pushplus_token: 'push-token-1' } }]);
   });
 
+  it('renders WeCom robot test panel with recipient key and typed content', () => {
+    const draft = createProviderDraft('wecom_robot', 1);
+    const markup = renderPage(
+      <ProviderTestPanel value={{ ...draft, testTopic: 'markdown' }} onChange={() => undefined} />,
+    );
+
+    expect(markup).toContain('机器人 Key');
+    expect(markup).toContain('内容格式');
+    expect(markup).toContain('content');
+    expect(markup).toContain('markdown');
+    expect(markup).toContain('模拟请求');
+    expect(markup).toContain('真实发送');
+    expect(markup).not.toContain('测试接收人');
+
+    const payload = providerTestPayload(
+      { ...draft, testRecipient: 'robot-key-1', testTopic: 'markdown', testBody: '**企微群机器人测试**' },
+      false,
+    ) as {
+      body: Record<string, unknown>;
+      rendered_message: { message_type: string; content: Record<string, unknown> };
+      recipient: string;
+      resolved_recipients: Array<{ platform_ids: Record<string, string> }>;
+    };
+    expect(payload.recipient).toBe('');
+    expect(payload.body).toEqual({ msgtype: 'markdown', content: '**企微群机器人测试**' });
+    expect(payload.rendered_message.message_type).toBe('markdown');
+    expect(payload.resolved_recipients).toEqual([{ platform_ids: { wecom_robot_key: 'robot-key-1' } }]);
+  });
+
   it('renders PushMe test panel with recipient key and builds typed payload', () => {
     const draft = createProviderDraft('pushme', 1);
     const markup = renderPage(
@@ -1621,6 +1782,23 @@ describe('critical console pages', () => {
     expect(JSON.stringify(preview)).not.toContain('target_context');
   });
 
+  it('does not append duplicate query fields to provider test request URLs', () => {
+    const preview = providerTestRequestPreview({
+      status: 'dry_run',
+      request: {
+        method: 'POST',
+        url: 'https://qyapi.weixin.qq.com/cgi-bin/message/send?access_token=%2A%2A%2A',
+        headers: { 'Content-Type': 'application/json' },
+        query: { access_token: '***' },
+        body: { touser: 'zhangsan', msgtype: 'text' },
+      },
+    });
+
+    expect(preview.url).toBe(
+      'POST https://qyapi.weixin.qq.com/cgi-bin/message/send?access_token=%2A%2A%2A',
+    );
+  });
+
   it('splits live provider test result into complete request and upstream response', () => {
     const preview = providerTestSendPreview({
       status: 'sent',
@@ -1674,6 +1852,7 @@ describe('critical console pages', () => {
     expect(markup).not.toContain('消息类型');
     expect(markup).toContain('内容编辑模式');
     expect(markup).toContain('企业微信应用消息');
+    expect(markup).toContain('msgtype');
     expect(markup).toContain('content');
     expect(markup).not.toContain('正文内容');
     expect(markup).not.toContain('模板表达式');
@@ -2132,13 +2311,15 @@ describe('critical console pages', () => {
     const body = JSON.parse(input.template_body) as Record<string, string>;
 
     expect(draft.fieldValues.content?.expression).toBe('');
+    expect(draft.fieldValues.msgtype?.expression).toBe('text');
     expect(input.target_provider_type).toBe('wecom_app');
     expect(input.message_type).toBe('text');
     expect(input.template_body).toContain('"content"');
+    expect(body.msgtype).toBe('text');
     expect(body.content).toBe('');
     expect(markup).not.toContain('默认值');
     expect(markup).not.toContain('placeholder="{{ payload.content }}"');
-    expect(templateUserFacingPreview(draft)).toBe('');
+    expect(templateUserFacingPreview(draft)).toContain('"msgtype": "text"');
   });
 
   it('applies the global fallback to payload variables inside template expressions', () => {
@@ -2398,7 +2579,7 @@ describe('critical console pages', () => {
     expect(markup).toContain('平台身份字段');
     expect(markup).not.toContain('身份类型');
     expect(markup).not.toContain('人员属性高级 JSON');
-    expect(markup).toContain('验证状态');
+    expect(markup).not.toContain('验证状态');
     expect(userSection).toContain('scope="col">状态</th>');
     expect(userSection).not.toContain('scope="col">启停</th>');
     expect(userSection.indexOf('scope="col">状态</th>')).toBeLessThan(userSection.indexOf('scope="col">操作</th>'));
@@ -2406,7 +2587,12 @@ describe('critical console pages', () => {
 
   it('renders user profile form without a status switch', () => {
     const UserProfileForm = (ConsolePages as typeof ConsolePages & {
-      UserProfileForm?: (props: { value: Record<string, unknown>; orgOptions: Array<{ label: string; value: string }>; onChange: (value: Record<string, unknown>) => void }) => ReactElement;
+      UserProfileForm?: (props: {
+        value: Record<string, unknown>;
+        orgOptions: Array<{ label: string; value: string }>;
+        channelOptions?: Array<{ label: string; value: string; providerType: string }>;
+        onChange: (value: Record<string, unknown>) => void;
+      }) => ReactElement;
     }).UserProfileForm;
 
     expect(UserProfileForm).toBeTypeOf('function');
@@ -2435,9 +2621,13 @@ describe('critical console pages', () => {
     expect(markup).not.toContain('role="switch"');
   });
 
-  it('renders the identity editor with a right aligned primary add button and no identity-kind input', () => {
+  it('renders the identity editor with channel-scoped identities and no identity-kind input', () => {
     const IdentityEditor = (ConsolePages as typeof ConsolePages & {
-      IdentityEditor?: (props: { identities: Array<Record<string, unknown>>; onChange: (identities: Array<Record<string, unknown>>) => void }) => ReactElement;
+      IdentityEditor?: (props: {
+        identities: Array<Record<string, unknown>>;
+        channelOptions: Array<{ label: string; value: string; providerType: string }>;
+        onChange: (identities: Array<Record<string, unknown>>) => void;
+      }) => ReactElement;
     }).IdentityEditor;
 
     expect(IdentityEditor).toBeTypeOf('function');
@@ -2450,26 +2640,121 @@ describe('critical console pages', () => {
         identities={[
           {
             platform: 'PushPlus',
+            channelId: 'channel-pushplus-work',
             fieldName: 'pushplus_token',
             value: 'token-1',
             verified: true,
           },
         ]}
+        channelOptions={[{ label: 'PushPlus 工作号', value: 'channel-pushplus-work', providerType: 'pushplus' }]}
         onChange={() => undefined}
       />,
     );
 
     expect(markup).toContain('平台身份字段');
+    expect(markup).toContain('推送渠道实例');
+    expect(markup).toContain('PushPlus 工作号');
+    expect(markup).toContain('字段');
+    expect(markup).toContain('Token');
+    expect(markup).toContain('identity-editor-table-shell');
     expect(markup).toContain('新增身份字段');
     expect(markup).toContain('ant-btn-primary');
     expect(markup).toContain('identity-add-button');
-    expect(markup).toContain('identity-row--verified');
     expect(markup).toContain('identity-delete-icon-button');
-    expect(markup).toContain('通过');
     expect(markup).not.toContain('>删除</');
+    expect(markup).not.toContain('通过');
     expect(markup).not.toContain('已验证');
     expect(markup).not.toContain('未验证');
+    expect(markup).not.toContain('role="switch"');
+    expect(markup).not.toContain('推送渠道类型');
     expect(markup).not.toContain('身份类型');
+  });
+
+  it('builds grouped identity channel options and readable identity value labels', () => {
+    const options = identityChannelCascaderOptions([
+      { label: '企业微信生产应用', value: 'channel-wecom-app', providerType: 'wecom_app' },
+      { label: '企业微信群机器人', value: 'channel-wecom-robot', providerType: 'wecom_robot' },
+      { label: 'PushPlus 工作号', value: 'channel-pushplus-work', providerType: 'pushplus' },
+    ]);
+
+    const pushplus = options.find((item) => item.value === 'pushplus');
+    expect(pushplus?.label).toBe('PushPlus【1】');
+    expect(pushplus?.children).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ label: '全部实例（PushPlus）', value: '__all_instances__' }),
+        expect.objectContaining({ label: 'PushPlus 工作号', value: 'channel-pushplus-work' }),
+      ]),
+    );
+
+    expect(identityFieldDisplayName('wecom_userid')).toBe('UserID');
+    expect(identityFieldDisplayName('wecom_robot_key')).toBe('Key');
+    expect(identityFieldDisplayName('pushplus_token')).toBe('Token');
+  });
+
+  it('keeps identity channel picking deliberate and selected labels compact', () => {
+    const channelOptions = [{ label: 'PushMe-test（PushMe）', value: 'channel-pushme-test', providerType: 'pushme' }];
+
+    expect(identityChannelExpandTrigger).toBe('click');
+    expect(identityChannelDisplayRender(['PushMe【1】', 'PushMe-test（PushMe）'])).toBe('PushMe-test（PushMe）');
+    expect(
+      identityChannelDisplay(
+        {
+          platform: 'PushMe',
+          channelId: 'channel-pushme-test',
+          fieldName: 'pushme_push_key',
+          value: 'push-key-1',
+          verified: true,
+        },
+        channelOptions,
+      ),
+    ).toBe('PushMe-test（PushMe）');
+    expect(
+      identityChannelDisplay(
+        {
+          platform: 'PushMe',
+          channelId: '',
+          fieldName: 'pushme_push_key',
+          value: 'push-key-1',
+          verified: true,
+        },
+        channelOptions,
+      ),
+    ).toBe('全部实例（PushMe）');
+  });
+
+  it('renders a Feishu mobile to OpenID resolver action for channel-scoped identities', () => {
+    const IdentityEditor = (ConsolePages as typeof ConsolePages & {
+      IdentityEditor?: (props: {
+        identities: Array<Record<string, unknown>>;
+        channelOptions: Array<{ label: string; value: string; providerType: string }>;
+        onChange: (identities: Array<Record<string, unknown>>) => void;
+      }) => ReactElement;
+    }).IdentityEditor;
+
+    expect(IdentityEditor).toBeTypeOf('function');
+    if (!IdentityEditor) {
+      throw new Error('IdentityEditor is not exported');
+    }
+
+    const markup = renderPage(
+      <IdentityEditor
+        identities={[
+          {
+            platform: '飞书机器人',
+            channelId: 'channel-feishu-work',
+            fieldName: 'feishu_open_id',
+            value: '13011111111',
+            verified: true,
+          },
+        ]}
+        channelOptions={[{ label: '飞书生产应用', value: 'channel-feishu-work', providerType: 'feishu_robot' }]}
+        onChange={() => undefined}
+      />,
+    );
+
+    expect(markup).toContain('identity-resolve-feishu-button');
+    expect(markup).toContain('手机号转 OpenID');
+    expect(markup).toContain('OpenID');
   });
 
   it('offers recipient-bound personal providers as personnel platform identities', () => {

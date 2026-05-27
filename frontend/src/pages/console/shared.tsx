@@ -73,8 +73,8 @@ export const providerBrandMeta: Record<ProviderKind, ProviderBrandDetail> = {
   feishu_robot: {
     color: '#00D2BE',
     rgb: '0, 210, 190',
-    desc: '飞书群聊及个人应用机器人，提供极其美观的可交互富文本卡片。',
-    tags: ['富文本卡片', '交互组件'],
+    desc: '飞书应用机器人，通过 tenant_access_token 向组织人员发送文本通知。',
+    tags: ['应用机器人', 'OpenID'],
     icon: <img src="/icons/feishu.png" alt="" />
   },
   pushplus: {
@@ -228,11 +228,11 @@ const fallbackMessageTypesByProvider: Record<ProviderKind, string[]> = {
   aliyun_sms: ['template', 'text'],
   tencent_sms: ['template', 'text'],
   baidu_sms: ['template', 'text'],
-  wecom_robot: ['text', 'markdown'],
+  wecom_robot: ['text'],
   wecom_app: ['text', 'card'],
   dingtalk_robot: ['text', 'markdown'],
   dingtalk_work: ['text', 'card'],
-  feishu_robot: ['text', 'markdown'],
+  feishu_robot: ['text'],
   gov_cloud: ['text', 'card'],
   custom_token: ['text'],
 };

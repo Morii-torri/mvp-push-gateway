@@ -208,7 +208,7 @@ func (r Repository) DeleteUser(ctx context.Context, id string) error {
 }
 
 func (r Repository) ListUserIdentities(ctx context.Context, userID string) ([]recipient.UserIdentity, error) {
-	rows, err := r.pool.Query(ctx, userIdentitySelectSQL()+` WHERE user_id = $1 ORDER BY provider_type, identity_kind`, userID)
+	rows, err := r.pool.Query(ctx, userIdentitySelectSQL()+` WHERE user_id = $1 ORDER BY provider_type, channel_id NULLS FIRST, identity_kind`, userID)
 	if err != nil {
 		return nil, fmt.Errorf("list user identities: %w", err)
 	}
@@ -227,10 +227,10 @@ func (r Repository) ListUserIdentities(ctx context.Context, userID string) ([]re
 
 func (r Repository) CreateUserIdentity(ctx context.Context, params recipient.CreateUserIdentityParams) (recipient.UserIdentity, error) {
 	item, err := r.queryUserIdentity(ctx, `
-		INSERT INTO user_identities (id, user_id, provider_type, identity_kind, identity_value, verified)
-		VALUES ($1, $2, $3, $4, $5, $6)
+		INSERT INTO user_identities (id, user_id, provider_type, channel_id, identity_kind, identity_value, verified)
+		VALUES ($1, $2, $3, nullif($4, '')::uuid, $5, $6, $7)
 		RETURNING `+userIdentitySelectColumns(),
-		uuid.NewString(), params.UserID, params.ProviderType, params.IdentityKind, params.IdentityValue, params.Verified,
+		uuid.NewString(), params.UserID, params.ProviderType, params.ChannelID, params.IdentityKind, params.IdentityValue, params.Verified,
 	)
 	if err != nil {
 		if isUniqueViolation(err) {
@@ -246,13 +246,14 @@ func (r Repository) UpdateUserIdentity(ctx context.Context, id string, params re
 		UPDATE user_identities
 		SET user_id = $2,
 			provider_type = $3,
-			identity_kind = $4,
-			identity_value = $5,
-			verified = $6,
+			channel_id = nullif($4, '')::uuid,
+			identity_kind = $5,
+			identity_value = $6,
+			verified = $7,
 			updated_at = now()
 		WHERE id = $1
 		RETURNING `+userIdentitySelectColumns(),
-		id, params.UserID, params.ProviderType, params.IdentityKind, params.IdentityValue, params.Verified,
+		id, params.UserID, params.ProviderType, params.ChannelID, params.IdentityKind, params.IdentityValue, params.Verified,
 	)
 	if err != nil {
 		if isUniqueViolation(err) {
@@ -274,10 +275,13 @@ func (r Repository) DeleteUserIdentity(ctx context.Context, id string) error {
 	return nil
 }
 
-func (r Repository) FindUserIdentity(ctx context.Context, providerType string, identityKind string, identityValue string) (recipient.UserIdentity, error) {
+func (r Repository) FindUserIdentity(ctx context.Context, providerType string, channelID string, identityKind string, identityValue string) (recipient.UserIdentity, error) {
 	item, err := r.queryUserIdentity(ctx, userIdentitySelectSQL()+`
 		WHERE provider_type = $1 AND identity_kind = $2 AND identity_value = $3
-	`, providerType, identityKind, identityValue)
+			AND (channel_id = nullif($4, '')::uuid OR channel_id IS NULL)
+		ORDER BY (channel_id = nullif($4, '')::uuid) DESC
+		LIMIT 1
+	`, providerType, identityKind, identityValue, channelID)
 	if err != nil {
 		return recipient.UserIdentity{}, mapRecipientQueryError("find user identity", err)
 	}
@@ -388,7 +392,7 @@ func scanUser(row sourceScanner) (recipient.User, error) {
 
 func scanUserIdentity(row sourceScanner) (recipient.UserIdentity, error) {
 	var item recipient.UserIdentity
-	if err := row.Scan(&item.ID, &item.UserID, &item.ProviderType, &item.IdentityKind, &item.IdentityValue, &item.Verified, &item.CreatedAt, &item.UpdatedAt); err != nil {
+	if err := row.Scan(&item.ID, &item.UserID, &item.ProviderType, &item.ChannelID, &item.IdentityKind, &item.IdentityValue, &item.Verified, &item.CreatedAt, &item.UpdatedAt); err != nil {
 		return recipient.UserIdentity{}, err
 	}
 	return item, nil
@@ -423,7 +427,7 @@ func userIdentitySelectSQL() string {
 }
 
 func userIdentitySelectColumns() string {
-	return `id, user_id, provider_type, identity_kind, identity_value, verified, created_at, updated_at`
+	return `id, user_id, provider_type, COALESCE(channel_id::text, ''), identity_kind, identity_value, verified, created_at, updated_at`
 }
 
 func recipientGroupSelectSQL() string {

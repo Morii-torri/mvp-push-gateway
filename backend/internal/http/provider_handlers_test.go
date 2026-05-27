@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	httpapi "mvp-push-gateway/backend/internal/http"
@@ -93,8 +94,52 @@ func TestProviderCapabilitiesResponseIncludesCapabilityMetadata(t *testing.T) {
 	}
 }
 
+func TestFeishuResolveOpenIDEndpointDelegatesToProviderService(t *testing.T) {
+	service := &capabilityProviderService{
+		resolveResult: provider.FeishuOpenIDResolveResult{
+			Success: true,
+			Items: []provider.FeishuOpenIDResolveItem{{
+				Mobile: "13011111111",
+				OpenID: "ou_resolved",
+				Status: "resolved",
+			}},
+		},
+	}
+	handler := httpapi.NewHandler(
+		testConfig(),
+		httpapi.WithAuthService(fakeAuthService{authenticatedToken: "admin-session"}),
+		httpapi.WithProviderService(service),
+	)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/channels/channel-feishu/feishu/resolve-open-id", strings.NewReader(`{"mobiles":["13011111111"]}`))
+	req.Header.Set("Authorization", "Bearer admin-session")
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	if service.resolveChannelID != "channel-feishu" || strings.Join(service.resolveMobiles, ",") != "13011111111" {
+		t.Fatalf("unexpected resolve input channel=%q mobiles=%v", service.resolveChannelID, service.resolveMobiles)
+	}
+	var body struct {
+		Success bool                               `json:"success"`
+		Items   []provider.FeishuOpenIDResolveItem `json:"items"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if !body.Success || len(body.Items) != 1 || body.Items[0].OpenID != "ou_resolved" {
+		t.Fatalf("unexpected response: %+v", body)
+	}
+}
+
 type capabilityProviderService struct {
-	capabilities []provider.Capability
+	capabilities     []provider.Capability
+	resolveChannelID string
+	resolveMobiles   []string
+	resolveResult    provider.FeishuOpenIDResolveResult
 }
 
 func (f *capabilityProviderService) SeedProviderCapabilities(context.Context) error {
@@ -131,4 +176,14 @@ func (f *capabilityProviderService) BuildRequest(context.Context, string, provid
 
 func (f *capabilityProviderService) TestSend(context.Context, string, provider.TestSendInput) (provider.TestSendResult, error) {
 	return provider.TestSendResult{}, nil
+}
+
+func (f *capabilityProviderService) RefreshToken(context.Context, string) (provider.TokenCacheStatus, error) {
+	return provider.TokenCacheStatus{IsCached: true}, nil
+}
+
+func (f *capabilityProviderService) ResolveFeishuOpenID(_ context.Context, channelID string, mobiles []string) (provider.FeishuOpenIDResolveResult, error) {
+	f.resolveChannelID = channelID
+	f.resolveMobiles = append([]string(nil), mobiles...)
+	return f.resolveResult, nil
 }

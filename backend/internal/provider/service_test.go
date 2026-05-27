@@ -4,7 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 )
 
@@ -73,7 +76,7 @@ func TestDefaultCapabilitiesExposeFirstBatchBuiltInProviders(t *testing.T) {
 		{ProviderAliyunSMS, "sms_template", "mobile"},
 		{ProviderTencentSMS, "sms_template", "mobile"},
 		{ProviderBaiduSMS, "sms_template", "mobile"},
-		{ProviderWeComRobot, "text", "wecom_userid"},
+		{ProviderWeComRobot, "text", "wecom_robot_key"},
 		{ProviderWeComApp, "text", "wecom_userid"},
 		{ProviderDingTalkRobot, "text", "mobile"},
 		{ProviderDingTalkWork, "text", "dingtalk_userid"},
@@ -100,6 +103,105 @@ func TestLegacyCompatibilityProviderTypesAreUnsupported(t *testing.T) {
 		if validProviderType(providerType) {
 			t.Fatalf("expected legacy provider type %s to be unsupported", providerType)
 		}
+	}
+}
+
+func TestFeishuRobotCapabilityUsesTenantTokenAndOpenID(t *testing.T) {
+	capability := findCapability(t, ProviderFeishuRobot, "text")
+
+	if capability.TokenLocation != PlacementHeader || capability.TokenFieldName != "Authorization" {
+		t.Fatalf("expected Feishu token in Authorization header, got location=%q field=%q", capability.TokenLocation, capability.TokenFieldName)
+	}
+	if !capability.RecipientRequired || capability.AllowNoRecipient || capability.IdentityKind != "feishu_open_id" {
+		t.Fatalf("expected required Feishu open_id recipient, got required=%v allow=%v identity=%q", capability.RecipientRequired, capability.AllowNoRecipient, capability.IdentityKind)
+	}
+	assertJSONField(t, capability.CredentialSchema, "properties.app_id.type", "string")
+	assertJSONField(t, capability.CredentialSchema, "properties.app_secret.format", "password")
+	assertJSONField(t, capability.ChannelConfigSchema, "properties.base_url.default", "https://open.feishu.cn/open-apis")
+	assertJSONField(t, capability.TokenStrategy, "strategy", "tenant_access_token")
+	assertJSONField(t, capability.TokenStrategy, "request.method", "POST")
+	assertJSONField(t, capability.TokenStrategy, "response_token_path", "tenant_access_token")
+	assertJSONField(t, capability.TokenStrategy, "response_expires_in_path", "expire")
+	assertJSONField(t, capability.TokenStrategy, "placement.location", "header")
+	assertJSONField(t, capability.TokenStrategy, "placement.field_name", "Authorization")
+	assertJSONField(t, capability.TokenStrategy, "placement.prefix", "Bearer ")
+	assertJSONField(t, capability.SendAPI, "url", "https://open.feishu.cn/open-apis/im/v1/messages")
+	var strategy struct {
+		Request struct {
+			BodyFields []string `json:"body_fields"`
+		} `json:"request"`
+	}
+	if err := json.Unmarshal(capability.TokenStrategy, &strategy); err != nil {
+		t.Fatalf("decode token strategy: %v", err)
+	}
+	if strings.Join(strategy.Request.BodyFields, ",") != "app_id,app_secret" {
+		t.Fatalf("expected app_id/app_secret body fields, got %+v", strategy.Request.BodyFields)
+	}
+}
+
+func TestServiceResolvesFeishuOpenIDByMobileWithTenantToken(t *testing.T) {
+	var tokenRequests int32
+	var resolveRequests int32
+	var resolveAuthHeader string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/open-apis/auth/v3/tenant_access_token/internal":
+			atomic.AddInt32(&tokenRequests, 1)
+			var body map[string]string
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				t.Fatalf("decode token body: %v", err)
+			}
+			if body["app_id"] != "cli_resolve" || body["app_secret"] != "secret-resolve" {
+				t.Fatalf("unexpected token body: %+v", body)
+			}
+			_, _ = w.Write([]byte(`{"code":0,"msg":"ok","tenant_access_token":"tenant-resolve","expire":7200}`))
+		case "/open-apis/contact/v3/users/batch_get_id":
+			atomic.AddInt32(&resolveRequests, 1)
+			resolveAuthHeader = r.Header.Get("Authorization")
+			if r.URL.Query().Get("user_id_type") != "open_id" {
+				t.Fatalf("expected open_id user_id_type, got %s", r.URL.RawQuery)
+			}
+			var body struct {
+				Mobiles         []string `json:"mobiles"`
+				IncludeResigned bool     `json:"include_resigned"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				t.Fatalf("decode resolve body: %v", err)
+			}
+			if strings.Join(body.Mobiles, ",") != "13011111111" || body.IncludeResigned {
+				t.Fatalf("unexpected resolve body: %+v", body)
+			}
+			_, _ = w.Write([]byte(`{"code":0,"msg":"ok","data":{"user_list":[{"mobile":"13011111111","user_id":"ou_resolved"}]}}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	service := NewService(singleChannelStore{channel: Channel{
+		ID:           "channel-feishu-resolve",
+		ProviderType: ProviderFeishuRobot,
+		AuthConfig:   json.RawMessage(`{"app_id":"cli_resolve","app_secret":"secret-resolve"}`),
+		SendConfig:   json.RawMessage(`{"base_url":"` + server.URL + `/open-apis"}`),
+		TimeoutMS:    1000,
+	}})
+
+	result, err := service.ResolveFeishuOpenID(context.Background(), "channel-feishu-resolve", []string{"13011111111"})
+	if err != nil {
+		t.Fatalf("resolve Feishu open id: %v", err)
+	}
+	if tokenRequests != 1 || resolveRequests != 1 {
+		t.Fatalf("expected one token request and one resolve request, got token=%d resolve=%d", tokenRequests, resolveRequests)
+	}
+	if resolveAuthHeader != "Bearer tenant-resolve" {
+		t.Fatalf("expected bearer token header, got %q", resolveAuthHeader)
+	}
+	if !result.Success || len(result.Items) != 1 {
+		t.Fatalf("unexpected resolve result: %+v", result)
+	}
+	if item := result.Items[0]; item.Mobile != "13011111111" || item.OpenID != "ou_resolved" || item.Status != "resolved" {
+		t.Fatalf("unexpected resolve item: %+v", item)
 	}
 }
 
@@ -356,6 +458,26 @@ func TestGovCloudCapabilityUsesDocumentedTokenAndSendMetadata(t *testing.T) {
 	requireJSONListContains(t, retryRule["non_retryable_json_codes"], float64(40031))
 	requireJSONListContains(t, retryRule["non_retryable_json_codes"], float64(40032))
 	requireJSONListContains(t, retryRule["non_retryable_json_codes"], float64(82001))
+}
+
+func TestWeComRobotCapabilityUsesWebhookURLAndRecipientKey(t *testing.T) {
+	capability := findCapability(t, ProviderWeComRobot, "text")
+
+	assertJSONField(t, capability.CredentialSchema, "properties.webhook_url.default", "https://qyapi.weixin.qq.com/cgi-bin/webhook/send")
+	assertJSONField(t, capability.CredentialSchema, "properties.key", nil)
+	assertJSONField(t, capability.ChannelConfigSchema, "properties.key", nil)
+	assertJSONField(t, capability.MessageSchema, "properties.msgtype.default", "text")
+	assertJSONField(t, capability.MessageSchema, "properties.content.type", "string")
+	if capability.IdentityKind != "wecom_robot_key" || !capability.RecipientRequired || capability.AllowNoRecipient {
+		t.Fatalf("expected WeCom robot key as required recipient identity, got identity=%q required=%v allow=%v", capability.IdentityKind, capability.RecipientRequired, capability.AllowNoRecipient)
+	}
+	if capability.RecipientFieldName != "key" || capability.RecipientLocation != PlacementQuery {
+		t.Fatalf("expected WeCom robot key in query, got field=%q location=%q", capability.RecipientFieldName, capability.RecipientLocation)
+	}
+	if capability.TokenLocation != PlacementNone {
+		t.Fatalf("expected WeCom robot to have no channel token placement, got %q", capability.TokenLocation)
+	}
+	assertJSONField(t, capability.SendAPI, "url", "https://qyapi.weixin.qq.com/cgi-bin/webhook/send")
 }
 
 func TestDefaultCapabilitiesDistinguishWebhookAndBuiltInProviders(t *testing.T) {
@@ -642,7 +764,7 @@ func TestBuildDeliveryRequestUsesBuiltInProviderDefaultsWithoutLegacyURL(t *test
 				requireBodyField(t, body, "msgtype", "text")
 				text := requireObjectField(t, body, "text")
 				requireBodyField(t, text, "content", "hello robot")
-				requireStringListField(t, text, "mentioned_list", []string{"u1"})
+				requireNoBodyField(t, text, "mentioned_list")
 			},
 		},
 		{
@@ -660,6 +782,59 @@ func TestBuildDeliveryRequestUsesBuiltInProviderDefaultsWithoutLegacyURL(t *test
 				requireBodyField(t, body, "touser", "u1|u2")
 				requireBodyField(t, body, "agentid", float64(1000001))
 				requireBodyField(t, body, "msgtype", "text")
+			},
+		},
+		{
+			name: "wecom app markdown",
+			channel: Channel{
+				ProviderType: ProviderWeComApp,
+				AuthConfig:   json.RawMessage(`{"agentid":1000001}`),
+			},
+			token:      "wecom-token",
+			message:    json.RawMessage(`{"msgtype":"markdown","markdown":"# hello"}`),
+			recipients: []ResolvedRecipient{{PlatformIDs: map[string]string{"wecom_userid": "u1"}}},
+			assert: func(t *testing.T, request BuiltRequest) {
+				requireRequest(t, request, "POST", "https://qyapi.weixin.qq.com/cgi-bin/message/send?access_token=wecom-token")
+				body := decodeRequestBody(t, request)
+				requireBodyField(t, body, "msgtype", "markdown")
+				markdown := requireObjectField(t, body, "markdown")
+				requireBodyField(t, markdown, "content", "# hello")
+			},
+		},
+		{
+			name: "wecom app textcard",
+			channel: Channel{
+				ProviderType: ProviderWeComApp,
+				AuthConfig:   json.RawMessage(`{"agentid":1000001}`),
+			},
+			token:      "wecom-token",
+			message:    json.RawMessage(`{"msgtype":"textcard","title":"告警","description":"磁盘 95%","url":"https://example.test/detail","btntxt":"查看"}`),
+			recipients: []ResolvedRecipient{{PlatformIDs: map[string]string{"wecom_userid": "u1"}}},
+			assert: func(t *testing.T, request BuiltRequest) {
+				body := decodeRequestBody(t, request)
+				requireBodyField(t, body, "msgtype", "textcard")
+				textcard := requireObjectField(t, body, "textcard")
+				requireBodyField(t, textcard, "title", "告警")
+				requireBodyField(t, textcard, "description", "磁盘 95%")
+				requireBodyField(t, textcard, "url", "https://example.test/detail")
+				requireBodyField(t, textcard, "btntxt", "查看")
+			},
+		},
+		{
+			name: "wecom robot recipient key markdown",
+			channel: Channel{
+				ProviderType: ProviderWeComRobot,
+				AuthConfig:   json.RawMessage(`{"webhook_url":"https://qyapi.weixin.qq.com/cgi-bin/webhook/send"}`),
+			},
+			message:    json.RawMessage(`{"msgtype":"markdown","content":"# hello"}`),
+			recipients: []ResolvedRecipient{{PlatformIDs: map[string]string{"wecom_robot_key": "robot-key-1"}}},
+			assert: func(t *testing.T, request BuiltRequest) {
+				requireRequest(t, request, "POST", "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=robot-key-1")
+				body := decodeRequestBody(t, request)
+				requireBodyField(t, body, "msgtype", "markdown")
+				markdown := requireObjectField(t, body, "markdown")
+				requireBodyField(t, markdown, "content", "# hello")
+				requireNoBodyField(t, body, "text")
 			},
 		},
 		{
@@ -700,15 +875,31 @@ func TestBuildDeliveryRequestUsesBuiltInProviderDefaultsWithoutLegacyURL(t *test
 			name: "feishu robot",
 			channel: Channel{
 				ProviderType: ProviderFeishuRobot,
-				AuthConfig:   json.RawMessage(`{"webhook_url":"https://open.feishu.cn/open-apis/bot/v2/hook/hook-token"}`),
+				TokenConfig:  json.RawMessage(`{"location":"header","field_name":"Authorization","prefix":"Bearer "}`),
+				SendConfig:   json.RawMessage(`{"base_url":"https://open.feishu.cn/open-apis"}`),
 			},
-			message: json.RawMessage(`{"body":"hello feishu"}`),
+			token:      "tenant-token",
+			message:    json.RawMessage(`{"body":"hello feishu"}`),
+			recipients: []ResolvedRecipient{{PlatformIDs: map[string]string{"feishu_open_id": "ou_123"}}},
 			assert: func(t *testing.T, request BuiltRequest) {
-				requireRequest(t, request, "POST", "https://open.feishu.cn/open-apis/bot/v2/hook/hook-token")
+				requireRequest(t, request, "POST", "https://open.feishu.cn/open-apis/im/v1/messages?receive_id_type=open_id")
+				if request.Headers["Authorization"] != "Bearer tenant-token" {
+					t.Fatalf("expected bearer token header, got %+v", request.Headers)
+				}
 				body := decodeRequestBody(t, request)
 				requireBodyField(t, body, "msg_type", "text")
-				content := requireObjectField(t, body, "content")
-				requireBodyField(t, content, "text", "hello feishu")
+				requireBodyField(t, body, "receive_id", "ou_123")
+				contentString, ok := body["content"].(string)
+				if !ok {
+					t.Fatalf("expected serialized content string, got %#v", body["content"])
+				}
+				var content map[string]string
+				if err := json.Unmarshal([]byte(contentString), &content); err != nil {
+					t.Fatalf("decode feishu content string: %v", err)
+				}
+				if content["text"] != "hello feishu" {
+					t.Fatalf("expected text content, got %+v", content)
+				}
 			},
 		},
 		{

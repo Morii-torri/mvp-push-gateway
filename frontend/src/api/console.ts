@@ -88,9 +88,24 @@ export type ChannelApiRecord = {
   dead_letter_policy: JSONValue;
   created_at: string;
   updated_at: string;
+  is_cached?: boolean;
+  token_refreshed_at?: string;
 };
 
-export type ChannelInput = Omit<ChannelApiRecord, 'id' | 'created_at' | 'updated_at'>;
+export type ChannelInput = Omit<ChannelApiRecord, 'id' | 'created_at' | 'updated_at' | 'is_cached' | 'token_refreshed_at'>;
+
+export type FeishuOpenIdResolveItem = {
+  mobile: string;
+  open_id: string;
+  status: string;
+  error?: string;
+};
+
+export type FeishuOpenIdResolveResponse = {
+  success: boolean;
+  items: FeishuOpenIdResolveItem[];
+  errors?: string[];
+};
 
 export type ProviderCapabilityApiRecord = {
   id?: string;
@@ -315,6 +330,7 @@ export type UserIdentityApiRecord = {
   id: string;
   user_id: string;
   provider_type: string;
+  channel_id: string;
   identity_kind: string;
   identity_value: string;
   verified: boolean;
@@ -325,6 +341,7 @@ export type UserIdentityApiRecord = {
 export type UserIdentityInput = {
   user_id?: string;
   provider_type: string;
+  channel_id?: string;
   identity_kind: string;
   identity_value: string;
   verified: boolean;
@@ -533,6 +550,20 @@ export const consoleApi = {
     return apiRequest<{ result: JSONValue }>(`/channels/${id}/test-send`, {
       method: 'POST',
       body: input,
+      fetcher,
+    });
+  },
+  refreshTokenChannel(id: string, fetcher?: ApiFetcher) {
+    return apiRequest<{ status: string; is_cached: boolean; token_refreshed_at: string }>(`/channels/${id}/refresh-token`, {
+      method: 'POST',
+      body: {},
+      fetcher,
+    });
+  },
+  resolveFeishuOpenId(id: string, mobiles: string[], fetcher?: ApiFetcher) {
+    return apiRequest<FeishuOpenIdResolveResponse>(`/channels/${id}/feishu/resolve-open-id`, {
+      method: 'POST',
+      body: { mobiles },
       fetcher,
     });
   },

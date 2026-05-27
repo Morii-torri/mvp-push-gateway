@@ -268,6 +268,31 @@ function enterpriseCardFields(): TemplateContentField[] {
   ];
 }
 
+function weComAppFields(): TemplateContentField[] {
+  return [
+    contentField(
+      'msgtype',
+      '消息类型',
+      'string',
+      'text',
+      'text',
+      true,
+      undefined,
+      [
+        { label: '文本消息', value: 'text' },
+        { label: 'Markdown 消息', value: 'markdown' },
+        { label: '文本卡片消息', value: 'textcard' },
+      ],
+    ),
+    contentField('content', '文本内容', 'string', '通知', '{{ payload.content }}'),
+    contentField('markdown', 'Markdown 内容', 'markdown', '', '{{ payload.content }}', false, 'msgtype=markdown 时使用'),
+    contentField('title', '卡片标题', 'string', '通知', '{{ payload.title }}', false, 'msgtype=textcard 时使用'),
+    contentField('description', '卡片描述', 'string', '', '{{ payload.summary }}', false, 'msgtype=textcard 时使用'),
+    contentField('url', '跳转链接', 'string', '', '{{ payload.url }}', false, 'msgtype=textcard 时使用'),
+    contentField('btntxt', '按钮文字', 'string', '详情', '详情', false, 'msgtype=textcard 时使用'),
+  ];
+}
+
 function smsTemplateFields(): TemplateContentField[] {
   return [
     contentField('template_params', '模板参数 JSON', 'object', '{}', '{{ payload.template_params }}'),
@@ -391,18 +416,30 @@ const fallbackTemplateSchemas: Record<ProviderKind, Record<string, { label: stri
   },
   wecom_robot: {
     text: {
-      label: '文本',
-      fields: [contentField('content', '正文内容', 'string', '通知', '{{ payload.content }}')],
+      label: '群机器人消息',
+      fields: [
+        contentField('msgtype', 'msgtype', 'string', 'text', 'text', true, undefined, [
+          { label: 'text', value: 'text' },
+          { label: 'markdown', value: 'markdown' },
+        ]),
+        contentField('content', 'content', 'string', '通知', '{{ payload.content }}'),
+      ],
     },
     markdown: {
       label: 'Markdown',
-      fields: [contentField('markdown', 'Markdown 内容', 'string', '', '{{ payload.content }}')],
+      fields: [
+        contentField('msgtype', 'msgtype', 'string', 'markdown', 'markdown', true, undefined, [
+          { label: 'text', value: 'text' },
+          { label: 'markdown', value: 'markdown' },
+        ]),
+        contentField('content', 'content', 'markdown', '', '{{ payload.content }}', true, '支持 Markdown'),
+      ],
     },
   },
   wecom_app: {
     text: {
-      label: '文本',
-      fields: [contentField('content', '正文内容', 'string', '通知', '{{ payload.content }}')],
+      label: '应用消息',
+      fields: weComAppFields(),
     },
     card: {
       label: '卡片',
@@ -435,11 +472,7 @@ const fallbackTemplateSchemas: Record<ProviderKind, Record<string, { label: stri
   feishu_robot: {
     text: {
       label: '文本',
-      fields: [contentField('content', '正文内容', 'string', '通知', '{{ payload.content }}')],
-    },
-    markdown: {
-      label: 'Markdown',
-      fields: [contentField('markdown', 'Markdown 内容', 'string', '', '{{ payload.content }}')],
+      fields: [contentField('text', '正文内容', 'string', '通知', '{{ payload.content }}')],
     },
   },
   gov_cloud: {
@@ -589,6 +622,9 @@ function templateListMessageFormat(providerType: ProviderKind, messageType: stri
     if (parsed && Object.prototype.hasOwnProperty.call(parsed, 'body')) {
       return 'text';
     }
+  }
+  if (providerType === 'wecom_robot') {
+    return literalMessageFormat(parsed?.msgtype) || messageType;
   }
   return messageType;
 }
@@ -796,7 +832,7 @@ function templateFieldFromSchemaRecord(value: JSONValue, fallbackKey = ''): Temp
     return null;
   }
   const defaultValue = jsonScalarToText(value.default) || jsonScalarToText(value.default_value) || jsonScalarToText(value.fallback);
-  const defaultExpression =
+  let defaultExpression =
     firstString(value.expression, value.template, value.template_expression) || `{{ payload.${payloadKeyForContentField(key)} }}`;
   const enumDescriptions = enumDescriptionRecord(value);
   const options = Array.isArray(value.enum)
@@ -807,6 +843,9 @@ function templateFieldFromSchemaRecord(value: JSONValue, fallbackKey = ''): Temp
           return { label: description ? `${item}：${description}` : item, value: item };
         })
     : undefined;
+  if (options?.length && defaultValue && defaultExpression.includes('{{')) {
+    defaultExpression = defaultValue;
+  }
   return {
     key,
     label: firstString(value.label, value.title, value.description) || providerFieldLabel(key),
@@ -955,10 +994,23 @@ function templateBodyObjectFromFieldValues(values: TemplateFieldValues, omittedK
 }
 
 function omittedTemplateFieldKeys(draft: TemplateDraft): Set<string> {
-  if (draft.targetProviderType !== 'bark') {
-    return new Set();
+  if (draft.targetProviderType === 'bark') {
+    return selectedBarkBodyFormat(draft) === 'markdown' ? new Set(['body']) : new Set(['markdown']);
   }
-  return selectedBarkBodyFormat(draft) === 'markdown' ? new Set(['body']) : new Set(['markdown']);
+  if (draft.targetProviderType === 'wecom_app' && draft.messageType === 'text') {
+    const msgtype = draft.fieldValues?.msgtype?.expression || 'text';
+    switch (msgtype) {
+      case 'text':
+        return new Set(['markdown', 'title', 'description', 'url', 'btntxt']);
+      case 'markdown':
+        return new Set(['content', 'title', 'description', 'url', 'btntxt']);
+      case 'textcard':
+        return new Set(['content', 'markdown']);
+      default:
+        return new Set();
+    }
+  }
+  return new Set();
 }
 
 function selectedBarkBodyFormat(draft: TemplateDraft): BarkBodyFormat {
@@ -1396,6 +1448,12 @@ function templatePreviewFormat(draft: TemplateDraft, rendered: JSONValue): Templ
   if (draft.targetProviderType === 'bark' && isRecord(rendered) && firstRenderedString(rendered, ['markdown'])) {
     return 'markdown';
   }
+  if (draft.targetProviderType === 'wecom_robot' && isRecord(rendered)) {
+    const format = previewFormatFromValue(rendered.msgtype);
+    if (format === 'text' || format === 'markdown') {
+      return format;
+    }
+  }
   return normalizeTemplateMessageFormat(draft.messageType);
 }
 
@@ -1538,10 +1596,8 @@ export function TemplateEditorForm({
   const view = templateCapabilityView(value.targetProviderType, value.messageType, capabilities);
   const update = (patch: Partial<TemplateDraft>) => onChange({ ...value, ...patch });
   const barkBodyFormat = selectedBarkBodyFormat(value);
-  const visibleFields =
-    value.targetProviderType === 'bark'
-      ? view.fields.filter((field) => field.key !== (barkBodyFormat === 'markdown' ? 'body' : 'markdown'))
-      : view.fields;
+  const omitted = omittedTemplateFieldKeys(value);
+  const visibleFields = view.fields.filter((field) => !omitted.has(field.key));
   const updateBarkBodyFormat = (nextFormat: BarkBodyFormat) => {
     const nextDraft = {
       ...value,

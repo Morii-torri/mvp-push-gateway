@@ -13,6 +13,10 @@ import Switch from 'antd/es/switch';
 import Tabs from 'antd/es/tabs';
 import Typography from 'antd/es/typography';
 import Segmented from 'antd/es/segmented';
+import Tag from 'antd/es/tag';
+import Alert from 'antd/es/alert';
+import { ReloadOutlined } from '@ant-design/icons';
+
 
 import {
   consoleApi,
@@ -117,6 +121,8 @@ type ProviderRuntimeConfig = ProviderPreset & {
   testUrl: string;
   testLevel: string;
   testIcon: string;
+  is_cached?: boolean;
+  token_refreshed_at?: string;
 };
 
 export type ProviderRow = ProviderRecord & ProviderRuntimeConfig;
@@ -370,20 +376,21 @@ const providerPresets: Record<ProviderKind, ProviderPreset> = {
     testBody: '百度智能云短信测试消息',
   },
   wecom_robot: {
-    tokenEndpoint: '固定机器人 Key',
-    tokenRequest: 'key',
+    tokenEndpoint: 'Webhook URL',
+    tokenRequest: '基础 Webhook 地址',
     tokenResponsePath: '-',
-    tokenPlacement: 'query.key',
+    tokenPlacement: '接收人 wecom_robot_key -> query.key',
     sendEndpoint: '内置企业微信群机器人 adapter',
-    recipientMapping: '可选 mentioned_list = receivers.wecom_userid',
-    bodyMapping: 'adapter 根据 text/markdown 内容生成机器人消息',
+    recipientMapping: '由路由接收人或人员平台身份 wecom_robot_key 提供',
+    bodyMapping: 'adapter 根据 msgtype 生成 text/markdown 群机器人消息',
     qps: 20,
     concurrency: 8,
     timeoutMs: 3000,
     retryPolicy: '2 次固定间隔',
     retryInterval: '2s / 5s',
     deadLetterPolicy: '全局默认：重试耗尽或上级错误进入死信',
-    testRecipient: 'zhangwei',
+    testRecipient: '',
+    testTopic: 'text',
     testBody: '企业微信群机器人测试消息',
   },
   wecom_app: {
@@ -393,7 +400,7 @@ const providerPresets: Record<ProviderKind, ProviderPreset> = {
     tokenPlacement: 'Query.access_token = ${token}',
     sendEndpoint: '内置企业微信应用 adapter',
     recipientMapping: 'touser/toparty/totag；touser 来自 receivers.wecom_userid',
-    bodyMapping: 'adapter 根据 text/card 内容生成应用消息',
+    bodyMapping: 'adapter 根据 msgtype 生成 text/markdown/textcard 应用消息',
     qps: 80,
     concurrency: 16,
     timeoutMs: 3000,
@@ -438,13 +445,13 @@ const providerPresets: Record<ProviderKind, ProviderPreset> = {
     testBody: '钉钉工作消息测试',
   },
   feishu_robot: {
-    tokenEndpoint: '固定机器人 Hook Token',
-    tokenRequest: 'hook_token + optional sign_secret',
-    tokenResponsePath: '-',
-    tokenPlacement: 'path hook token',
-    sendEndpoint: '内置飞书机器人 adapter',
-    recipientMapping: '默认无需接收人；可在内容中引用 feishu_open_id',
-    bodyMapping: 'adapter 根据 text/markdown 内容生成机器人消息',
+    tokenEndpoint: 'POST /auth/v3/tenant_access_token/internal',
+    tokenRequest: 'app_id + app_secret',
+    tokenResponsePath: 'tenant_access_token',
+    tokenPlacement: 'Header.Authorization = Bearer ${token}',
+    sendEndpoint: 'POST /im/v1/messages?receive_id_type=open_id',
+    recipientMapping: 'receive_id 来自人员平台身份 feishu_open_id',
+    bodyMapping: 'adapter 固定生成 text 消息，并将 content 序列化为 JSON 字符串',
     qps: 20,
     concurrency: 8,
     timeoutMs: 3000,
@@ -529,6 +536,7 @@ function providerVisibleConfigFields(providerType: ProviderKind, fields: Provide
   const hiddenKeysByProvider: Partial<Record<ProviderKind, Set<string>>> = {
     pushplus: new Set(['token', 'topic', 'template', 'channel']),
     wxpusher: new Set(['spt', 'mode', 'content_type']),
+    wecom_robot: new Set(['key', 'mentioned_list', 'allow_at_all', 'base_url']),
     bark: new Set(['device_key', 'device_keys']),
     pushme: new Set(['push_key', 'temp_key', 'type', 'method', 'content_type']),
   };
@@ -914,9 +922,15 @@ function fallbackProviderFields(providerType: ProviderKind): ProviderConfigField
   }
   if (providerType === 'wecom_robot') {
     return [
-      field('key', '机器人 Key', 'auth_config', 'password', true),
-      field('mentioned_list', '提醒成员列表', 'send_config', 'textarea'),
-      field('allow_at_all', '允许 @all', 'send_config'),
+      field(
+        'webhook_url',
+        'Webhook URL',
+        'auth_config',
+        'text',
+        true,
+        'https://qyapi.weixin.qq.com/cgi-bin/webhook/send',
+        'https://qyapi.weixin.qq.com/cgi-bin/webhook/send',
+      ),
     ];
   }
   if (providerType === 'wecom_app') {
@@ -924,7 +938,10 @@ function fallbackProviderFields(providerType: ProviderKind): ProviderConfigField
       field('corpid', '企业 ID', 'auth_config', 'text', true),
       field('corpsecret', '应用 Secret', 'auth_config', 'password', true),
       field('agentid', '应用 AgentId', 'send_config', 'text', true),
-      field('allow_at_all', '允许 @all', 'send_config'),
+      field('safe', '保密消息', 'send_config', 'number', false, '0', 0),
+      field('enable_id_trans', '开启 ID 转译', 'send_config', 'number', false, '0', 0),
+      field('enable_duplicate_check', '开启重复检查', 'send_config', 'number', false, '0', 0),
+      field('duplicate_check_interval', '重复检查间隔秒', 'send_config', 'number', false, '1800', 1800),
     ];
   }
   if (providerType === 'dingtalk_robot') {
@@ -944,8 +961,9 @@ function fallbackProviderFields(providerType: ProviderKind): ProviderConfigField
   }
   if (providerType === 'feishu_robot') {
     return [
-      field('hook_token', '机器人 Hook Token', 'auth_config', 'password', true),
-      field('sign_secret', '签名 Secret', 'auth_config', 'password'),
+      field('base_url', 'API 基础地址', 'send_config', 'text', true, 'https://open.feishu.cn/open-apis', 'https://open.feishu.cn/open-apis'),
+      field('app_id', '飞书 App ID', 'auth_config', 'text', true),
+      field('app_secret', '飞书 App Secret', 'auth_config', 'password', true),
     ];
   }
   if (providerType === 'self') {
@@ -1284,6 +1302,17 @@ function providerTestBodyValue(value: ProviderRow): JSONValue {
     }
     return body;
   }
+  if (value.providerType === 'wecom_robot') {
+    return {
+      msgtype: normalizedWeComRobotMessageType(value.testTopic),
+      content: value.testBody.trim(),
+    };
+  }
+  if (value.providerType === 'feishu_robot') {
+    return {
+      text: value.testBody.trim(),
+    };
+  }
   if (value.providerType === 'pushme') {
     return {
       title: value.testTitle.trim(),
@@ -1340,6 +1369,8 @@ function normalizedProviderTestRecipient(value: ProviderRow): string {
     value.providerType === 'pushplus' ||
     value.providerType === 'wxpusher' ||
     value.providerType === 'serverchan' ||
+    value.providerType === 'wecom_robot' ||
+    value.providerType === 'feishu_robot' ||
     value.providerType === 'bark' ||
     value.providerType === 'pushme'
   ) {
@@ -1392,6 +1423,12 @@ function providerTestRecipients(value: ProviderRow, recipient: string): JSONValu
   if (value.providerType === 'serverchan') {
     return splitListText(value.testRecipient).map((sendKey) => ({ platform_ids: { serverchan_sendkey: sendKey } }));
   }
+  if (value.providerType === 'wecom_robot') {
+    return splitListText(value.testRecipient).map((key) => ({ platform_ids: { wecom_robot_key: key } }));
+  }
+  if (value.providerType === 'feishu_robot') {
+    return splitListText(value.testRecipient).map((openID) => ({ platform_ids: { feishu_open_id: openID } }));
+  }
   if (value.providerType === 'bark') {
     return splitListText(value.testRecipient).map((deviceKey) => ({ platform_ids: { bark_device_key: deviceKey } }));
   }
@@ -1410,6 +1447,10 @@ function normalizedBarkMessageType(value: string): string {
   return value.trim().toLowerCase() === 'markdown' ? 'markdown' : 'text';
 }
 
+function normalizedWeComRobotMessageType(value: string): string {
+  return value.trim().toLowerCase() === 'markdown' ? 'markdown' : 'text';
+}
+
 function normalizedBarkLevel(value: string): string {
   const normalized = value.trim();
   return barkLevelOptions.some((option) => option.value === normalized) ? normalized : '';
@@ -1423,11 +1464,15 @@ export function providerTestPayload(value: ProviderRow, send: boolean, liveSendC
       ? 'html'
       : value.providerType === 'serverchan'
         ? 'markdown'
-        : value.providerType === 'pushme'
-          ? normalizedPushMeMessageType(value.testTopic)
-          : value.providerType === 'bark'
-            ? normalizedBarkMessageType(value.testTopic)
-            : value.messageTypes[0] ?? 'text';
+        : value.providerType === 'wecom_robot'
+          ? normalizedWeComRobotMessageType(value.testTopic)
+          : value.providerType === 'feishu_robot'
+            ? 'text'
+            : value.providerType === 'pushme'
+              ? normalizedPushMeMessageType(value.testTopic)
+              : value.providerType === 'bark'
+                ? normalizedBarkMessageType(value.testTopic)
+                : value.messageTypes[0] ?? 'text';
   const resolvedRecipients = providerTestRecipients(value, recipient);
   return {
     send,
@@ -1483,9 +1528,24 @@ function urlWithQuery(url: string, query: JSONValue): string {
   if (!isRecord(query) || Object.keys(query).length === 0) {
     return url;
   }
+  const existingKeys = new Set<string>();
+  try {
+    const parsed = new URL(url);
+    parsed.searchParams.forEach((_, key) => existingKeys.add(key));
+  } catch {
+    const queryStart = url.indexOf('?');
+    if (queryStart >= 0) {
+      for (const part of url.slice(queryStart + 1).split('&')) {
+        const key = part.split('=')[0];
+        if (key) {
+          existingKeys.add(decodeURIComponent(key.replace(/\+/g, ' ')));
+        }
+      }
+    }
+  }
   const params = new URLSearchParams();
   for (const [key, value] of Object.entries(query)) {
-    if (value === undefined || value === null || typeof value === 'object') {
+    if (existingKeys.has(key) || value === undefined || value === null || typeof value === 'object') {
       continue;
     }
     params.set(key, String(value));
@@ -1705,6 +1765,8 @@ export function mapChannelRow(channel: ChannelApiRecord, capabilities: ProviderC
     deadLetterRetentionDays: typeof deadLetterPolicy.retention_days === 'number' ? deadLetterPolicy.retention_days : 7,
     deadLetterReplay: typeof deadLetterPolicy.replay === 'boolean' ? deadLetterPolicy.replay : base.deadLetterReplay,
     fieldValues,
+    is_cached: channel.is_cached,
+    token_refreshed_at: channel.token_refreshed_at,
   };
 }
 
@@ -2158,9 +2220,29 @@ export function ProviderTestPanel({
   const { message, modal } = App.useApp();
   const [testResult, setTestResult] = useState<JSONValue | null>(null);
   const [testResultMode, setTestResultMode] = useState<'simulate' | 'send' | null>(null);
+  const [refreshing, setRefreshing] = useState(false);
+
+  const handleRefresh = async () => {
+    setRefreshing(true);
+    try {
+      const res = await consoleApi.refreshTokenChannel(value.id);
+      onChange({
+        ...value,
+        is_cached: res.is_cached,
+        token_refreshed_at: res.token_refreshed_at,
+      });
+      message.success('AccessToken 刷新成功！');
+    } catch (err) {
+      showUserFacingError(message, err);
+    } finally {
+      setRefreshing(false);
+    }
+  };
   const pushPlusTest = value.providerType === 'pushplus';
   const wxPusherTest = value.providerType === 'wxpusher';
   const serverChanTest = value.providerType === 'serverchan';
+  const weComRobotTest = value.providerType === 'wecom_robot';
+  const feishuRobotTest = value.providerType === 'feishu_robot';
   const pushMeTest = value.providerType === 'pushme';
   const barkTest = value.providerType === 'bark';
   const update = (patch: Partial<ProviderRow>) => onChange({ ...value, ...patch });
@@ -2187,6 +2269,22 @@ export function ProviderTestPanel({
     }
     if (serverChanTest && splitListText(value.testRecipient).length === 0) {
       message.error('请填写 Server酱 SendKey');
+      return false;
+    }
+    if (weComRobotTest && splitListText(value.testRecipient).length === 0) {
+      message.error('请填写机器人 Key');
+      return false;
+    }
+    if (weComRobotTest && !value.testBody.trim()) {
+      message.error('请填写 content');
+      return false;
+    }
+    if (feishuRobotTest && splitListText(value.testRecipient).length === 0) {
+      message.error('请填写飞书 OpenID');
+      return false;
+    }
+    if (feishuRobotTest && !value.testBody.trim()) {
+      message.error('请填写 text');
       return false;
     }
     if (pushMeTest && !value.testTitle.trim()) {
@@ -2240,6 +2338,43 @@ export function ProviderTestPanel({
 
   return (
     <Form layout="vertical">
+      {['wecom_app', 'dingtalk_work', 'feishu_robot', 'gov_cloud'].includes(value.providerType) && (
+        <Form.Item className="form-item-full">
+          <Alert
+            message={
+              <Space>
+                <span>🔑 AccessToken 状态：</span>
+                {value.is_cached ? (
+                  <Tag color="success">已缓存</Tag>
+                ) : (
+                  <Tag color="default">未缓存</Tag>
+                )}
+                {value.token_refreshed_at ? (
+                  <span style={{ fontSize: '12px', color: 'rgba(0, 0, 0, 0.45)' }}>
+                    (上一次token刷新时间: {new Date(value.token_refreshed_at).toLocaleString()})
+                  </span>
+                ) : (
+                  <span style={{ fontSize: '12px', color: 'rgba(0, 0, 0, 0.45)' }}>
+                    (暂无刷新记录)
+                  </span>
+                )}
+                <Button
+                  type="text"
+                  size="small"
+                  shape="circle"
+                  icon={<ReloadOutlined spin={refreshing} />}
+                  loading={refreshing}
+                  onClick={handleRefresh}
+                  style={{ color: 'rgba(0, 0, 0, 0.45)' }}
+                />
+              </Space>
+            }
+            type="info"
+            showIcon
+            style={{ marginBottom: 16 }}
+          />
+        </Form.Item>
+      )}
       {pushPlusTest ? (
         <div className="two-column-form provider-test-form">
           <Form.Item label="PushPlus Token" required className="form-item-full">
@@ -2293,6 +2428,42 @@ export function ProviderTestPanel({
             <Input value={value.testTopic} onChange={(event) => update({ testTopic: event.target.value })} />
           </Form.Item>
           <Form.Item label="desp（可选）" className="form-item-full" extra="支持 Markdown">
+            <Input.TextArea
+              rows={5}
+              value={value.testBody}
+              onChange={(event) => update({ testBody: event.target.value })}
+            />
+          </Form.Item>
+        </div>
+      ) : weComRobotTest ? (
+        <div className="two-column-form provider-test-form">
+          <Form.Item label="机器人 Key" required className="form-item-full">
+            <Input value={value.testRecipient} onChange={(event) => update({ testRecipient: event.target.value })} />
+          </Form.Item>
+          <Form.Item label="内容格式" required>
+            <Select
+              value={normalizedWeComRobotMessageType(value.testTopic)}
+              options={[
+                { label: 'text', value: 'text' },
+                { label: 'markdown', value: 'markdown' },
+              ]}
+              onChange={(testTopic) => update({ testTopic })}
+            />
+          </Form.Item>
+          <Form.Item label="content" required className="form-item-full" extra={normalizedWeComRobotMessageType(value.testTopic) === 'markdown' ? '支持 Markdown' : undefined}>
+            <Input.TextArea
+              rows={5}
+              value={value.testBody}
+              onChange={(event) => update({ testBody: event.target.value })}
+            />
+          </Form.Item>
+        </div>
+      ) : feishuRobotTest ? (
+        <div className="two-column-form provider-test-form">
+          <Form.Item label="飞书 OpenID" required className="form-item-full">
+            <Input value={value.testRecipient} onChange={(event) => update({ testRecipient: event.target.value })} />
+          </Form.Item>
+          <Form.Item label="text" required className="form-item-full">
             <Input.TextArea
               rows={5}
               value={value.testBody}
