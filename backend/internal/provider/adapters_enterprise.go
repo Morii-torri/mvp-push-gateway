@@ -82,23 +82,48 @@ func weComAppRequestConfig(auth, send, content map[string]any, recipient any) (r
 }
 
 func dingTalkRobotRequestConfig(auth, send, content map[string]any, recipient any) (requestConfig, error) {
-	requestURL := firstString(stringConfig(auth, "webhook_url", "webhookUrl"), stringConfig(send, "webhook_url", "webhookUrl"))
-	if requestURL == "" {
-		accessToken := firstString(stringConfig(auth, "access_token"), stringConfig(send, "access_token"))
-		if accessToken == "" {
+	baseURL := firstString(stringConfig(send, "base_url"), stringConfig(auth, "base_url"), "https://oapi.dingtalk.com")
+	accessToken := firstRecipientString(recipient)
+	if accessToken == "" {
+		return requestConfig{}, ErrInvalidInput
+	}
+	requestURL := joinURL(baseURL, "/robot/send")
+	parsed, err := url.Parse(requestURL)
+	if err != nil {
+		return requestConfig{}, ErrInvalidInput
+	}
+	values := parsed.Query()
+	values.Set("access_token", accessToken)
+	if secret := firstString(stringConfig(auth, "secret"), stringConfig(auth, "robot_secret")); secret != "" {
+		timestamp := time.Now().UnixMilli()
+		sign, err := dingTalkRobotSign(secret, timestamp)
+		if err != nil {
 			return requestConfig{}, ErrInvalidInput
 		}
-		requestURL = "https://oapi.dingtalk.com/robot/send?access_token=" + url.QueryEscape(accessToken)
+		values.Set("timestamp", fmt.Sprintf("%d", timestamp))
+		values.Set("sign", sign)
 	}
+	parsed.RawQuery = values.Encode()
 	body := map[string]any{
-		"msgtype": "text",
-		"text":    map[string]any{"content": messageBody(content)},
+		"msgtype": "markdown",
+		"markdown": map[string]any{
+			"title": messageTitle(content),
+			"text":  firstString(stringConfig(content, "text"), stringConfig(content, "markdown"), messageBody(content)),
+		},
 		"at": map[string]any{
-			"atMobiles": recipientStrings(recipient),
-			"isAtAll":   boolConfig(send, "is_at_all", "at_all", "isAtAll"),
+			"isAtAll": boolConfig(send, "isAtAll", "is_at_all", "at_all", "allow_at_all"),
 		},
 	}
-	return jsonRequest("POST", requestURL, body)
+	return jsonRequest("POST", parsed.String(), body)
+}
+
+func dingTalkRobotSign(secret string, timestamp int64) (string, error) {
+	stringToSign := fmt.Sprintf("%d\n%s", timestamp, secret)
+	h := hmac.New(sha256.New, []byte(secret))
+	if _, err := h.Write([]byte(stringToSign)); err != nil {
+		return "", err
+	}
+	return base64.StdEncoding.EncodeToString(h.Sum(nil)), nil
 }
 
 func dingTalkWorkRequestConfig(auth, send, content map[string]any, recipient any) (requestConfig, error) {
@@ -182,21 +207,4 @@ func feishuGroupSign(secret string, timestamp int64) (string, error) {
 		return "", err
 	}
 	return base64.StdEncoding.EncodeToString(h.Sum(nil)), nil
-}
-
-func govCloudRequestConfig(auth, send, content map[string]any, recipient any) (requestConfig, error) {
-	baseURL := firstString(stringConfig(send, "base_url"), stringConfig(auth, "base_url"), govCloudDefaultBaseURL)
-	body := map[string]any{
-		"touser":      strings.Join(recipientStrings(recipient), "|"),
-		"toparty":     stringConfig(send, "toparty"),
-		"totag":       stringConfig(send, "totag"),
-		"msgtype":     "text",
-		"description": firstString(stringConfig(content, "description"), messageBody(content)),
-	}
-	if boolConfig(send, "at_all", "allow_at_all") {
-		body["touser"] = "@all"
-		body["toparty"] = ""
-		body["totag"] = ""
-	}
-	return tokenQueryJSONRequest("POST", joinURL(baseURL, "/request/message/send"), "access_token", body)
 }

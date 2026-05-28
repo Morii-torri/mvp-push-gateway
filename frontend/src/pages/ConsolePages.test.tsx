@@ -67,7 +67,7 @@ import {
 import type { ChannelApiRecord, OrgUnitApiRecord, ProviderCapabilityApiRecord, TemplateApiRecord, TemplateVersionApiRecord } from '../api/console';
 import { getProviderTypeLabel } from '../utils/labels';
 import { providerTypeOptions, recipientIdentityProviderOptions } from './console/shared';
-import { mapChannelRow, providerCapabilityView, providerFieldValuesAfterChange, providerWithCapability } from './console/providerConfig';
+import { mapChannelRow, providerCapabilityView, providerFieldValuesAfterChange, providerWithCapability, tokenCacheStatusMeta } from './console/providerConfig';
 
 const lastUpdated = new Date('2026-05-11T09:30:00+08:00');
 
@@ -92,7 +92,6 @@ describe('critical console pages', () => {
     ['dingtalk_work', '钉钉工作消息'],
     ['feishu_robot', '飞书应用机器人'],
     ['feishu_group', '飞书群消息'],
-    ['gov_cloud', '随申办政务云'],
     ['custom_token', '自定义 Token 平台'],
     ['ntfy', 'ntfy'],
     ['gotify', 'Gotify'],
@@ -134,12 +133,13 @@ describe('critical console pages', () => {
     {
       provider_type: 'email',
       display_name: 'SMTP 邮件',
-      supported_message_types: ['text', 'html'],
+      supported_message_types: ['text'],
       content_schema: {
-        html: {
+        text: {
           fields: [
-            { key: 'subject', label: '邮件主题', required: true, default: '通知' },
-            { key: 'html', label: 'HTML 正文', required: true, default: '<p>通知</p>' },
+            { key: 'subject', label: '主题', required: true, default: '通知' },
+            { key: 'body', label: '正文', required: true, default: '通知正文' },
+            { key: 'format', label: '内容格式', required: true, default: 'text', enum: ['text', 'html'] },
           ],
         },
       },
@@ -456,7 +456,7 @@ describe('critical console pages', () => {
     expect(providersMarkup.indexOf('企业协同')).toBeLessThan(providersMarkup.indexOf('个人推送'));
     expect(providersMarkup.indexOf('个人推送')).toBeLessThan(providersMarkup.indexOf('邮件短信'));
     expect(providersMarkup.indexOf('邮件短信')).toBeLessThan(providersMarkup.indexOf('基础通道'));
-    expect(providersMarkup.indexOf('基础通道')).toBeLessThan(providersMarkup.indexOf('自建服务'));
+    expect(providersMarkup.indexOf('基础通道')).toBeLessThan(providersMarkup.lastIndexOf('自建服务'));
     for (const label of hiddenLegacyProviderLabels) {
       expect(providersMarkup).not.toContain(label);
     }
@@ -487,23 +487,17 @@ describe('critical console pages', () => {
       'webhook',
       'self',
       'custom_token',
-      'gov_cloud',
       'ntfy',
       'gotify',
     ]);
   });
 
-  it('renders gov cloud fields with documented base URL and no raw mapping fields', () => {
-    const draft = createProviderDraft('gov_cloud', 1);
-    const markup = renderPage(
-      <ProviderConfigForm value={draft} onChange={() => undefined} capabilities={[]} />,
-    );
+  it('does not expose the removed gov cloud provider in provider configuration', () => {
+    const markup = renderPage(<ProvidersPage lastUpdated={lastUpdated} onRefresh={() => undefined} />);
 
-    expect(markup).toContain('corpsecret');
-    expect(markup).toContain('https://www.ywxt.sh.cegn.cn/api-gateway/uranus/uranus/cgi-bin/');
-    expect(markup).toContain('开发环境不可访问，先实现请求构建');
-    expect(markup).not.toContain('Body 映射模板');
-    expect(markup).not.toContain('请求 Header');
+    expect(providerTypeOptions.some((option) => String(option.value) === 'gov_cloud')).toBe(false);
+    expect(markup).not.toContain('随申办政务云');
+    expect(markup).not.toContain('gov_cloud');
   });
 
   it('uses PushPlus recipient-token provider fields and HTML content template fallback', () => {
@@ -739,6 +733,32 @@ describe('critical console pages', () => {
 
     expect(payload.recipient).toBe('userid_001');
     expect(payload.resolved_recipients).toEqual([{ value: 'userid_001' }]);
+  });
+
+  it('builds SMTP email test payload with subject and body fields', () => {
+    expect(createProviderDraft('email', 1).testRecipient).toBe('');
+    const draft = {
+      ...createProviderDraft('email', 1),
+      testRecipient: '021120129@sues.edu.cn',
+      testTitle: '邮件测试标题',
+      testBody: '邮件测试消息',
+    };
+
+    const payload = providerTestPayload(draft, false) as {
+      recipient: string;
+      body: Record<string, unknown>;
+      rendered_message: { provider_type: string; message_type: string; content: Record<string, unknown> };
+      resolved_recipients: Array<{ value: string }>;
+    };
+
+    expect(payload.recipient).toBe('021120129@sues.edu.cn');
+    expect(payload.body).toEqual({ subject: '邮件测试标题', body: '邮件测试消息' });
+    expect(payload.rendered_message).toEqual({
+      provider_type: 'email',
+      message_type: 'text',
+      content: payload.body,
+    });
+    expect(payload.resolved_recipients).toEqual([{ value: '021120129@sues.edu.cn' }]);
   });
 
   it('renders Feishu robot test panel with OpenID and text payload', () => {
@@ -1073,7 +1093,6 @@ describe('critical console pages', () => {
   it('uses robot markdown and enterprise card template fallbacks without exposing raw provider enums', () => {
     const robotTypes = [
       ['wecom_robot', '企业微信群机器人'],
-      ['dingtalk_robot', '钉钉群机器人'],
     ] as const;
     const appTypes = [
       ['wecom_app', '企业微信应用消息'],
@@ -1095,6 +1114,23 @@ describe('critical console pages', () => {
       expect(markup).not.toContain(providerType);
       expect(input.template_body).toContain('"markdown"');
     }
+
+    const dingTalkMarkup = renderPage(
+      <TemplateEditorForm
+        value={createTemplateDraft([], [], 'dingtalk_robot', 'markdown')}
+        onChange={() => undefined}
+        sourceRows={[]}
+        capabilities={[]}
+      />,
+    );
+    const dingTalkInput = templateVersionInputFromDraft(createTemplateDraft([], [], 'dingtalk_robot', 'markdown'));
+    const dingTalkBody = JSON.parse(dingTalkInput.template_body) as Record<string, string>;
+    expect(dingTalkMarkup).toContain('钉钉群机器人');
+    expect(dingTalkMarkup).toContain('title');
+    expect(dingTalkMarkup).toContain('text');
+    expect(dingTalkMarkup).toContain('支持标准 Markdown');
+    expect(dingTalkMarkup).not.toContain('msgtype');
+    expect(Object.keys(dingTalkBody)).toEqual(['title', 'text']);
 
     for (const [providerType, label] of appTypes) {
       const markup = renderPage(
@@ -1144,6 +1180,32 @@ describe('critical console pages', () => {
       },
     };
     expect(templateUserFacingPreview(previewDraft)).toBe('飞书文本预览');
+  });
+
+  it('uses DingTalk group robot base API, optional secret and markdown-only template', () => {
+    const providerMarkup = renderPage(
+      <ProviderConfigForm value={createProviderDraft('dingtalk_robot', 1)} onChange={() => undefined} capabilities={[]} />,
+    );
+    expect(providerMarkup).toContain('API 基础地址');
+    expect(providerMarkup).toContain('secret');
+    expect(providerMarkup).toContain('isAtAll');
+    expect(providerMarkup).toContain('https://oapi.dingtalk.com');
+    expect(providerMarkup).not.toContain('Webhook URL');
+    expect(providerMarkup).not.toContain('机器人 Access Token');
+    expect(providerMarkup).not.toContain('安全关键词');
+
+    const templateDraft = createTemplateDraft([], [], 'dingtalk_robot', 'markdown');
+    const templateMarkup = renderPage(
+      <TemplateEditorForm value={templateDraft} onChange={() => undefined} sourceRows={[]} capabilities={[]} />,
+    );
+    const input = templateVersionInputFromDraft(templateDraft);
+    const body = JSON.parse(input.template_body) as Record<string, string>;
+    expect(input.message_type).toBe('markdown');
+    expect(Object.keys(body)).toEqual(['title', 'text']);
+    expect(templateMarkup).toContain('title');
+    expect(templateMarkup).toContain('text');
+    expect(templateMarkup).toContain('支持标准 Markdown');
+    expect(templateMarkup).not.toContain('msgtype');
   });
 
   it('uses Feishu group message webhook fields and text-only template', () => {
@@ -1352,7 +1414,7 @@ describe('critical console pages', () => {
         ...outlookValues,
         'auth_config.username': 'ops@example.com',
         'auth_config.password': 'app-password',
-        'send_config.from': 'MVP Push <ops@example.com>',
+        'send_config.from': 'MVP Push',
         'send_config.cc': 'team@example.com, audit@example.com',
         'send_config.bcc': 'security@example.com',
         'send_config.reply_to': 'reply@example.com',
@@ -1370,18 +1432,46 @@ describe('critical console pages', () => {
       '自定义',
     ]);
     expect(defaultMarkup).toContain('邮箱服务商');
+    expect(defaultMarkup).toContain('SMTP 主机地址');
+    expect(defaultMarkup).toContain('SMTP 端口');
+    expect(defaultMarkup).toContain('加密方式');
     expect(defaultMarkup).toContain('用户名');
     expect(defaultMarkup).toContain('授权码 / 密码');
-    expect(defaultMarkup).toContain('发件人地址');
+    expect(defaultMarkup).toContain('发件人显示名');
     expect(defaultMarkup).toContain('抄送收件人地址');
     expect(defaultMarkup).toContain('密送收件人地址');
     expect(defaultMarkup).toContain('指定回复地址');
-    expect(defaultMarkup).not.toContain('SMTP 主机地址');
     expect(defaultMarkup).not.toContain('启用 SSL/TLS');
     expect(defaultMarkup).not.toContain('start_tls');
     expect(customMarkup).toContain('SMTP 主机地址');
     expect(customMarkup).toContain('SMTP 端口');
     expect(customMarkup).toContain('加密方式');
+    expect(draft.configFields.map((field) => field.label)).toEqual([
+      '邮箱服务商',
+      'SMTP 主机地址',
+      'SMTP 端口',
+      '加密方式',
+      '用户名',
+      '授权码 / 密码',
+      '发件人显示名',
+      '抄送收件人地址',
+      '密送收件人地址',
+      '指定回复地址',
+    ]);
+    const renderedLabelOrder = [
+      '邮箱服务商',
+      'SMTP 主机地址',
+      'SMTP 端口',
+      '加密方式',
+      '用户名',
+      '授权码 / 密码',
+      '发件人显示名',
+      '抄送收件人地址',
+      '密送收件人地址',
+      '指定回复地址',
+    ].map((label) => defaultMarkup.indexOf(`title="${label}"`));
+    expect(renderedLabelOrder.every((index) => index >= 0)).toBe(true);
+    expect([...renderedLabelOrder].sort((a, b) => a - b)).toEqual(renderedLabelOrder);
     expect(input.auth_config).toEqual({
       service_provider: 'outlook',
       host: 'smtp-mail.outlook.com',
@@ -1391,11 +1481,17 @@ describe('critical console pages', () => {
       password: 'app-password',
     });
     expect(input.send_config).toEqual({
-      from: 'MVP Push <ops@example.com>',
+      from: 'MVP Push',
       cc: ['team@example.com', 'audit@example.com'],
       bcc: ['security@example.com'],
       reply_to: 'reply@example.com',
     });
+  });
+
+  it('maps persistent token cache statuses for provider rows', () => {
+    expect(tokenCacheStatusMeta({ is_cached: true, token_cache_status: 'cached' })).toEqual({ label: '已缓存', color: 'success' });
+    expect(tokenCacheStatusMeta({ is_cached: false, token_cache_status: 'expired' })).toEqual({ label: '已过期', color: 'warning' });
+    expect(tokenCacheStatusMeta({ is_cached: false, token_cache_status: 'missing' })).toEqual({ label: '未缓存', color: 'default' });
   });
 
   it('renders route page guardrails and hit counts without exposing raw english enums', () => {
@@ -2364,6 +2460,64 @@ describe('critical console pages', () => {
     expect(templateVersionInputFromDraft(textDraft).message_type).toBe('text');
   });
 
+  it('does not stringify the SMTP email payload as body when email body is empty', () => {
+    const draft = createTemplateDraft(
+      [
+        {
+          id: 'src-a',
+          code: 'ui-test',
+          name: 'UI 测试来源',
+          latestPayload: JSON.stringify({ title: '【通知】UI 入站测试消息' }),
+        },
+      ],
+      templateCapabilities,
+      'email',
+      'text',
+    );
+    draft.fieldValues.subject = { expression: '{{ payload.title }}', defaultValue: '' };
+    draft.fieldValues.body = { expression: '', defaultValue: '' };
+    draft.fieldValues.format = { expression: 'text', defaultValue: '' };
+
+    const preview = templateReceivedPreview(draft);
+
+    expect(preview.title).toBe('【通知】UI 入站测试消息');
+    expect(preview.body).toBe('');
+    expect(preview.html).toBe('');
+    expect(templateUserFacingPreview(draft)).toBe('【通知】UI 入站测试消息');
+  });
+
+  it('switches SMTP email received preview between plain text and HTML formats', () => {
+    const sourceRows = [
+      {
+        id: 'src-a',
+        code: 'alerts',
+        name: '告警来源',
+        latestPayload: JSON.stringify({ title: 'CPU 告警', content: 'CPU 90%' }),
+      },
+    ];
+    const htmlDraft = createTemplateDraft(sourceRows, [], 'email', 'text');
+    htmlDraft.fieldValues.subject = { expression: '{{ payload.title }}', defaultValue: '' };
+    htmlDraft.fieldValues.body = { expression: '<strong>{{ payload.content }}</strong><script>alert(1)</script>', defaultValue: '' };
+    htmlDraft.fieldValues.format = { expression: 'html', defaultValue: '' };
+    const textDraft = createTemplateDraft(sourceRows, [], 'email', 'text');
+    textDraft.fieldValues.subject = { expression: '{{ payload.title }}', defaultValue: '' };
+    textDraft.fieldValues.body = { expression: '<strong>{{ payload.content }}</strong>', defaultValue: '' };
+    textDraft.fieldValues.format = { expression: 'text', defaultValue: '' };
+
+    const htmlPreview = templateReceivedPreview(htmlDraft);
+    const textPreview = templateReceivedPreview(textDraft);
+    const htmlInput = templateVersionInputFromDraft(htmlDraft);
+    const htmlSchema = htmlInput.message_body_schema as { fields: Array<{ key: string; enum?: string[] }> };
+
+    expect(htmlPreview.format).toBe('html');
+    expect(htmlPreview.html).toContain('<strong>CPU 90%</strong>');
+    expect(htmlPreview.html).not.toContain('<script>');
+    expect(textPreview.format).toBe('text');
+    expect(textPreview.html).toContain('&lt;strong&gt;CPU 90%&lt;/strong&gt;');
+    expect(htmlInput.template_body).toContain('"format"');
+    expect(htmlSchema.fields.find((field) => field.key === 'format')?.enum).toEqual(['text', 'html']);
+  });
+
   it('uses PushMe type field to choose the received preview format', () => {
     const sourceRows = [
       {
@@ -2411,7 +2565,7 @@ describe('critical console pages', () => {
     );
     const emailDraft = switchTemplateMessageType(
       switchTemplateProviderType(markdownDraft, 'email', templateCapabilities),
-      'html',
+      'text',
       templateCapabilities,
     );
     const emailMarkup = renderPage(
@@ -2425,8 +2579,10 @@ describe('critical console pages', () => {
 
     expect(markdownMarkup).toContain('markdown');
     expect(markdownMarkup).not.toContain('邮件主题');
-    expect(emailMarkup).toContain('subject');
-    expect(emailMarkup).toContain('html');
+    expect(emailMarkup).toContain('主题');
+    expect(emailMarkup).toContain('正文');
+    expect(emailMarkup).not.toContain('html');
+    expect(emailMarkup).not.toContain('HTML 正文');
     expect(emailMarkup).not.toContain('Markdown 内容');
   });
 
@@ -2504,13 +2660,13 @@ describe('critical console pages', () => {
         source_id: 'src-1',
         enabled: true,
         current_version_id: 'tpl-version-1',
-        message_type: 'html',
+        message_type: 'text',
         target_provider_type: 'email',
-        template_body: '{"subject":"{{ payload.title }}","html":"{{ payload.content }}"}',
+        template_body: '{"subject":"{{ payload.title }}","body":"{{ payload.content }}"}',
         message_body_schema: {
           fields: [
-            { key: 'subject', label: '邮件主题' },
-            { key: 'html', label: 'HTML 正文' },
+            { key: 'subject', label: '主题' },
+            { key: 'body', label: '正文' },
           ],
         },
         sample_payload: { title: '测试', content: '正文' },
@@ -2521,8 +2677,8 @@ describe('critical console pages', () => {
     );
 
     expect(row.targetProviderType).toBe('email');
-    expect(row.messageType).toBe('html');
-    expect(row.targetField).toBe('subject、html');
+    expect(row.messageType).toBe('text');
+    expect(row.targetField).toBe('subject、body');
     expect(row.targetField).not.toBe('tpl-version-1');
   });
 

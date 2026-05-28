@@ -102,4 +102,4 @@ attempt_count: 2
 
 ## 后续联调边界
 
-本次没有真实调用 PushPlus、WxPusher、Server 酱、短信、企微、钉钉、飞书、政务云、ntfy、Gotify、Bark、PushMe 等外部平台。真实发送必须等待账号、token、测试接收人和网络白名单准备完成后单独联调。
+本次没有真实调用 PushPlus、WxPusher、Server 酱、短信、企微、钉钉、飞书、ntfy、Gotify、Bark、PushMe 等外部平台。真实发送必须等待账号、token、测试接收人和网络白名单准备完成后单独联调。

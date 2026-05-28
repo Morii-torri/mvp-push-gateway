@@ -34,20 +34,18 @@
 | 第一批 | 飞书应用机器人 | `feishu_robot` | 企业应用机器人 | 已实现 build-request/mock；未真实联调 |
 | 第一批 | 飞书群消息 | `feishu_group` | 群机器人 webhook | 已实现 build-request/mock；未真实联调 |
 | 第一批兼容 | 飞书旧类型 | `feishu` | legacy robot | 已移除；新配置使用 `feishu_robot` / `feishu_group` |
-| 第一批 | 随申办政务云 | `gov_cloud` | 政务云消息平台 | 已实现 build-request/mock 和错误分类；开发环境不可访问，未真实联调 |
 | 高级保留 | 高级 custom_token | `custom_token` | advanced HTTP | 保留高级映射，不作为普通用户主路径 |
 | P2 | ntfy | `ntfy` | 自托管通知 | 已实现 build-request/mock；目标服务依赖用户配置，未真实联调 |
 | P2 | Gotify | `gotify` | 自托管通知 | 已实现 build-request/mock；目标服务依赖用户配置，未真实联调 |
 | P2 | Bark | `bark` | iOS 通知 | 已实现 build-request/mock；未真实联调 |
 | P2 | PushMe | `pushme` | 多平台通知 | 已实现 build-request/mock；未真实联调 |
 
-除通用 Webhook 可用本地假服务完成闭环外，PushPlus、WxPusher、Server酱、短信、企微、钉钉、飞书、SMTP/self/gov_cloud 当前均不要写成已经真实发送成功。
+除通用 Webhook 可用本地假服务完成闭环外，PushPlus、WxPusher、Server酱、短信、企微、钉钉、飞书、SMTP/self 当前均不要写成已经真实发送成功。
 
 ### 1.2 需要你补充的资料
 
 | 项目 | 为什么需要你补 |
 |---|---|
-| 随申办政务云 | base URL 已确认；开发环境当前不可访问，第一阶段按文档实现并用 mock/fake server 测试，不做真实联调。后续还需要测试 corpsecret、IP 白名单要求和可用测试接收人。 |
 | 短信供应商账号 | 第一批明确为阿里云、腾讯云、百度智能云；目前没有测试账号，第一阶段按官方 SDK/文档实现并用 mock client 测试，后续补账号、签名、模板 ID、区域后再真实联调。 |
 | 其他高级 custom_token 系统 | 不作为本批固定平台；如后续要接，需要目标系统的 token API、发送 API、成功判定和错误码。 |
 | 企业客户侧限制 | 例如企微、钉钉、飞书是否只允许机器人，不允许企业应用；是否要求私有域名、代理、IP 白名单。 |
@@ -165,42 +163,7 @@ Delivery adapter 输出 final request。日志快照记录 `target_context`、`r
 | adapter 配置模型 | 复用当前 `send_config.method/url/headers/body/recipient` |
 | 模板内容 schema | `json`：任意对象 |
 
-### 3.3 随申办政务云
-
-| 项 | 内容 |
-|---|---|
-| 支持消息类型 | 第一版建议先做 `text`；平台文档还包含图片、音频、视频、文件、文本卡片、图文、模板卡片，后续按需扩展 |
-| 用户填写配置 | `base_url` 默认 `https://www.ywxt.sh.cegn.cn/api-gateway/uranus/uranus/cgi-bin/`、`corpsecret`、是否允许 `@all`、超时、限流；后续如平台要求可补应用标识 |
-| 接收人身份字段 | `gov_userid`、`gov_party_id`、`gov_tag_id`；`touser/toparty/totag` 三者不能同时为空 |
-| Token 获取方式 | `GET {base_url}/gettoken?corpsecret=...`；示例：`https://www.ywxt.sh.cegn.cn/api-gateway/uranus/uranus/cgi-bin/gettoken?corpsecret=...`；返回 `access_token/expires_in`；有效期 3600 秒，必须全局缓存；access_token 至少预留 512 字节 |
-| 发送 API | `POST {base_url}/request/message/send?access_token=...` |
-| 请求体结构 | 文本消息：`{"touser":"UserID1|UserID2","toparty":"PartyID1|PartyID2","totag":"TagID1|TagID2","msgtype":"text","description":"消息内容"}`；`touser=@all` 时忽略 `toparty/totag` |
-| 成功判定 | token 接口 JSON `errcode == 0`；发送接口也按 `errcode == 0` 判定成功 |
-| 错误码和重试建议 | token 获取失败记 `MGP-TOKEN-*`；`401/40014/42001` 清缓存后刷新 token 并重试一次；`-1/523/5xx` 有限重试；`40031/40032/82001` 等参数或接收人错误不重试 |
-| 限流/频率限制 | 平台限制待联调确认；本地先配置 QPS、并发和重试次数；开发环境当前不可访问，先实现不测试真实接口 |
-| adapter 配置模型 | `credentials={base_url, corpsecret}`；`token_cache={access_token, expires_at}`；`recipient={identity_kind:gov_userid, party_identity_kind:gov_party_id, tag_identity_kind:gov_tag_id, format:pipe_string}` |
-| 模板内容 schema | `gov_text:{title?, description}`；`description` 支持换行和 A 标签链接 |
-
-随申办政务云错误码处理策略：
-
-| 类型 | 错误码 | 处理建议 |
-|---|---|---|
-| 成功 | `0` | 成功 |
-| 特殊参数格式错误 | `{"errcode":-1,"errmsg":"Invalid input"}` | 不重试；说明请求参数类型不匹配，例如整型传成 string 或 string 传成整型 |
-| 系统繁忙/临时失败 | `-1`、`500`、`10701`、`10702`、`10911`、`523`、`60047`、`4400044` | 可重试；`-1` 建议最多 3 次；`523` 表示服务过载，建议错峰重试 |
-| Token 失效/缺失 | `401`、`40014`、`42001`、`41001` | 清理 token cache，重新获取 `access_token` 后重试一次 |
-| 凭证/权限/应用配置错误 | `40001`、`40091`、`41004`、`48002`、`50003`、`301002`、`10001004`、`500011` | 不重试；需要管理员检查 secret、应用权限、IP 限制或应用状态 |
-| 请求参数/消息体错误 | `10601`、`10602`、`10603`、`10605`、`40008`、`40033`、`40035`、`40058`、`40063`、`41010`、`41011`、`41016`、`41033`、`41035`、`44004`、`45002`、`45004`、`45008`、`45032`、`94001`-`94010`、`10001011`、`10001027`、`4500000` | 不重试；应修复 adapter 或模板内容 schema |
-| 接收人/可见范围错误 | `40003`、`40031`、`40032`、`40066`、`40068`、`46004`、`50002`、`60111`、`60123`、`60124`、`301021`、`301023`、`81013`、`82001`、`82002`、`82003`、`86216` | 不重试；应修复人员身份、部门、标签或应用可见范围 |
-| 素材/媒体错误 | `40004`、`40005`、`40006`、`40007`、`40009`、`40011`、`41006`、`44001`、`45001`、`45007`、`301015`、`301016`、`301017`、`6100001` | 不重试；第一版文本消息不涉及，后续扩展媒体消息时处理 |
-| 数据不存在/重复/业务异常 | `10606`、`10607`、`29999`、`40050`、`46003`、`46004`、`302009`、`302015`、`302016`、`302017`、`302018`、`302019`、`302020` | 默认不重试；按业务错误展示给管理员 |
-| 账号/组织维护错误 | `60001`-`60062`、`60102`-`60127`、`4400012`-`4400044`、`10000002` | 发送消息一般不直接触发；不重试，归类为组织/账号数据问题 |
-| OAuth/JSSDK/域名类错误 | `40029`、`40054`、`40055`、`40078`、`40093`、`40094`、`40099`、`50001`、`80001`、`85004`、`85005`、`91040` | 当前发送文本消息不应触发；不重试 |
-| 频率/容量/批量限制 | `45024`、`500007`、`85003`、`4400017` | 不建议原样重试；需要分批、降速或联系管理员扩容 |
-
-实现备注：错误码全集来自用户提供资料；adapter 第一版应至少实现上述分类映射，完整错误信息原样写入 `response_snapshot`，方便后续补充精细化处理。
-
-### 3.4 企业微信应用消息
+### 3.3 企业微信应用消息
 
 | 项 | 内容 |
 |---|---|
@@ -216,7 +179,7 @@ Delivery adapter 输出 final request。日志快照记录 `target_context`、`r
 | adapter 配置模型 | `credentials={corpid, corpsecret, agentid}`；`token_cache={access_token, expires_at}`；`recipient={identity_kind:wecom_userid, format:pipe_string}` |
 | 模板内容 schema | `text:{title?, body}`；`markdown:{title?, markdown}` |
 
-### 3.5 企业微信群机器人
+### 3.4 企业微信群机器人
 
 | 项 | 内容 |
 |---|---|
@@ -252,17 +215,17 @@ Delivery adapter 输出 final request。日志快照记录 `target_context`、`r
 
 | 项 | 内容 |
 |---|---|
-| 支持消息类型 | `text`、`markdown` |
-| 用户填写配置 | webhook URL、可选 secret、关键词说明、超时、限流 |
-| 接收人身份字段 | 默认无；可选手机号用于 `atMobiles` |
-| Token 获取方式 | 无；secret 用于签名 |
+| 支持消息类型 | 仅 `markdown` |
+| 用户填写配置 | API 基础地址，默认 `https://oapi.dingtalk.com`；可选 `secret`；`isAtAll` 默认 `false`；超时、限流 |
+| 接收人身份字段 | `dingtalk_robot_access_token`；实际发送时作为 URL query `access_token` |
+| Token 获取方式 | 无；`access_token` 来自接收人身份；`secret` 仅用于可选加签 |
 | 发送 API | `POST https://oapi.dingtalk.com/robot/send?access_token=...&timestamp=...&sign=...` |
-| 请求体结构 | `{"msgtype":"text","text":{"content":"..."},"at":{"atMobiles":["138..."],"isAtAll":false}}` |
+| 请求体结构 | `{"msgtype":"markdown","markdown":{"title":"标题","text":"## 标题 \\n - 列表项 \\n [链接](url)"},"at":{"isAtAll":false}}` |
 | 成功判定 | JSON `errcode == 0` |
-| 错误码和重试建议 | secret/key/关键词错误不重试；限流和 `5xx/timeout` 可重试 |
+| 错误码和重试建议 | access token、secret、关键词错误不重试；限流和 `5xx/timeout` 可重试 |
 | 限流/频率限制 | 钉钉机器人有频率限制，接入时核对官方最新值；本地建议默认低 QPS |
-| adapter 配置模型 | `credentials={webhook_url, secret}`；`recipient={required:false, identity_kind:mobile}` |
-| 模板内容 schema | `text:{title?, body}`；`markdown:{title, markdown}` |
+| adapter 配置模型 | `credentials={secret}`；`send_config={base_url,isAtAll}`；`recipient={required:true, identity_kind:dingtalk_robot_access_token}` |
+| 模板内容 schema | `markdown:{title, text}`；`msgtype` 由 adapter 固定为 `markdown` |
 
 ### 3.8 飞书群消息
 
@@ -452,9 +415,8 @@ Delivery adapter 输出 final request。日志快照记录 `target_context`、`r
 12. `dingtalk_robot`
 13. `dingtalk_work` 和 legacy `dingtalk`
 14. `feishu_robot` 和 legacy `feishu`
-15. `gov_cloud`
-16. legacy aggregate `sms`
-17. advanced `custom_token`
+15. legacy aggregate `sms`
+16. advanced `custom_token`
 
 这批 provider 已具备 capability metadata、默认 schema、build request/mock 路径或兼容路径，但除可由本地假服务验证的 Webhook 外，不应声称已经真实联调成功。
 
@@ -469,11 +431,10 @@ Delivery adapter 输出 final request。日志快照记录 `target_context`、`r
 
 ## 5. 后续落地时的关键检查点
 
-1. 真实联调 PushPlus、WxPusher、Server酱、企微、钉钉、飞书、SMTP/self/gov_cloud，并记录账号、白名单、速率限制和失败响应。
+1. 真实联调 PushPlus、WxPusher、Server酱、企微、钉钉、飞书、SMTP/self，并记录账号、白名单、速率限制和失败响应。
 2. 为阿里云、腾讯云、百度短信补测试账号、签名、模板 ID、区域和真实错误码映射。
-3. 随申办政务云在可访问网络中验证 corpsecret、IP 白名单、测试接收人、token 缓存和错误分类。
-4. 保持模板语义：模板输出内部消息内容，不输出最终平台 HTTP body，不保存接收人字段。
-5. 保持 adapter 边界：内置 provider 生成 final request，Webhook/custom_token 继续保留高级映射。
+3. 保持模板语义：模板输出内部消息内容，不输出最终平台 HTTP body，不保存接收人字段。
+4. 保持 adapter 边界：内置 provider 生成 final request，Webhook/custom_token 继续保留高级映射。
 6. 检查日志详情是否持续展示 target context、rendered message、resolved recipients、final request 和 upstream response。
 
 ## 6. 参考链接
@@ -483,7 +444,6 @@ Delivery adapter 输出 final request。日志快照记录 `target_context`、`r
 - 当前项目端到端验收：`docs/operations/end-to-end-smoke.md`
 - 当前项目平台能力代码：`backend/internal/provider/service.go`
 - Austin/MagicPush 通道分析：`docs/research/open-source-push-channel-analysis.md`
-- 随申办政务云：来自本次用户提供的 `/gettoken` 与 `/request/message/send` 接口摘要
 - 企业微信应用消息官方文档：https://developer.work.weixin.qq.com/document/path/90236
 - 企业微信群机器人官方文档：https://developer.work.weixin.qq.com/document/path/91770
 - 钉钉工作通知官方文档：https://open.dingtalk.com/document/orgapp/asynchronous-sending-of-enterprise-session-messages

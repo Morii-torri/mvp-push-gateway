@@ -122,7 +122,9 @@ type ProviderRuntimeConfig = ProviderPreset & {
   testLevel: string;
   testIcon: string;
   is_cached?: boolean;
+  token_cache_status?: string;
   token_refreshed_at?: string;
+  token_expires_at?: string;
 };
 
 export type ProviderRow = ProviderRecord & ProviderRuntimeConfig;
@@ -171,6 +173,19 @@ const emailSecurityOptions = [
   { label: 'SSL', value: 'SSL' },
   { label: 'STARTTLS', value: 'STARTTLS' },
 ];
+
+export function tokenCacheStatusMeta(value: { is_cached?: boolean; token_cache_status?: string }) {
+  if (value.is_cached || value.token_cache_status === 'cached') {
+    return { label: '已缓存', color: 'success' };
+  }
+  if (value.token_cache_status === 'expired') {
+    return { label: '已过期', color: 'warning' };
+  }
+  if (value.token_cache_status === 'invalidated') {
+    return { label: '已失效', color: 'error' };
+  }
+  return { label: '未缓存', color: 'default' };
+}
 
 const providerPresets: Record<ProviderKind, ProviderPreset> = {
   webhook: {
@@ -341,15 +356,16 @@ const providerPresets: Record<ProviderKind, ProviderPreset> = {
     tokenPlacement: 'SMTP AUTH',
     sendEndpoint: 'SMTP sendmail',
     recipientMapping: 'mail.to = receivers.email',
-    bodyMapping: 'adapter 根据 subject/text/html 生成 MIME 邮件',
+    bodyMapping: 'adapter 根据 subject/body 生成邮件',
     qps: 20,
     concurrency: 8,
     timeoutMs: 5000,
     retryPolicy: '2 次固定间隔',
     retryInterval: '5s / 15s',
     deadLetterPolicy: '全局默认：重试耗尽或上级错误进入死信',
-    testRecipient: 'zhangwei@example.gov.cn',
+    testRecipient: '',
     testBody: '邮件测试消息',
+    testTitle: '邮件测试标题',
   },
   aliyun_sms: {
     tokenEndpoint: 'AccessKey 签名鉴权',
@@ -438,20 +454,21 @@ const providerPresets: Record<ProviderKind, ProviderPreset> = {
     testBody: '企业微信应用测试消息',
   },
   dingtalk_robot: {
-    tokenEndpoint: '固定机器人 Access Token',
-    tokenRequest: 'access_token + optional secret',
+    tokenEndpoint: '无 AccessToken 换取',
+    tokenRequest: 'base_url + optional secret',
     tokenResponsePath: '-',
-    tokenPlacement: 'query.access_token',
-    sendEndpoint: '内置钉钉群机器人 adapter',
-    recipientMapping: '可选 atMobiles = receivers.mobile',
-    bodyMapping: 'adapter 根据 text/markdown 内容生成机器人消息',
+    tokenPlacement: 'query.access_token（来自接收人）',
+    sendEndpoint: 'POST /robot/send?access_token={access_token}',
+    recipientMapping: '机器人 access_token 来自人员平台身份 dingtalk_robot_access_token',
+    bodyMapping: 'adapter 固定生成 markdown 群机器人消息；配置 secret 时自动追加 timestamp/sign',
     qps: 20,
     concurrency: 8,
     timeoutMs: 3000,
     retryPolicy: '2 次固定间隔',
     retryInterval: '2s / 5s',
     deadLetterPolicy: '全局默认：重试耗尽或上级错误进入死信',
-    testRecipient: '13800005678',
+    testRecipient: '',
+    testTitle: '钉钉测试标题',
     testBody: '钉钉机器人测试消息',
   },
   dingtalk_work: {
@@ -504,23 +521,6 @@ const providerPresets: Record<ProviderKind, ProviderPreset> = {
     deadLetterPolicy: '全局默认：重试耗尽或上级错误进入死信',
     testRecipient: '',
     testBody: '飞书群消息测试',
-  },
-  gov_cloud: {
-    tokenEndpoint: 'GET /gettoken?corpsecret=...',
-    tokenRequest: 'corpsecret',
-    tokenResponsePath: 'access_token',
-    tokenPlacement: 'Query.access_token = ${token}',
-    sendEndpoint: 'POST /request/message/send',
-    recipientMapping: 'touser/toparty/totag；touser 来自 receivers.gov_userid',
-    bodyMapping: 'adapter 根据 description 生成随申办文本消息；开发环境不可访问，先实现请求构建',
-    qps: 80,
-    concurrency: 8,
-    timeoutMs: 3000,
-    retryPolicy: '3 次指数退避',
-    retryInterval: '1s / 3s / 9s',
-    deadLetterPolicy: '全局默认：重试耗尽或上级错误进入死信',
-    testRecipient: 'gov-user-1',
-    testBody: '随申办政务云测试消息',
   },
   custom_token: {
     tokenEndpoint: '',
@@ -799,7 +799,7 @@ export function providerFieldLabel(key: string): string {
     device_key: 'Device Key',
     device_keys: 'Device Key 列表',
     endpoint: 'Endpoint',
-    from: '发件人地址',
+    from: '发件人显示名',
     headers: '请求 Header',
     hook_token: '机器人 Hook Token',
     host: 'SMTP 主机地址',
@@ -887,7 +887,7 @@ function fallbackProviderFields(providerType: ProviderKind): ProviderConfigField
       field('security', '加密方式', 'auth_config', 'select', true, '', 'SSL', 'string', '', emailSecurityOptions),
       field('username', '用户名', 'auth_config', 'text', true),
       field('password', '授权码 / 密码', 'auth_config', 'password', true),
-      field('from', '发件人地址', 'send_config'),
+      field('from', '发件人显示名', 'send_config', 'text', false, '例如：Gongsy-admin；系统会自动拼成 Gongsy-admin <用户名邮箱>'),
       field('cc', '抄送收件人地址', 'send_config', 'text', false, '多个地址用英文逗号或竖线分隔', undefined, 'array', 'string'),
       field('bcc', '密送收件人地址', 'send_config', 'text', false, '多个地址用英文逗号或竖线分隔', undefined, 'array', 'string'),
       field('reply_to', '指定回复地址', 'send_config'),
@@ -920,21 +920,6 @@ function fallbackProviderFields(providerType: ProviderKind): ProviderConfigField
       field('endpoint', 'Endpoint', 'send_config'),
       field('signature_id', '签名 ID', 'send_config', 'text', true),
       field('template_id', '短信模板 ID', 'send_config', 'text', true),
-    ];
-  }
-  if (providerType === 'gov_cloud') {
-    return [
-      field(
-        'base_url',
-        'base_url',
-        'send_config',
-        'text',
-        true,
-        '开发环境不可访问，先实现请求构建',
-        'https://www.ywxt.sh.cegn.cn/api-gateway/uranus/uranus/cgi-bin/',
-      ),
-      field('corpsecret', 'corpsecret', 'auth_config', 'password', true),
-      field('allow_at_all', '允许 @all', 'send_config'),
     ];
   }
   if (providerType === 'webhook') {
@@ -1028,10 +1013,12 @@ function fallbackProviderFields(providerType: ProviderKind): ProviderConfigField
   }
   if (providerType === 'dingtalk_robot') {
     return [
-      field('access_token', '机器人 Access Token', 'auth_config', 'password', true),
-      field('robot_secret', '机器人签名 Secret', 'auth_config', 'password'),
-      field('keywords', '安全关键词', 'send_config', 'textarea'),
-      field('allow_at_all', '允许 @all', 'send_config'),
+      field('base_url', 'API 基础地址', 'send_config', 'text', true, undefined, 'https://oapi.dingtalk.com'),
+      field('secret', 'secret', 'auth_config', 'password'),
+      field('isAtAll', 'isAtAll', 'send_config', 'select', false, '', 'false', 'string', '', [
+        { label: 'false', value: 'false' },
+        { label: 'true', value: 'true' },
+      ]),
     ];
   }
   if (providerType === 'dingtalk_work') {
@@ -1113,15 +1100,7 @@ export function providerFieldValuesAfterChange(
 }
 
 function visibleProviderConfigFields(value: ProviderRow): ProviderConfigField[] {
-  if (value.providerType !== 'email') {
-    return value.configFields;
-  }
-  if (!value.configFields.some((field) => field.target === 'auth_config' && field.key === 'service_provider')) {
-    return value.configFields;
-  }
-  const serviceProvider = value.fieldValues['auth_config.service_provider'];
-  const showCustomFields = serviceProvider === 'custom';
-  return value.configFields.filter((field) => showCustomFields || !['host', 'port', 'security'].includes(field.key));
+  return value.configFields;
 }
 
 function fieldValuesFromConfigs(
@@ -1438,6 +1417,12 @@ function providerTestBodyValue(value: ProviderRow): JSONValue {
       content: value.testBody.trim(),
     };
   }
+  if (value.providerType === 'dingtalk_robot') {
+    return {
+      title: value.testTitle.trim(),
+      text: value.testBody.trim(),
+    };
+  }
   if (value.providerType === 'feishu_robot') {
     return {
       text: value.testBody.trim(),
@@ -1481,6 +1466,12 @@ function providerTestBodyValue(value: ProviderRow): JSONValue {
       body.icon = icon;
     }
     return body;
+  }
+  if (value.providerType === 'email') {
+    return {
+      subject: value.testTitle.trim(),
+      body: value.testBody.trim(),
+    };
   }
   const trimmed = value.testBody.trim();
   if (!trimmed) {
@@ -1569,6 +1560,9 @@ function providerTestRecipients(value: ProviderRow, recipient: string): JSONValu
   if (value.providerType === 'feishu_group') {
     return splitListText(value.testRecipient).map((token) => ({ platform_ids: { feishu_webhook_token: token } }));
   }
+  if (value.providerType === 'dingtalk_robot') {
+    return splitListText(value.testRecipient).map((token) => ({ platform_ids: { dingtalk_robot_access_token: token } }));
+  }
   if (value.providerType === 'bark') {
     return splitListText(value.testRecipient).map((deviceKey) => ({ platform_ids: { bark_device_key: deviceKey } }));
   }
@@ -1606,15 +1600,17 @@ export function providerTestPayload(value: ProviderRow, send: boolean, liveSendC
         ? 'markdown'
         : value.providerType === 'wecom_robot'
           ? normalizedWeComRobotMessageType(value.testTopic)
-          : value.providerType === 'feishu_robot'
-            ? 'text'
-            : value.providerType === 'feishu_group'
+          : value.providerType === 'dingtalk_robot'
+            ? 'markdown'
+            : value.providerType === 'feishu_robot'
               ? 'text'
-              : value.providerType === 'pushme'
-                ? normalizedPushMeMessageType(value.testTopic)
-                : value.providerType === 'bark'
-                  ? normalizedBarkMessageType(value.testTopic)
-                  : value.messageTypes[0] ?? 'text';
+              : value.providerType === 'feishu_group'
+                ? 'text'
+                : value.providerType === 'pushme'
+                  ? normalizedPushMeMessageType(value.testTopic)
+                  : value.providerType === 'bark'
+                    ? normalizedBarkMessageType(value.testTopic)
+                    : value.messageTypes[0] ?? 'text';
   const resolvedRecipients = providerTestRecipients(value, recipient);
   return {
     send,
@@ -1908,7 +1904,9 @@ export function mapChannelRow(channel: ChannelApiRecord, capabilities: ProviderC
     deadLetterReplay: typeof deadLetterPolicy.replay === 'boolean' ? deadLetterPolicy.replay : base.deadLetterReplay,
     fieldValues,
     is_cached: channel.is_cached,
+    token_cache_status: channel.token_cache_status,
     token_refreshed_at: channel.token_refreshed_at,
+    token_expires_at: channel.token_expires_at,
   };
 }
 
@@ -2022,7 +2020,7 @@ export function ProviderTypeCardSelector({ value, onChange }: ProviderTypeCardSe
     { label: '个人推送', values: ['pushplus', 'wxpusher', 'serverchan', 'bark', 'pushme'] },
     { label: '邮件短信', values: ['email', 'aliyun_sms', 'tencent_sms', 'baidu_sms'] },
     { label: '基础通道', values: ['webhook', 'self', 'custom_token'] },
-    { label: '自建服务', values: ['gov_cloud', 'ntfy', 'gotify'] },
+    { label: '自建服务', values: ['ntfy', 'gotify'] },
   ];
 
   const [activeTab, setActiveTab] = useState<string>(() => {
@@ -2370,7 +2368,9 @@ export function ProviderTestPanel({
       onChange({
         ...value,
         is_cached: res.is_cached,
+        token_cache_status: res.token_cache_status,
         token_refreshed_at: res.token_refreshed_at,
+        token_expires_at: res.token_expires_at,
       });
       message.success('AccessToken 刷新成功！');
     } catch (err) {
@@ -2387,6 +2387,7 @@ export function ProviderTestPanel({
   const feishuGroupTest = value.providerType === 'feishu_group';
   const pushMeTest = value.providerType === 'pushme';
   const barkTest = value.providerType === 'bark';
+  const emailTest = value.providerType === 'email';
   const update = (patch: Partial<ProviderRow>) => onChange({ ...value, ...patch });
   const resolveFeishuOpenID = async () => {
     const mobile = value.testRecipient.trim();
@@ -2484,6 +2485,14 @@ export function ProviderTestPanel({
       message.error('请填写 body / markdown');
       return false;
     }
+    if (emailTest && !value.testTitle.trim()) {
+      message.error('请填写邮件主题');
+      return false;
+    }
+    if (emailTest && !value.testBody.trim()) {
+      message.error('请填写邮件正文');
+      return false;
+    }
     return true;
   };
   const runTest = async (send: boolean, liveSendConfirmed = false) => {
@@ -2515,17 +2524,13 @@ export function ProviderTestPanel({
 
   return (
     <Form layout="vertical">
-      {['wecom_app', 'dingtalk_work', 'feishu_robot', 'gov_cloud'].includes(value.providerType) && (
+      {['wecom_app', 'dingtalk_work', 'feishu_robot'].includes(value.providerType) && (
         <Form.Item className="form-item-full">
           <Alert
             message={
               <Space>
                 <span>🔑 AccessToken 状态：</span>
-                {value.is_cached ? (
-                  <Tag color="success">已缓存</Tag>
-                ) : (
-                  <Tag color="default">未缓存</Tag>
-                )}
+                <Tag color={tokenCacheStatusMeta(value).color}>{tokenCacheStatusMeta(value).label}</Tag>
                 {value.token_refreshed_at ? (
                   <span style={{ fontSize: '12px', color: 'rgba(0, 0, 0, 0.45)' }}>
                     (上一次token刷新时间: {new Date(value.token_refreshed_at).toLocaleString()})
@@ -2738,6 +2743,24 @@ export function ProviderTestPanel({
           </Form.Item>
           <Form.Item label="url（可选）" className="form-item-full">
             <Input value={value.testUrl} onChange={(event) => update({ testUrl: event.target.value })} />
+          </Form.Item>
+        </div>
+      ) : emailTest ? (
+        <div className="two-column-form provider-test-form">
+          {providerTestNeedsRecipient(value) ? (
+            <Form.Item label="测试收件人地址" required className="form-item-full">
+              <Input value={value.testRecipient} onChange={(event) => update({ testRecipient: event.target.value })} />
+            </Form.Item>
+          ) : null}
+          <Form.Item label="邮件主题" required className="form-item-full">
+            <Input value={value.testTitle} onChange={(event) => update({ testTitle: event.target.value })} />
+          </Form.Item>
+          <Form.Item label="邮件正文" required className="form-item-full">
+            <Input.TextArea
+              rows={5}
+              value={value.testBody}
+              onChange={(event) => update({ testBody: event.target.value })}
+            />
           </Form.Item>
         </div>
       ) : (

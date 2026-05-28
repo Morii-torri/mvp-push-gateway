@@ -1,14 +1,20 @@
 package provider
 
 import (
+	"bufio"
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"errors"
+	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 )
 
 func TestDefaultCapabilitiesExposeProviderMetadata(t *testing.T) {
@@ -50,7 +56,6 @@ func TestDefaultCapabilitiesExposeProviderMetadata(t *testing.T) {
 		ProviderDingTalkWork,
 		ProviderEmail,
 		ProviderAliyunSMS,
-		ProviderGovCloud,
 		ProviderSelf,
 		ProviderWebhook,
 		ProviderCustomToken,
@@ -78,11 +83,10 @@ func TestDefaultCapabilitiesExposeFirstBatchBuiltInProviders(t *testing.T) {
 		{ProviderBaiduSMS, "sms_template", "mobile"},
 		{ProviderWeComRobot, "text", "wecom_robot_key"},
 		{ProviderWeComApp, "text", "wecom_userid"},
-		{ProviderDingTalkRobot, "text", "mobile"},
+		{ProviderDingTalkRobot, "markdown", "dingtalk_robot_access_token"},
 		{ProviderDingTalkWork, "text", "dingtalk_userid"},
 		{ProviderFeishuRobot, "text", "feishu_open_id"},
 		{ProviderFeishuGroup, "text", "feishu_webhook_token"},
-		{ProviderGovCloud, "text", "gov_userid"},
 	}
 
 	for _, item := range required {
@@ -109,7 +113,7 @@ func TestEmailCapabilityUsesProviderPresetsAndEncryptedSecurity(t *testing.T) {
 	assertJSONField(t, capability.CredentialSchema, "properties.secure", nil)
 	assertJSONField(t, capability.CredentialSchema, "properties.start_tls", nil)
 	assertJSONField(t, capability.CredentialSchema, "properties.password.title", "授权码 / 密码")
-	assertJSONField(t, capability.ChannelConfigSchema, "properties.from.title", "发件人地址")
+	assertJSONField(t, capability.ChannelConfigSchema, "properties.from.title", "发件人显示名")
 	assertJSONField(t, capability.ChannelConfigSchema, "properties.cc.title", "抄送收件人地址")
 	assertJSONField(t, capability.ChannelConfigSchema, "properties.bcc.title", "密送收件人地址")
 	assertJSONField(t, capability.ChannelConfigSchema, "properties.reply_to.title", "指定回复地址")
@@ -137,10 +141,62 @@ func TestEmailCapabilityUsesProviderPresetsAndEncryptedSecurity(t *testing.T) {
 	}
 }
 
+func TestListChannelsReportsExpiredPersistentTokenCache(t *testing.T) {
+	now := time.Date(2026, 5, 27, 16, 0, 0, 0, time.UTC)
+	channel := Channel{
+		ID:           "89a72d77-e0a8-43e5-bc50-edb3a7a114a0",
+		ProviderType: ProviderWeComApp,
+		AuthConfig:   json.RawMessage(`{"corpid":"corp-1","corpsecret":"secret-1"}`),
+		SendConfig:   json.RawMessage(`{}`),
+	}
+	capability := findCapability(t, ProviderWeComApp, "text")
+	resolver, _, err := DecodeCapabilityResolver(capability.TokenStrategy, channel)
+	if err != nil {
+		t.Fatalf("decode token resolver: %v", err)
+	}
+	store := channelTokenCacheStore{
+		singleChannelStore:    singleChannelStore{channel: channel},
+		memoryTokenCacheStore: newMemoryTokenCacheStore(),
+	}
+	if err := store.StoreTokenCache(context.Background(), StoreTokenCacheParams{
+		ProviderType:   ProviderWeComApp,
+		Strategy:       "client_credentials",
+		CacheKey:       TokenResolverCacheKey(resolver),
+		ChannelID:      channel.ID,
+		TokenURL:       resolver.Request.URL,
+		Token:          "token-from-db",
+		ExpiresAt:      now.Add(-time.Minute),
+		RefreshAfterAt: now.Add(-6 * time.Minute),
+		RefreshedAt:    now.Add(-2 * time.Hour),
+		Metadata:       json.RawMessage(`{}`),
+	}); err != nil {
+		t.Fatalf("store token cache: %v", err)
+	}
+	service := NewService(store)
+	service.tokenManager = NewTokenManager(store, WithTokenManagerNow(func() time.Time { return now }))
+
+	channels, err := service.ListChannels(context.Background())
+	if err != nil {
+		t.Fatalf("list channels: %v", err)
+	}
+	if len(channels) != 1 {
+		t.Fatalf("expected one channel, got %d", len(channels))
+	}
+	if channels[0].IsCached {
+		t.Fatalf("expired token must not be reported usable")
+	}
+	if channels[0].TokenCacheStatus != "expired" {
+		t.Fatalf("expected expired token cache status, got %q", channels[0].TokenCacheStatus)
+	}
+	if channels[0].TokenRefreshedAt == "" || channels[0].TokenExpiresAt == "" {
+		t.Fatalf("expected persisted token timestamps, got refreshed=%q expires=%q", channels[0].TokenRefreshedAt, channels[0].TokenExpiresAt)
+	}
+}
+
 func TestLegacyCompatibilityProviderTypesAreUnsupported(t *testing.T) {
-	for _, providerType := range []ProviderType{"sms", "wecom", "dingtalk", "feishu"} {
+	for _, providerType := range []ProviderType{"sms", "wecom", "dingtalk", "feishu", "gov_cloud"} {
 		if validProviderType(providerType) {
-			t.Fatalf("expected legacy provider type %s to be unsupported", providerType)
+			t.Fatalf("expected removed provider type %s to be unsupported", providerType)
 		}
 	}
 }
@@ -493,31 +549,6 @@ func TestDefaultCapabilitiesExposeP2Providers(t *testing.T) {
 	}
 }
 
-func TestGovCloudCapabilityUsesDocumentedTokenAndSendMetadata(t *testing.T) {
-	capability := findCapability(t, ProviderGovCloud, "text")
-	assertJSONField(t, capability.CredentialSchema, "properties.base_url.default", "https://www.ywxt.sh.cegn.cn/api-gateway/uranus/uranus/cgi-bin/")
-	assertJSONField(t, capability.TokenStrategy, "token_url", "https://www.ywxt.sh.cegn.cn/api-gateway/uranus/uranus/cgi-bin/gettoken")
-	assertJSONField(t, capability.TokenStrategy, "request.method", "GET")
-	assertJSONField(t, capability.TokenStrategy, "request.query_secret_field", "corpsecret")
-	assertJSONField(t, capability.TokenStrategy, "expires_in_seconds", float64(3600))
-	assertJSONField(t, capability.SendAPI, "url", "https://www.ywxt.sh.cegn.cn/api-gateway/uranus/uranus/cgi-bin/request/message/send")
-	assertJSONField(t, capability.SuccessRule, "field", "errcode")
-	assertJSONField(t, capability.SuccessRule, "equals", float64(0))
-
-	var retryRule map[string]any
-	if err := json.Unmarshal(capability.RetryRule, &retryRule); err != nil {
-		t.Fatalf("decode retry rule: %v", err)
-	}
-	requireJSONListContains(t, retryRule["refresh_token_codes"], float64(401))
-	requireJSONListContains(t, retryRule["refresh_token_codes"], float64(40014))
-	requireJSONListContains(t, retryRule["refresh_token_codes"], float64(42001))
-	requireJSONListContains(t, retryRule["retryable_json_codes"], float64(-1))
-	requireJSONListContains(t, retryRule["retryable_json_codes"], float64(523))
-	requireJSONListContains(t, retryRule["non_retryable_json_codes"], float64(40031))
-	requireJSONListContains(t, retryRule["non_retryable_json_codes"], float64(40032))
-	requireJSONListContains(t, retryRule["non_retryable_json_codes"], float64(82001))
-}
-
 func TestWeComRobotCapabilityUsesWebhookURLAndRecipientKey(t *testing.T) {
 	capability := findCapability(t, ProviderWeComRobot, "text")
 
@@ -536,6 +567,25 @@ func TestWeComRobotCapabilityUsesWebhookURLAndRecipientKey(t *testing.T) {
 		t.Fatalf("expected WeCom robot to have no channel token placement, got %q", capability.TokenLocation)
 	}
 	assertJSONField(t, capability.SendAPI, "url", "https://qyapi.weixin.qq.com/cgi-bin/webhook/send")
+}
+
+func TestDingTalkRobotCapabilityUsesMarkdownAndRecipientAccessToken(t *testing.T) {
+	capability := findCapability(t, ProviderDingTalkRobot, "markdown")
+
+	assertJSONField(t, capability.CredentialSchema, "properties.webhook_url", nil)
+	assertJSONField(t, capability.CredentialSchema, "properties.access_token", nil)
+	assertJSONField(t, capability.CredentialSchema, "properties.secret.title", "secret")
+	assertJSONField(t, capability.ChannelConfigSchema, "properties.base_url.default", "https://oapi.dingtalk.com")
+	assertJSONField(t, capability.ChannelConfigSchema, "properties.isAtAll.default", false)
+	assertJSONField(t, capability.MessageSchema, "properties.msgtype", nil)
+	assertJSONField(t, capability.MessageSchema, "properties.title.type", "string")
+	assertJSONField(t, capability.MessageSchema, "properties.text.type", "string")
+	if capability.IdentityKind != "dingtalk_robot_access_token" || !capability.RecipientRequired || capability.AllowNoRecipient {
+		t.Fatalf("expected DingTalk robot access token as required recipient identity, got identity=%q required=%v allow=%v", capability.IdentityKind, capability.RecipientRequired, capability.AllowNoRecipient)
+	}
+	if capability.RecipientFieldName != "access_token" || capability.RecipientLocation != PlacementQuery {
+		t.Fatalf("expected DingTalk robot access token in query, got field=%q location=%q", capability.RecipientFieldName, capability.RecipientLocation)
+	}
 }
 
 func TestDefaultCapabilitiesDistinguishWebhookAndBuiltInProviders(t *testing.T) {
@@ -755,6 +805,36 @@ func TestBuildDeliveryRequestUsesBuiltInProviderDefaultsWithoutLegacyURL(t *test
 			},
 		},
 		{
+			name: "smtp email snapshot",
+			channel: Channel{
+				ProviderType: ProviderEmail,
+				AuthConfig:   json.RawMessage(`{"host":"smtp.qq.com","port":465,"security":"SSL","username":"ops@qq.com","password":"app-password"}`),
+				SendConfig:   json.RawMessage(`{"from":"MVP Push <ops@qq.com>","cc":["team@example.com"],"bcc":["audit@example.com"],"reply_to":"reply@example.com"}`),
+			},
+			message:    json.RawMessage(`{"subject":"测试标题","body":"邮件测试消息"}`),
+			recipients: []ResolvedRecipient{{Email: "021120129@sues.edu.cn"}},
+			assert: func(t *testing.T, request BuiltRequest) {
+				requireRequest(t, request, "SMTP_SEND", "smtp://smtp.qq.com:465")
+				body := decodeRequestBody(t, request)
+				requireBodyField(t, body, "host", "smtp.qq.com")
+				requireBodyField(t, body, "port", float64(465))
+				requireBodyField(t, body, "security", "SSL")
+				requireBodyField(t, body, "username", "ops@qq.com")
+				requireBodyField(t, body, "from", `"MVP Push" <ops@qq.com>`)
+				requireStringListField(t, body, "to", []string{"021120129@sues.edu.cn"})
+				requireStringListField(t, body, "cc", []string{"team@example.com"})
+				requireStringListField(t, body, "bcc", []string{"audit@example.com"})
+				requireBodyField(t, body, "reply_to", "reply@example.com")
+				requireBodyField(t, body, "subject", "测试标题")
+				requireBodyField(t, body, "body", "邮件测试消息")
+				requireBodyField(t, body, "format", "text")
+				requireBodyField(t, body, "smtp_envelope_from", "ops@qq.com")
+				requireBodyField(t, body, "password_configured", true)
+				requireNoBodyField(t, body, "password")
+				requireNoBodyField(t, body, "html")
+			},
+		},
+		{
 			name: "aliyun sms",
 			channel: Channel{
 				ProviderType: ProviderAliyunSMS,
@@ -899,16 +979,35 @@ func TestBuildDeliveryRequestUsesBuiltInProviderDefaultsWithoutLegacyURL(t *test
 			name: "dingtalk robot",
 			channel: Channel{
 				ProviderType: ProviderDingTalkRobot,
-				AuthConfig:   json.RawMessage(`{"webhook_url":"https://oapi.dingtalk.com/robot/send?access_token=robot-token"}`),
+				AuthConfig:   json.RawMessage(`{"secret":"SEC123"}`),
+				SendConfig:   json.RawMessage(`{"base_url":"https://oapi.dingtalk.com","isAtAll":false}`),
 			},
-			message:    json.RawMessage(`{"title":"Notice","body":"hello ding"}`),
-			recipients: []ResolvedRecipient{{Mobile: "13800138000"}},
+			message:    json.RawMessage(`{"title":"Notice","text":"## hello ding\n - item"}`),
+			recipients: []ResolvedRecipient{{PlatformIDs: map[string]string{"dingtalk_robot_access_token": "robot-token"}}},
 			assert: func(t *testing.T, request BuiltRequest) {
-				requireRequest(t, request, "POST", "https://oapi.dingtalk.com/robot/send?access_token=robot-token")
+				if request.Method != "POST" {
+					t.Fatalf("expected POST, got %s", request.Method)
+				}
+				parsed, err := url.Parse(request.URL)
+				if err != nil {
+					t.Fatalf("parse request url %q: %v", request.URL, err)
+				}
+				if parsed.Scheme+"://"+parsed.Host+parsed.Path != "https://oapi.dingtalk.com/robot/send" {
+					t.Fatalf("unexpected request URL path: %s", request.URL)
+				}
+				query := parsed.Query()
+				if query.Get("access_token") != "robot-token" || query.Get("timestamp") == "" || query.Get("sign") == "" {
+					t.Fatalf("expected access_token, timestamp and sign query params, got %s", request.URL)
+				}
 				body := decodeRequestBody(t, request)
-				requireBodyField(t, body, "msgtype", "text")
+				requireBodyField(t, body, "msgtype", "markdown")
+				markdown := requireObjectField(t, body, "markdown")
+				requireBodyField(t, markdown, "title", "Notice")
+				requireBodyField(t, markdown, "text", "## hello ding\n - item")
 				at := requireObjectField(t, body, "at")
-				requireStringListField(t, at, "atMobiles", []string{"13800138000"})
+				requireBodyField(t, at, "isAtAll", false)
+				requireNoBodyField(t, at, "atMobiles")
+				requireNoBodyField(t, body, "text")
 			},
 		},
 		{
@@ -978,23 +1077,6 @@ func TestBuildDeliveryRequestUsesBuiltInProviderDefaultsWithoutLegacyURL(t *test
 				if body["timestamp"] == "" || body["sign"] == "" {
 					t.Fatalf("expected signed Feishu group request, got %+v", body)
 				}
-			},
-		},
-		{
-			name: "gov cloud",
-			channel: Channel{
-				ProviderType: ProviderGovCloud,
-				AuthConfig:   json.RawMessage(`{"corpsecret":"secret"}`),
-			},
-			token:      "gov-token",
-			message:    json.RawMessage(`{"description":"gov message"}`),
-			recipients: []ResolvedRecipient{{PlatformIDs: map[string]string{"gov_userid": "gov-u1"}}},
-			assert: func(t *testing.T, request BuiltRequest) {
-				requireRequest(t, request, "POST", "https://www.ywxt.sh.cegn.cn/api-gateway/uranus/uranus/cgi-bin/request/message/send?access_token=gov-token")
-				body := decodeRequestBody(t, request)
-				requireBodyField(t, body, "touser", "gov-u1")
-				requireBodyField(t, body, "msgtype", "text")
-				requireBodyField(t, body, "description", "gov message")
 			},
 		},
 		{
@@ -1367,6 +1449,160 @@ func TestTestSendDryRunSnapshotIncludesAdapterContext(t *testing.T) {
 	}
 }
 
+func TestTestSendDryRunBuildsEmailSMTPSnapshot(t *testing.T) {
+	service := NewService(singleChannelStore{
+		channel: Channel{
+			ID:           "channel-email",
+			ProviderType: ProviderEmail,
+			Name:         "QQ email",
+			AuthConfig:   json.RawMessage(`{"host":"smtp.qq.com","port":465,"security":"SSL","username":"ops@qq.com","password":"app-password"}`),
+			SendConfig:   json.RawMessage(`{"from":"MVP Push <ops@qq.com>"}`),
+			TimeoutMS:    1000,
+		},
+	})
+
+	result, err := service.TestSend(context.Background(), "channel-email", TestSendInput{
+		BuildRequestInput: BuildRequestInput{
+			Recipient: "021120129@sues.edu.cn",
+			Body:      json.RawMessage(`{"subject":"邮件测试标题","body":"邮件测试消息"}`),
+		},
+	})
+	if err != nil {
+		t.Fatalf("dry-run email test send: %v", err)
+	}
+	if result.Status != "dry_run" {
+		t.Fatalf("expected dry_run status, got %q", result.Status)
+	}
+	if result.Request.Method != "SMTP_SEND" || result.Request.URL != "smtp://smtp.qq.com:465" {
+		t.Fatalf("expected SMTP dry-run request, got %s %s", result.Request.Method, result.Request.URL)
+	}
+	body := decodeRequestBody(t, result.Request)
+	requireBodyField(t, body, "subject", "邮件测试标题")
+	requireBodyField(t, body, "body", "邮件测试消息")
+	requireStringListField(t, body, "to", []string{"021120129@sues.edu.cn"})
+	requireNoBodyField(t, body, "password")
+}
+
+func TestSendBuiltRequestDeliversEmailOverSMTP(t *testing.T) {
+	smtpServer := newFakeSMTPTLSServer(t)
+	defer smtpServer.Close()
+
+	originalTLSConfig := smtpTLSConfigForHost
+	smtpTLSConfigForHost = func(host string) *tls.Config {
+		return &tls.Config{ServerName: host, InsecureSkipVerify: true}
+	}
+	t.Cleanup(func() { smtpTLSConfigForHost = originalTLSConfig })
+
+	channel := Channel{
+		ProviderType: ProviderEmail,
+		AuthConfig:   json.RawMessage(`{"host":"127.0.0.1","username":"login@example.com","password":"app-password"}`),
+		SendConfig:   json.RawMessage(`{"from":"Gongsy OA-admin <sender-alias@example.com>"}`),
+		TimeoutMS:    1000,
+	}
+	built, err := BuildRequest(channel, BuildRequestInput{
+		Recipient: "user@example.com",
+		Body:      json.RawMessage(`{"subject":"邮件测试标题","body":"邮件测试消息"}`),
+	})
+	if err != nil {
+		t.Fatalf("build email request: %v", err)
+	}
+	built.URL = "smtp://" + smtpServer.Addr()
+
+	statusCode, _, response, err := sendBuiltRequest(context.Background(), channel, built)
+	if err != nil {
+		t.Fatalf("send smtp email: %v", err)
+	}
+	if statusCode != http.StatusAccepted {
+		t.Fatalf("expected accepted status, got %d body=%s", statusCode, response)
+	}
+	if !strings.Contains(smtpServer.Message(), "Subject: =?utf-8?q?=E9=82=AE=E4=BB=B6=E6=B5=8B=E8=AF=95=E6=A0=87=E9=A2=98?=") {
+		t.Fatalf("expected encoded subject, got:\n%s", smtpServer.Message())
+	}
+	if !strings.Contains(smtpServer.Message(), "邮件测试消息") {
+		t.Fatalf("expected message body, got:\n%s", smtpServer.Message())
+	}
+	if !strings.Contains(smtpServer.Message(), `From: "Gongsy OA-admin" <sender-alias@example.com>`) {
+		t.Fatalf("expected display From header, got:\n%s", smtpServer.Message())
+	}
+	if smtpServer.MailFrom() != "login@example.com" {
+		t.Fatalf("expected SMTP MAIL FROM address, got %q", smtpServer.MailFrom())
+	}
+	if got := smtpServer.Recipients(); len(got) != 1 || got[0] != "user@example.com" {
+		t.Fatalf("expected SMTP recipient, got %+v", got)
+	}
+}
+
+func TestSendBuiltRequestComposesEmailFromDisplayName(t *testing.T) {
+	smtpServer := newFakeSMTPTLSServer(t)
+	defer smtpServer.Close()
+
+	originalTLSConfig := smtpTLSConfigForHost
+	smtpTLSConfigForHost = func(host string) *tls.Config {
+		return &tls.Config{ServerName: host, InsecureSkipVerify: true}
+	}
+	t.Cleanup(func() { smtpTLSConfigForHost = originalTLSConfig })
+
+	channel := Channel{
+		ProviderType: ProviderEmail,
+		AuthConfig:   json.RawMessage(`{"host":"127.0.0.1","username":"2536209004@qq.com","password":"app-password"}`),
+		SendConfig:   json.RawMessage(`{"from":"Gongsy-admin"}`),
+		TimeoutMS:    1000,
+	}
+	built, err := BuildRequest(channel, BuildRequestInput{
+		Recipient: "user@example.com",
+		Body:      json.RawMessage(`{"subject":"Test","body":"Body"}`),
+	})
+	if err != nil {
+		t.Fatalf("build email request: %v", err)
+	}
+	built.URL = "smtp://" + smtpServer.Addr()
+
+	if _, _, _, err := sendBuiltRequest(context.Background(), channel, built); err != nil {
+		t.Fatalf("send smtp email: %v", err)
+	}
+	if !strings.Contains(smtpServer.Message(), `From: "Gongsy-admin" <2536209004@qq.com>`) {
+		t.Fatalf("expected composed From header, got:\n%s", smtpServer.Message())
+	}
+	if smtpServer.MailFrom() != "2536209004@qq.com" {
+		t.Fatalf("expected SMTP MAIL FROM username, got %q", smtpServer.MailFrom())
+	}
+}
+
+func TestSendBuiltRequestDeliversEmailHTMLContent(t *testing.T) {
+	smtpServer := newFakeSMTPTLSServer(t)
+	defer smtpServer.Close()
+
+	originalTLSConfig := smtpTLSConfigForHost
+	smtpTLSConfigForHost = func(host string) *tls.Config {
+		return &tls.Config{ServerName: host, InsecureSkipVerify: true}
+	}
+	t.Cleanup(func() { smtpTLSConfigForHost = originalTLSConfig })
+
+	channel := Channel{
+		ProviderType: ProviderEmail,
+		AuthConfig:   json.RawMessage(`{"host":"127.0.0.1","username":"login@example.com","password":"app-password"}`),
+		TimeoutMS:    1000,
+	}
+	built, err := BuildRequest(channel, BuildRequestInput{
+		Recipient: "user@example.com",
+		Body:      json.RawMessage(`{"subject":"HTML Test","body":"<strong>Body</strong>","format":"html"}`),
+	})
+	if err != nil {
+		t.Fatalf("build email request: %v", err)
+	}
+	built.URL = "smtp://" + smtpServer.Addr()
+
+	if _, _, _, err := sendBuiltRequest(context.Background(), channel, built); err != nil {
+		t.Fatalf("send smtp html email: %v", err)
+	}
+	if !strings.Contains(smtpServer.Message(), "Content-Type: text/html; charset=UTF-8") {
+		t.Fatalf("expected html content type, got:\n%s", smtpServer.Message())
+	}
+	if !strings.Contains(smtpServer.Message(), "<strong>Body</strong>") {
+		t.Fatalf("expected html body, got:\n%s", smtpServer.Message())
+	}
+}
+
 func TestTestSendRequiresBarkRecipientEvenWithLegacyChannelDeviceKey(t *testing.T) {
 	service := NewService(singleChannelStore{
 		channel: Channel{
@@ -1448,6 +1684,11 @@ func findCapability(t *testing.T, providerType ProviderType, messageType string)
 
 type singleChannelStore struct {
 	channel Channel
+}
+
+type channelTokenCacheStore struct {
+	singleChannelStore
+	*memoryTokenCacheStore
 }
 
 func (s singleChannelStore) SeedProviderCapabilities(context.Context, []Capability) error {
@@ -1633,6 +1874,140 @@ func requireNumberListField(t *testing.T, body map[string]any, field string, exp
 	for i, expectedItem := range expected {
 		if items[i] != expectedItem {
 			t.Fatalf("expected %s[%d]=%v, got %#v", field, i, expectedItem, items[i])
+		}
+	}
+}
+
+type fakeSMTPTLSServer struct {
+	listener   net.Listener
+	done       chan struct{}
+	mailFrom   atomic.Value
+	recipients atomic.Value
+	message    atomic.Value
+}
+
+func newFakeSMTPTLSServer(t *testing.T) *fakeSMTPTLSServer {
+	t.Helper()
+
+	tlsSource := httptest.NewTLSServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	certificates := tlsSource.TLS.Certificates
+	tlsSource.Close()
+
+	listener, err := tls.Listen("tcp", "127.0.0.1:0", &tls.Config{Certificates: certificates})
+	if err != nil {
+		t.Fatalf("listen fake smtp: %v", err)
+	}
+	server := &fakeSMTPTLSServer{listener: listener, done: make(chan struct{})}
+	go server.serve()
+	return server
+}
+
+func (s *fakeSMTPTLSServer) Addr() string {
+	return s.listener.Addr().String()
+}
+
+func (s *fakeSMTPTLSServer) Close() {
+	_ = s.listener.Close()
+	<-s.done
+}
+
+func (s *fakeSMTPTLSServer) MailFrom() string {
+	value, _ := s.mailFrom.Load().(string)
+	return value
+}
+
+func (s *fakeSMTPTLSServer) Recipients() []string {
+	value, _ := s.recipients.Load().([]string)
+	return value
+}
+
+func (s *fakeSMTPTLSServer) Message() string {
+	value, _ := s.message.Load().(string)
+	return value
+}
+
+func (s *fakeSMTPTLSServer) serve() {
+	defer close(s.done)
+	conn, err := s.listener.Accept()
+	if err != nil {
+		return
+	}
+	defer conn.Close()
+
+	reader := bufio.NewReader(conn)
+	writer := bufio.NewWriter(conn)
+	writeSMTPLine(writer, "220 localhost ESMTP")
+	recipients := []string{}
+	for {
+		line, err := reader.ReadString('\n')
+		if err != nil {
+			return
+		}
+		command := strings.TrimSpace(line)
+		upper := strings.ToUpper(command)
+		switch {
+		case strings.HasPrefix(upper, "EHLO"):
+			writeSMTPLine(writer, "250-localhost")
+			writeSMTPLine(writer, "250 AUTH PLAIN")
+		case strings.HasPrefix(upper, "AUTH"):
+			writeSMTPLine(writer, "235 2.7.0 Authentication successful")
+		case strings.HasPrefix(upper, "MAIL FROM:"):
+			s.mailFrom.Store(extractSMTPPath(command))
+			writeSMTPLine(writer, "250 2.1.0 OK")
+		case strings.HasPrefix(upper, "RCPT TO:"):
+			recipients = append(recipients, extractSMTPPath(command))
+			s.recipients.Store(append([]string(nil), recipients...))
+			writeSMTPLine(writer, "250 2.1.5 OK")
+		case upper == "DATA":
+			writeSMTPLine(writer, "354 End data with <CR><LF>.<CR><LF>")
+			message, err := readSMTPData(reader)
+			if err != nil {
+				return
+			}
+			s.message.Store(message)
+			writeSMTPLine(writer, "250 2.0.0 OK queued")
+		case upper == "QUIT":
+			writeSMTPLine(writer, "221 2.0.0 Bye")
+			return
+		default:
+			writeSMTPLine(writer, "250 OK")
+		}
+	}
+}
+
+func writeSMTPLine(writer *bufio.Writer, line string) {
+	_, _ = writer.WriteString(line + "\r\n")
+	_ = writer.Flush()
+}
+
+func extractSMTPPath(command string) string {
+	start := strings.Index(command, "<")
+	end := strings.LastIndex(command, ">")
+	if start >= 0 && end > start {
+		return command[start+1 : end]
+	}
+	parts := strings.SplitN(command, ":", 2)
+	if len(parts) == 2 {
+		return strings.TrimSpace(parts[1])
+	}
+	return ""
+}
+
+func readSMTPData(reader *bufio.Reader) (string, error) {
+	var builder strings.Builder
+	for {
+		line, err := reader.ReadString('\n')
+		if err != nil {
+			return "", err
+		}
+		if strings.TrimRight(line, "\r\n") == "." {
+			return builder.String(), nil
+		}
+		if strings.HasPrefix(line, "..") {
+			line = line[1:]
+		}
+		if _, err := io.WriteString(&builder, line); err != nil {
+			return "", err
 		}
 	}
 }

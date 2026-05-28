@@ -100,8 +100,8 @@ describe('dashboard data mapping', () => {
         },
         {
           channel_id: 'channel-2',
-          name: 'Gov',
-          provider_type: 'gov_cloud',
+          name: 'ntfy',
+          provider_type: 'ntfy',
           health: 'critical',
           pending: 2,
           failure_rate: 50,

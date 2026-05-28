@@ -66,7 +66,9 @@ type channelResponse struct {
 	CreatedAt        string                `json:"created_at"`
 	UpdatedAt        string                `json:"updated_at"`
 	IsCached         bool                  `json:"is_cached"`
+	TokenCacheStatus string                `json:"token_cache_status,omitempty"`
 	TokenRefreshedAt string                `json:"token_refreshed_at,omitempty"`
+	TokenExpiresAt   string                `json:"token_expires_at,omitempty"`
 }
 
 type channelRequest struct {
@@ -312,7 +314,9 @@ func (h *Handler) channelRefreshTokenHandler(w http.ResponseWriter, r *http.Requ
 	writeJSON(w, http.StatusOK, map[string]any{
 		"status":             "ok",
 		"is_cached":          status.IsCached,
+		"token_cache_status": status.Status,
 		"token_refreshed_at": status.TokenRefreshed,
+		"token_expires_at":   status.ExpiresAt,
 	})
 }
 
@@ -388,7 +392,9 @@ func toChannelResponse(channel provider.Channel) channelResponse {
 		CreatedAt:        formatTime(channel.CreatedAt),
 		UpdatedAt:        formatTime(channel.UpdatedAt),
 		IsCached:         channel.IsCached,
+		TokenCacheStatus: channel.TokenCacheStatus,
 		TokenRefreshedAt: channel.TokenRefreshedAt,
+		TokenExpiresAt:   channel.TokenExpiresAt,
 	}
 }
 

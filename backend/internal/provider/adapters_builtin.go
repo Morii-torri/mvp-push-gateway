@@ -1,7 +1,5 @@
 package provider
 
-const govCloudDefaultBaseURL = "https://www.ywxt.sh.cegn.cn/api-gateway/uranus/uranus/cgi-bin/"
-
 func builtInRequestConfig(channel Channel, input BuildRequestInput) (requestConfig, bool, error) {
 	auth, err := decodeObjectConfig(channel.AuthConfig)
 	if err != nil {
@@ -41,6 +39,9 @@ func builtInRequestConfig(channel Channel, input BuildRequestInput) (requestConf
 	case ProviderSelf:
 		config, err := selfRequestConfig(auth, send, content, input)
 		return config, true, err
+	case ProviderEmail:
+		config, err := emailRequestConfig(auth, send, content, input.Recipient)
+		return config, true, err
 	case ProviderAliyunSMS, ProviderTencentSMS, ProviderBaiduSMS:
 		config, err := smsRequestConfig(channel.ProviderType, auth, send, content, input.Recipient)
 		return config, true, err
@@ -61,9 +62,6 @@ func builtInRequestConfig(channel Channel, input BuildRequestInput) (requestConf
 		return config, true, err
 	case ProviderFeishuGroup:
 		config, err := feishuGroupRequestConfig(auth, send, content, input.Recipient)
-		return config, true, err
-	case ProviderGovCloud:
-		config, err := govCloudRequestConfig(auth, send, content, input.Recipient)
 		return config, true, err
 	default:
 		return requestConfig{}, false, nil

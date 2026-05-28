@@ -25,7 +25,6 @@ func builtInCapabilities() []Capability {
 		dingTalkWorkCapability(ProviderDingTalkWork, "DingTalk work message"),
 		feishuRobotCapability(),
 		feishuGroupCapability(),
-		govCloudCapability(),
 		customTokenCapability(),
 	}
 }
@@ -46,6 +45,10 @@ func robotTextContentSchema() json.RawMessage {
 	return rawJSON(`{"type":"object","required":["content"],"properties":{"title":{"type":"string","default":"{{ payload.title }}"},"body":{"type":"string","default":"{{ payload.content }}"},"content":{"type":"string","default":"{{ payload.content }}"},"markdown":{"type":"string"}}}`)
 }
 
+func dingTalkRobotMarkdownContentSchema() json.RawMessage {
+	return rawJSON(`{"type":"object","required":["title","text"],"properties":{"title":{"type":"string","title":"Markdown 标题","default":"{{ payload.title }}"},"text":{"type":"string","title":"Markdown 内容","default":"{{ payload.content }}","format_hint":"支持标准 Markdown；换行用 \\n，空格可用 &nbsp;"}}}`)
+}
+
 func feishuGroupContentSchema() json.RawMessage {
 	return rawJSON(`{"type":"object","required":["msgtype","text"],"properties":{"msgtype":{"type":"string","enum":["text"],"default":"text"},"text":{"type":"string","title":"text","default":"{{ payload.content }}"}}}`)
 }
@@ -60,8 +63,4 @@ func weComAppContentSchema() json.RawMessage {
 
 func smsTemplateContentSchema() json.RawMessage {
 	return rawJSON(`{"type":"object","required":["template_params"],"properties":{"template_params":{"type":["object","array"],"title":"Template parameters"},"out_id":{"type":"string"},"sign_name":{"type":"string"},"template_id":{"type":"string"}}}`)
-}
-
-func govCloudTextContentSchema() json.RawMessage {
-	return rawJSON(`{"type":"object","properties":{"title":{"type":"string"},"description":{"type":"string","default":"{{ payload.content }}"},"body":{"type":"string"},"content":{"type":"string"}}}`)
 }

@@ -24,7 +24,6 @@ export const providerTypeOptions: Array<{ label: string; value: ProviderKind }> 
   { label: '通用 Webhook', value: 'webhook' },
   { label: '本平台级联', value: 'self' },
   { label: '自定义 Token 平台', value: 'custom_token' },
-  { label: '随申办政务云', value: 'gov_cloud' },
   { label: 'ntfy', value: 'ntfy' },
   { label: 'Gotify', value: 'gotify' },
 ];
@@ -179,19 +178,6 @@ export const providerBrandMeta: Record<ProviderKind, ProviderBrandDetail> = {
       </svg>
     )
   },
-  gov_cloud: {
-    color: '#1D39C4',
-    rgb: '29, 57, 196',
-    desc: '专有随申办政务云推送通道，基于政务云专线进行安全消息隔离。',
-    tags: ['政务专网', '超高安全'],
-    icon: (
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" className="svg-logo">
-        <polygon points="12 2 22 8.5 22 15.5 12 22 2 15.5 2 8.5 12 2" />
-        <polyline points="2 8.5 12 15 22 8.5" />
-        <line x1="12" y1="15" x2="12" y2="22" />
-      </svg>
-    )
-  },
   ntfy: {
     color: '#FA541C',
     rgb: '250, 84, 28',
@@ -238,11 +224,10 @@ const fallbackMessageTypesByProvider: Record<ProviderKind, string[]> = {
   baidu_sms: ['template', 'text'],
   wecom_robot: ['text'],
   wecom_app: ['text', 'card'],
-  dingtalk_robot: ['text', 'markdown'],
+  dingtalk_robot: ['markdown'],
   dingtalk_work: ['text', 'card'],
   feishu_robot: ['text'],
   feishu_group: ['text'],
-  gov_cloud: ['text', 'card'],
   custom_token: ['text'],
 };
 

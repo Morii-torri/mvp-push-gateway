@@ -33,7 +33,7 @@
 - 路由规则已改为发送动作组 `action.targets[]`；每个 target 绑定一个渠道实例和一个兼容模板版本，legacy `template_version_id + channel_ids` 仍兼容。
 - Planning worker 已按 action targets fan-out，每个 target 单独加载渠道/模板、校验 provider type、渲染模板、解析接收人并生成 delivery attempt。
 - Delivery adapter boundary 已明确：输入 channel config、rendered message、resolved recipients、target context 和 token，输出 final request；日志快照包含 `target_context`、`rendered_message`、`resolved_recipients`、`final_request`、`upstream_response`。
-- 第一批 provider defaults 已实现 build-request/mock 级别支持：`webhook`、`self`、`pushplus`、`wxpusher`、`serverchan`、`email`、`aliyun_sms`、`tencent_sms`、`baidu_sms`、`wecom_robot`、`wecom_app`、legacy `wecom`、`dingtalk_robot`、`dingtalk_work`、legacy `dingtalk`、`feishu_robot`、legacy `feishu`、`gov_cloud`、legacy `sms` 和高级 `custom_token`。
+- 第一批 provider defaults 已实现 build-request/mock 级别支持：`webhook`、`self`、`pushplus`、`wxpusher`、`serverchan`、`email`、`aliyun_sms`、`tencent_sms`、`baidu_sms`、`wecom_robot`、`wecom_app`、legacy `wecom`、`dingtalk_robot`、`dingtalk_work`、legacy `dingtalk`、`feishu_robot`、legacy `feishu`、legacy `sms` 和高级 `custom_token`。
 - P2 provider defaults 已实现 build-request/mock 级别支持：`ntfy`、`gotify`、`bark`、`pushme`。
 - Provider type registry 已引入，后续新增 provider type 不应再频繁修改数据库 CHECK constraint。
 - 前端过大的 `ConsolePages.tsx` 已拆出 provider config form、template editor、route rule form、message log detail 和 shared helpers。
@@ -41,8 +41,8 @@
 仍需收敛或联调：
 
 - 当前用户仍在准备上级平台账号、token、测试接收人和网络白名单；在账号准备完成前，不做真实向上级平台发送。
-- PushPlus、WxPusher、Server酱、短信、企微、钉钉、飞书、SMTP/self/gov_cloud 当前均为 implemented but not live-tested 或 configuration-dependent；不要写成已真实发送成功。
-- 随申办当前开发环境不可访问，先实现不测试；短信没有测试账号，当前是配置模型和 mock build request，真实发送还需要接 SDK/签名流程。
+- PushPlus、WxPusher、Server酱、短信、企微、钉钉、飞书、SMTP/self 当前均为 implemented but not live-tested 或 configuration-dependent；不要写成已真实发送成功。
+- 短信没有测试账号，当前是配置模型和 mock build request，真实发送还需要接 SDK/签名流程。
 - `ntfy`、`gotify`、`bark`、`pushme` 已补入 P2 provider defaults 和 build-request/mock adapter；当前不做真实联调。
 - Route send action group 的自动化测试已覆盖，但手动 UI smoke 没有最终确认记录，不能算已完成手动验收。
 - legacy `route_actions.template_version_id/channel_ids` 仍保留兼容，后续新模型稳定后再清理。
@@ -54,7 +54,7 @@
 
 - 允许做：schema/capability 补齐、build-request、request snapshot、mock adapter、fake server、本地 webhook、自测用本平台级联。
 - 允许做：`test-send` 的 dry-run/build-only 模式，展示将要发送的 URL/header/query/body 和缺失配置提示。
-- 不允许做：主动调用真实 PushPlus、WxPusher、Server酱、短信、企微、钉钉、飞书、SMTP、随申办、ntfy、Gotify、Bark、PushMe 等上级真实发送接口。
+- 不允许做：主动调用真实 PushPlus、WxPusher、Server酱、短信、企微、钉钉、飞书、SMTP、ntfy、Gotify、Bark、PushMe 等上级真实发送接口。
 - 不允许把“build-request/mock 通过”描述成“真实发送成功”。
 - 如果需要保留真实发送入口，前端必须有明确的二次确认和中文风险提示；默认按钮应优先触发 dry-run/build-request。
 
@@ -147,7 +147,6 @@ Rendered message content
 - 钉钉：按手机号/userid/robot webhook 等能力组装。
 - 邮箱：接收人进入 `to/cc/bcc`，标题进入 `subject`，内容进入 text/html。
 - 短信：手机号进入平台要求字段，内容进入模板参数。
-- 随申办政务云：按 token 换取和 touser 字段规则内置。
 
 只有 Webhook/custom_token 高级模式开放：
 

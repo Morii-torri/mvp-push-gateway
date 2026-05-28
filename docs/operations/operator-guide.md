@@ -118,7 +118,7 @@ curl -X POST http://127.0.0.1:18080/api/v1/ingest/smoke001 \
 
 - 通用 Webhook：可指向本地 fake server 完成真实本地闭环。
 - 本平台级联：用于上下级网关联动的 build-request/mock。
-- 其他 provider：PushPlus、WxPusher、Server酱、邮件、短信、企微、钉钉、飞书、政务云、ntfy、Gotify、Bark、PushMe 当前多数是 build-request/mock 或 configuration-dependent。
+- 其他 provider：PushPlus、WxPusher、Server酱、邮件、短信、企微、钉钉、飞书、ntfy、Gotify、Bark、PushMe 当前多数是 build-request/mock 或 configuration-dependent。
 
 测试发送边界：
 
@@ -288,7 +288,7 @@ curl -X PUT http://127.0.0.1:18080/api/v1/route-flows/${FLOW_ID}/rules \
 - 组织树。
 - 人员目录。
 - 手机号、邮箱等基础字段。
-- 各推送渠道身份字段，例如企微 userid、飞书 open_id、钉钉 userid、政务云 userid。
+- 各推送渠道身份字段，例如企微 userid、飞书 open_id、飞书 webhook token、钉钉 userid。
 
 组织管理页左侧展示树结构，右侧展示当前组织下级列表和筛选结果。树节点悬停时可新增下级组织，系统会自动预置上级组织字段。
 

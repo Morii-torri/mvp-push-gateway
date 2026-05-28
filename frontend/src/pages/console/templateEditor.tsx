@@ -173,6 +173,15 @@ function isMultilineTemplateField(field: TemplateContentField): boolean {
 }
 
 function templateContentFieldLabel(field: TemplateContentField): string {
+  if (field.key === 'subject' && /^(邮件)?主题$/.test(field.label)) {
+    return field.label;
+  }
+  if (field.key === 'body' && /^(邮件)?正文$/.test(field.label)) {
+    return field.label || field.key;
+  }
+  if (field.key === 'format' && field.label === '内容格式') {
+    return field.label;
+  }
   return field.key;
 }
 
@@ -370,17 +379,14 @@ const fallbackTemplateSchemas: Record<ProviderKind, Record<string, { label: stri
   },
   email: {
     text: {
-      label: '文本邮件',
+      label: '邮件',
       fields: [
-        contentField('subject', '邮件主题', 'string', '通知', '{{ payload.title }}'),
-        contentField('body', '邮件正文', 'string', '', '{{ payload.content }}'),
-      ],
-    },
-    html: {
-      label: 'HTML 邮件',
-      fields: [
-        contentField('subject', '邮件主题', 'string', '通知', '{{ payload.title }}'),
-        contentField('html', 'HTML 正文', 'string', '', '{{ payload.content }}'),
+        contentField('subject', '主题', 'string', '通知', '{{ payload.title }}'),
+        contentField('body', '正文', 'string', '', '{{ payload.content }}'),
+        contentField('format', '内容格式', 'string', 'text', 'text', true, undefined, [
+          { label: '纯文本', value: 'text' },
+          { label: 'HTML', value: 'html' },
+        ]),
       ],
     },
   },
@@ -447,15 +453,11 @@ const fallbackTemplateSchemas: Record<ProviderKind, Record<string, { label: stri
     },
   },
   dingtalk_robot: {
-    text: {
-      label: '文本',
-      fields: [contentField('content', '正文内容', 'string', '通知', '{{ payload.content }}')],
-    },
     markdown: {
       label: 'Markdown',
       fields: [
         contentField('title', 'Markdown 标题', 'string', '通知', '{{ payload.title }}'),
-        contentField('markdown', 'Markdown 内容', 'string', '', '{{ payload.content }}'),
+        contentField('text', 'Markdown 内容', 'string', '', '{{ payload.content }}', true, '支持标准 Markdown；换行用 \\n，空格可用 &nbsp;'),
       ],
     },
   },
@@ -484,19 +486,6 @@ const fallbackTemplateSchemas: Record<ProviderKind, Record<string, { label: stri
         ]),
         contentField('text', 'text', 'string', '通知', '{{ payload.content }}'),
       ],
-    },
-  },
-  gov_cloud: {
-    text: {
-      label: '文本',
-      fields: [
-        contentField('title', '标题', 'string', '通知', '{{ payload.title }}'),
-        contentField('description', '消息内容 description', 'string', '', '{{ payload.content }}'),
-      ],
-    },
-    card: {
-      label: '卡片',
-      fields: enterpriseCardFields(),
     },
   },
   custom_token: {
@@ -1439,7 +1428,8 @@ export function templateReceivedPreview(draft: TemplateDraft): TemplateReceivedP
     };
   }
   const title = firstRenderedString(rendered, ['title', 'subject']);
-  const body = firstRenderedString(rendered, previewBodyKeys(format)) || fallbackRenderedBody(rendered);
+  const explicitBody = firstRenderedString(rendered, previewBodyKeys(format));
+  const body = explicitBody || (draft.targetProviderType === 'email' ? '' : fallbackRenderedBody(rendered));
   return {
     format,
     title,
@@ -1462,6 +1452,12 @@ function templatePreviewFormat(draft: TemplateDraft, rendered: JSONValue): Templ
   if (draft.targetProviderType === 'wecom_robot' && isRecord(rendered)) {
     const format = previewFormatFromValue(rendered.msgtype);
     if (format === 'text' || format === 'markdown') {
+      return format;
+    }
+  }
+  if (draft.targetProviderType === 'email' && isRecord(rendered)) {
+    const format = previewFormatFromValue(rendered.format);
+    if (format === 'text' || format === 'html') {
       return format;
     }
   }

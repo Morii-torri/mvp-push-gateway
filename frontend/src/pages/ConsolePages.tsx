@@ -161,6 +161,7 @@ import {
   providerTestSendPreview,
   providerWithCapability,
   switchProviderType,
+  tokenCacheStatusMeta,
   type ProviderRow,
 } from './console/providerConfig';
 import {
@@ -244,11 +245,11 @@ const providerTypeGroups: ProviderTypeGroup[] = [
   { label: '个人推送', tone: 'cyan', values: ['pushplus', 'wxpusher', 'serverchan', 'bark', 'pushme'] },
   { label: '邮件短信', tone: 'green', values: ['email', 'aliyun_sms', 'tencent_sms', 'baidu_sms'] },
   { label: '基础通道', tone: 'blue', values: ['webhook', 'self', 'custom_token'] },
-  { label: '自建服务', tone: 'orange', values: ['gov_cloud', 'ntfy', 'gotify'] },
+  { label: '自建服务', tone: 'orange', values: ['ntfy', 'gotify'] },
 ];
 
 export function providerShowsTokenCacheStatus(providerType: string): boolean {
-  return ['wecom_app', 'dingtalk_work', 'feishu_robot', 'gov_cloud'].includes(providerType);
+  return ['wecom_app', 'dingtalk_work', 'feishu_robot'].includes(providerType);
 }
 
 export type ConsolePageProps = {
@@ -2083,7 +2084,7 @@ export function ProvidersPage({ lastUpdated, onRefresh }: ConsolePageProps) {
   const [loadState, setLoadState] = useState<ApiLoadState>(emptyLoadState);
   const isFirstLoad = useRef(true);
   const [selected, setSelected] = useState<ProviderRow | null>(null);
-  const [providerDraft, setProviderDraft] = useState<ProviderRow>(() => createProviderDraft('gov_cloud', 1));
+  const [providerDraft, setProviderDraft] = useState<ProviderRow>(() => createProviderDraft('wecom_robot', 1));
   const [providerTestDraft, setProviderTestDraft] = useState<ProviderRow>(() => createProviderDraft('webhook', 1));
   const [editingProviderId, setEditingProviderId] = useState<string | null>(null);
   const [pendingProviderEnabledIds, setPendingProviderEnabledIds] = useState<Set<string>>(() => new Set());
@@ -2260,11 +2261,7 @@ export function ProvidersPage({ lastUpdated, onRefresh }: ConsolePageProps) {
             unCheckedChildren="停用"
           />
           {providerShowsTokenCacheStatus(record.providerType) && (
-            record.is_cached ? (
-              <StatusTag meta={{ label: '已缓存', color: 'success' }} />
-            ) : (
-              <StatusTag meta={{ label: '未缓存', color: 'default' }} />
-            )
+            <StatusTag meta={tokenCacheStatusMeta(record)} />
           )}
         </Space>
       ),
@@ -2291,7 +2288,7 @@ export function ProvidersPage({ lastUpdated, onRefresh }: ConsolePageProps) {
   return (
     <PageFrame
       title="推送渠道"
-      description="配置企业微信、飞书、钉钉、邮箱、短信、政务云、Webhook 和自定义 Token 推送渠道。"
+      description="配置企业微信、飞书、钉钉、邮箱、短信、Webhook、自建服务和自定义 Token 推送渠道。"
       lastUpdated={lastUpdated}
       onRefresh={onRefresh}
     >
@@ -4554,10 +4551,10 @@ export function identityFieldDisplayName(identityKind: string): string {
     serverchan_sendkey: 'SendKey',
     bark_device_key: 'Device Key',
     pushme_push_key: 'Push Key',
-    gov_userid: 'UserID',
     wecom_robot_key: 'Key',
     wecom_userid: 'UserID',
     dingtalk_userid: 'UserID',
+    dingtalk_robot_access_token: 'AccessToken',
     feishu_open_id: 'OpenID',
     feishu_webhook_token: 'Token',
     identity: 'Identity',
@@ -4881,9 +4878,6 @@ function defaultIdentityKindForPlatform(platform: string): string {
   if (providerType === 'pushme') {
     return 'pushme_push_key';
   }
-  if (providerType === 'gov_cloud') {
-    return 'gov_userid';
-  }
   if (providerType === 'wecom_robot') {
     return 'wecom_robot_key';
   }
@@ -4894,7 +4888,7 @@ function defaultIdentityKindForPlatform(platform: string): string {
     return 'dingtalk_userid';
   }
   if (providerType === 'dingtalk_robot') {
-    return 'mobile';
+    return 'dingtalk_robot_access_token';
   }
   if (providerType === 'feishu_robot') {
     return 'feishu_open_id';

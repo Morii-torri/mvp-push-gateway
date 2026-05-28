@@ -41,6 +41,7 @@ type TokenCacheEntry struct {
 
 type TokenCacheStatus struct {
 	IsCached       bool
+	Status         string
 	TokenRefreshed string
 	ExpiresAt      string
 	LastError      string
@@ -305,15 +306,30 @@ func (m *TokenManager) Status(ctx context.Context, capability Capability, channe
 		return TokenCacheStatus{}, err
 	}
 	entry, ok, err := m.store.GetTokenCache(ctx, TokenResolverCacheKey(resolver))
-	if err != nil || !ok || !tokenEntryUsable(entry, m.now().UTC()) {
+	if err != nil {
 		return TokenCacheStatus{}, err
 	}
-	status := TokenCacheStatus{IsCached: true, LastError: entry.LastError}
+	if !ok {
+		return TokenCacheStatus{Status: "missing"}, nil
+	}
+	status := TokenCacheStatus{LastError: entry.LastError}
 	if !entry.RefreshedAt.IsZero() {
 		status.TokenRefreshed = entry.RefreshedAt.Format(time.RFC3339)
 	}
 	if !entry.ExpiresAt.IsZero() {
 		status.ExpiresAt = entry.ExpiresAt.Format(time.RFC3339)
+	}
+	now := m.now().UTC()
+	switch {
+	case entry.InvalidatedAt != nil:
+		status.Status = "invalidated"
+	case strings.TrimSpace(entry.Token) == "":
+		status.Status = "missing"
+	case !entry.ExpiresAt.IsZero() && !now.Before(entry.ExpiresAt):
+		status.Status = "expired"
+	default:
+		status.IsCached = true
+		status.Status = "cached"
 	}
 	return status, nil
 }
@@ -496,7 +512,7 @@ func TokenResolverCacheKey(config *TokenResolverConfig) string {
 
 func RequiresTokenResolution(providerType ProviderType) bool {
 	switch providerType {
-	case ProviderWeComApp, ProviderDingTalkWork, ProviderFeishuRobot, ProviderGovCloud:
+	case ProviderWeComApp, ProviderDingTalkWork, ProviderFeishuRobot:
 		return true
 	default:
 		return false

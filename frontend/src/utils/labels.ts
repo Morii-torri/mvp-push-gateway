@@ -24,7 +24,6 @@ export type ProviderType =
   | 'dingtalk_work'
   | 'feishu_robot'
   | 'feishu_group'
-  | 'gov_cloud'
   | 'custom_token';
 export type InboundStatus =
   | 'accepted'
@@ -94,7 +93,6 @@ const providerTypeLabels: Record<ProviderType, string> = {
   dingtalk_work: '钉钉工作消息',
   feishu_robot: '飞书应用机器人',
   feishu_group: '飞书群消息',
-  gov_cloud: '随申办政务云',
   custom_token: '自定义 Token 平台',
 };
 

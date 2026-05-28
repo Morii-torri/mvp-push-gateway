@@ -35,7 +35,6 @@ VALUES
     ('aliyun_sms', 'Aliyun SMS', 'sms', true),
     ('tencent_sms', 'Tencent Cloud SMS', 'sms', true),
     ('baidu_sms', 'Baidu Cloud SMS', 'sms', true),
-    ('gov_cloud', 'Government cloud message', 'government', true),
     ('self', 'MVP Push Gateway cascade', 'gateway', true),
     ('webhook', 'Generic Webhook', 'advanced', true),
     ('custom_token', 'Custom token platform', 'advanced', true),

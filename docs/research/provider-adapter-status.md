@@ -16,11 +16,10 @@
 | SMTP 邮件 | `email` | 邮件 | 已完成 SMTP request snapshot/config model | SMTP 账号、授权码、TLS/端口联调；如要真实 SMTP 发送需补实际 SMTP client 路径 |
 | 企业微信群机器人 | `wecom_robot` | 企业 IM 机器人 | 已完成 webhook/key adapter、@ 人配置、errcode 规则 | 机器人 webhook/key、群机器人限流样本 |
 | 企业微信应用消息 | `wecom_app` / legacy `wecom` | 企业应用 | 已完成应用消息 body、token strategy metadata、recipient 映射 | corpid、corpsecret、agentid、测试用户、token/cache 真实联调 |
-| 钉钉群机器人 | `dingtalk_robot` | 企业 IM 机器人 | 已完成 webhook/secret 签名 adapter、at 配置、errcode 规则 | webhook、secret、手机号/atAll 策略 |
+| 钉钉群机器人 | `dingtalk_robot` | 企业 IM 机器人 | 已完成 markdown-only adapter、接收人 access_token、可选 secret 签名、errcode 规则 | access_token、secret、markdown 内容、isAtAll 策略 |
 | 钉钉工作消息 | `dingtalk_work` / legacy `dingtalk` | 企业应用 | 已完成工作消息 body、token strategy metadata、recipient 映射 | appKey/appSecret、agentId、测试用户、真实 token 联调 |
 | 飞书应用机器人 | `feishu_robot` | 企业应用机器人 | 已完成 tenant_access_token、open_id 文本消息 adapter、success/retry metadata | app_id、app_secret、open_id、真实应用机器人测试 |
 | 飞书群消息 | `feishu_group` | 企业 IM 群机器人 | 已完成 webhook token 接收人、可选签名 adapter、success/retry metadata | webhook token、secret、真实群测试 |
-| 随申办政务云 | `gov_cloud` | 政务云消息平台 | 已完成 text 消息、token strategy、错误分类、base URL 配置 | 当前开发环境不可访问；需可访问网络、corpsecret、测试接收人、IP 白名单确认 |
 | ntfy | `ntfy` | 自托管/公共通知 | 已完成 build-request adapter、Basic/Bearer 配置、notice schema | ntfy.sh topic 或自托管 server；真实限制需按目标服务确认 |
 | Gotify | `gotify` | 自托管通知 | 已完成 build-request adapter、app token、priority/extras | Gotify server、app token、客户端订阅 |
 | Bark | `bark` | iOS 推送 | 已完成 build-request adapter、device key、notice schema | Bark server/device key、iOS 客户端测试 |

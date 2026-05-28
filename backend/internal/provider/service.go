@@ -3,11 +3,16 @@ package provider
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"mime"
+	"net"
 	"net/http"
+	"net/mail"
+	"net/smtp"
 	"net/url"
 	"sort"
 	"strings"
@@ -29,7 +34,6 @@ const (
 	ProviderAliyunSMS     ProviderType = "aliyun_sms"
 	ProviderTencentSMS    ProviderType = "tencent_sms"
 	ProviderBaiduSMS      ProviderType = "baidu_sms"
-	ProviderGovCloud      ProviderType = "gov_cloud"
 	ProviderSelf          ProviderType = "self"
 	ProviderWebhook       ProviderType = "webhook"
 	ProviderCustomToken   ProviderType = "custom_token"
@@ -107,6 +111,7 @@ type Channel struct {
 	CreatedAt        time.Time
 	UpdatedAt        time.Time
 	IsCached         bool
+	TokenCacheStatus string
 	TokenRefreshedAt string
 	TokenExpiresAt   string
 	TokenLastError   string
@@ -390,7 +395,6 @@ func testSendRequiresRecipient(providerType ProviderType) bool {
 		ProviderWeComApp,
 		ProviderFeishuRobot,
 		ProviderDingTalkWork,
-		ProviderGovCloud,
 		ProviderWeComRobot,
 		ProviderPushPlus,
 		ProviderWxPusher,
@@ -464,12 +468,10 @@ func missingCredentialFields(channel Channel, token string) []string {
 		}
 		requireAny("钉钉 agent_id", auth["agent_id"], auth["agentid"], send["agent_id"], send["agentid"])
 	case ProviderDingTalkRobot:
-		requireAny("钉钉机器人 webhook", auth["webhook_url"], send["webhook_url"])
+		// Access token is resolved from the recipient identity for DingTalk group robots.
 	case ProviderFeishuRobot:
 		requireAny("飞书 app_id", auth["app_id"])
 		requireAny("飞书 app_secret", auth["app_secret"])
-	case ProviderGovCloud:
-		requireAny("政务云 access_token 或 corpsecret", token, auth["access_token"], auth["corpsecret"])
 	case ProviderNtfy:
 		requireAny("ntfy server_url", auth["server_url"], send["server_url"])
 		requireAny("ntfy topic", auth["topic"], send["topic"])
@@ -608,7 +610,7 @@ func titleContentSchema() json.RawMessage {
 }
 
 func emailContentSchema() json.RawMessage {
-	return rawJSON(`{"type":"object","required":["subject","html"],"properties":{"subject":{"type":"string","title":"Subject","default":"{{ payload.title }}"},"html":{"type":"string","title":"HTML body","default":"{{ payload.content }}"},"text":{"type":"string","title":"Plain text body"}}}`)
+	return rawJSON(`{"type":"object","required":["subject","body","format"],"field_order":["subject","body","format"],"properties":{"subject":{"type":"string","title":"主题","default":"{{ payload.title }}"},"body":{"type":"string","title":"正文","default":"{{ payload.content }}"},"format":{"type":"string","title":"内容格式","default":"text","enum":["text","html"],"enum_labels":{"text":"纯文本","html":"HTML"}}}}`)
 }
 
 func smsContentSchema() json.RawMessage {
@@ -671,7 +673,6 @@ func validProviderType(providerType ProviderType) bool {
 		ProviderAliyunSMS,
 		ProviderTencentSMS,
 		ProviderBaiduSMS,
-		ProviderGovCloud,
 		ProviderSelf,
 		ProviderWebhook,
 		ProviderCustomToken,
@@ -948,7 +949,7 @@ func resolvedRecipientFromMap(value map[string]any) ResolvedRecipient {
 			}
 		}
 	}
-	for _, key := range []string{"wecom_robot_key", "wecom_userid", "feishu_open_id", "feishu_user_id", "dingtalk_userid", "wxpusher_uid", "bark_device_key", "gov_userid", "gov_party_id", "gov_tag_id", "userid", "open_id"} {
+	for _, key := range []string{"wecom_robot_key", "wecom_userid", "feishu_open_id", "feishu_user_id", "dingtalk_userid", "dingtalk_robot_access_token", "wxpusher_uid", "bark_device_key", "userid", "open_id"} {
 		if stringValue := stringFromMap(value, key); stringValue != "" {
 			recipient.PlatformIDs[key] = stringValue
 		}
@@ -992,10 +993,8 @@ func recipientIdentityValue(providerType ProviderType, recipient ResolvedRecipie
 	switch providerType {
 	case ProviderEmail:
 		return recipient.Email
-	case ProviderAliyunSMS, ProviderTencentSMS, ProviderBaiduSMS, ProviderDingTalkRobot:
+	case ProviderAliyunSMS, ProviderTencentSMS, ProviderBaiduSMS:
 		return recipient.Mobile
-	case ProviderGovCloud:
-		return firstString(recipient.PlatformIDs["gov_userid"], recipient.Mobile)
 	case ProviderSelf:
 		return recipient.SystemUserID
 	default:
@@ -1015,6 +1014,8 @@ func providerIdentityKeys(providerType ProviderType) []string {
 		return []string{"feishu_webhook_token", "feishu_hook_token", "hook_token", "token"}
 	case ProviderDingTalkWork:
 		return []string{"dingtalk_userid", "userid", "user_id"}
+	case ProviderDingTalkRobot:
+		return []string{"dingtalk_robot_access_token", "access_token", "token"}
 	case ProviderWxPusher:
 		return []string{"wxpusher_uid", "uid"}
 	case ProviderPushPlus:
@@ -1025,8 +1026,6 @@ func providerIdentityKeys(providerType ProviderType) []string {
 		return []string{"bark_device_key", "device_key"}
 	case ProviderPushMe:
 		return []string{"pushme_push_key", "push_key"}
-	case ProviderGovCloud:
-		return []string{"gov_userid", "userid", "user_id"}
 	default:
 		return nil
 	}
@@ -1056,6 +1055,9 @@ func firstString(values ...string) string {
 }
 
 func sendBuiltRequest(ctx context.Context, channel Channel, built BuiltRequest) (int, map[string][]string, []byte, error) {
+	if channel.ProviderType == ProviderEmail || strings.EqualFold(built.Method, "SMTP_SEND") {
+		return sendSMTPBuiltRequest(ctx, channel, built)
+	}
 	body := built.Body
 	if len(bytes.TrimSpace(body)) == 0 {
 		body = json.RawMessage(`{}`)
@@ -1085,6 +1087,231 @@ func sendBuiltRequest(ctx context.Context, channel Channel, built BuiltRequest) 
 		return resp.StatusCode, resp.Header, responseBody, readErr
 	}
 	return resp.StatusCode, resp.Header, responseBody, nil
+}
+
+var smtpTLSConfigForHost = func(host string) *tls.Config {
+	return &tls.Config{ServerName: host, MinVersion: tls.VersionTLS12}
+}
+
+func sendSMTPBuiltRequest(ctx context.Context, channel Channel, built BuiltRequest) (int, map[string][]string, []byte, error) {
+	body, err := decodeObjectConfig(built.Body)
+	if err != nil {
+		return 0, nil, nil, err
+	}
+	auth, err := decodeObjectConfig(channel.AuthConfig)
+	if err != nil {
+		return 0, nil, nil, err
+	}
+	send, err := decodeObjectConfig(channel.SendConfig)
+	if err != nil {
+		return 0, nil, nil, err
+	}
+	endpoint, err := smtpEndpointFromRequest(built.URL, body)
+	if err != nil {
+		return 0, nil, nil, err
+	}
+	username := firstString(stringConfig(auth, "username"), stringConfig(send, "username"), stringConfig(body, "username"))
+	password := firstString(stringConfig(auth, "password"), stringConfig(send, "password"))
+	fromHeader, err := smtpFromHeader(username, firstString(stringConfig(body, "from"), stringConfig(send, "from")))
+	if err != nil {
+		return 0, nil, nil, err
+	}
+	envelopeFrom := firstString(stringConfig(body, "smtp_envelope_from"), smtpEnvelopeFrom(username, fromHeader))
+	if envelopeFrom == "" {
+		return 0, nil, nil, fmt.Errorf("%w: 缺少邮件发件人地址", ErrInvalidInput)
+	}
+	to := stringListFromAny(body["to"])
+	if len(to) == 0 {
+		return 0, nil, nil, fmt.Errorf("%w: 缺少邮件收件人地址", ErrInvalidInput)
+	}
+	cc := stringListFromAny(body["cc"])
+	bcc := stringListFromAny(body["bcc"])
+	recipients := append(append(append([]string{}, to...), cc...), bcc...)
+	subject := firstString(stringConfig(body, "subject"), "通知")
+	messageBody := firstString(stringConfig(body, "body"), stringConfig(body, "content"), stringConfig(body, "text"))
+	format := normalizedEmailContentFormat(firstString(stringConfig(body, "format"), stringConfig(body, "content_type")))
+	message := buildSMTPMessage(fromHeader, to, cc, firstString(stringConfig(body, "reply_to"), stringConfig(send, "reply_to")), subject, messageBody, format)
+
+	timeout := time.Duration(channel.TimeoutMS) * time.Millisecond
+	if timeout <= 0 {
+		timeout = 10 * time.Second
+	}
+	client, err := dialSMTPClient(ctx, endpoint, timeout)
+	if err != nil {
+		return 0, nil, nil, err
+	}
+	defer client.Close()
+	if username != "" || password != "" {
+		if err := client.Auth(smtp.PlainAuth("", username, password, endpoint.host)); err != nil {
+			return 0, nil, nil, err
+		}
+	}
+	if err := client.Mail(envelopeFrom); err != nil {
+		return 0, nil, nil, err
+	}
+	for _, recipient := range recipients {
+		address, err := emailAddressOnly(recipient)
+		if err != nil {
+			return 0, nil, nil, err
+		}
+		if err := client.Rcpt(address); err != nil {
+			return 0, nil, nil, err
+		}
+	}
+	writer, err := client.Data()
+	if err != nil {
+		return 0, nil, nil, err
+	}
+	if _, err := writer.Write(message); err != nil {
+		_ = writer.Close()
+		return 0, nil, nil, err
+	}
+	if err := writer.Close(); err != nil {
+		return 0, nil, nil, err
+	}
+	if err := client.Quit(); err != nil {
+		return 0, nil, nil, err
+	}
+	response, err := marshalJSON(map[string]any{
+		"accepted":   true,
+		"recipients": recipients,
+		"protocol":   "smtp",
+	})
+	if err != nil {
+		return 0, nil, nil, err
+	}
+	return http.StatusAccepted, map[string][]string{"Protocol": {"smtp"}}, response, nil
+}
+
+type smtpEndpoint struct {
+	host     string
+	address  string
+	security string
+}
+
+func smtpEndpointFromRequest(rawURL string, body map[string]any) (smtpEndpoint, error) {
+	parsed, err := url.Parse(strings.TrimSpace(rawURL))
+	if err != nil || parsed.Host == "" {
+		return smtpEndpoint{}, ErrInvalidInput
+	}
+	host := parsed.Hostname()
+	port := parsed.Port()
+	if port == "" {
+		port = "465"
+	}
+	security := strings.ToUpper(firstString(stringConfig(body, "security"), "SSL"))
+	if security != "SSL" && security != "STARTTLS" {
+		return smtpEndpoint{}, fmt.Errorf("%w: SMTP 仅支持 SSL 或 STARTTLS", ErrInvalidInput)
+	}
+	return smtpEndpoint{host: host, address: net.JoinHostPort(host, port), security: security}, nil
+}
+
+func dialSMTPClient(ctx context.Context, endpoint smtpEndpoint, timeout time.Duration) (*smtp.Client, error) {
+	dialer := &net.Dialer{Timeout: timeout}
+	if endpoint.security == "STARTTLS" {
+		conn, err := dialer.DialContext(ctx, "tcp", endpoint.address)
+		if err != nil {
+			return nil, err
+		}
+		client, err := smtp.NewClient(conn, endpoint.host)
+		if err != nil {
+			_ = conn.Close()
+			return nil, err
+		}
+		if err := client.StartTLS(smtpTLSConfigForHost(endpoint.host)); err != nil {
+			_ = client.Close()
+			return nil, err
+		}
+		return client, nil
+	}
+	conn, err := tls.DialWithDialer(dialer, "tcp", endpoint.address, smtpTLSConfigForHost(endpoint.host))
+	if err != nil {
+		return nil, err
+	}
+	client, err := smtp.NewClient(conn, endpoint.host)
+	if err != nil {
+		_ = conn.Close()
+		return nil, err
+	}
+	return client, nil
+}
+
+func buildSMTPMessage(from string, to, cc []string, replyTo, subject, body, format string) []byte {
+	contentType := "text/plain"
+	if normalizedEmailContentFormat(format) == "html" {
+		contentType = "text/html"
+	}
+	headers := []string{
+		"From: " + from,
+		"To: " + strings.Join(to, ", "),
+		"Subject: " + mime.QEncoding.Encode("utf-8", subject),
+		"Date: " + time.Now().Format(time.RFC1123Z),
+		"MIME-Version: 1.0",
+		"Content-Type: " + contentType + "; charset=UTF-8",
+		"Content-Transfer-Encoding: 8bit",
+	}
+	if len(cc) > 0 {
+		headers = append(headers, "Cc: "+strings.Join(cc, ", "))
+	}
+	if strings.TrimSpace(replyTo) != "" {
+		headers = append(headers, "Reply-To: "+replyTo)
+	}
+	return []byte(strings.Join(headers, "\r\n") + "\r\n\r\n" + normalizeSMTPBody(body))
+}
+
+func normalizeSMTPBody(body string) string {
+	normalized := strings.ReplaceAll(body, "\r\n", "\n")
+	normalized = strings.ReplaceAll(normalized, "\r", "\n")
+	return strings.ReplaceAll(normalized, "\n", "\r\n")
+}
+
+func normalizedEmailContentFormat(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "html", "text/html":
+		return "html"
+	default:
+		return "text"
+	}
+}
+
+func emailAddressOnly(value string) (string, error) {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return "", fmt.Errorf("%w: 缺少邮件地址", ErrInvalidInput)
+	}
+	address, err := mail.ParseAddress(trimmed)
+	if err != nil {
+		return "", err
+	}
+	return address.Address, nil
+}
+
+func smtpFromHeader(username, fromValue string) (string, error) {
+	usernameAddress, usernameErr := emailAddressOnly(username)
+	trimmedFrom := strings.TrimSpace(fromValue)
+	if trimmedFrom == "" {
+		if usernameErr != nil {
+			return "", fmt.Errorf("%w: 缺少邮件发件人地址", ErrInvalidInput)
+		}
+		return (&mail.Address{Address: usernameAddress}).String(), nil
+	}
+	if address, err := mail.ParseAddress(trimmedFrom); err == nil {
+		return address.String(), nil
+	}
+	if usernameErr == nil && !strings.Contains(trimmedFrom, "@") && !strings.ContainsAny(trimmedFrom, "<>") {
+		return (&mail.Address{Name: trimmedFrom, Address: usernameAddress}).String(), nil
+	}
+	return "", fmt.Errorf("%w: 发件人显示名或地址格式无效", ErrInvalidInput)
+}
+
+func smtpEnvelopeFrom(username, fromHeader string) string {
+	if address, err := emailAddressOnly(username); err == nil {
+		return address
+	}
+	if address, err := emailAddressOnly(fromHeader); err == nil {
+		return address
+	}
+	return ""
 }
 
 func marshalJSON(value any) (json.RawMessage, error) {
@@ -1401,7 +1628,7 @@ func (s *Service) RefreshToken(ctx context.Context, id string) (TokenCacheStatus
 			if err != nil {
 				return TokenCacheStatus{}, err
 			}
-			status := TokenCacheStatus{IsCached: true}
+			status := TokenCacheStatus{IsCached: true, Status: "cached"}
 			if !resolution.ExpiresAt.IsZero() {
 				status.ExpiresAt = resolution.ExpiresAt.Format(time.RFC3339)
 			}
@@ -1615,6 +1842,7 @@ func (s *Service) withTokenStatus(ctx context.Context, channel Channel) Channel 
 			return channel
 		}
 		channel.IsCached = status.IsCached
+		channel.TokenCacheStatus = status.Status
 		channel.TokenRefreshedAt = status.TokenRefreshed
 		channel.TokenExpiresAt = status.ExpiresAt
 		channel.TokenLastError = status.LastError
@@ -1629,6 +1857,9 @@ func (status TokenCacheStatus) withFallback(fallback TokenCacheStatus) TokenCach
 	}
 	if fallback.IsCached {
 		return fallback
+	}
+	if strings.TrimSpace(status.Status) == "" {
+		status.Status = fallback.Status
 	}
 	return status
 }

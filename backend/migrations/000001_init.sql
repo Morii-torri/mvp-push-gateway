@@ -26,7 +26,7 @@ CREATE TABLE inbound_sources (
 CREATE TABLE delivery_channels (
     id uuid PRIMARY KEY,
     provider_type text NOT NULL
-        CHECK (provider_type IN ('wecom', 'feishu', 'dingtalk', 'email', 'sms', 'gov_cloud', 'self', 'webhook', 'custom_token')),
+        CHECK (provider_type IN ('wecom', 'feishu', 'dingtalk', 'email', 'sms', 'self', 'webhook', 'custom_token')),
     name text NOT NULL,
     enabled boolean NOT NULL DEFAULT true,
     auth_config jsonb NOT NULL DEFAULT '{}'::jsonb,
@@ -44,7 +44,7 @@ CREATE TABLE delivery_channels (
 CREATE TABLE provider_capabilities (
     id uuid PRIMARY KEY,
     provider_type text NOT NULL
-        CHECK (provider_type IN ('wecom', 'feishu', 'dingtalk', 'email', 'sms', 'gov_cloud', 'self', 'webhook', 'custom_token')),
+        CHECK (provider_type IN ('wecom', 'feishu', 'dingtalk', 'email', 'sms', 'self', 'webhook', 'custom_token')),
     message_type text NOT NULL,
     message_schema jsonb NOT NULL DEFAULT '{}'::jsonb,
     recipient_required boolean NOT NULL DEFAULT true,

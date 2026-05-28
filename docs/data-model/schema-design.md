@@ -4,7 +4,7 @@
 
 ## 枚举约定
 
-- `provider_type`: `webhook` / `self` / `pushplus` / `wxpusher` / `serverchan` / `email` / `aliyun_sms` / `tencent_sms` / `baidu_sms` / `wecom_robot` / `wecom_app` / `dingtalk_robot` / `dingtalk_work` / `feishu_robot` / `feishu_group` / `gov_cloud` / `ntfy` / `gotify` / `bark` / `pushme` / `custom_token`。不再支持 legacy `wecom` / `dingtalk` / `feishu` / `sms` 渠道。
+- `provider_type`: `webhook` / `self` / `pushplus` / `wxpusher` / `serverchan` / `email` / `aliyun_sms` / `tencent_sms` / `baidu_sms` / `wecom_robot` / `wecom_app` / `dingtalk_robot` / `dingtalk_work` / `feishu_robot` / `feishu_group` / `ntfy` / `gotify` / `bark` / `pushme` / `custom_token`。不再支持 legacy `wecom` / `dingtalk` / `feishu` / `sms` 渠道。
 - `location`: `query` / `header` / `body` / `path` / `none`
 - `message_status`: `accepted` / `deduped` / `silenced` / `planned` / `partial_sent` / `sent` / `failed` / `no_route`
 - `delivery_status`: `queued` / `processing` / `sent` / `failed` / `deduped` / `skipped`
@@ -118,13 +118,13 @@ Provider type registry，避免每新增一个 provider 都扩展 `delivery_chan
 | `default_retry_policy` | jsonb | 默认重试策略 |
 | `request_examples` | jsonb | 示例 |
 
-第一批 provider defaults 已实现 build-request/mock 级别支持：`webhook`、`self`、`pushplus`、`wxpusher`、`serverchan`、`email`、`aliyun_sms`、`tencent_sms`、`baidu_sms`、`wecom_robot`、`wecom_app`、`dingtalk_robot`、`dingtalk_work`、`feishu_robot`、`feishu_group`、`gov_cloud` 和高级 `custom_token`。P2 provider defaults 已实现 build-request/mock 级别支持：`ntfy`、`gotify`、`bark`、`pushme`。legacy `wecom`、`dingtalk`、`feishu`、`sms` 已移除，不再作为可配置渠道或发送模型。PushPlus、WxPusher、Server酱、短信、企微、钉钉、飞书、SMTP/self/gov_cloud、ntfy、Gotify、Bark、PushMe 当前均不要标注为已真实联调成功。
+第一批 provider defaults 已实现 build-request/mock 级别支持：`webhook`、`self`、`pushplus`、`wxpusher`、`serverchan`、`email`、`aliyun_sms`、`tencent_sms`、`baidu_sms`、`wecom_robot`、`wecom_app`、`dingtalk_robot`、`dingtalk_work`、`feishu_robot`、`feishu_group` 和高级 `custom_token`。P2 provider defaults 已实现 build-request/mock 级别支持：`ntfy`、`gotify`、`bark`、`pushme`。legacy `wecom`、`dingtalk`、`feishu`、`sms` 已移除，不再作为可配置渠道或发送模型。PushPlus、WxPusher、Server酱、短信、企微、钉钉、飞书、SMTP/self、ntfy、Gotify、Bark、PushMe 当前均不要标注为已真实联调成功。
 
 `delivery_channels.provider_type` 和 `provider_capabilities.provider_type` 通过 FK 指向 `provider_types`。
 
 ### `provider_token_cache`
 
-推送渠道 AccessToken 持久缓存。用于企业微信应用、钉钉工作消息、政务云等需要服务端换取 access token 的渠道，保证多实例、多 worker 共享同一份 token 状态。
+推送渠道 AccessToken 持久缓存。用于企业微信应用、钉钉工作消息、飞书应用机器人等需要服务端换取 access token 的渠道，保证多实例、多 worker 共享同一份 token 状态。
 
 | 字段 | 类型 | 说明 |
 |---|---|---|
@@ -195,7 +195,7 @@ Provider type registry，避免每新增一个 provider 都扩展 `delivery_chan
 | `user_id` | uuid | 人员 |
 | `provider_type` | text | provider type，可为 `common` |
 | `channel_id` | uuid null | 推送渠道实例；为空表示该 provider type 的默认身份 |
-| `identity_kind` | text | mobile、email、wecom_userid、dingtalk_userid、feishu_open_id、wxpusher_uid、gov_userid、gov_party_id、gov_tag_id 等 |
+| `identity_kind` | text | mobile、email、wecom_userid、dingtalk_userid、feishu_open_id、feishu_webhook_token、wxpusher_uid 等 |
 | `identity_value` | text | 实际值 |
 | `verified` | boolean | 是否校验 |
 | `ux_user_identities_type_default` | unique partial index | `channel_id is null` 时防止类型级默认身份重复 |

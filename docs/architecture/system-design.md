@@ -2,7 +2,7 @@
 
 ## 目标
 
-MVP Push Gateway 是一个综合消息推送网关。它面向内部系统、政务系统、业务平台和运维工具，统一接收入站消息，按条件路由、消息模板、接收人策略和推送渠道能力投递到 Webhook、本平台级联、PushPlus、WxPusher、Server酱、邮箱、短信、企业微信、钉钉、飞书、随申办政务云等 provider。
+MVP Push Gateway 是一个综合消息推送网关。它面向内部系统、政务系统、业务平台和运维工具，统一接收入站消息，按条件路由、消息模板、接收人策略和推送渠道能力投递到 Webhook、本平台级联、PushPlus、WxPusher、Server酱、邮箱、短信、企业微信、钉钉、飞书、自建服务等 provider。
 
 ## 技术栈
 
@@ -66,8 +66,8 @@ MVP Push Gateway 是一个综合消息推送网关。它面向内部系统、政
 
 推送渠道分两层：
 
-- `provider_type`：渠道类型，例如 `webhook`、`self`、`pushplus`、`wxpusher`、`serverchan`、`email`、`aliyun_sms`、`tencent_sms`、`baidu_sms`、`wecom_robot`、`wecom_app`、`dingtalk_robot`、`dingtalk_work`、`feishu_robot`、`feishu_group`、`gov_cloud`、`ntfy`、`gotify`、`bark`、`pushme`，高级模式保留 `custom_token`。不再兼容 legacy `wecom`、`dingtalk`、`feishu`、`sms`。
-- `delivery_channel`：具体可投递实例，例如“上海政务云生产”、“企业微信生产机器人”、“飞书审批通知”。
+- `provider_type`：渠道类型，例如 `webhook`、`self`、`pushplus`、`wxpusher`、`serverchan`、`email`、`aliyun_sms`、`tencent_sms`、`baidu_sms`、`wecom_robot`、`wecom_app`、`dingtalk_robot`、`dingtalk_work`、`feishu_robot`、`feishu_group`、`ntfy`、`gotify`、`bark`、`pushme`，高级模式保留 `custom_token`。不再兼容 legacy `wecom`、`dingtalk`、`feishu`、`sms`。
+- `delivery_channel`：具体可投递实例，例如“企业微信生产机器人”、“飞书审批通知”、“自建 ntfy 运维通知”。
 
 渠道能力必须数据化，不能写死在 UI：
 
@@ -89,7 +89,7 @@ AccessToken 类渠道必须由后端统一获取、缓存和刷新：
 
 每个渠道实例必须独立限流、独立并发控制和独立失败隔离。一个慢渠道只能积压自己的 `send_message` job，不能阻塞其他渠道的发送 worker。
 
-第一批 provider defaults 已实现 build-request/mock 级别支持：`webhook`、`self`、`pushplus`、`wxpusher`、`serverchan`、`email`、`aliyun_sms`、`tencent_sms`、`baidu_sms`、`wecom_robot`、`wecom_app`、`dingtalk_robot`、`dingtalk_work`、`feishu_robot`、`feishu_group`、`gov_cloud` 和高级 `custom_token`。P2 provider defaults 也已实现 build-request/mock 级别支持：`ntfy`、`gotify`、`bark`、`pushme`。legacy `wecom`、`dingtalk`、`feishu`、`sms` 已移除，不再作为发送模型。PushPlus、WxPusher、Server酱、短信、企微、钉钉、飞书、SMTP/self/gov_cloud、ntfy、Gotify、Bark、PushMe 当前均为 implemented but not live-tested 或 configuration-dependent；不要写成已真实投递成功。
+第一批 provider defaults 已实现 build-request/mock 级别支持：`webhook`、`self`、`pushplus`、`wxpusher`、`serverchan`、`email`、`aliyun_sms`、`tencent_sms`、`baidu_sms`、`wecom_robot`、`wecom_app`、`dingtalk_robot`、`dingtalk_work`、`feishu_robot`、`feishu_group` 和高级 `custom_token`。P2 provider defaults 也已实现 build-request/mock 级别支持：`ntfy`、`gotify`、`bark`、`pushme`。legacy `wecom`、`dingtalk`、`feishu`、`sms` 已移除，不再作为发送模型。PushPlus、WxPusher、Server酱、短信、企微、钉钉、飞书、SMTP/self、ntfy、Gotify、Bark、PushMe 当前均为 implemented but not live-tested 或 configuration-dependent；不要写成已真实投递成功。
 
 ### 组织人员
 
@@ -100,7 +100,6 @@ AccessToken 类渠道必须由后端统一获取、缓存和刷新：
 - 企业微信 userid。
 - 飞书 open_id / union_id。
 - 钉钉 userid / mobile。
-- 随申办 `gov_userid`、`gov_party_id`、`gov_tag_id`。
 - 自定义 provider 身份字段。
 
 发送时根据目标渠道能力选择对应身份字段，并按 `channel_id` 优先解析：如果人员配置了目标渠道实例的身份值，使用实例级身份；否则回退到同 provider type 或 `common` 的默认身份。这样同一人员可以在不同企业微信企业、飞书租户、邮件渠道或短信渠道中使用不同 userid、open_id、邮箱或手机号。缺失时按配置决定报错、跳过或降级。

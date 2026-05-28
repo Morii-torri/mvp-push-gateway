@@ -71,7 +71,6 @@ export type ProviderType =
   | 'dingtalk_work'
   | 'feishu_robot'
   | 'feishu_group'
-  | 'gov_cloud'
   | 'custom_token';
 
 export type ChannelApiRecord = {
@@ -90,10 +89,12 @@ export type ChannelApiRecord = {
   created_at: string;
   updated_at: string;
   is_cached?: boolean;
+  token_cache_status?: string;
   token_refreshed_at?: string;
+  token_expires_at?: string;
 };
 
-export type ChannelInput = Omit<ChannelApiRecord, 'id' | 'created_at' | 'updated_at' | 'is_cached' | 'token_refreshed_at'>;
+export type ChannelInput = Omit<ChannelApiRecord, 'id' | 'created_at' | 'updated_at' | 'is_cached' | 'token_cache_status' | 'token_refreshed_at' | 'token_expires_at'>;
 
 export type FeishuOpenIdResolveItem = {
   mobile: string;
@@ -555,7 +556,7 @@ export const consoleApi = {
     });
   },
   refreshTokenChannel(id: string, fetcher?: ApiFetcher) {
-    return apiRequest<{ status: string; is_cached: boolean; token_refreshed_at: string }>(`/channels/${id}/refresh-token`, {
+    return apiRequest<{ status: string; is_cached: boolean; token_cache_status?: string; token_refreshed_at: string; token_expires_at?: string }>(`/channels/${id}/refresh-token`, {
       method: 'POST',
       body: {},
       fetcher,

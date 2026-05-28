@@ -19,7 +19,6 @@ ALTER TABLE delivery_channels
         'aliyun_sms',
         'tencent_sms',
         'baidu_sms',
-        'gov_cloud',
         'self',
         'webhook',
         'custom_token',
@@ -47,7 +46,6 @@ ALTER TABLE provider_capabilities
         'aliyun_sms',
         'tencent_sms',
         'baidu_sms',
-        'gov_cloud',
         'self',
         'webhook',
         'custom_token',
@@ -97,7 +95,6 @@ ALTER TABLE delivery_channels
         'dingtalk',
         'email',
         'sms',
-        'gov_cloud',
         'self',
         'webhook',
         'custom_token'
@@ -114,7 +111,6 @@ ALTER TABLE provider_capabilities
         'dingtalk',
         'email',
         'sms',
-        'gov_cloud',
         'self',
         'webhook',
         'custom_token'

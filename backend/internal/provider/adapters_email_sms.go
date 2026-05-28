@@ -1,9 +1,62 @@
 package provider
 
 import (
+	"encoding/json"
 	"fmt"
 	"sort"
+	"strconv"
+	"strings"
 )
+
+func emailRequestConfig(auth, send, content map[string]any, recipient any) (requestConfig, error) {
+	host := firstString(stringConfig(auth, "host"), stringConfig(send, "host"))
+	port := firstPositiveInt(rawConfig(auth, "port"), rawConfig(send, "port"))
+	security := strings.ToUpper(firstString(stringConfig(auth, "security"), stringConfig(send, "security"), "SSL"))
+	if security != "SSL" && security != "STARTTLS" {
+		security = "SSL"
+	}
+	if port == 0 {
+		if security == "STARTTLS" {
+			port = 587
+		} else {
+			port = 465
+		}
+	}
+
+	requestURL := ""
+	if host != "" {
+		requestURL = fmt.Sprintf("smtp://%s:%d", host, port)
+	}
+	username := firstString(stringConfig(auth, "username"), stringConfig(send, "username"))
+	from := firstString(stringConfig(send, "from"), stringConfig(auth, "from"))
+	if normalizedFrom, err := smtpFromHeader(username, from); err == nil {
+		from = normalizedFrom
+	}
+	body := map[string]any{
+		"host":                host,
+		"port":                port,
+		"security":            security,
+		"username":            username,
+		"from":                from,
+		"to":                  recipientStrings(recipient),
+		"subject":             firstString(stringConfig(content, "subject"), stringConfig(content, "title"), "通知"),
+		"body":                firstString(stringConfig(content, "body"), stringConfig(content, "text"), stringConfig(content, "content"), stringConfig(content, "html")),
+		"format":              normalizedEmailContentFormat(firstString(stringConfig(content, "format"), stringConfig(content, "content_type"))),
+		"password_configured": firstString(stringConfig(auth, "password"), stringConfig(send, "password")) != "",
+		"live_test_status":    "implemented_but_not_live_tested",
+	}
+	if envelopeFrom := smtpEnvelopeFrom(body["username"].(string), body["from"].(string)); envelopeFrom != "" {
+		body["smtp_envelope_from"] = envelopeFrom
+	}
+	if cc := listConfig(send, "cc"); len(cc) > 0 {
+		body["cc"] = cc
+	}
+	if bcc := listConfig(send, "bcc"); len(bcc) > 0 {
+		body["bcc"] = bcc
+	}
+	copyStringField(body, "reply_to", send, "reply_to")
+	return jsonRequest("SMTP_SEND", requestURL, body)
+}
 
 func smsRequestConfig(providerType ProviderType, auth, send, content map[string]any, recipient any) (requestConfig, error) {
 	vendor := smsVendor(providerType, auth, send)
@@ -15,6 +68,34 @@ func smsRequestConfig(providerType ProviderType, auth, send, content map[string]
 	default:
 		return aliyunSMSRequestConfig(send, content, recipient)
 	}
+}
+
+func firstPositiveInt(values ...any) int {
+	for _, value := range values {
+		switch typed := value.(type) {
+		case int:
+			if typed > 0 {
+				return typed
+			}
+		case int64:
+			if typed > 0 {
+				return int(typed)
+			}
+		case float64:
+			if typed > 0 {
+				return int(typed)
+			}
+		case json.Number:
+			if number, err := strconv.Atoi(string(typed)); err == nil && number > 0 {
+				return number
+			}
+		case string:
+			if number, err := strconv.Atoi(strings.TrimSpace(typed)); err == nil && number > 0 {
+				return number
+			}
+		}
+	}
+	return 0
 }
 
 func aliyunSMSRequestConfig(send, content map[string]any, recipient any) (requestConfig, error) {
