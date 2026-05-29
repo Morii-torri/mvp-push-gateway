@@ -352,8 +352,8 @@ func TestWorkerFansOutActionTargetsIntoDeliveryAttemptsAndSendJobs(t *testing.T)
 		t.Fatalf("create webhook channel: %v", err)
 	}
 	customChannel, err := repository.CreateChannel(ctx, provider.CreateChannelParams{
-		ProviderType:     provider.ProviderCustomToken,
-		Name:             "Custom Token",
+		ProviderType:     provider.ProviderWebhook,
+		Name:             "Webhook With Recipient",
 		Enabled:          true,
 		SendConfig:       json.RawMessage(`{"method":"POST","url":"https://example.test/custom","recipient":{"location":"body","path":"recipient"}}`),
 		RateLimitConfig:  json.RawMessage(`{}`),
@@ -363,7 +363,7 @@ func TestWorkerFansOutActionTargetsIntoDeliveryAttemptsAndSendJobs(t *testing.T)
 		DeadLetterPolicy: json.RawMessage(`{}`),
 	})
 	if err != nil {
-		t.Fatalf("create custom token channel: %v", err)
+		t.Fatalf("create recipient webhook channel: %v", err)
 	}
 
 	webhookTemplate, err := templateService.CreateTemplate(ctx, msgtemplate.TemplateInput{Name: "Webhook Template", SourceID: inboundSource.ID, Enabled: true})
@@ -386,7 +386,7 @@ func TestWorkerFansOutActionTargetsIntoDeliveryAttemptsAndSendJobs(t *testing.T)
 	}
 	customVersion, err := templateService.Publish(ctx, customTemplate.ID, msgtemplate.VersionInput{
 		MessageType:        "json",
-		TargetProviderType: string(provider.ProviderCustomToken),
+		TargetProviderType: string(provider.ProviderWebhook),
 		TemplateBody:       `{"target":"custom","ticket":"{{ payload.ticket }}"}`,
 		MessageBodySchema:  json.RawMessage(`{"type":"object"}`),
 		SamplePayload:      json.RawMessage(`{"ticket":"T-1001"}`),
@@ -618,8 +618,8 @@ func TestWorkerMarksBusinessPlanningFailuresDone(t *testing.T) {
 			t.Fatalf("create source: %v", err)
 		}
 		channel, err := repository.CreateChannel(ctx, provider.CreateChannelParams{
-			ProviderType:     provider.ProviderCustomToken,
-			Name:             "Custom Token",
+			ProviderType:     provider.ProviderWebhook,
+			Name:             "Recipient Webhook",
 			Enabled:          true,
 			SendConfig:       json.RawMessage(`{"method":"POST","url":"https://example.test/send","recipient":{"location":"body","path":"recipient"}}`),
 			RateLimitConfig:  json.RawMessage(`{}`),
@@ -637,7 +637,7 @@ func TestWorkerMarksBusinessPlanningFailuresDone(t *testing.T) {
 		}
 		templateVersion, err := templateService.Publish(ctx, template.ID, msgtemplate.VersionInput{
 			MessageType:        "json",
-			TargetProviderType: string(provider.ProviderCustomToken),
+			TargetProviderType: string(provider.ProviderWebhook),
 			TemplateBody:       `{"message":"{{ payload.title }}"}`,
 			MessageBodySchema:  json.RawMessage(`{"type":"object"}`),
 			SamplePayload:      json.RawMessage(`{"title":"x"}`),

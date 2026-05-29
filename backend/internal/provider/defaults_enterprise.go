@@ -60,13 +60,17 @@ func weComAppCapability(providerType ProviderType, displayName string) Capabilit
 	})
 }
 
-func dingTalkRobotCapability() Capability {
+func dingTalkRobotCapability(messageType string) Capability {
+	messageSchema := dingTalkRobotMarkdownContentSchema()
+	if messageType == "text" {
+		messageSchema = dingTalkRobotTextContentSchema()
+	}
 	return capability(capabilitySpec{
 		ProviderType:         ProviderDingTalkRobot,
 		DisplayName:          "DingTalk group robot",
 		Category:             "enterprise_robot",
-		MessageType:          "markdown",
-		MessageSchema:        dingTalkRobotMarkdownContentSchema(),
+		MessageType:          messageType,
+		MessageSchema:        messageSchema,
 		CredentialSchema:     rawJSON(`{"type":"object","properties":{"secret":{"type":"string","title":"secret","format":"password","description":"机器人安全设置中加签一栏下 SEC 开头的字符串；为空时不加签。"}}}`),
 		ChannelConfigSchema:  rawJSON(`{"type":"object","properties":{"base_url":{"type":"string","title":"API 基础地址","default":"https://oapi.dingtalk.com"},"isAtAll":{"type":"boolean","title":"isAtAll","default":false}}}`),
 		RecipientRequired:    true,
@@ -91,33 +95,37 @@ func dingTalkRobotCapability() Capability {
 	})
 }
 
-func dingTalkWorkCapability(providerType ProviderType, displayName string) Capability {
+func dingTalkWorkCapability(providerType ProviderType, displayName string, messageType string) Capability {
+	messageSchema := dingTalkWorkMarkdownContentSchema()
+	if messageType == "sampleText" {
+		messageSchema = dingTalkWorkTextContentSchema()
+	}
 	return capability(capabilitySpec{
 		ProviderType:         providerType,
 		DisplayName:          displayName,
 		Category:             "enterprise_app",
-		MessageType:          "text",
-		MessageSchema:        robotTextContentSchema(),
-		CredentialSchema:     rawJSON(`{"type":"object","required":["app_key","app_secret","agent_id"],"properties":{"app_key":{"type":"string"},"app_secret":{"type":"string","format":"password"},"agent_id":{"type":["string","integer"]}}}`),
-		ChannelConfigSchema:  rawJSON(`{"type":"object","properties":{"base_url":{"type":"string","default":"https://oapi.dingtalk.com"},"to_all_user":{"type":"boolean","default":false}}}`),
+		MessageType:          messageType,
+		MessageSchema:        messageSchema,
+		CredentialSchema:     rawJSON(`{"type":"object","required":["corp_id","client_id","client_secret"],"properties":{"corp_id":{"type":"string","title":"corpId"},"client_id":{"type":"string","title":"client_id"},"client_secret":{"type":"string","title":"client_secret","format":"password"}}}`),
+		ChannelConfigSchema:  rawJSON(`{"type":"object","required":["robot_code"],"properties":{"base_url":{"type":"string","default":"https://api.dingtalk.com"},"robot_code":{"type":"string","title":"robotCode"}}}`),
 		RecipientRequired:    true,
 		RecipientRequirement: "system",
-		RecipientFieldName:   "userid_list",
+		RecipientFieldName:   "userIds",
 		RecipientLocation:    PlacementBody,
-		RecipientPath:        "userid_list",
-		RecipientFormat:      "comma_string",
+		RecipientPath:        "userIds",
+		RecipientFormat:      "array",
 		IdentityKind:         "dingtalk_userid",
-		TokenLocation:        PlacementQuery,
-		TokenFieldName:       "access_token",
-		TokenStrategy:        rawJSON(`{"strategy":"app_access_token","cacheable":true,"cache_key_fields":["app_key","app_secret"],"token_url":"https://oapi.dingtalk.com/gettoken","request":{"method":"GET","query_fields":["appkey","appsecret"]},"response_token_path":"access_token","response_expires_in_path":"expires_in","placement":{"location":"query","field_name":"access_token"},"refresh_on_json_codes":[40001,42001]}`),
-		SendAPI:              rawJSON(`{"method":"POST","url":"https://oapi.dingtalk.com/topapi/message/corpconversation/asyncsend_v2","content_type":"application/json","live_test_status":"implemented_but_not_live_tested","notes":"No live DingTalk work-message account is configured in this environment."}`),
+		TokenLocation:        PlacementHeader,
+		TokenFieldName:       "x-acs-dingtalk-access-token",
+		TokenStrategy:        rawJSON(`{"strategy":"app_access_token","cacheable":true,"cache_key_fields":["corp_id","client_id","client_secret"],"token_url":"https://api.dingtalk.com/v1.0/oauth2/{corp_id}/token","request":{"method":"POST","body":{"grant_type":"client_credentials"},"body_fields":["client_id","client_secret"]},"response_token_path":"accessToken|access_token","response_expires_in_path":"expireIn|expires_in","placement":{"location":"header","field_name":"x-acs-dingtalk-access-token"},"refresh_on_json_codes":[40001,42001]}`),
+		SendAPI:              rawJSON(`{"method":"POST","url":"https://api.dingtalk.com/v1.0/robot/oToMessages/batchSend","content_type":"application/json","live_test_status":"implemented_but_not_live_tested","notes":"No live DingTalk work-message account is configured in this environment."}`),
 		SuccessRule:          rawJSON(`{"type":"json_field","status_codes":[200],"field":"errcode","equals":0}`),
 		RetryRule:            rawJSON(`{"status_codes":[408,429,500,502,503,504],"network_errors":true,"refresh_token_codes":[40001,42001],"retryable_json_codes":[88],"non_retryable_json_codes":[40035,40036,60020]}`),
 		DefaultRateLimit:     rawJSON(`{"qps":20}`),
 		DefaultConcurrency:   2,
 		DefaultTimeoutMS:     5000,
 		DefaultRetryPolicy:   rawJSON(`{"max_attempts":3,"delay_ms":1000,"backoff":"linear"}`),
-		RequestExamples:      rawJSON(`{"agent_id":123,"userid_list":"user1,user2","msg":{"msgtype":"text","text":{"content":"Disk 95%"}}}`),
+		RequestExamples:      rawJSON(`{"robotCode":"dingxxxxxx","userIds":["user1","user2"],"msgKey":"sampleMarkdown","msgParam":"{\"title\":\"hello title\",\"text\":\"hello text\"}"}`),
 		CustomBodyAllowed:    false,
 	})
 }

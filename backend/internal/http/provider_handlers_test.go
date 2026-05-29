@@ -135,11 +135,55 @@ func TestFeishuResolveOpenIDEndpointDelegatesToProviderService(t *testing.T) {
 	}
 }
 
+func TestDingTalkResolveUserIDEndpointDelegatesToProviderService(t *testing.T) {
+	service := &capabilityProviderService{
+		dingTalkResolveResult: provider.DingTalkUserIDResolveResult{
+			Success: true,
+			Items: []provider.DingTalkUserIDResolveItem{{
+				QueryWord: "张三",
+				UserID:    "093102391140051902",
+				Status:    "resolved",
+			}},
+		},
+	}
+	handler := httpapi.NewHandler(
+		testConfig(),
+		httpapi.WithAuthService(fakeAuthService{authenticatedToken: "admin-session"}),
+		httpapi.WithProviderService(service),
+	)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/channels/channel-dingtalk/dingtalk/resolve-user-id", strings.NewReader(`{"query_words":["张三"]}`))
+	req.Header.Set("Authorization", "Bearer admin-session")
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	if service.dingTalkResolveChannelID != "channel-dingtalk" || strings.Join(service.dingTalkResolveWords, ",") != "张三" {
+		t.Fatalf("unexpected resolve input channel=%q words=%v", service.dingTalkResolveChannelID, service.dingTalkResolveWords)
+	}
+	var body struct {
+		Success bool                                 `json:"success"`
+		Items   []provider.DingTalkUserIDResolveItem `json:"items"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if !body.Success || len(body.Items) != 1 || body.Items[0].UserID != "093102391140051902" {
+		t.Fatalf("unexpected response: %+v", body)
+	}
+}
+
 type capabilityProviderService struct {
-	capabilities     []provider.Capability
-	resolveChannelID string
-	resolveMobiles   []string
-	resolveResult    provider.FeishuOpenIDResolveResult
+	capabilities             []provider.Capability
+	resolveChannelID         string
+	resolveMobiles           []string
+	resolveResult            provider.FeishuOpenIDResolveResult
+	dingTalkResolveChannelID string
+	dingTalkResolveWords     []string
+	dingTalkResolveResult    provider.DingTalkUserIDResolveResult
 }
 
 func (f *capabilityProviderService) SeedProviderCapabilities(context.Context) error {
@@ -186,4 +230,10 @@ func (f *capabilityProviderService) ResolveFeishuOpenID(_ context.Context, chann
 	f.resolveChannelID = channelID
 	f.resolveMobiles = append([]string(nil), mobiles...)
 	return f.resolveResult, nil
+}
+
+func (f *capabilityProviderService) ResolveDingTalkUserID(_ context.Context, channelID string, queryWords []string) (provider.DingTalkUserIDResolveResult, error) {
+	f.dingTalkResolveChannelID = channelID
+	f.dingTalkResolveWords = append([]string(nil), queryWords...)
+	return f.dingTalkResolveResult, nil
 }

@@ -244,7 +244,7 @@ const providerTypeGroups: ProviderTypeGroup[] = [
   { label: '企业协同', tone: 'purple', values: ['wecom_robot', 'wecom_app', 'dingtalk_robot', 'dingtalk_work', 'feishu_robot', 'feishu_group'] },
   { label: '个人推送', tone: 'cyan', values: ['pushplus', 'wxpusher', 'serverchan', 'bark', 'pushme'] },
   { label: '邮件短信', tone: 'green', values: ['email', 'aliyun_sms', 'tencent_sms', 'baidu_sms'] },
-  { label: '基础通道', tone: 'blue', values: ['webhook', 'self', 'custom_token'] },
+  { label: '基础通道', tone: 'blue', values: ['webhook', 'self'] },
   { label: '自建服务', tone: 'orange', values: ['ntfy', 'gotify'] },
 ];
 
@@ -1382,8 +1382,9 @@ export function IdentityEditor({
   onChange?: (identities: UserIdentityDraft[]) => void;
   readOnly?: boolean;
 }) {
-  const { message } = App.useApp();
+  const { message, modal } = App.useApp();
   const [resolvingFeishuKeys, setResolvingFeishuKeys] = useState<Set<string>>(() => new Set());
+  const [resolvingDingTalkKeys, setResolvingDingTalkKeys] = useState<Set<string>>(() => new Set());
   const rows = identities.map((item, index) => ({ ...item, id: `identity-${index}` }));
   const updateIdentity = (index: number, patch: Partial<UserIdentityDraft>) => {
     onChange?.(identities.map((item, itemIndex) => (itemIndex === index ? { ...item, ...patch } : item)));
@@ -1436,6 +1437,42 @@ export function IdentityEditor({
       });
     }
   };
+  const resolveDingTalkIdentity = async (index: number, record: UserIdentityDraft) => {
+    const queryWord = record.value.trim();
+    if (!record.channelId) {
+      message.warning('请先选择具体钉钉工作消息渠道实例');
+      return;
+    }
+    if (!queryWord) {
+      message.warning('请先填写用户名称');
+      return;
+    }
+    const key = `${record.channelId}-${index}`;
+    setResolvingDingTalkKeys((current) => new Set(current).add(key));
+    try {
+      const result = await consoleApi.resolveDingTalkUserId(record.channelId, [queryWord]);
+      const item = result.items.find((current) => current.query_word === queryWord);
+      if (item?.status === 'multiple') {
+        modal.warning({ title: '检测到多个用户', content: item.error || '检测到多个用户，请重试或手动输入。' });
+        return;
+      }
+      if (!item?.user_id) {
+        const error = item?.error || result.errors?.[0] || '未匹配到钉钉用户';
+        message.error(error);
+        return;
+      }
+      updateIdentity(index, { value: item.user_id, fieldName: 'dingtalk_userid' });
+      message.success('已转换为钉钉 UserID');
+    } catch (error) {
+      showError(message, error);
+    } finally {
+      setResolvingDingTalkKeys((current) => {
+        const next = new Set(current);
+        next.delete(key);
+        return next;
+      });
+    }
+  };
   const channelCascaderOptions = identityChannelCascaderOptions(channelOptions);
   const identityColumns: TableProps<(UserIdentityDraft & { id: string })>['columns'] = [
     {
@@ -1479,11 +1516,28 @@ export function IdentityEditor({
         if (readOnly) {
           return value;
         }
-        const isFeishu = providerValueFromLabel(record.platform) === 'feishu_robot';
+        const providerValue = providerValueFromLabel(record.platform);
+        const isFeishu = providerValue === 'feishu_robot';
+        const isDingTalkWork = providerValue === 'dingtalk_work';
         const resolveKey = `${record.channelId}-${index}`;
         const input = <Input value={value} onChange={(event) => updateIdentity(index, { value: event.target.value })} />;
-        if (!isFeishu) {
+        if (!isFeishu && !isDingTalkWork) {
           return input;
+        }
+        if (isDingTalkWork) {
+          return (
+            <Space.Compact className="full-width">
+              {input}
+              <Button
+                aria-label="用户名称转 UserID"
+                title="用户名称转 UserID"
+                className="identity-resolve-dingtalk-button"
+                icon={<SyncOutlined />}
+                loading={resolvingDingTalkKeys.has(resolveKey)}
+                onClick={() => void resolveDingTalkIdentity(index, record)}
+              />
+            </Space.Compact>
+          );
         }
         return (
           <Space.Compact className="full-width">
@@ -2288,7 +2342,7 @@ export function ProvidersPage({ lastUpdated, onRefresh }: ConsolePageProps) {
   return (
     <PageFrame
       title="推送渠道"
-      description="配置企业微信、飞书、钉钉、邮箱、短信、Webhook、自建服务和自定义 Token 推送渠道。"
+      description="配置企业微信、飞书、钉钉、邮箱、短信、Webhook、自建服务和 MVP-PUSH 推送渠道。"
       lastUpdated={lastUpdated}
       onRefresh={onRefresh}
     >

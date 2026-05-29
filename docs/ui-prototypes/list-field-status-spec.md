@@ -165,9 +165,8 @@ AppShell 需要顶层受控聚合页子 Tab：
 | `dingtalk` | 钉钉 |
 | `email` | 邮箱 |
 | `sms` | 短信 |
-| `self` | 本平台 |
+| `self` | MVP-PUSH |
 | `webhook` | 通用 Webhook |
-| `custom_token` | 自定义 Token 平台 |
 
 推送渠道类型侧栏展示要求：
 

@@ -3,7 +3,7 @@ package provider
 func selfCapability(messageType string) Capability {
 	return capability(capabilitySpec{
 		ProviderType:         ProviderSelf,
-		DisplayName:          "MVP Push Gateway cascade",
+		DisplayName:          "MVP-PUSH",
 		Category:             "gateway",
 		MessageType:          messageType,
 		MessageSchema:        cascadeContentSchema(),

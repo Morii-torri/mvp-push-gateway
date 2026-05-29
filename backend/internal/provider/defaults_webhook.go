@@ -27,35 +27,3 @@ func webhookCapability() Capability {
 		CustomBodyAllowed:    true,
 	})
 }
-
-func customTokenCapability() Capability {
-	return capability(capabilitySpec{
-		ProviderType:         ProviderCustomToken,
-		DisplayName:          "Custom token platform",
-		Category:             "advanced",
-		MessageType:          "json",
-		MessageSchema:        customTokenContentSchema(),
-		CredentialSchema:     rawJSON(`{"type":"object","required":["token_url","client_id","client_secret"],"properties":{"token_url":{"type":"string"},"client_id":{"type":"string"},"client_secret":{"type":"string","format":"password"}}}`),
-		ChannelConfigSchema:  rawJSON(`{"type":"object","required":["send_url"],"properties":{"send_url":{"type":"string"},"method":{"type":"string","default":"POST"},"token_json_path":{"type":"string","default":"access_token"}}}`),
-		RecipientRequired:    true,
-		AllowNoRecipient:     true,
-		RecipientRequirement: "payload",
-		RecipientFieldName:   "recipient",
-		RecipientLocation:    PlacementBody,
-		RecipientPath:        "recipient",
-		RecipientFormat:      "string",
-		IdentityKind:         "custom",
-		TokenLocation:        PlacementHeader,
-		TokenFieldName:       "Authorization",
-		TokenStrategy:        rawJSON(`{"strategy":"custom_token_api","cacheable":true,"placement":{"location":"header","field_name":"Authorization","prefix":"Bearer "}}`),
-		SendAPI:              rawJSON(`{"method":"POST","url_template":"{{ channel.send_url }}","content_type":"application/json","live_test_status":"configuration_dependent","notes":"Custom token provider remains configurable and may be live-tested only with user supplied endpoints."}`),
-		SuccessRule:          rawJSON(`{"type":"configurable","default_status_codes":[200,201,202]}`),
-		RetryRule:            rawJSON(`{"status_codes":[408,429,500,502,503,504],"network_errors":true}`),
-		DefaultRateLimit:     rawJSON(`{"qps":10}`),
-		DefaultConcurrency:   5,
-		DefaultTimeoutMS:     5000,
-		DefaultRetryPolicy:   rawJSON(`{"max_attempts":3,"delay_ms":1000,"backoff":"linear"}`),
-		RequestExamples:      rawJSON(`{"message":"Disk 95%"}`),
-		CustomBodyAllowed:    true,
-	})
-}

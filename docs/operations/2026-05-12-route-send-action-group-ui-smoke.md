@@ -9,7 +9,7 @@
 本次允许的上级目标：
 
 - 本地 fake webhook：`http://127.0.0.1:18191/webhook`
-- 本平台级联：`http://127.0.0.1:18190/api/v1/ingest/cascadeui`
+- MVP-PUSH：`http://127.0.0.1:18190/api/v1/ingest/cascadeui`
 
 ## 运行环境
 
@@ -26,10 +26,10 @@
 1. 首次启动后创建管理员并登录。
 2. 在“来源接入”创建两个来源：
    - `smokeui`：主入站来源，Token 鉴权，CIDR `127.0.0.1/32`
-   - `cascadeui`：本平台级联目标来源，Token 鉴权，CIDR `127.0.0.1/32`
+   - `cascadeui`：MVP-PUSH 级联目标来源，Token 鉴权，CIDR `127.0.0.1/32`
 3. 在“推送渠道”创建两个渠道实例：
    - `Smoke Webhook`，provider type `webhook`，URL 指向本地 fake webhook
-   - `Smoke 本平台级联`，provider type `self`，目标指向当前后端 `cascadeui`
+   - `Smoke MVP-PUSH`，provider type `self`，目标指向当前后端 `cascadeui`
 4. 在“消息模板”创建并发布两个 JSON 模板版本：
    - `Smoke Webhook 模板`
    - `Smoke 级联模板`
@@ -39,7 +39,7 @@
    - 接收策略：无接收人
    - 发送动作组 targets：
      - `Smoke Webhook -> Smoke Webhook 模板`
-     - `Smoke 本平台级联 -> Smoke 级联模板`
+     - `Smoke MVP-PUSH -> Smoke 级联模板`
 7. 发布并激活路由版本。
 8. 在“来源接入 -> 入站测试”发送 payload：
 
@@ -71,14 +71,14 @@ message_id: 62de6b5d-adae-440a-90eb-f6af474cb675
 status: planned
 outbound_status: sent
 attempt_count: 2
-target_channel_names: Smoke 本平台级联, Smoke Webhook
+target_channel_names: Smoke MVP-PUSH, Smoke Webhook
 target_provider_types: self, webhook
 duration_ms: 1287
 ```
 
 fake webhook 收到请求并返回 `200 {"ok": true}`。
 
-本平台级联目标返回 `202 accepted`，子 trace 为：
+MVP-PUSH 目标返回 `202 accepted`，子 trace 为：
 
 ```text
 636f6f10-02b6-4313-915c-7a18e5657804

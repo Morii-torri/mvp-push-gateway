@@ -21,7 +21,6 @@ ALTER TABLE delivery_channels
         'baidu_sms',
         'self',
         'webhook',
-        'custom_token',
         'pushplus',
         'wxpusher',
         'serverchan'
@@ -48,7 +47,6 @@ ALTER TABLE provider_capabilities
         'baidu_sms',
         'self',
         'webhook',
-        'custom_token',
         'pushplus',
         'wxpusher',
         'serverchan'
@@ -96,8 +94,7 @@ ALTER TABLE delivery_channels
         'email',
         'sms',
         'self',
-        'webhook',
-        'custom_token'
+        'webhook'
     ));
 
 ALTER TABLE provider_capabilities
@@ -112,8 +109,7 @@ ALTER TABLE provider_capabilities
         'email',
         'sms',
         'self',
-        'webhook',
-        'custom_token'
+        'webhook'
     ));
 
 ALTER TABLE provider_capabilities

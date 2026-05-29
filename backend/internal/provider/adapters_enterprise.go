@@ -104,17 +104,27 @@ func dingTalkRobotRequestConfig(auth, send, content map[string]any, recipient an
 		values.Set("sign", sign)
 	}
 	parsed.RawQuery = values.Encode()
+	msgType := normalizedDingTalkRobotMessageType(content)
 	body := map[string]any{
-		"msgtype": "markdown",
-		"markdown": map[string]any{
-			"title": messageTitle(content),
-			"text":  firstString(stringConfig(content, "text"), stringConfig(content, "markdown"), messageBody(content)),
-		},
+		"msgtype": msgType,
 		"at": map[string]any{
 			"isAtAll": boolConfig(send, "isAtAll", "is_at_all", "at_all", "allow_at_all"),
 		},
 	}
-	return jsonRequest("POST", parsed.String(), body)
+	if msgType == "text" {
+		body["text"] = map[string]any{"content": firstString(stringConfig(content, "content"), messageBody(content))}
+	} else {
+		body["markdown"] = map[string]any{
+			"title": messageTitle(content),
+			"text":  firstString(stringConfig(content, "text"), stringConfig(content, "markdown"), messageBody(content)),
+		}
+	}
+	config, err := jsonRequest("POST", parsed.String(), body)
+	if err != nil {
+		return requestConfig{}, err
+	}
+	config.SkipRenderedMerge = true
+	return config, nil
 }
 
 func dingTalkRobotSign(secret string, timestamp int64) (string, error) {
@@ -127,19 +137,72 @@ func dingTalkRobotSign(secret string, timestamp int64) (string, error) {
 }
 
 func dingTalkWorkRequestConfig(auth, send, content map[string]any, recipient any) (requestConfig, error) {
-	baseURL := firstString(stringConfig(send, "base_url"), stringConfig(auth, "base_url"), "https://oapi.dingtalk.com")
+	baseURL := firstString(stringConfig(send, "base_url"), stringConfig(auth, "base_url"), "https://api.dingtalk.com")
+	msgKey := normalizedDingTalkWorkMsgKey(content)
+	msgParam, err := dingTalkWorkMsgParam(msgKey, content)
+	if err != nil {
+		return requestConfig{}, ErrInvalidInput
+	}
 	body := map[string]any{
-		"agent_id":    firstValue(send, auth, "agent_id", "agentid"),
-		"userid_list": strings.Join(recipientStrings(recipient), ","),
-		"msg": map[string]any{
-			"msgtype": "text",
-			"text":    map[string]any{"content": messageBody(content)},
-		},
+		"robotCode": firstString(stringConfig(send, "robot_code", "robotCode"), stringConfig(auth, "robot_code", "robotCode")),
+		"userIds":   recipientStrings(recipient),
+		"msgKey":    msgKey,
+		"msgParam":  msgParam,
 	}
-	if boolConfig(send, "to_all_user", "toAllUser") {
-		body["to_all_user"] = true
+	config, err := jsonRequest("POST", joinURL(baseURL, "/v1.0/robot/oToMessages/batchSend"), body)
+	if err != nil {
+		return requestConfig{}, err
 	}
-	return tokenQueryJSONRequest("POST", joinURL(baseURL, "/topapi/message/corpconversation/asyncsend_v2"), "access_token", body)
+	config.Token = placementConfig{Location: PlacementHeader, FieldName: "x-acs-dingtalk-access-token"}
+	config.Recipient = placementConfig{Location: PlacementBody, Path: "userIds", Format: "array"}
+	config.SkipRenderedMerge = true
+	return config, nil
+}
+
+func normalizedDingTalkRobotMessageType(content map[string]any) string {
+	msgType := strings.TrimSpace(firstString(stringConfig(content, "msgtype", "msg_type", "msgKey", "msg_key", "type")))
+	if strings.EqualFold(msgType, "text") {
+		return "text"
+	}
+	if strings.EqualFold(msgType, "markdown") {
+		return "markdown"
+	}
+	if stringConfig(content, "content") != "" && stringConfig(content, "title") == "" && stringConfig(content, "text") == "" {
+		return "text"
+	}
+	return "markdown"
+}
+
+func normalizedDingTalkWorkMsgKey(content map[string]any) string {
+	msgKey := strings.TrimSpace(firstString(stringConfig(content, "msgKey", "msg_key", "message_type", "type")))
+	switch msgKey {
+	case "sampleText", "text":
+		return "sampleText"
+	case "sampleMarkdown", "markdown":
+		return "sampleMarkdown"
+	default:
+		if stringConfig(content, "content") != "" && stringConfig(content, "title") == "" && stringConfig(content, "text") == "" {
+			return "sampleText"
+		}
+		return "sampleMarkdown"
+	}
+}
+
+func dingTalkWorkMsgParam(msgKey string, content map[string]any) (string, error) {
+	var payload map[string]string
+	if msgKey == "sampleText" {
+		payload = map[string]string{"content": firstString(stringConfig(content, "content"), messageBody(content))}
+	} else {
+		payload = map[string]string{
+			"title": messageTitle(content),
+			"text":  firstString(stringConfig(content, "text"), stringConfig(content, "markdown"), messageBody(content)),
+		}
+	}
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		return "", err
+	}
+	return string(raw), nil
 }
 
 func feishuRobotRequestConfig(auth, send, content map[string]any, recipient any) (requestConfig, error) {

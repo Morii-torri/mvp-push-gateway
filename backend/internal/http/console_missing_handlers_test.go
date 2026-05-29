@@ -544,3 +544,7 @@ func (f *fakeProviderService) RefreshToken(context.Context, string) (provider.To
 func (f *fakeProviderService) ResolveFeishuOpenID(context.Context, string, []string) (provider.FeishuOpenIDResolveResult, error) {
 	return provider.FeishuOpenIDResolveResult{}, nil
 }
+
+func (f *fakeProviderService) ResolveDingTalkUserID(context.Context, string, []string) (provider.DingTalkUserIDResolveResult, error) {
+	return provider.DingTalkUserIDResolveResult{}, nil
+}

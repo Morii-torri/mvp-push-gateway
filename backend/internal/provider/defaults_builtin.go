@@ -21,11 +21,12 @@ func builtInCapabilities() []Capability {
 		smsVendorCapability(ProviderBaiduSMS, "Baidu Cloud SMS", "baidu", rawJSON(`{"method":"POST","url":"https://sms.bj.baidubce.com/bce/v2/message","content_type":"application/json","adapter":"mock_http","live_test_status":"implemented_but_not_live_tested","notes":"No SDK or live SMS account is used in this build-request adapter."}`), rawJSON(`{"vendor":"baidu","mobile":["13800138000"],"signature_id":"sig","template":"tpl","content_var":{"code":"1234"}}`)),
 		weComRobotCapability(),
 		weComAppCapability(ProviderWeComApp, "WeCom application message"),
-		dingTalkRobotCapability(),
-		dingTalkWorkCapability(ProviderDingTalkWork, "DingTalk work message"),
+		dingTalkRobotCapability("text"),
+		dingTalkRobotCapability("markdown"),
+		dingTalkWorkCapability(ProviderDingTalkWork, "DingTalk work message", "sampleMarkdown"),
+		dingTalkWorkCapability(ProviderDingTalkWork, "DingTalk work message", "sampleText"),
 		feishuRobotCapability(),
 		feishuGroupCapability(),
-		customTokenCapability(),
 	}
 }
 
@@ -45,8 +46,20 @@ func robotTextContentSchema() json.RawMessage {
 	return rawJSON(`{"type":"object","required":["content"],"properties":{"title":{"type":"string","default":"{{ payload.title }}"},"body":{"type":"string","default":"{{ payload.content }}"},"content":{"type":"string","default":"{{ payload.content }}"},"markdown":{"type":"string"}}}`)
 }
 
+func dingTalkRobotTextContentSchema() json.RawMessage {
+	return rawJSON(`{"type":"object","required":["content"],"properties":{"content":{"type":"string","title":"text","default":"{{ payload.content }}"}}}`)
+}
+
 func dingTalkRobotMarkdownContentSchema() json.RawMessage {
 	return rawJSON(`{"type":"object","required":["title","text"],"properties":{"title":{"type":"string","title":"Markdown 标题","default":"{{ payload.title }}"},"text":{"type":"string","title":"Markdown 内容","default":"{{ payload.content }}","format_hint":"支持标准 Markdown；换行用 \\n，空格可用 &nbsp;"}}}`)
+}
+
+func dingTalkWorkTextContentSchema() json.RawMessage {
+	return rawJSON(`{"type":"object","required":["content"],"properties":{"content":{"type":"string","title":"content","default":"{{ payload.content }}"}}}`)
+}
+
+func dingTalkWorkMarkdownContentSchema() json.RawMessage {
+	return rawJSON(`{"type":"object","required":["title","text"],"properties":{"title":{"type":"string","title":"title","default":"{{ payload.title }}"},"text":{"type":"string","title":"text","default":"{{ payload.content }}","format_hint":"支持标准 Markdown；换行用 \\n，空格可用 &nbsp;"}}}`)
 }
 
 func feishuGroupContentSchema() json.RawMessage {

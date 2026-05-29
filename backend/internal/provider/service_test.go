@@ -6,6 +6,7 @@ import (
 	"crypto/tls"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -58,7 +59,6 @@ func TestDefaultCapabilitiesExposeProviderMetadata(t *testing.T) {
 		ProviderAliyunSMS,
 		ProviderSelf,
 		ProviderWebhook,
-		ProviderCustomToken,
 	} {
 		if !seen[providerType] {
 			t.Fatalf("missing default capability for provider type %s", providerType)
@@ -84,7 +84,7 @@ func TestDefaultCapabilitiesExposeFirstBatchBuiltInProviders(t *testing.T) {
 		{ProviderWeComRobot, "text", "wecom_robot_key"},
 		{ProviderWeComApp, "text", "wecom_userid"},
 		{ProviderDingTalkRobot, "markdown", "dingtalk_robot_access_token"},
-		{ProviderDingTalkWork, "text", "dingtalk_userid"},
+		{ProviderDingTalkWork, "sampleMarkdown", "dingtalk_userid"},
 		{ProviderFeishuRobot, "text", "feishu_open_id"},
 		{ProviderFeishuGroup, "text", "feishu_webhook_token"},
 	}
@@ -194,7 +194,7 @@ func TestListChannelsReportsExpiredPersistentTokenCache(t *testing.T) {
 }
 
 func TestLegacyCompatibilityProviderTypesAreUnsupported(t *testing.T) {
-	for _, providerType := range []ProviderType{"sms", "wecom", "dingtalk", "feishu", "gov_cloud"} {
+	for _, providerType := range []ProviderType{"sms", "wecom", "dingtalk", "feishu", "gov_cloud", "custom_token"} {
 		if validProviderType(providerType) {
 			t.Fatalf("expected removed provider type %s to be unsupported", providerType)
 		}
@@ -316,6 +316,105 @@ func TestServiceResolvesFeishuOpenIDByMobileWithTenantToken(t *testing.T) {
 	}
 	if item := result.Items[0]; item.Mobile != "13011111111" || item.OpenID != "ou_resolved" || item.Status != "resolved" {
 		t.Fatalf("unexpected resolve item: %+v", item)
+	}
+}
+
+func TestServiceResolvesDingTalkUserIDByQueryWordWithAppToken(t *testing.T) {
+	var tokenRequests int32
+	var resolveRequests int32
+	var resolveTokenHeader string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/v1.0/oauth2/ding-corp/token":
+			atomic.AddInt32(&tokenRequests, 1)
+			var body map[string]string
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				t.Fatalf("decode token body: %v", err)
+			}
+			if body["client_id"] != "ding-client" || body["client_secret"] != "secret-app" || body["grant_type"] != "client_credentials" {
+				t.Fatalf("unexpected token body: %+v", body)
+			}
+			_, _ = w.Write([]byte(`{"accessToken":"ding-resolve-token","expireIn":7200}`))
+		case "/v1.0/contact/users/search":
+			atomic.AddInt32(&resolveRequests, 1)
+			resolveTokenHeader = r.Header.Get("x-acs-dingtalk-access-token")
+			var body struct {
+				QueryWord      string `json:"queryWord"`
+				Offset         int    `json:"offset"`
+				Size           int    `json:"size"`
+				FullMatchField int    `json:"fullMatchField"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				t.Fatalf("decode resolve body: %v", err)
+			}
+			if body.QueryWord != "张三" || body.Offset != 0 || body.Size != 10 || body.FullMatchField != 1 {
+				t.Fatalf("unexpected resolve body: %+v", body)
+			}
+			_, _ = w.Write([]byte(`{"hasMore":false,"totalCount":1,"list":["093102391140051902"]}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	service := NewService(singleChannelStore{channel: Channel{
+		ID:           "channel-dingtalk-resolve",
+		ProviderType: ProviderDingTalkWork,
+		AuthConfig:   json.RawMessage(`{"corp_id":"ding-corp","client_id":"ding-client","client_secret":"secret-app","token_base_url":"` + server.URL + `"}`),
+		SendConfig:   json.RawMessage(`{"base_url":"` + server.URL + `","robot_code":"ding_app"}`),
+		TimeoutMS:    1000,
+	}})
+
+	result, err := service.ResolveDingTalkUserID(context.Background(), "channel-dingtalk-resolve", []string{"张三"})
+	if err != nil {
+		t.Fatalf("resolve DingTalk user id: %v", err)
+	}
+	if tokenRequests != 1 || resolveRequests != 1 {
+		t.Fatalf("expected one token request and one resolve request, got token=%d resolve=%d", tokenRequests, resolveRequests)
+	}
+	if resolveTokenHeader != "ding-resolve-token" {
+		t.Fatalf("expected DingTalk token header, got %q", resolveTokenHeader)
+	}
+	if !result.Success || len(result.Items) != 1 {
+		t.Fatalf("unexpected resolve result: %+v", result)
+	}
+	if item := result.Items[0]; item.QueryWord != "张三" || item.UserID != "093102391140051902" || item.Status != "resolved" {
+		t.Fatalf("unexpected resolve item: %+v", item)
+	}
+}
+
+func TestServiceDingTalkUserIDResolveMarksMultipleMatches(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/v1.0/oauth2/ding-corp/token":
+			_, _ = w.Write([]byte(`{"access_token":"ding-resolve-token","expires_in":7200}`))
+		case "/v1.0/contact/users/search":
+			_, _ = w.Write([]byte(`{"hasMore":false,"totalCount":2,"list":["u1","u2"]}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	service := NewService(singleChannelStore{channel: Channel{
+		ID:           "channel-dingtalk-multiple",
+		ProviderType: ProviderDingTalkWork,
+		AuthConfig:   json.RawMessage(`{"corp_id":"ding-corp","client_id":"ding-client","client_secret":"secret-app","token_base_url":"` + server.URL + `"}`),
+		SendConfig:   json.RawMessage(`{"base_url":"` + server.URL + `","robot_code":"ding_app"}`),
+		TimeoutMS:    1000,
+	}})
+
+	result, err := service.ResolveDingTalkUserID(context.Background(), "channel-dingtalk-multiple", []string{"张三"})
+	if err != nil {
+		t.Fatalf("resolve DingTalk user id: %v", err)
+	}
+	if result.Success || len(result.Items) != 1 {
+		t.Fatalf("expected unresolved multiple result, got %+v", result)
+	}
+	if item := result.Items[0]; item.Status != "multiple" || !strings.Contains(item.Error, "检测到多个用户") {
+		t.Fatalf("unexpected multiple item: %+v", item)
 	}
 }
 
@@ -571,6 +670,7 @@ func TestWeComRobotCapabilityUsesWebhookURLAndRecipientKey(t *testing.T) {
 
 func TestDingTalkRobotCapabilityUsesMarkdownAndRecipientAccessToken(t *testing.T) {
 	capability := findCapability(t, ProviderDingTalkRobot, "markdown")
+	textCapability := findCapability(t, ProviderDingTalkRobot, "text")
 
 	assertJSONField(t, capability.CredentialSchema, "properties.webhook_url", nil)
 	assertJSONField(t, capability.CredentialSchema, "properties.access_token", nil)
@@ -580,12 +680,41 @@ func TestDingTalkRobotCapabilityUsesMarkdownAndRecipientAccessToken(t *testing.T
 	assertJSONField(t, capability.MessageSchema, "properties.msgtype", nil)
 	assertJSONField(t, capability.MessageSchema, "properties.title.type", "string")
 	assertJSONField(t, capability.MessageSchema, "properties.text.type", "string")
+	assertJSONField(t, textCapability.MessageSchema, "properties.content.type", "string")
 	if capability.IdentityKind != "dingtalk_robot_access_token" || !capability.RecipientRequired || capability.AllowNoRecipient {
 		t.Fatalf("expected DingTalk robot access token as required recipient identity, got identity=%q required=%v allow=%v", capability.IdentityKind, capability.RecipientRequired, capability.AllowNoRecipient)
 	}
 	if capability.RecipientFieldName != "access_token" || capability.RecipientLocation != PlacementQuery {
 		t.Fatalf("expected DingTalk robot access token in query, got field=%q location=%q", capability.RecipientFieldName, capability.RecipientLocation)
 	}
+}
+
+func TestDingTalkWorkCapabilityUsesRobotBatchSendAndUserIDs(t *testing.T) {
+	markdown := findCapability(t, ProviderDingTalkWork, "sampleMarkdown")
+	text := findCapability(t, ProviderDingTalkWork, "sampleText")
+
+	assertJSONField(t, markdown.CredentialSchema, "properties.corp_id.type", "string")
+	assertJSONField(t, markdown.CredentialSchema, "properties.client_id.type", "string")
+	assertJSONField(t, markdown.CredentialSchema, "properties.client_secret.format", "password")
+	assertJSONField(t, markdown.ChannelConfigSchema, "properties.robot_code.type", "string")
+	assertJSONField(t, markdown.ChannelConfigSchema, "properties.base_url.default", "https://api.dingtalk.com")
+	assertJSONField(t, markdown.MessageSchema, "properties.title.type", "string")
+	assertJSONField(t, markdown.MessageSchema, "properties.text.type", "string")
+	assertJSONField(t, text.MessageSchema, "properties.content.type", "string")
+	if markdown.IdentityKind != "dingtalk_userid" || markdown.RecipientFormat != "array" || markdown.RecipientFieldName != "userIds" {
+		t.Fatalf("unexpected DingTalk work recipient metadata: identity=%q format=%q field=%q", markdown.IdentityKind, markdown.RecipientFormat, markdown.RecipientFieldName)
+	}
+	if markdown.TokenLocation != PlacementHeader || markdown.TokenFieldName != "x-acs-dingtalk-access-token" {
+		t.Fatalf("expected DingTalk token in x-acs-dingtalk-access-token header, got location=%q field=%q", markdown.TokenLocation, markdown.TokenFieldName)
+	}
+	assertJSONField(t, markdown.TokenStrategy, "token_url", "https://api.dingtalk.com/v1.0/oauth2/{corp_id}/token")
+	assertJSONField(t, markdown.TokenStrategy, "request.method", "POST")
+	assertJSONField(t, markdown.TokenStrategy, "request.body.grant_type", "client_credentials")
+	assertJSONField(t, markdown.TokenStrategy, "response_token_path", "accessToken|access_token")
+	assertJSONField(t, markdown.TokenStrategy, "response_expires_in_path", "expireIn|expires_in")
+	assertJSONField(t, markdown.TokenStrategy, "placement.location", "header")
+	assertJSONField(t, markdown.TokenStrategy, "placement.field_name", "x-acs-dingtalk-access-token")
+	assertJSONField(t, markdown.SendAPI, "url", "https://api.dingtalk.com/v1.0/robot/oToMessages/batchSend")
 }
 
 func TestDefaultCapabilitiesDistinguishWebhookAndBuiltInProviders(t *testing.T) {
@@ -598,14 +727,6 @@ func TestDefaultCapabilitiesDistinguishWebhookAndBuiltInProviders(t *testing.T) 
 	}
 	if !webhook.CustomBodyAllowed {
 		t.Fatal("webhook should allow custom JSON bodies")
-	}
-
-	customToken := findCapability(t, ProviderCustomToken, "json")
-	if !customToken.CustomBodyAllowed {
-		t.Fatal("custom token provider should allow custom JSON bodies")
-	}
-	if customToken.TokenLocation == PlacementNone {
-		t.Fatal("custom token provider should describe token placement")
 	}
 
 	wecom := findCapability(t, ProviderWeComApp, "text")
@@ -976,7 +1097,7 @@ func TestBuildDeliveryRequestUsesBuiltInProviderDefaultsWithoutLegacyURL(t *test
 			},
 		},
 		{
-			name: "dingtalk robot",
+			name: "dingtalk robot markdown",
 			channel: Channel{
 				ProviderType: ProviderDingTalkRobot,
 				AuthConfig:   json.RawMessage(`{"secret":"SEC123"}`),
@@ -1011,21 +1132,71 @@ func TestBuildDeliveryRequestUsesBuiltInProviderDefaultsWithoutLegacyURL(t *test
 			},
 		},
 		{
-			name: "dingtalk work",
+			name: "dingtalk robot text",
+			channel: Channel{
+				ProviderType: ProviderDingTalkRobot,
+				SendConfig:   json.RawMessage(`{"base_url":"https://oapi.dingtalk.com","isAtAll":true}`),
+			},
+			message:    json.RawMessage(`{"content":"我就是我"}`),
+			recipients: []ResolvedRecipient{{PlatformIDs: map[string]string{"dingtalk_robot_access_token": "robot-token"}}},
+			assert: func(t *testing.T, request BuiltRequest) {
+				requireRequest(t, request, "POST", "https://oapi.dingtalk.com/robot/send?access_token=robot-token")
+				body := decodeRequestBody(t, request)
+				requireBodyField(t, body, "msgtype", "text")
+				text := requireObjectField(t, body, "text")
+				requireBodyField(t, text, "content", "我就是我")
+				at := requireObjectField(t, body, "at")
+				requireBodyField(t, at, "isAtAll", true)
+				requireNoBodyField(t, body, "markdown")
+			},
+		},
+		{
+			name: "dingtalk work markdown",
 			channel: Channel{
 				ProviderType: ProviderDingTalkWork,
-				AuthConfig:   json.RawMessage(`{"agent_id":123}`),
+				SendConfig:   json.RawMessage(`{"base_url":"https://api.dingtalk.com","robot_code":"dingia0tfyhohgzi1zci"}`),
 			},
 			token:      "ding-token",
-			message:    json.RawMessage(`{"body":"hello work"}`),
+			message:    json.RawMessage(`{"title":"hello title","text":"hello text"}`),
 			recipients: []ResolvedRecipient{{PlatformIDs: map[string]string{"dingtalk_userid": "u1"}}, {PlatformIDs: map[string]string{"dingtalk_userid": "u2"}}},
 			assert: func(t *testing.T, request BuiltRequest) {
-				requireRequest(t, request, "POST", "https://oapi.dingtalk.com/topapi/message/corpconversation/asyncsend_v2?access_token=ding-token")
+				requireRequest(t, request, "POST", "https://api.dingtalk.com/v1.0/robot/oToMessages/batchSend")
+				if request.Headers["x-acs-dingtalk-access-token"] != "ding-token" {
+					t.Fatalf("expected DingTalk access token header, got headers=%v", request.Headers)
+				}
 				body := decodeRequestBody(t, request)
-				requireBodyField(t, body, "agent_id", float64(123))
-				requireBodyField(t, body, "userid_list", "u1,u2")
-				msg := requireObjectField(t, body, "msg")
-				requireBodyField(t, msg, "msgtype", "text")
+				requireBodyField(t, body, "robotCode", "dingia0tfyhohgzi1zci")
+				requireStringListField(t, body, "userIds", []string{"u1", "u2"})
+				requireBodyField(t, body, "msgKey", "sampleMarkdown")
+				var msgParam map[string]string
+				if err := json.Unmarshal([]byte(fmt.Sprint(body["msgParam"])), &msgParam); err != nil {
+					t.Fatalf("decode msgParam: %v", err)
+				}
+				if msgParam["title"] != "hello title" || msgParam["text"] != "hello text" {
+					t.Fatalf("unexpected msgParam: %+v", msgParam)
+				}
+			},
+		},
+		{
+			name: "dingtalk work text",
+			channel: Channel{
+				ProviderType: ProviderDingTalkWork,
+				SendConfig:   json.RawMessage(`{"base_url":"https://api.dingtalk.com","robot_code":"ding-app"}`),
+			},
+			token:      "ding-token",
+			message:    json.RawMessage(`{"msgKey":"sampleText","content":"hello content"}`),
+			recipients: []ResolvedRecipient{{PlatformIDs: map[string]string{"dingtalk_userid": "u1"}}},
+			assert: func(t *testing.T, request BuiltRequest) {
+				requireRequest(t, request, "POST", "https://api.dingtalk.com/v1.0/robot/oToMessages/batchSend")
+				body := decodeRequestBody(t, request)
+				requireBodyField(t, body, "msgKey", "sampleText")
+				var msgParam map[string]string
+				if err := json.Unmarshal([]byte(fmt.Sprint(body["msgParam"])), &msgParam); err != nil {
+					t.Fatalf("decode msgParam: %v", err)
+				}
+				if msgParam["content"] != "hello content" {
+					t.Fatalf("unexpected msgParam: %+v", msgParam)
+				}
 			},
 		},
 		{

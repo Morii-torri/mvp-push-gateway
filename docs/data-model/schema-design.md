@@ -4,7 +4,7 @@
 
 ## 枚举约定
 
-- `provider_type`: `webhook` / `self` / `pushplus` / `wxpusher` / `serverchan` / `email` / `aliyun_sms` / `tencent_sms` / `baidu_sms` / `wecom_robot` / `wecom_app` / `dingtalk_robot` / `dingtalk_work` / `feishu_robot` / `feishu_group` / `ntfy` / `gotify` / `bark` / `pushme` / `custom_token`。不再支持 legacy `wecom` / `dingtalk` / `feishu` / `sms` 渠道。
+- `provider_type`: `webhook` / `self` / `pushplus` / `wxpusher` / `serverchan` / `email` / `aliyun_sms` / `tencent_sms` / `baidu_sms` / `wecom_robot` / `wecom_app` / `dingtalk_robot` / `dingtalk_work` / `feishu_robot` / `feishu_group` / `ntfy` / `gotify` / `bark` / `pushme`。不再支持 legacy 旧类型和自定义令牌平台渠道。
 - `location`: `query` / `header` / `body` / `path` / `none`
 - `message_status`: `accepted` / `deduped` / `silenced` / `planned` / `partial_sent` / `sent` / `failed` / `no_route`
 - `delivery_status`: `queued` / `processing` / `sent` / `failed` / `deduped` / `skipped`
@@ -118,7 +118,7 @@ Provider type registry，避免每新增一个 provider 都扩展 `delivery_chan
 | `default_retry_policy` | jsonb | 默认重试策略 |
 | `request_examples` | jsonb | 示例 |
 
-第一批 provider defaults 已实现 build-request/mock 级别支持：`webhook`、`self`、`pushplus`、`wxpusher`、`serverchan`、`email`、`aliyun_sms`、`tencent_sms`、`baidu_sms`、`wecom_robot`、`wecom_app`、`dingtalk_robot`、`dingtalk_work`、`feishu_robot`、`feishu_group` 和高级 `custom_token`。P2 provider defaults 已实现 build-request/mock 级别支持：`ntfy`、`gotify`、`bark`、`pushme`。legacy `wecom`、`dingtalk`、`feishu`、`sms` 已移除，不再作为可配置渠道或发送模型。PushPlus、WxPusher、Server酱、短信、企微、钉钉、飞书、SMTP/self、ntfy、Gotify、Bark、PushMe 当前均不要标注为已真实联调成功。
+第一批 provider defaults 已实现 build-request/mock 级别支持：`webhook`、`self`、`pushplus`、`wxpusher`、`serverchan`、`email`、`aliyun_sms`、`tencent_sms`、`baidu_sms`、`wecom_robot`、`wecom_app`、`dingtalk_robot`、`dingtalk_work`、`feishu_robot`、`feishu_group`。P2 provider defaults 已实现 build-request/mock 级别支持：`ntfy`、`gotify`、`bark`、`pushme`。legacy 旧类型和自定义令牌平台已移除，不再作为可配置渠道或发送模型。PushPlus、WxPusher、Server酱、短信、企微、钉钉、飞书、SMTP/self、ntfy、Gotify、Bark、PushMe 当前均不要标注为已真实联调成功。
 
 `delivery_channels.provider_type` 和 `provider_capabilities.provider_type` 通过 FK 指向 `provider_types`。
 
@@ -363,7 +363,7 @@ planning worker 使用 `source_id + current_version_id` 缓存执行模型；发
 | `dead_lettered_at` | timestamptz null | 进入死信时间 |
 | `queued_at` / `started_at` / `finished_at` | timestamptz | 时间 |
 
-Delivery adapter 边界约定：adapter 输入 channel config、rendered message、resolved recipients、delivery target context 和 token，输出 `final_request`。Webhook/custom_token 可继续使用高级映射；内置 provider 不要求模板保存最终 HTTP body。
+Delivery adapter 边界约定：adapter 输入 channel config、rendered message、resolved recipients、delivery target context 和 token，输出 `final_request`。Webhook 可继续使用高级映射；内置 provider 不要求模板保存最终 HTTP body。
 
 ### `dedupe_keys`
 

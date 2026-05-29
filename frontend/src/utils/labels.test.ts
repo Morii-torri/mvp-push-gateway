@@ -27,7 +27,7 @@ describe('console label mappings', () => {
   });
 
   it('maps provider, outbound, job and validation enums into Chinese display text', () => {
-    expect(getProviderTypeLabel('custom_token')).toBe('自定义 Token 平台');
+    expect(getProviderTypeLabel('self')).toBe('MVP-PUSH');
     expect(getProviderTypeLabel('webhook')).toBe('通用 Webhook');
     expect(getOutboundStatusMeta('processing').label).toBe('处理中');
     expect(getOutboundStatusMeta('deduped').label).toBe('发送前去重');

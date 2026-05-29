@@ -55,7 +55,7 @@
 - 前端实时通知：右上角通知入口只跳转“日志与监控”，不新增独立日志页；通知数字和列表必须来自后端统计或日志接口。
 - 总览趋势：时间筛选是最近 N 分钟/小时/天滚动窗口，X 轴跟随后端 `bucket_start`，不要固定 0-24。
 - 账户菜单：管理员头像菜单支持修改密码、修改账户别名和退出登录；新密码不少于 10 位且需二次确认；退出登录需要二次确认。
-- 推送渠道：第一批内置 `webhook`、`self`、`pushplus`、`wxpusher`、`serverchan`、`email`、`aliyun_sms`、`tencent_sms`、`baidu_sms`、`wecom_robot`、`wecom_app`、`dingtalk_robot`、`dingtalk_work`、`feishu_robot`、`feishu_group`；第二批 build-request/mock 内置 `ntfy`、`gotify`、`bark`、`pushme`；高级模式保留 `custom_token`。不要再新增或恢复 legacy `wecom`、`dingtalk`、`feishu`、`sms` 兼容渠道，也不要恢复已移除的政务云类渠道。
+- 推送渠道：第一批内置 `webhook`、`self`、`pushplus`、`wxpusher`、`serverchan`、`email`、`aliyun_sms`、`tencent_sms`、`baidu_sms`、`wecom_robot`、`wecom_app`、`dingtalk_robot`、`dingtalk_work`、`feishu_robot`、`feishu_group`；第二批 build-request/mock 内置 `ntfy`、`gotify`、`bark`、`pushme`。不要再新增或恢复 legacy `wecom`、`dingtalk`、`feishu`、`sms` 兼容渠道，不要恢复自定义令牌平台 adaptor，也不要恢复已移除的政务云类渠道。
 - 平台能力：消息类型、凭证配置、渠道配置、消息内容 schema、Token 换取、Token 放置位置、接收人身份、成功/重试规则、默认限流/超时/并发/重试。
 - 组织人员：组织树、人员、平台身份字段，例如手机号、邮箱、企微 userid、飞书 open_id、飞书 webhook token。
 - 匹配组：IP 组、业务值组、系统值组，用于条件判断。
@@ -111,6 +111,6 @@
 
 ## 当前阶段
 
-截至 2026-05-21，核心后端链路、provider capability registry、provider-aware template、route send action group、planning fan-out、delivery adapter boundary、渠道 AccessToken 缓存/强刷和 2026-05-21 前端 UI 基线已进入当前产品基线。管理台已收敛为八个主菜单，真实接口替代 demo/fallback，右上角通知、总览趋势、组织人员拆分、账户菜单、Workspace Keep-Alive 和推送渠道品牌化选择器均按当前源码为准。文档描述应以当前源码和迁移为准，不再沿用“template node / 单模板多渠道 / 自定义 Token 平台作为主路径”的旧模型。
+截至 2026-05-21，核心后端链路、provider capability registry、provider-aware template、route send action group、planning fan-out、delivery adapter boundary、渠道 AccessToken 缓存/强刷和 2026-05-21 前端 UI 基线已进入当前产品基线。管理台已收敛为八个主菜单，真实接口替代 demo/fallback，右上角通知、总览趋势、组织人员拆分、账户菜单、Workspace Keep-Alive 和推送渠道品牌化选择器均按当前源码为准。文档描述应以当前源码和迁移为准，不再沿用“template node / 单模板多渠道 / 自定义令牌平台”的旧模型。
 
 第一批和 P2 provider defaults 已实现 build-request/mock 级别支持，但 PushPlus、WxPusher、Server酱、短信、企微、钉钉、飞书、SMTP/self、ntfy、Gotify、Bark、PushMe 均不要写成已经真实联调成功；当前应标注为 implemented but not live-tested 或 configuration-dependent。

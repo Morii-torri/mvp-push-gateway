@@ -259,7 +259,7 @@ POST /api/inbound/:token
 
 - **长尾通道做平台预设。** Bark、Gotify、ntfy、PushMe、PushDeer、Server酱、PushPlus、WxPusher、息知、iGot、群晖 Chat 等普通 HTTP 类渠道，优先做成 `delivery_channels` 的 provider preset，而不是写重型业务模块。
 - **通道配置字段元数据。** MagicPush 的 `getConfigFields()` 适合转化为 provider capability registry：display name、credential schema、send config schema、token schema、默认限流、默认测试 payload，由前端自动生成表单。
-- **通用 Webhook 高级模式。** 当前项目已有 `webhook/custom_token` 能力基础，建议补强 headers/body 模板、响应成功判定、错误字段提取、变量帮助和测试发送体验。
+- **通用 Webhook 高级模式。** 当前项目已有 `webhook` 能力基础，建议补强 headers/body 模板、响应成功判定、错误字段提取、变量帮助和测试发送体验。
 - **个人通知生态。** MagicPush 覆盖的个人和自托管通知渠道可以快速补齐当前项目的“轻量推送出口”，但入口仍走我们的来源和路由。
 - **入站预设模板。** Grafana、Prometheus、GitHub、Emby 等 JSONPath 映射经验，可以转化为来源接入预设：最近 payload 字段识别、默认模板、默认条件字段和默认路由策略。
 - **扫码/WebSocket 绑定体验。** 微信龙虾机器人、元宝 Bot 这类需要绑定态的渠道，可作为特殊 provider adapter，绑定结果仍写入渠道配置或平台身份表。

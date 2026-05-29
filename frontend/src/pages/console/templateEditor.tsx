@@ -453,22 +453,29 @@ const fallbackTemplateSchemas: Record<ProviderKind, Record<string, { label: stri
     },
   },
   dingtalk_robot: {
+    text: {
+      label: '文本',
+      fields: [contentField('content', 'text', 'string', '通知', '{{ payload.content }}')],
+    },
     markdown: {
       label: 'Markdown',
       fields: [
-        contentField('title', 'Markdown 标题', 'string', '通知', '{{ payload.title }}'),
         contentField('text', 'Markdown 内容', 'string', '', '{{ payload.content }}', true, '支持标准 Markdown；换行用 \\n，空格可用 &nbsp;'),
+        contentField('title', 'Markdown 标题', 'string', '通知', '{{ payload.title }}'),
       ],
     },
   },
   dingtalk_work: {
-    text: {
-      label: '文本',
-      fields: [contentField('content', '正文内容', 'string', '通知', '{{ payload.content }}')],
+    sampleMarkdown: {
+      label: 'Markdown',
+      fields: [
+        contentField('title', 'title', 'string', '通知', '{{ payload.title }}'),
+        contentField('text', 'text', 'string', '', '{{ payload.content }}', true, '支持标准 Markdown；换行用 \\n，空格可用 &nbsp;'),
+      ],
     },
-    card: {
-      label: '卡片',
-      fields: enterpriseCardFields(),
+    sampleText: {
+      label: '文本',
+      fields: [contentField('content', 'content', 'string', '通知', '{{ payload.content }}')],
     },
   },
   feishu_robot: {
@@ -485,15 +492,6 @@ const fallbackTemplateSchemas: Record<ProviderKind, Record<string, { label: stri
           { label: 'text', value: 'text' },
         ]),
         contentField('text', 'text', 'string', '通知', '{{ payload.content }}'),
-      ],
-    },
-  },
-  custom_token: {
-    text: {
-      label: '文本',
-      fields: [
-        contentField('title', '标题', 'string', '通知', '{{ payload.title }}'),
-        contentField('content', '正文内容', 'string', '', '{{ payload.content }}'),
       ],
     },
   },

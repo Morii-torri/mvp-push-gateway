@@ -70,8 +70,7 @@ export type ProviderType =
   | 'dingtalk_robot'
   | 'dingtalk_work'
   | 'feishu_robot'
-  | 'feishu_group'
-  | 'custom_token';
+  | 'feishu_group';
 
 export type ChannelApiRecord = {
   id: string;
@@ -106,6 +105,19 @@ export type FeishuOpenIdResolveItem = {
 export type FeishuOpenIdResolveResponse = {
   success: boolean;
   items: FeishuOpenIdResolveItem[];
+  errors?: string[];
+};
+
+export type DingTalkUserIdResolveItem = {
+  query_word: string;
+  user_id: string;
+  status: string;
+  error?: string;
+};
+
+export type DingTalkUserIdResolveResponse = {
+  success: boolean;
+  items: DingTalkUserIdResolveItem[];
   errors?: string[];
 };
 
@@ -566,6 +578,13 @@ export const consoleApi = {
     return apiRequest<FeishuOpenIdResolveResponse>(`/channels/${id}/feishu/resolve-open-id`, {
       method: 'POST',
       body: { mobiles },
+      fetcher,
+    });
+  },
+  resolveDingTalkUserId(id: string, queryWords: string[], fetcher?: ApiFetcher) {
+    return apiRequest<DingTalkUserIdResolveResponse>(`/channels/${id}/dingtalk/resolve-user-id`, {
+      method: 'POST',
+      body: { query_words: queryWords },
       fetcher,
     });
   },

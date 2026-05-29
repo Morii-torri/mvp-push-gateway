@@ -2,7 +2,7 @@
 
 ## 目标
 
-MVP Push Gateway 是一个综合消息推送网关。它面向内部系统、政务系统、业务平台和运维工具，统一接收入站消息，按条件路由、消息模板、接收人策略和推送渠道能力投递到 Webhook、本平台级联、PushPlus、WxPusher、Server酱、邮箱、短信、企业微信、钉钉、飞书、自建服务等 provider。
+MVP Push Gateway 是一个综合消息推送网关。它面向内部系统、政务系统、业务平台和运维工具，统一接收入站消息，按条件路由、消息模板、接收人策略和推送渠道能力投递到 Webhook、MVP-PUSH、PushPlus、WxPusher、Server酱、邮箱、短信、企业微信、钉钉、飞书、自建服务等 provider。
 
 ## 技术栈
 
@@ -66,7 +66,7 @@ MVP Push Gateway 是一个综合消息推送网关。它面向内部系统、政
 
 推送渠道分两层：
 
-- `provider_type`：渠道类型，例如 `webhook`、`self`、`pushplus`、`wxpusher`、`serverchan`、`email`、`aliyun_sms`、`tencent_sms`、`baidu_sms`、`wecom_robot`、`wecom_app`、`dingtalk_robot`、`dingtalk_work`、`feishu_robot`、`feishu_group`、`ntfy`、`gotify`、`bark`、`pushme`，高级模式保留 `custom_token`。不再兼容 legacy `wecom`、`dingtalk`、`feishu`、`sms`。
+- `provider_type`：渠道类型，例如 `webhook`、`self`、`pushplus`、`wxpusher`、`serverchan`、`email`、`aliyun_sms`、`tencent_sms`、`baidu_sms`、`wecom_robot`、`wecom_app`、`dingtalk_robot`、`dingtalk_work`、`feishu_robot`、`feishu_group`、`ntfy`、`gotify`、`bark`、`pushme`。不再兼容 legacy 旧类型和自定义令牌平台。
 - `delivery_channel`：具体可投递实例，例如“企业微信生产机器人”、“飞书审批通知”、“自建 ntfy 运维通知”。
 
 渠道能力必须数据化，不能写死在 UI：
@@ -89,7 +89,7 @@ AccessToken 类渠道必须由后端统一获取、缓存和刷新：
 
 每个渠道实例必须独立限流、独立并发控制和独立失败隔离。一个慢渠道只能积压自己的 `send_message` job，不能阻塞其他渠道的发送 worker。
 
-第一批 provider defaults 已实现 build-request/mock 级别支持：`webhook`、`self`、`pushplus`、`wxpusher`、`serverchan`、`email`、`aliyun_sms`、`tencent_sms`、`baidu_sms`、`wecom_robot`、`wecom_app`、`dingtalk_robot`、`dingtalk_work`、`feishu_robot`、`feishu_group` 和高级 `custom_token`。P2 provider defaults 也已实现 build-request/mock 级别支持：`ntfy`、`gotify`、`bark`、`pushme`。legacy `wecom`、`dingtalk`、`feishu`、`sms` 已移除，不再作为发送模型。PushPlus、WxPusher、Server酱、短信、企微、钉钉、飞书、SMTP/self、ntfy、Gotify、Bark、PushMe 当前均为 implemented but not live-tested 或 configuration-dependent；不要写成已真实投递成功。
+第一批 provider defaults 已实现 build-request/mock 级别支持：`webhook`、`self`、`pushplus`、`wxpusher`、`serverchan`、`email`、`aliyun_sms`、`tencent_sms`、`baidu_sms`、`wecom_robot`、`wecom_app`、`dingtalk_robot`、`dingtalk_work`、`feishu_robot`、`feishu_group`。P2 provider defaults 也已实现 build-request/mock 级别支持：`ntfy`、`gotify`、`bark`、`pushme`。legacy 旧类型和自定义令牌平台已移除，不再作为发送模型。PushPlus、WxPusher、Server酱、短信、企微、钉钉、飞书、SMTP/self、ntfy、Gotify、Bark、PushMe 当前均为 implemented but not live-tested 或 configuration-dependent；不要写成已真实投递成功。
 
 ### 组织人员
 

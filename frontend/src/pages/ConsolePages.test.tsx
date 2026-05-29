@@ -67,7 +67,14 @@ import {
 import type { ChannelApiRecord, OrgUnitApiRecord, ProviderCapabilityApiRecord, TemplateApiRecord, TemplateVersionApiRecord } from '../api/console';
 import { getProviderTypeLabel } from '../utils/labels';
 import { providerTypeOptions, recipientIdentityProviderOptions } from './console/shared';
-import { mapChannelRow, providerCapabilityView, providerFieldValuesAfterChange, providerWithCapability, tokenCacheStatusMeta } from './console/providerConfig';
+import {
+  ProviderTypeCardSelector,
+  mapChannelRow,
+  providerCapabilityView,
+  providerFieldValuesAfterChange,
+  providerWithCapability,
+  tokenCacheStatusMeta,
+} from './console/providerConfig';
 
 const lastUpdated = new Date('2026-05-11T09:30:00+08:00');
 
@@ -78,7 +85,7 @@ function renderPage(node: ReactElement) {
 describe('critical console pages', () => {
   const supportedProviderLabels = [
     ['webhook', '通用 Webhook'],
-    ['self', '本平台级联'],
+    ['self', 'MVP-PUSH'],
     ['pushplus', 'PushPlus'],
     ['wxpusher', 'WxPusher'],
     ['serverchan', 'Server酱'],
@@ -92,7 +99,6 @@ describe('critical console pages', () => {
     ['dingtalk_work', '钉钉工作消息'],
     ['feishu_robot', '飞书应用机器人'],
     ['feishu_group', '飞书群消息'],
-    ['custom_token', '自定义 Token 平台'],
     ['ntfy', 'ntfy'],
     ['gotify', 'Gotify'],
     ['bark', 'Bark'],
@@ -178,7 +184,8 @@ describe('critical console pages', () => {
     expect(sourcesMarkup).not.toContain('token_and_hmac');
     expect(providersMarkup).toContain('推送渠道');
     expect(providersMarkup).toContain('通用 Webhook');
-    expect(providersMarkup).toContain('自定义 Token 平台');
+    expect(providersMarkup).toContain('MVP-PUSH');
+    expect(providersMarkup).not.toContain('自定义 Token 平台');
     expect(providersMarkup).not.toContain('发送模式');
     expect(providersMarkup).not.toContain('custom_token');
     const deadLetterIndex = providersMarkup.indexOf('死信策略');
@@ -486,7 +493,6 @@ describe('critical console pages', () => {
       'baidu_sms',
       'webhook',
       'self',
-      'custom_token',
       'ntfy',
       'gotify',
     ]);
@@ -1096,7 +1102,6 @@ describe('critical console pages', () => {
     ] as const;
     const appTypes = [
       ['wecom_app', '企业微信应用消息'],
-      ['dingtalk_work', '钉钉工作消息'],
     ] as const;
 
     for (const [providerType, label] of robotTypes) {
@@ -1130,7 +1135,7 @@ describe('critical console pages', () => {
     expect(dingTalkMarkup).toContain('text');
     expect(dingTalkMarkup).toContain('支持标准 Markdown');
     expect(dingTalkMarkup).not.toContain('msgtype');
-    expect(Object.keys(dingTalkBody)).toEqual(['title', 'text']);
+    expect(Object.keys(dingTalkBody)).toEqual(['text', 'title']);
 
     for (const [providerType, label] of appTypes) {
       const markup = renderPage(
@@ -1148,6 +1153,21 @@ describe('critical console pages', () => {
       expect(input.template_body).toContain('"title"');
       expect(input.template_body).toContain('"url"');
     }
+
+    const dingTalkWorkMarkdown = createTemplateDraft([], [], 'dingtalk_work', 'sampleMarkdown');
+    const dingTalkWorkMarkup = renderPage(
+      <TemplateEditorForm value={dingTalkWorkMarkdown} onChange={() => undefined} sourceRows={[]} capabilities={[]} />,
+    );
+    const dingTalkWorkInput = templateVersionInputFromDraft(dingTalkWorkMarkdown);
+    const dingTalkWorkBody = JSON.parse(dingTalkWorkInput.template_body) as Record<string, string>;
+    expect(dingTalkWorkInput.message_type).toBe('sampleMarkdown');
+    expect(Object.keys(dingTalkWorkBody)).toEqual(['title', 'text']);
+    expect(dingTalkWorkMarkup).toContain('钉钉工作消息');
+
+    const dingTalkWorkText = templateVersionInputFromDraft(createTemplateDraft([], [], 'dingtalk_work', 'sampleText'));
+    const dingTalkWorkTextBody = JSON.parse(dingTalkWorkText.template_body) as Record<string, string>;
+    expect(dingTalkWorkText.message_type).toBe('sampleText');
+    expect(Object.keys(dingTalkWorkTextBody)).toEqual(['content']);
   });
 
   it('uses Feishu app robot text-only template and app credentials', () => {
@@ -1201,11 +1221,27 @@ describe('critical console pages', () => {
     const input = templateVersionInputFromDraft(templateDraft);
     const body = JSON.parse(input.template_body) as Record<string, string>;
     expect(input.message_type).toBe('markdown');
-    expect(Object.keys(body)).toEqual(['title', 'text']);
+    expect(Object.keys(body)).toEqual(['text', 'title']);
     expect(templateMarkup).toContain('title');
     expect(templateMarkup).toContain('text');
     expect(templateMarkup).toContain('支持标准 Markdown');
     expect(templateMarkup).not.toContain('msgtype');
+  });
+
+  it('uses DingTalk work OAuth field labels aligned with the new token endpoint', () => {
+    const providerMarkup = renderPage(
+      <ProviderConfigForm value={createProviderDraft('dingtalk_work', 1)} onChange={() => undefined} capabilities={[]} />,
+    );
+
+    expect(providerMarkup).toContain('Corp ID');
+    expect(providerMarkup).toContain('ClientID（原 AppKey）');
+    expect(providerMarkup).toContain('Client Secret（原 AppSecret）');
+    expect(providerMarkup).toContain('API 基础地址');
+    expect(providerMarkup).toContain('robotCode');
+    expect(providerMarkup).not.toContain('corpId');
+    expect(providerMarkup).not.toContain('client_id');
+    expect(providerMarkup).not.toContain('client_secret');
+    expect(providerMarkup).not.toContain('应用 AgentId');
   });
 
   it('uses Feishu group message webhook fields and text-only template', () => {
@@ -1323,20 +1359,109 @@ describe('critical console pages', () => {
     }).send_config).toEqual({});
   });
 
-  it('keeps mapping tabs only for custom HTTP providers', () => {
+  it('keeps generic webhook configuration compact without token or mapping tabs', () => {
     const builtInMarkup = renderPage(
       <ProviderConfigForm value={createProviderDraft('wecom_app', 1)} onChange={() => undefined} capabilities={[]} />,
     );
-    const customMarkup = renderPage(
-      <ProviderConfigForm value={createProviderDraft('custom_token', 1)} onChange={() => undefined} capabilities={[]} />,
+    const webhookCapabilities: ProviderCapabilityApiRecord[] = [
+      {
+        provider_type: 'webhook',
+        display_name: 'Generic Webhook',
+        credential_schema: {
+          properties: {
+            secret: { type: 'string', format: 'password' },
+            headers: { type: 'object' },
+          },
+        },
+        channel_config_schema: {
+          required: ['url'],
+          properties: {
+            url: { type: 'string' },
+            method: { type: 'string', default: 'POST' },
+            headers: { type: 'object' },
+            body: { type: 'object' },
+            recipient: { type: 'object' },
+          },
+        },
+      },
+    ];
+    const webhookMarkup = renderPage(
+      <ProviderConfigForm value={createProviderDraft('webhook', 1, webhookCapabilities)} onChange={() => undefined} capabilities={webhookCapabilities} />,
     );
 
     expect(builtInMarkup).not.toContain('令牌获取');
     expect(builtInMarkup).not.toContain('请求映射');
     expect(builtInMarkup).not.toContain('高级 JSON 配置');
-    expect(customMarkup).toContain('令牌获取');
-    expect(customMarkup).toContain('请求映射');
-    expect(customMarkup).not.toContain('高级 JSON 配置');
+    expect(webhookMarkup).toContain('Webhook URL');
+    expect(webhookMarkup).toContain('支持通用占位符');
+    expect(webhookMarkup).toContain('请求方法');
+    expect(webhookMarkup).toContain('POST');
+    expect(webhookMarkup).not.toContain('secret');
+    expect(webhookMarkup).not.toContain('请求 Header');
+    expect(webhookMarkup).not.toContain('title="recipient"');
+    expect(webhookMarkup).not.toContain('令牌获取');
+    expect(webhookMarkup).not.toContain('请求映射');
+    expect(webhookMarkup).not.toContain('Body 映射模板');
+    expect(webhookMarkup).not.toContain('高级 JSON 配置');
+  });
+
+  it('shows only required MVP-PUSH cascade fields for the selected auth mode', () => {
+    const capabilities: ProviderCapabilityApiRecord[] = [
+      {
+        provider_type: 'self',
+        display_name: 'MVP-PUSH',
+        credential_schema: {
+          required: ['base_url', 'source_code'],
+          properties: {
+            base_url: { type: 'string' },
+            source_code: { type: 'string' },
+            source_token: { type: 'string', format: 'password' },
+            hmac_secret: { type: 'string', format: 'password' },
+            auth_mode: { type: 'string', enum: ['token', 'hmac', 'token_and_hmac', 'none'], default: 'token' },
+          },
+        },
+        channel_config_schema: {
+          properties: {
+            api_prefix: { type: 'string', default: '/api/v1' },
+            source_code: { type: 'string' },
+            payload_mode: { type: 'string', enum: ['wrapped', 'raw'], default: 'wrapped' },
+            include_trace_id: { type: 'boolean', default: true },
+            include_source_context: { type: 'boolean', default: true },
+          },
+        },
+      },
+    ];
+    const tokenDraft = createProviderDraft('self', 1, capabilities);
+    const tokenMarkup = renderPage(
+      <ProviderConfigForm value={tokenDraft} onChange={() => undefined} capabilities={capabilities} />,
+    );
+    const hmacMarkup = renderPage(
+      <ProviderConfigForm
+        value={{ ...tokenDraft, fieldValues: { ...tokenDraft.fieldValues, 'auth_config.auth_mode': 'hmac' } }}
+        onChange={() => undefined}
+        capabilities={capabilities}
+      />,
+    );
+
+    expect(tokenMarkup).toContain('API 基础地址');
+    expect(tokenMarkup).toContain('鉴权方式');
+    expect(tokenMarkup.match(/title="上级来源编码"/g)?.length).toBe(1);
+    expect(tokenMarkup).toContain('上级来源 Token');
+    expect(tokenMarkup).not.toContain('上级 HMAC 密钥');
+    expect(tokenMarkup).not.toContain('api_prefix');
+    expect(tokenMarkup).not.toContain('Payload 包装模式');
+    expect(tokenMarkup).not.toContain('include_trace_id');
+    expect(tokenMarkup).not.toContain('include_source_context');
+    expect(hmacMarkup).toContain('上级 HMAC 密钥');
+    expect(hmacMarkup).not.toContain('上级来源 Token');
+  });
+
+  it('opens the provider type selector on the basic channel group for generic webhook', () => {
+    const markup = renderPage(<ProviderTypeCardSelector value="webhook" onChange={() => undefined} />);
+
+    expect(markup).toMatch(/ant-segmented-item-selected[\s\S]*基础通道/);
+    expect(markup).toContain('通用 Webhook');
+    expect(markup).not.toContain('企业微信应用消息');
   });
 
   it('changes provider fields when provider type switches', () => {
@@ -1865,6 +1990,74 @@ describe('critical console pages', () => {
     expect(payload.body).toEqual({ msgtype: 'markdown', content: '**企微群机器人测试**' });
     expect(payload.rendered_message.message_type).toBe('markdown');
     expect(payload.resolved_recipients).toEqual([{ platform_ids: { wecom_robot_key: 'robot-key-1' } }]);
+  });
+
+  it('renders DingTalk robot test panel with access token, text, and title fields', () => {
+    const draft = createProviderDraft('dingtalk_robot', 1);
+    const markup = renderPage(
+      <ProviderTestPanel value={draft} onChange={() => undefined} />,
+    );
+
+    expect(markup).toContain('钉钉机器人 AccessToken');
+    expect(markup).toContain('text');
+    expect(markup).toContain('title');
+    expect(markup.indexOf('title="text"')).toBeLessThan(markup.indexOf('title="title"'));
+    expect(markup).toContain('模拟请求');
+    expect(markup).toContain('真实发送');
+    expect(markup).not.toContain('测试接收人');
+
+    const payload = providerTestPayload(
+      {
+        ...draft,
+        testRecipient: 'ding-token-1',
+        testBody: '## 钉钉正文',
+        testTitle: '钉钉标题',
+      },
+      false,
+    ) as {
+      body: Record<string, unknown>;
+      rendered_message: { message_type: string; content: Record<string, unknown> };
+      recipient: string;
+      resolved_recipients: Array<{ platform_ids: Record<string, string> }>;
+    };
+    expect(payload.recipient).toBe('ding-token-1');
+    expect(Object.keys(payload.body)).toEqual(['msgtype', 'text', 'title']);
+    expect(payload.body).toEqual({ msgtype: 'markdown', text: '## 钉钉正文', title: '钉钉标题' });
+    expect(payload.rendered_message.message_type).toBe('markdown');
+    expect(payload.resolved_recipients).toEqual([{ platform_ids: { dingtalk_robot_access_token: 'ding-token-1' } }]);
+  });
+
+  it('renders DingTalk work test panel with UserID conversion and msgKey payload', () => {
+    const draft = createProviderDraft('dingtalk_work', 1);
+    const markup = renderPage(
+      <ProviderTestPanel value={draft} onChange={() => undefined} />,
+    );
+
+    expect(markup).toContain('钉钉 UserID（填入用户名称后点击转换按钮自动转换）');
+    expect(markup).toContain('msgKey');
+    expect(markup).toContain('sampleMarkdown');
+    expect(markup).toContain('title');
+    expect(markup).toContain('text');
+
+    const payload = providerTestPayload(
+      {
+        ...draft,
+        testRecipient: '093102391140051902',
+        testTopic: 'sampleMarkdown',
+        testTitle: '钉钉标题',
+        testBody: '## 钉钉正文',
+      },
+      false,
+    ) as {
+      body: Record<string, unknown>;
+      rendered_message: { message_type: string; content: Record<string, unknown> };
+      recipient: string;
+      resolved_recipients: Array<{ platform_ids: Record<string, string> }>;
+    };
+    expect(payload.recipient).toBe('');
+    expect(payload.body).toEqual({ msgKey: 'sampleMarkdown', title: '钉钉标题', text: '## 钉钉正文' });
+    expect(payload.rendered_message.message_type).toBe('sampleMarkdown');
+    expect(payload.resolved_recipients).toEqual([{ platform_ids: { dingtalk_userid: '093102391140051902' } }]);
   });
 
   it('renders PushMe test panel with recipient key and builds typed payload', () => {

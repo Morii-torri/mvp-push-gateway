@@ -36,7 +36,6 @@ const (
 	ProviderBaiduSMS      ProviderType = "baidu_sms"
 	ProviderSelf          ProviderType = "self"
 	ProviderWebhook       ProviderType = "webhook"
-	ProviderCustomToken   ProviderType = "custom_token"
 	ProviderPushPlus      ProviderType = "pushplus"
 	ProviderWxPusher      ProviderType = "wxpusher"
 	ProviderServerChan    ProviderType = "serverchan"
@@ -146,6 +145,19 @@ type FeishuOpenIDResolveResult struct {
 	Success bool                      `json:"success"`
 	Items   []FeishuOpenIDResolveItem `json:"items"`
 	Errors  []string                  `json:"errors,omitempty"`
+}
+
+type DingTalkUserIDResolveItem struct {
+	QueryWord string `json:"query_word"`
+	UserID    string `json:"user_id"`
+	Status    string `json:"status"`
+	Error     string `json:"error,omitempty"`
+}
+
+type DingTalkUserIDResolveResult struct {
+	Success bool                        `json:"success"`
+	Items   []DingTalkUserIDResolveItem `json:"items"`
+	Errors  []string                    `json:"errors,omitempty"`
 }
 
 type Store interface {
@@ -462,11 +474,12 @@ func missingCredentialFields(channel Channel, token string) []string {
 	case ProviderWeComRobot:
 		requireAny("企业微信机器人 Webhook 地址", auth["webhook_url"], send["webhook_url"])
 	case ProviderDingTalkWork:
-		requireAny("钉钉 access_token 或 app_key/app_secret", token, auth["access_token"], auth["app_key"])
+		requireAny("钉钉 access_token 或 corp_id/client_id/client_secret", token, auth["access_token"], auth["corp_id"])
 		if isEmptyValue(token) && isEmptyValue(auth["access_token"]) {
-			requireAny("钉钉 app_secret", auth["app_secret"])
+			requireAny("钉钉 client_id", auth["client_id"])
+			requireAny("钉钉 client_secret", auth["client_secret"])
 		}
-		requireAny("钉钉 agent_id", auth["agent_id"], auth["agentid"], send["agent_id"], send["agentid"])
+		requireAny("钉钉 robotCode", send["robot_code"], send["robotCode"], auth["robot_code"], auth["robotCode"])
 	case ProviderDingTalkRobot:
 		// Access token is resolved from the recipient identity for DingTalk group robots.
 	case ProviderFeishuRobot:
@@ -621,10 +634,6 @@ func webhookContentSchema() json.RawMessage {
 	return rawJSON(`{"type":"object","properties":{"payload":{"type":"object","title":"Payload","additionalProperties":true},"headers":{"type":"object","additionalProperties":{"type":"string"}}},"additionalProperties":true}`)
 }
 
-func customTokenContentSchema() json.RawMessage {
-	return rawJSON(`{"type":"object","required":["message"],"properties":{"message":{"type":"string","title":"Message","default":"{{ payload.title }}"},"payload":{"type":"object","additionalProperties":true}},"additionalProperties":true}`)
-}
-
 func normalizeChannelInput(input CreateChannelInput) (CreateChannelParams, error) {
 	input.Name = strings.TrimSpace(input.Name)
 	if input.Name == "" || !validProviderType(input.ProviderType) {
@@ -675,7 +684,6 @@ func validProviderType(providerType ProviderType) bool {
 		ProviderBaiduSMS,
 		ProviderSelf,
 		ProviderWebhook,
-		ProviderCustomToken,
 		ProviderPushPlus,
 		ProviderWxPusher,
 		ProviderServerChan,
@@ -1693,6 +1701,143 @@ func (s *Service) ResolveFeishuOpenID(ctx context.Context, channelID string, mob
 	return result, err
 }
 
+func (s *Service) ResolveDingTalkUserID(ctx context.Context, channelID string, queryWords []string) (DingTalkUserIDResolveResult, error) {
+	channel, err := s.GetChannel(ctx, channelID)
+	if err != nil {
+		return DingTalkUserIDResolveResult{}, err
+	}
+	if channel.ProviderType != ProviderDingTalkWork {
+		return DingTalkUserIDResolveResult{}, fmt.Errorf("%w: channel is not dingtalk_work", ErrInvalidInput)
+	}
+	cleanWords := cleanResolveWords(queryWords)
+	if len(cleanWords) == 0 {
+		return DingTalkUserIDResolveResult{}, fmt.Errorf("%w: query_words is required", ErrInvalidInput)
+	}
+	if len(cleanWords) > 50 {
+		return DingTalkUserIDResolveResult{}, fmt.Errorf("%w: query_words supports at most 50 items", ErrInvalidInput)
+	}
+	capability := findDefaultCapability(channel.ProviderType, "sampleMarkdown")
+	if capability.ProviderType == "" {
+		return DingTalkUserIDResolveResult{}, fmt.Errorf("%w: dingtalk capability not found", ErrNotFound)
+	}
+	resolver := dingTalkAppAccessTokenResolver(channel)
+	resolution, err := s.tokenManager.ResolveWithResolver(ctx, TokenResolveInput{
+		Capability: capability,
+		Channel:    channel,
+		Resolver:   resolver,
+		Strategy:   "app_access_token",
+	})
+	if err != nil {
+		return DingTalkUserIDResolveResult{}, err
+	}
+	result, code, err := s.requestDingTalkUserID(ctx, channel, resolution.Token, cleanWords)
+	if err != nil {
+		return DingTalkUserIDResolveResult{}, err
+	}
+	if !dingTalkTokenRefreshCode(code) {
+		return result, nil
+	}
+	_ = s.tokenManager.Invalidate(ctx, resolution.CacheKey, "dingtalk user id resolve token refresh code")
+	refreshed, refreshErr := s.tokenManager.ResolveWithResolver(ctx, TokenResolveInput{
+		Capability:   capability,
+		Channel:      channel,
+		Resolver:     resolver,
+		Strategy:     "app_access_token",
+		ForceRefresh: true,
+	})
+	if refreshErr != nil {
+		return DingTalkUserIDResolveResult{}, refreshErr
+	}
+	result, _, err = s.requestDingTalkUserID(ctx, channel, refreshed.Token, cleanWords)
+	return result, err
+}
+
+func (s *Service) requestDingTalkUserID(ctx context.Context, channel Channel, token string, queryWords []string) (DingTalkUserIDResolveResult, int, error) {
+	baseURL := firstString(stringConfig(rawObject(channel.SendConfig), "base_url"), stringConfig(rawObject(channel.AuthConfig), "base_url"), "https://api.dingtalk.com")
+	requestURL := joinURL(baseURL, "/v1.0/contact/users/search")
+	timeout := time.Duration(channel.TimeoutMS) * time.Millisecond
+	if timeout <= 0 {
+		timeout = 5 * time.Second
+	}
+	client := &http.Client{Timeout: timeout}
+	result := DingTalkUserIDResolveResult{Success: true, Items: make([]DingTalkUserIDResolveItem, 0, len(queryWords))}
+	for _, queryWord := range queryWords {
+		body := map[string]any{
+			"queryWord":      queryWord,
+			"offset":         0,
+			"size":           10,
+			"fullMatchField": 1,
+		}
+		rawBody, err := json.Marshal(body)
+		if err != nil {
+			return DingTalkUserIDResolveResult{}, 0, err
+		}
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, requestURL, bytes.NewReader(rawBody))
+		if err != nil {
+			return DingTalkUserIDResolveResult{}, 0, err
+		}
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("x-acs-dingtalk-access-token", strings.TrimSpace(token))
+		resp, err := client.Do(req)
+		if err != nil {
+			return DingTalkUserIDResolveResult{}, 0, err
+		}
+		responseBody, readErr := io.ReadAll(resp.Body)
+		_ = resp.Body.Close()
+		if readErr != nil {
+			return DingTalkUserIDResolveResult{}, 0, readErr
+		}
+		if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+			return DingTalkUserIDResolveResult{}, 0, fmt.Errorf("dingtalk resolve user_id returned status %d", resp.StatusCode)
+		}
+		var decoded struct {
+			Code       int      `json:"code"`
+			ErrCode    int      `json:"errcode"`
+			Message    string   `json:"message"`
+			ErrMsg     string   `json:"errmsg"`
+			HasMore    bool     `json:"hasMore"`
+			TotalCount int      `json:"totalCount"`
+			List       []string `json:"list"`
+		}
+		if err := json.Unmarshal(responseBody, &decoded); err != nil {
+			return DingTalkUserIDResolveResult{}, 0, err
+		}
+		code := firstNonZero(decoded.Code, decoded.ErrCode)
+		if code != 0 {
+			result.Success = false
+			result.Items = append(result.Items, DingTalkUserIDResolveItem{
+				QueryWord: queryWord,
+				Status:    "failed",
+				Error:     firstString(decoded.Message, decoded.ErrMsg, "钉钉用户搜索失败"),
+			})
+			return result, code, nil
+		}
+		switch {
+		case len(decoded.List) == 1:
+			result.Items = append(result.Items, DingTalkUserIDResolveItem{
+				QueryWord: queryWord,
+				UserID:    decoded.List[0],
+				Status:    "resolved",
+			})
+		case len(decoded.List) > 1 || decoded.TotalCount > 1:
+			result.Success = false
+			result.Items = append(result.Items, DingTalkUserIDResolveItem{
+				QueryWord: queryWord,
+				Status:    "multiple",
+				Error:     "检测到多个用户，请重试或手动输入",
+			})
+		default:
+			result.Success = false
+			result.Items = append(result.Items, DingTalkUserIDResolveItem{
+				QueryWord: queryWord,
+				Status:    "failed",
+				Error:     "未匹配到钉钉用户",
+			})
+		}
+	}
+	return result, 0, nil
+}
+
 func (s *Service) requestFeishuOpenID(ctx context.Context, channel Channel, token string, mobiles []string) (FeishuOpenIDResolveResult, int, error) {
 	baseURL := firstString(stringConfig(rawObject(channel.SendConfig), "base_url"), stringConfig(rawObject(channel.AuthConfig), "base_url"), "https://open.feishu.cn/open-apis")
 	requestURL := joinURL(baseURL, "/contact/v3/users/batch_get_id")
@@ -1778,6 +1923,32 @@ func (s *Service) requestFeishuOpenID(ctx context.Context, channel Channel, toke
 	return result, decoded.Code, nil
 }
 
+func dingTalkAppAccessTokenResolver(channel Channel) TokenResolverConfig {
+	auth := rawObject(channel.AuthConfig)
+	tokenURL := firstString(stringConfig(rawObject(channel.TokenConfig), "token_url"), stringConfig(auth, "token_url"))
+	if tokenURL == "" {
+		baseURL := firstString(stringConfig(auth, "token_base_url"), "https://api.dingtalk.com")
+		tokenURL = joinURL(baseURL, "/v1.0/oauth2/"+url.PathEscape(credentialValue(channel.AuthConfig, "corp_id"))+"/token")
+	}
+	body := mustJSON(map[string]any{
+		"client_id":     credentialValue(channel.AuthConfig, "client_id"),
+		"client_secret": credentialValue(channel.AuthConfig, "client_secret"),
+		"grant_type":    "client_credentials",
+	})
+	return TokenResolverConfig{
+		Request: TokenRequestConfig{
+			Method: http.MethodPost,
+			URL:    tokenURL,
+			Body:   body,
+		},
+		ResponsePath:  "accessToken|access_token",
+		ExpiresInPath: "expireIn|expires_in",
+		Placement:     rawJSON(`{"location":"header","field_name":"x-acs-dingtalk-access-token"}`),
+		Cacheable:     true,
+		RefreshCodes:  []any{40001, 42001},
+	}
+}
+
 func feishuTenantAccessTokenResolver(channel Channel) TokenResolverConfig {
 	baseURL := firstString(stringConfig(rawObject(channel.SendConfig), "base_url"), stringConfig(rawObject(channel.AuthConfig), "base_url"), "https://open.feishu.cn/open-apis")
 	return TokenResolverConfig{
@@ -1798,15 +1969,19 @@ func feishuTenantAccessTokenResolver(channel Channel) TokenResolverConfig {
 }
 
 func cleanResolveMobiles(values []string) []string {
+	return cleanResolveWords(values)
+}
+
+func cleanResolveWords(values []string) []string {
 	seen := map[string]bool{}
 	cleaned := make([]string, 0, len(values))
 	for _, value := range values {
-		mobile := strings.TrimSpace(value)
-		if mobile == "" || seen[mobile] {
+		word := strings.TrimSpace(value)
+		if word == "" || seen[word] {
 			continue
 		}
-		seen[mobile] = true
-		cleaned = append(cleaned, mobile)
+		seen[word] = true
+		cleaned = append(cleaned, word)
 	}
 	return cleaned
 }
@@ -1818,6 +1993,24 @@ func feishuTokenRefreshCode(code int) bool {
 	default:
 		return false
 	}
+}
+
+func dingTalkTokenRefreshCode(code int) bool {
+	switch code {
+	case 40001, 42001:
+		return true
+	default:
+		return false
+	}
+}
+
+func firstNonZero(values ...int) int {
+	for _, value := range values {
+		if value != 0 {
+			return value
+		}
+	}
+	return 0
 }
 
 func findDefaultCapability(providerType ProviderType, messageType string) Capability {

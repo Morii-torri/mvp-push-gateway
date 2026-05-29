@@ -437,6 +437,12 @@ func DecodeCapabilityResolver(raw json.RawMessage, channel Channel) (*TokenResol
 		method = http.MethodGet
 	}
 	tokenURL := strings.TrimSpace(config.TokenURL)
+	if override := getCredentialValue(credentials, "token_url"); override != "" {
+		tokenURL = override
+	} else if baseURL := getCredentialValue(credentials, "token_base_url"); baseURL != "" && strings.Contains(tokenURL, "api.dingtalk.com/v1.0/oauth2/{corp_id}/token") {
+		tokenURL = joinURL(baseURL, "/v1.0/oauth2/{corp_id}/token")
+	}
+	tokenURL = replaceCredentialPlaceholders(tokenURL, credentials)
 	bodyMap := map[string]any{}
 	if len(bytes.TrimSpace(config.Request.Body)) > 0 {
 		_ = json.Unmarshal(config.Request.Body, &bodyMap)
@@ -539,8 +545,11 @@ func computeTokenExpiry(now time.Time, responseBody []byte, config *TokenResolve
 	if path := strings.TrimSpace(config.ExpiresInPath); path != "" {
 		var parsed any
 		if err := json.Unmarshal(responseBody, &parsed); err == nil {
-			if value, ok := navigateNumericPath(parsed, path); ok {
-				expiresIn = int(value)
+			for _, candidatePath := range splitFallbackPaths(path) {
+				if value, ok := navigateNumericPath(parsed, candidatePath); ok {
+					expiresIn = int(value)
+					break
+				}
 			}
 		}
 	}
@@ -563,8 +572,14 @@ func tokenMetadata(channel Channel, resolver TokenResolverConfig) json.RawMessag
 	if corpid := credentialValue(channel.AuthConfig, "corpid"); corpid != "" {
 		metadata["corpid"] = corpid
 	}
+	if corpID := credentialValue(channel.AuthConfig, "corp_id"); corpID != "" {
+		metadata["corp_id"] = corpID
+	}
 	if appID := credentialValue(channel.AuthConfig, "app_id"); appID != "" {
 		metadata["app_id"] = appID
+	}
+	if clientID := credentialValue(channel.AuthConfig, "client_id"); clientID != "" {
+		metadata["client_id"] = clientID
 	}
 	raw, _ := json.Marshal(metadata)
 	return raw
@@ -598,7 +613,9 @@ func redactTokenResponse(raw []byte, responsePath string) any {
 	if err := json.Unmarshal(raw, &value); err != nil {
 		return nil
 	}
-	redactJSONPath(value, responsePath)
+	for _, path := range splitFallbackPaths(responsePath) {
+		redactJSONPath(value, path)
+	}
 	return value
 }
 
@@ -643,6 +660,19 @@ func extractTokenFromResponse(data []byte, path string) (string, error) {
 	if err := json.Unmarshal(data, &current); err != nil {
 		return "", fmt.Errorf("decode token response: %w", err)
 	}
+	var lastErr error
+	for _, candidatePath := range splitFallbackPaths(path) {
+		value, err := extractTokenAtPath(current, candidatePath)
+		if err == nil {
+			return value, nil
+		}
+		lastErr = err
+	}
+	return "", lastErr
+}
+
+func extractTokenAtPath(value any, path string) (string, error) {
+	current := value
 	for _, segment := range strings.Split(path, ".") {
 		segment = strings.TrimSpace(segment)
 		if segment == "" {
@@ -662,6 +692,20 @@ func extractTokenFromResponse(data []byte, path string) (string, error) {
 		return "", fmt.Errorf("empty token at path %q", path)
 	}
 	return token, nil
+}
+
+func splitFallbackPaths(path string) []string {
+	parts := strings.Split(path, "|")
+	paths := make([]string, 0, len(parts))
+	for _, part := range parts {
+		if trimmed := strings.TrimSpace(part); trimmed != "" {
+			paths = append(paths, trimmed)
+		}
+	}
+	if len(paths) == 0 {
+		return []string{strings.TrimSpace(path)}
+	}
+	return paths
 }
 
 func navigateNumericPath(current any, path string) (float64, bool) {
@@ -700,20 +744,48 @@ func getCredentialValue(credentials map[string]any, key string) string {
 			return text
 		}
 	}
-	aliases := map[string]string{
-		"appkey":     "app_key",
-		"app_key":    "appkey",
-		"appsecret":  "app_secret",
-		"app_secret": "appsecret",
+	aliases := map[string][]string{
+		"appkey":        {"app_key", "client_id"},
+		"app_key":       {"appkey", "client_id"},
+		"appsecret":     {"app_secret", "client_secret"},
+		"app_secret":    {"appsecret", "client_secret"},
+		"clientId":      {"client_id", "app_key", "appkey"},
+		"client_id":     {"clientId", "app_key", "appkey"},
+		"clientSecret":  {"client_secret", "app_secret", "appsecret"},
+		"client_secret": {"clientSecret", "app_secret", "appsecret"},
+		"corpId":        {"corp_id", "corpid"},
+		"corp_id":       {"corpId", "corpid"},
+		"corpid":        {"corp_id", "corpId"},
 	}
-	if alias, ok := aliases[key]; ok {
-		if value, found := credentials[alias]; found {
+	if candidates, ok := aliases[key]; ok {
+		for _, alias := range candidates {
+			value, found := credentials[alias]
+			if !found {
+				continue
+			}
 			if text := strings.TrimSpace(fmt.Sprint(value)); text != "" {
 				return text
 			}
 		}
 	}
 	return ""
+}
+
+func replaceCredentialPlaceholders(raw string, credentials map[string]any) string {
+	replacements := map[string]string{
+		"{corp_id}":       url.PathEscape(getCredentialValue(credentials, "corp_id")),
+		"{corpId}":        url.PathEscape(getCredentialValue(credentials, "corp_id")),
+		"{client_id}":     url.PathEscape(getCredentialValue(credentials, "client_id")),
+		"{clientId}":      url.PathEscape(getCredentialValue(credentials, "client_id")),
+		"{client_secret}": url.PathEscape(getCredentialValue(credentials, "client_secret")),
+		"{clientSecret}":  url.PathEscape(getCredentialValue(credentials, "client_secret")),
+	}
+	for placeholder, value := range replacements {
+		if value != "" {
+			raw = strings.ReplaceAll(raw, placeholder, value)
+		}
+	}
+	return raw
 }
 
 func decodeDirectResolver(raw json.RawMessage) (*TokenResolverConfig, error) {

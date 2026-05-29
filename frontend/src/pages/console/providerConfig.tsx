@@ -174,6 +174,19 @@ const emailSecurityOptions = [
   { label: 'STARTTLS', value: 'STARTTLS' },
 ];
 
+const webhookMethodOptions = [
+  { label: 'POST', value: 'POST' },
+  { label: 'PUT', value: 'PUT' },
+  { label: 'PATCH', value: 'PATCH' },
+];
+
+const selfAuthModeOptions = [
+  { label: 'Token', value: 'token' },
+  { label: 'HMAC', value: 'hmac' },
+  { label: 'Token + HMAC', value: 'token_and_hmac' },
+  { label: '无鉴权', value: 'none' },
+];
+
 export function tokenCacheStatusMeta(value: { is_cached?: boolean; token_cache_status?: string }) {
   if (value.is_cached || value.token_cache_status === 'cached') {
     return { label: '已缓存', color: 'success' };
@@ -189,13 +202,13 @@ export function tokenCacheStatusMeta(value: { is_cached?: boolean; token_cache_s
 
 const providerPresets: Record<ProviderKind, ProviderPreset> = {
   webhook: {
-    tokenEndpoint: '无令牌或固定 Header',
-    tokenRequest: '{}',
+    tokenEndpoint: '-',
+    tokenRequest: '-',
     tokenResponsePath: '-',
-    tokenPlacement: 'Header.X-Webhook-Token',
+    tokenPlacement: '-',
     sendEndpoint: '',
-    recipientMapping: '无接收人字段；高级模式可放入 body/header/query/path',
-    bodyMapping: '{"event":"message.push","payload":"{{ message }}"}',
+    recipientMapping: 'Webhook URL 可使用接收人或消息上下文占位符',
+    bodyMapping: '模板正文直接作为 JSON Body',
     qps: 50,
     concurrency: 16,
     timeoutMs: 3000,
@@ -220,7 +233,7 @@ const providerPresets: Record<ProviderKind, ProviderPreset> = {
     retryInterval: '1s / 3s / 9s',
     deadLetterPolicy: '全局默认：重试耗尽或上级错误进入死信',
     testRecipient: '-',
-    testBody: '本平台级联测试消息',
+    testBody: 'MVP-PUSH 测试消息',
   },
   pushplus: {
     tokenEndpoint: '接收人 PushPlus Token',
@@ -472,21 +485,23 @@ const providerPresets: Record<ProviderKind, ProviderPreset> = {
     testBody: '钉钉机器人测试消息',
   },
   dingtalk_work: {
-    tokenEndpoint: '钉钉应用 access token',
-    tokenRequest: 'app_key + app_secret',
-    tokenResponsePath: 'access_token',
-    tokenPlacement: 'Query.access_token = ${token}',
-    sendEndpoint: '内置钉钉工作消息 adapter',
-    recipientMapping: 'userid_list = receivers.dingtalk_userid',
-    bodyMapping: 'adapter 根据 text/card 内容生成工作消息',
+    tokenEndpoint: 'POST https://api.dingtalk.com/v1.0/oauth2/{corpId}/token',
+    tokenRequest: 'corpId + client_id + client_secret + grant_type=client_credentials',
+    tokenResponsePath: 'accessToken / access_token',
+    tokenPlacement: 'Header.x-acs-dingtalk-access-token = ${token}',
+    sendEndpoint: 'POST /v1.0/robot/oToMessages/batchSend',
+    recipientMapping: 'userIds = receivers.dingtalk_userid',
+    bodyMapping: 'msgKey + msgParam(JSON string)',
     qps: 60,
     concurrency: 12,
     timeoutMs: 3000,
     retryPolicy: '3 次指数退避',
     retryInterval: '1s / 3s / 9s',
     deadLetterPolicy: '全局默认：重试耗尽或上级错误进入死信',
-    testRecipient: 'manager001',
+    testRecipient: '',
+    testTitle: '钉钉工作标题',
     testBody: '钉钉工作消息测试',
+    testTopic: 'sampleMarkdown',
   },
   feishu_robot: {
     tokenEndpoint: 'POST /auth/v3/tenant_access_token/internal',
@@ -522,23 +537,6 @@ const providerPresets: Record<ProviderKind, ProviderPreset> = {
     testRecipient: '',
     testBody: '飞书群消息测试',
   },
-  custom_token: {
-    tokenEndpoint: '',
-    tokenRequest: '{"secret":"${secret}"}',
-    tokenResponsePath: 'data.token',
-    tokenPlacement: 'Header.Authorization = Bearer ${token}',
-    sendEndpoint: '',
-    recipientMapping: 'body.receivers',
-    bodyMapping: '{"receivers":"{{ receivers }}","message":"{{ message.content }}"}',
-    qps: 30,
-    concurrency: 12,
-    timeoutMs: 3000,
-    retryPolicy: '3 次指数退避',
-    retryInterval: '1s / 3s / 9s',
-    deadLetterPolicy: '全局默认：重试耗尽或上级错误进入死信',
-    testRecipient: 'test_user',
-    testBody: '自定义平台测试消息',
-  },
 };
 
 function parseSendEndpoint(endpoint: string): Pick<ProviderRecord, 'requestMethod' | 'requestUrl'> {
@@ -570,7 +568,7 @@ export function providerCapabilityView(
     displayName: primary?.display_name || getProviderTypeLabel(providerType),
     category: primary?.category || providerCategoryLabel(providerType),
     supportedMessageTypes,
-    customBodyAllowed: primary?.custom_body_allowed ?? (providerType === 'webhook' || providerType === 'custom_token'),
+    customBodyAllowed: primary?.custom_body_allowed ?? providerType === 'webhook',
     fields: fields.length > 0 ? fields : fallbackProviderFields(providerType),
     capabilityRecords: records,
   };
@@ -578,6 +576,8 @@ export function providerCapabilityView(
 
 function providerVisibleConfigFields(providerType: ProviderKind, fields: ProviderConfigField[]): ProviderConfigField[] {
   const hiddenKeysByProvider: Partial<Record<ProviderKind, Set<string>>> = {
+    webhook: new Set(['secret', 'headers', 'body', 'recipient']),
+    self: new Set(['api_prefix', 'payload_mode', 'include_trace_id', 'include_source_context']),
     pushplus: new Set(['token', 'topic', 'template', 'channel']),
     wxpusher: new Set(['spt', 'mode', 'content_type']),
     wecom_robot: new Set(['key', 'mentioned_list', 'allow_at_all', 'base_url']),
@@ -585,7 +585,56 @@ function providerVisibleConfigFields(providerType: ProviderKind, fields: Provide
     pushme: new Set(['push_key', 'temp_key', 'type', 'method', 'content_type']),
   };
   const hidden = hiddenKeysByProvider[providerType];
-  return hidden ? fields.filter((field) => !hidden.has(field.key)) : fields;
+  return fields
+    .filter((field) => {
+      if (providerType === 'self' && field.target === 'send_config' && field.key === 'source_code') {
+        return false;
+      }
+      return hidden ? !hidden.has(field.key) : true;
+    })
+    .map((field) => normalizeProviderConfigField(providerType, field));
+}
+
+function normalizeProviderConfigField(providerType: ProviderKind, field: ProviderConfigField): ProviderConfigField {
+  if (providerType === 'webhook') {
+    if (field.key === 'url') {
+      return {
+        ...field,
+        label: 'Webhook URL',
+        placeholder: field.placeholder || 'https://example.com/webhook/{{ recipient }}',
+      };
+    }
+    if (field.key === 'method') {
+      return {
+        ...field,
+        label: '请求方法',
+        inputType: 'select',
+        defaultValue: field.defaultValue || 'POST',
+        options: webhookMethodOptions,
+      };
+    }
+  }
+  if (providerType === 'self') {
+    if (field.key === 'base_url') {
+      return { ...field, label: 'API 基础地址' };
+    }
+    if (field.key === 'auth_mode') {
+      return {
+        ...field,
+        label: '鉴权方式',
+        inputType: 'select',
+        defaultValue: field.defaultValue || 'token',
+        options: selfAuthModeOptions,
+      };
+    }
+    if (field.key === 'hmac_secret') {
+      return { ...field, label: '上级 HMAC 密钥', inputType: 'password' };
+    }
+    if (field.key === 'source_token') {
+      return { ...field, label: '上级来源 Token', inputType: 'password' };
+    }
+  }
+  return field;
 }
 
 function capabilityMessageTypes(providerType: ProviderKind, records: ProviderCapabilityApiRecord[]): string[] {
@@ -621,7 +670,7 @@ function providerCategoryLabel(providerType: ProviderKind): string {
   if (providerType === 'aliyun_sms' || providerType === 'tencent_sms' || providerType === 'baidu_sms') {
     return '短信';
   }
-  if (providerType === 'webhook' || providerType === 'custom_token') {
+  if (providerType === 'webhook') {
     return '高级 HTTP';
   }
   if (providerType === 'self') {
@@ -682,7 +731,7 @@ function fieldFromSchemaRecord(value: JSONValue, fallbackTarget: ProviderFieldTa
     key,
     label: firstString(value.label, value.title, value.description) || providerFieldLabel(key),
     target,
-    inputType: options?.length ? 'select' : providerFieldInputType(firstString(value.input_type, value.inputType, value.widget, value.type)),
+    inputType: options?.length ? 'select' : providerFieldInputType(firstString(value.input_type, value.inputType, value.widget, value.format, value.type)),
     valueType: firstString(value.type),
     itemType: isRecord(value.items) ? firstString(value.items.type) : '',
     required: Boolean(value.required),
@@ -785,7 +834,11 @@ export function providerFieldLabel(key: string): string {
     app_key: 'App Key',
     app_secret: 'App Secret',
     app_token: '应用 Token',
+    client_id: 'ClientID（原 AppKey）',
+    client_secret: 'Client Secret（原 AppSecret）',
+    corp_id: 'Corp ID',
     auth_type: '鉴权类型',
+    auth_mode: '鉴权方式',
     baas_url: 'API 基础地址',
     base_url: 'API 基础地址',
     bearer_token: 'Bearer Token',
@@ -801,6 +854,7 @@ export function providerFieldLabel(key: string): string {
     endpoint: 'Endpoint',
     from: '发件人显示名',
     headers: '请求 Header',
+    hmac_secret: '上级 HMAC 密钥',
     hook_token: '机器人 Hook Token',
     host: 'SMTP 主机地址',
     icon: '图标 URL',
@@ -849,6 +903,7 @@ export function providerFieldLabel(key: string): string {
     username: '用户名',
     version: '版本',
     webhook_url: 'Webhook URL',
+    url: 'Webhook URL',
   };
   return labels[key] ?? key;
 }
@@ -924,22 +979,8 @@ function fallbackProviderFields(providerType: ProviderKind): ProviderConfigField
   }
   if (providerType === 'webhook') {
     return [
-      field('send_url', 'Webhook URL', 'send_config', 'text', true),
-      field('method', '请求方法', 'send_config'),
-      field('headers', '请求 Header JSON', 'send_config', 'textarea'),
-      field('body_template', 'Body 映射模板', 'send_config', 'textarea'),
-      field('token', '固定 Token', 'auth_config', 'password'),
-    ];
-  }
-  if (providerType === 'custom_token') {
-    return [
-      field('token_endpoint', 'Token 获取 URL', 'token_config', 'text', true),
-      field('token_request', 'Token 请求 JSON', 'token_config', 'textarea'),
-      field('token_response_path', 'Token 字段路径', 'token_config'),
-      field('send_url', '发送 URL', 'send_config', 'text', true),
-      field('method', '请求方法', 'send_config'),
-      field('headers', '请求 Header JSON', 'send_config', 'textarea'),
-      field('body_template', 'Body 映射模板', 'send_config', 'textarea'),
+      field('url', 'Webhook URL', 'send_config', 'text', true, 'https://example.com/webhook/{{ recipient }}'),
+      field('method', '请求方法', 'send_config', 'select', false, '', 'POST', 'string', '', webhookMethodOptions),
     ];
   }
   if (providerType === 'pushplus') {
@@ -1023,9 +1064,11 @@ function fallbackProviderFields(providerType: ProviderKind): ProviderConfigField
   }
   if (providerType === 'dingtalk_work') {
     return [
-      field('app_key', '钉钉 App Key', 'auth_config', 'text', true),
-      field('app_secret', '钉钉 App Secret', 'auth_config', 'password', true),
-      field('agent_id', '应用 AgentId', 'send_config', 'text', true),
+      field('corp_id', 'Corp ID', 'auth_config', 'text', true),
+      field('client_id', 'ClientID（原 AppKey）', 'auth_config', 'text', true),
+      field('client_secret', 'Client Secret（原 AppSecret）', 'auth_config', 'password', true),
+      field('base_url', 'API 基础地址', 'send_config', 'text', true, undefined, 'https://api.dingtalk.com'),
+      field('robot_code', 'robotCode', 'send_config', 'text', true),
     ];
   }
   if (providerType === 'feishu_robot') {
@@ -1043,11 +1086,11 @@ function fallbackProviderFields(providerType: ProviderKind): ProviderConfigField
   }
   if (providerType === 'self') {
     return [
-      field('base_url', '上级网关地址', 'send_config', 'text', true, 'https://gateway.example.gov.cn'),
-      field('source_code', '上级来源编码', 'send_config', 'text', true),
+      field('base_url', 'API 基础地址', 'auth_config', 'text', true, 'https://gateway.example.gov.cn'),
+      field('source_code', '上级来源编码', 'auth_config', 'text', true),
+      field('auth_mode', '鉴权方式', 'auth_config', 'select', false, '', 'token', 'string', '', selfAuthModeOptions),
       field('source_token', '上级来源 Token', 'auth_config', 'password'),
       field('hmac_secret', '上级 HMAC 密钥', 'auth_config', 'password'),
-      field('payload_mode', 'Payload 包装模式', 'send_config', 'text', false, 'wrap'),
     ];
   }
   return [];
@@ -1100,7 +1143,22 @@ export function providerFieldValuesAfterChange(
 }
 
 function visibleProviderConfigFields(value: ProviderRow): ProviderConfigField[] {
-  return value.configFields;
+  if (value.providerType !== 'self') {
+    return value.configFields;
+  }
+  const authMode = String(value.fieldValues['auth_config.auth_mode'] ?? 'token');
+  return value.configFields.filter((field) => {
+    if (field.target !== 'auth_config') {
+      return true;
+    }
+    if (field.key === 'source_token') {
+      return authMode === 'token' || authMode === 'token_and_hmac';
+    }
+    if (field.key === 'hmac_secret') {
+      return authMode === 'hmac' || authMode === 'token_and_hmac';
+    }
+    return true;
+  });
 }
 
 function fieldValuesFromConfigs(
@@ -1218,6 +1276,9 @@ function coerceDelimitedItems(items: string[], field: ProviderConfigField): JSON
 }
 
 function providerFieldExtra(field: ProviderConfigField): string | undefined {
+  if (field.target === 'send_config' && field.key === 'url') {
+    return '支持通用占位符，例如 {{ recipient }}、{{ message.id }}、{{ payload.xxx }}。';
+  }
   if (providerFieldUsesDelimitedList(field)) {
     return '多个值用英文逗号 , 或竖线 | 分隔。';
   }
@@ -1418,7 +1479,29 @@ function providerTestBodyValue(value: ProviderRow): JSONValue {
     };
   }
   if (value.providerType === 'dingtalk_robot') {
+    const msgtype = normalizedDingTalkRobotMessageType(value.testTopic);
+    if (msgtype === 'text') {
+      return {
+        msgtype,
+        content: value.testBody.trim(),
+      };
+    }
     return {
+      msgtype,
+      text: value.testBody.trim(),
+      title: value.testTitle.trim(),
+    };
+  }
+  if (value.providerType === 'dingtalk_work') {
+    const msgKey = normalizedDingTalkWorkMsgKey(value.testTopic);
+    if (msgKey === 'sampleText') {
+      return {
+        msgKey,
+        content: value.testBody.trim(),
+      };
+    }
+    return {
+      msgKey,
       title: value.testTitle.trim(),
       text: value.testBody.trim(),
     };
@@ -1497,6 +1580,7 @@ function normalizedProviderTestRecipient(value: ProviderRow): string {
     value.providerType === 'wxpusher' ||
     value.providerType === 'serverchan' ||
     value.providerType === 'wecom_robot' ||
+    value.providerType === 'dingtalk_work' ||
     value.providerType === 'feishu_robot' ||
     value.providerType === 'feishu_group' ||
     value.providerType === 'bark' ||
@@ -1563,6 +1647,9 @@ function providerTestRecipients(value: ProviderRow, recipient: string): JSONValu
   if (value.providerType === 'dingtalk_robot') {
     return splitListText(value.testRecipient).map((token) => ({ platform_ids: { dingtalk_robot_access_token: token } }));
   }
+  if (value.providerType === 'dingtalk_work') {
+    return splitListText(value.testRecipient).map((userID) => ({ platform_ids: { dingtalk_userid: userID } }));
+  }
   if (value.providerType === 'bark') {
     return splitListText(value.testRecipient).map((deviceKey) => ({ platform_ids: { bark_device_key: deviceKey } }));
   }
@@ -1575,6 +1662,14 @@ function providerTestRecipients(value: ProviderRow, recipient: string): JSONValu
 function normalizedPushMeMessageType(value: string): string {
   const normalized = value.trim().toLowerCase();
   return normalized === 'text' || normalized === 'html' || normalized === 'markdown' ? normalized : 'markdown';
+}
+
+function normalizedDingTalkRobotMessageType(value: string): string {
+  return value.trim() === 'text' ? 'text' : 'markdown';
+}
+
+function normalizedDingTalkWorkMsgKey(value: string): string {
+  return value.trim() === 'sampleText' ? 'sampleText' : 'sampleMarkdown';
 }
 
 function normalizedBarkMessageType(value: string): string {
@@ -1601,16 +1696,18 @@ export function providerTestPayload(value: ProviderRow, send: boolean, liveSendC
         : value.providerType === 'wecom_robot'
           ? normalizedWeComRobotMessageType(value.testTopic)
           : value.providerType === 'dingtalk_robot'
-            ? 'markdown'
-            : value.providerType === 'feishu_robot'
-              ? 'text'
-              : value.providerType === 'feishu_group'
+            ? normalizedDingTalkRobotMessageType(value.testTopic)
+            : value.providerType === 'dingtalk_work'
+              ? normalizedDingTalkWorkMsgKey(value.testTopic)
+              : value.providerType === 'feishu_robot'
                 ? 'text'
-                : value.providerType === 'pushme'
-                  ? normalizedPushMeMessageType(value.testTopic)
-                  : value.providerType === 'bark'
-                    ? normalizedBarkMessageType(value.testTopic)
-                    : value.messageTypes[0] ?? 'text';
+                : value.providerType === 'feishu_group'
+                  ? 'text'
+                  : value.providerType === 'pushme'
+                    ? normalizedPushMeMessageType(value.testTopic)
+                    : value.providerType === 'bark'
+                      ? normalizedBarkMessageType(value.testTopic)
+                      : value.messageTypes[0] ?? 'text';
   const resolvedRecipients = providerTestRecipients(value, recipient);
   return {
     send,
@@ -1911,7 +2008,7 @@ export function mapChannelRow(channel: ChannelApiRecord, capabilities: ProviderC
 }
 
 export function channelInputFromProvider(value: ProviderRow): ChannelInput {
-  const basicConfig = configRecordsFromFieldValues(value.configFields, value.fieldValues);
+  const basicConfig = configRecordsFromFieldValues(visibleProviderConfigFields(value), value.fieldValues);
   return {
     provider_type: value.providerType,
     name: value.name.trim(),
@@ -2019,12 +2116,12 @@ export function ProviderTypeCardSelector({ value, onChange }: ProviderTypeCardSe
     { label: '企业协同', values: ['wecom_robot', 'wecom_app', 'dingtalk_robot', 'dingtalk_work', 'feishu_robot', 'feishu_group'] },
     { label: '个人推送', values: ['pushplus', 'wxpusher', 'serverchan', 'bark', 'pushme'] },
     { label: '邮件短信', values: ['email', 'aliyun_sms', 'tencent_sms', 'baidu_sms'] },
-    { label: '基础通道', values: ['webhook', 'self', 'custom_token'] },
+    { label: '基础通道', values: ['webhook', 'self'] },
     { label: '自建服务', values: ['ntfy', 'gotify'] },
   ];
 
   const [activeTab, setActiveTab] = useState<string>(() => {
-    if (value && value !== 'webhook') {
+    if (value) {
       const matchedGroup = groups.slice(1).find(g => g.values.includes(value));
       if (matchedGroup) return matchedGroup.label;
     }
@@ -2033,7 +2130,7 @@ export function ProviderTypeCardSelector({ value, onChange }: ProviderTypeCardSe
   const [searchQuery, setSearchQuery] = useState<string>('');
 
   useEffect(() => {
-    if (value && value !== 'webhook') {
+    if (value) {
       const currentGroup = groups.find(g => g.label === activeTab);
       if (currentGroup && currentGroup.values.includes(value)) {
         return;
@@ -2145,7 +2242,7 @@ export function ProviderConfigForm({
   onChange: (value: ProviderRow) => void;
   capabilities?: ProviderCapabilityApiRecord[];
 }) {
-  const customMapping = value.customBodyAllowed || value.providerType === 'custom_token' || value.providerType === 'webhook';
+  const customMapping = false;
   const update = (patch: Partial<ProviderRow>) => onChange({ ...value, ...patch });
   const updateFieldValue = (field: ProviderConfigField, nextValue: ProviderFieldValue) => {
     update({
@@ -2360,6 +2457,7 @@ export function ProviderTestPanel({
   const [testResultMode, setTestResultMode] = useState<'simulate' | 'send' | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   const [resolvingFeishuOpenID, setResolvingFeishuOpenID] = useState(false);
+  const [resolvingDingTalkUserID, setResolvingDingTalkUserID] = useState(false);
 
   const handleRefresh = async () => {
     setRefreshing(true);
@@ -2383,6 +2481,8 @@ export function ProviderTestPanel({
   const wxPusherTest = value.providerType === 'wxpusher';
   const serverChanTest = value.providerType === 'serverchan';
   const weComRobotTest = value.providerType === 'wecom_robot';
+  const dingTalkRobotTest = value.providerType === 'dingtalk_robot';
+  const dingTalkWorkTest = value.providerType === 'dingtalk_work';
   const feishuRobotTest = value.providerType === 'feishu_robot';
   const feishuGroupTest = value.providerType === 'feishu_group';
   const pushMeTest = value.providerType === 'pushme';
@@ -2416,6 +2516,36 @@ export function ProviderTestPanel({
       setResolvingFeishuOpenID(false);
     }
   };
+  const resolveDingTalkUserID = async () => {
+    const queryWord = value.testRecipient.trim();
+    if (!value.id) {
+      message.warning('请先保存钉钉工作消息渠道实例');
+      return;
+    }
+    if (!queryWord) {
+      message.warning('请先填写用户名称');
+      return;
+    }
+    setResolvingDingTalkUserID(true);
+    try {
+      const result = await consoleApi.resolveDingTalkUserId(value.id, [queryWord]);
+      const item = result.items.find((current) => current.query_word === queryWord);
+      if (item?.status === 'multiple') {
+        modal.warning({ title: '检测到多个用户', content: item.error || '检测到多个用户，请重试或手动输入。' });
+        return;
+      }
+      if (!item?.user_id) {
+        message.error(item?.error || result.errors?.[0] || '未匹配到钉钉用户');
+        return;
+      }
+      update({ testRecipient: item.user_id });
+      message.success('已转换为钉钉 UserID');
+    } catch (error) {
+      showUserFacingError(message, error);
+    } finally {
+      setResolvingDingTalkUserID(false);
+    }
+  };
   const validateTestPayload = () => {
     if (pushPlusTest && !value.testBody.trim()) {
       message.error('请填写 content');
@@ -2447,6 +2577,30 @@ export function ProviderTestPanel({
     }
     if (weComRobotTest && !value.testBody.trim()) {
       message.error('请填写 content');
+      return false;
+    }
+    if (dingTalkRobotTest && splitListText(value.testRecipient).length === 0) {
+      message.error('请填写钉钉机器人 AccessToken');
+      return false;
+    }
+    if (dingTalkRobotTest && !value.testBody.trim()) {
+      message.error('请填写 text');
+      return false;
+    }
+    if (dingTalkRobotTest && normalizedDingTalkRobotMessageType(value.testTopic) === 'markdown' && !value.testTitle.trim()) {
+      message.error('请填写 title');
+      return false;
+    }
+    if (dingTalkWorkTest && splitListText(value.testRecipient).length === 0) {
+      message.error('请填写钉钉 UserID');
+      return false;
+    }
+    if (dingTalkWorkTest && normalizedDingTalkWorkMsgKey(value.testTopic) === 'sampleMarkdown' && !value.testTitle.trim()) {
+      message.error('请填写 title');
+      return false;
+    }
+    if (dingTalkWorkTest && !value.testBody.trim()) {
+      message.error(normalizedDingTalkWorkMsgKey(value.testTopic) === 'sampleText' ? '请填写 content' : '请填写 text');
       return false;
     }
     if (feishuRobotTest && splitListText(value.testRecipient).length === 0) {
@@ -2633,6 +2787,82 @@ export function ProviderTestPanel({
             />
           </Form.Item>
           <Form.Item label="content" required className="form-item-full" extra={normalizedWeComRobotMessageType(value.testTopic) === 'markdown' ? '支持 Markdown' : undefined}>
+            <Input.TextArea
+              rows={5}
+              value={value.testBody}
+              onChange={(event) => update({ testBody: event.target.value })}
+            />
+          </Form.Item>
+        </div>
+      ) : dingTalkRobotTest ? (
+        <div className="two-column-form provider-test-form">
+          <Form.Item label="钉钉机器人 AccessToken" required className="form-item-full">
+            <Input value={value.testRecipient} onChange={(event) => update({ testRecipient: event.target.value })} />
+          </Form.Item>
+          <Form.Item label="msgtype" required>
+            <Select
+              value={normalizedDingTalkRobotMessageType(value.testTopic)}
+              options={[
+                { label: 'text', value: 'text' },
+                { label: 'markdown', value: 'markdown' },
+              ]}
+              onChange={(testTopic) => update({ testTopic })}
+            />
+          </Form.Item>
+          <Form.Item
+            label={normalizedDingTalkRobotMessageType(value.testTopic) === 'text' ? 'content' : 'text'}
+            required
+            className="form-item-full"
+            extra={normalizedDingTalkRobotMessageType(value.testTopic) === 'markdown' ? '支持标准 Markdown；换行用 \\n，空格可用 &nbsp;' : undefined}
+          >
+            <Input.TextArea
+              rows={5}
+              value={value.testBody}
+              onChange={(event) => update({ testBody: event.target.value })}
+            />
+          </Form.Item>
+          {normalizedDingTalkRobotMessageType(value.testTopic) === 'markdown' ? (
+            <Form.Item label="title" required className="form-item-full">
+              <Input value={value.testTitle} onChange={(event) => update({ testTitle: event.target.value })} />
+            </Form.Item>
+          ) : null}
+        </div>
+      ) : dingTalkWorkTest ? (
+        <div className="two-column-form provider-test-form">
+          <Form.Item label="钉钉 UserID（填入用户名称后点击转换按钮自动转换）" required className="form-item-full">
+            <Space.Compact className="full-width">
+              <Input value={value.testRecipient} onChange={(event) => update({ testRecipient: event.target.value })} />
+              <Button
+                aria-label="用户名称转 UserID"
+                title="用户名称转 UserID"
+                className="provider-test-resolve-dingtalk-button"
+                icon={<SyncOutlined />}
+                loading={resolvingDingTalkUserID}
+                onClick={() => void resolveDingTalkUserID()}
+              />
+            </Space.Compact>
+          </Form.Item>
+          <Form.Item label="msgKey" required>
+            <Select
+              value={normalizedDingTalkWorkMsgKey(value.testTopic)}
+              options={[
+                { label: 'sampleMarkdown', value: 'sampleMarkdown' },
+                { label: 'sampleText', value: 'sampleText' },
+              ]}
+              onChange={(testTopic) => update({ testTopic })}
+            />
+          </Form.Item>
+          {normalizedDingTalkWorkMsgKey(value.testTopic) === 'sampleMarkdown' ? (
+            <Form.Item label="title" required className="form-item-full">
+              <Input value={value.testTitle} onChange={(event) => update({ testTitle: event.target.value })} />
+            </Form.Item>
+          ) : null}
+          <Form.Item
+            label={normalizedDingTalkWorkMsgKey(value.testTopic) === 'sampleText' ? 'content' : 'text'}
+            required
+            className="form-item-full"
+            extra={normalizedDingTalkWorkMsgKey(value.testTopic) === 'sampleMarkdown' ? '支持标准 Markdown；换行用 \\n，空格可用 &nbsp;' : undefined}
+          >
             <Input.TextArea
               rows={5}
               value={value.testBody}

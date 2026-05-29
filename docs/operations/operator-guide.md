@@ -117,7 +117,7 @@ curl -X POST http://127.0.0.1:18080/api/v1/ingest/smoke001 \
 建议先配置：
 
 - 通用 Webhook：可指向本地 fake server 完成真实本地闭环。
-- 本平台级联：用于上下级网关联动的 build-request/mock。
+- MVP-PUSH：用于上下级网关联动的 build-request/mock。
 - 其他 provider：PushPlus、WxPusher、Server酱、邮件、短信、企微、钉钉、飞书、ntfy、Gotify、Bark、PushMe 当前多数是 build-request/mock 或 configuration-dependent。
 
 测试发送边界：

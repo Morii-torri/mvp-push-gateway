@@ -16,7 +16,7 @@
 | 批次 | 平台 | provider type | 类型 | 当前状态 |
 |---|---|---|---|---|
 | 第一批 | 通用 Webhook | `webhook` | 通用 HTTP | 已实现 build-request/mock；Webhook 闭环依赖目标 URL |
-| 第一批 | 本平台级联 MVP Push Gateway | `self` | 上级网关 | 已实现 build-request/mock；真实级联依赖另一个网关实例配置 |
+| 第一批 | MVP-PUSH | `self` | 上级网关 | 已实现 build-request/mock；真实级联依赖另一个网关实例配置 |
 | 第一批 | PushPlus | `pushplus` | 第三方推送网关 | 已实现 build-request/mock；未真实联调 |
 | 第一批 | WxPusher | `wxpusher` | 第三方推送网关 | 已实现 build-request/mock；未真实联调 |
 | 第一批 | Server酱 | `serverchan` | 第三方推送网关 | 已实现 build-request/mock；未真实联调 |
@@ -24,17 +24,12 @@
 | 第一批 | 阿里云短信 | `aliyun_sms` | 短信 | 已实现配置模型和 mock build request；暂无测试账号 |
 | 第一批 | 腾讯云短信 | `tencent_sms` | 短信 | 已实现配置模型和 mock build request；暂无测试账号 |
 | 第一批 | 百度智能云短信 | `baidu_sms` | 短信 | 已实现配置模型和 mock build request；暂无测试账号 |
-| 第一批兼容 | 短信聚合别名 | `sms` | legacy aggregate | 保留兼容；新配置优先使用具体短信 provider |
 | 第一批 | 企业微信群机器人 | `wecom_robot` | 群机器人 | 已实现 build-request/mock；未真实联调 |
 | 第一批 | 企业微信应用消息 | `wecom_app` | 企业应用 | 已实现 build-request/mock；未真实联调 |
-| 第一批兼容 | 企业微信旧类型 | `wecom` | legacy enterprise app | 保留兼容；新配置优先使用 `wecom_app` / `wecom_robot` |
 | 第一批 | 钉钉群机器人 | `dingtalk_robot` | 群机器人 | 已实现 build-request/mock；未真实联调 |
 | 第一批 | 钉钉工作消息 | `dingtalk_work` | 企业应用 | 已实现 build-request/mock；未真实联调 |
-| 第一批兼容 | 钉钉旧类型 | `dingtalk` | legacy work notice | 保留兼容；新配置优先使用 `dingtalk_work` / `dingtalk_robot` |
 | 第一批 | 飞书应用机器人 | `feishu_robot` | 企业应用机器人 | 已实现 build-request/mock；未真实联调 |
 | 第一批 | 飞书群消息 | `feishu_group` | 群机器人 webhook | 已实现 build-request/mock；未真实联调 |
-| 第一批兼容 | 飞书旧类型 | `feishu` | legacy robot | 已移除；新配置使用 `feishu_robot` / `feishu_group` |
-| 高级保留 | 高级 custom_token | `custom_token` | advanced HTTP | 保留高级映射，不作为普通用户主路径 |
 | P2 | ntfy | `ntfy` | 自托管通知 | 已实现 build-request/mock；目标服务依赖用户配置，未真实联调 |
 | P2 | Gotify | `gotify` | 自托管通知 | 已实现 build-request/mock；目标服务依赖用户配置，未真实联调 |
 | P2 | Bark | `bark` | iOS 通知 | 已实现 build-request/mock；未真实联调 |
@@ -47,9 +42,9 @@
 | 项目 | 为什么需要你补 |
 |---|---|
 | 短信供应商账号 | 第一批明确为阿里云、腾讯云、百度智能云；目前没有测试账号，第一阶段按官方 SDK/文档实现并用 mock client 测试，后续补账号、签名、模板 ID、区域后再真实联调。 |
-| 其他高级 custom_token 系统 | 不作为本批固定平台；如后续要接，需要目标系统的 token API、发送 API、成功判定和错误码。 |
+| 其他高级 HTTP 系统 | 不作为本批固定平台；如后续要接，优先通过通用 Webhook 能力补充目标系统的 token API、发送 API、成功判定和错误码。 |
 | 企业客户侧限制 | 例如企微、钉钉、飞书是否只允许机器人，不允许企业应用；是否要求私有域名、代理、IP 白名单。 |
-| 本平台级联策略 | 需要确认级联时 payload 是原样透传、包装后透传，还是只透传渲染后的消息内容。 |
+| MVP-PUSH 级联策略 | 需要确认级联时 payload 是原样透传、包装后透传，还是只透传渲染后的消息内容。 |
 
 ## 2. 统一设计建议
 
@@ -127,7 +122,7 @@ Delivery adapter 输入：
 - delivery target context。
 - token。
 
-Delivery adapter 输出 final request。日志快照记录 `target_context`、`rendered_message`、`resolved_recipients`、`final_request`、`upstream_response`，同时兼容旧 `send` snapshot。Webhook/custom_token 保留高级映射；内置 provider 的普通模板不保存最终 HTTP body。
+Delivery adapter 输出 final request。日志快照记录 `target_context`、`rendered_message`、`resolved_recipients`、`final_request`、`upstream_response`，同时兼容旧 `send` snapshot。Webhook 保留高级映射；内置 provider 的普通模板不保存最终 HTTP body。
 
 ## 3. 平台逐项参照
 
@@ -154,7 +149,7 @@ Delivery adapter 输出 final request。日志快照记录 `target_context`、`r
 | 支持消息类型 | `json`、`text`、`markdown`、`html`；普通用户默认 `json` |
 | 用户填写配置 | URL、Method、Headers、Body 模板、成功判定、超时、重试 |
 | 接收人身份字段 | 默认无；高级模式可把接收人放入 body/header/query/path |
-| Token 获取方式 | 无；如需通用 token 流程，使用高级自定义 Token 模式；不作为本批固定平台 |
+| Token 获取方式 | 无；如需通用 token 流程，后续在通用 Webhook 能力内扩展；不作为本批固定平台 |
 | 发送 API | 用户自定义 |
 | 请求体结构 | 用户自定义；默认发送内部消息对象 |
 | 成功判定 | 默认 HTTP `2xx`；高级模式支持 JSON path 判定 |
@@ -411,12 +406,11 @@ Delivery adapter 输出 final request。日志快照记录 `target_context`、`r
 8. `tencent_sms`
 9. `baidu_sms`
 10. `wecom_robot`
-11. `wecom_app` 和 legacy `wecom`
+11. `wecom_app`
 12. `dingtalk_robot`
-13. `dingtalk_work` 和 legacy `dingtalk`
-14. `feishu_robot` 和 legacy `feishu`
-15. legacy aggregate `sms`
-16. advanced `custom_token`
+13. `dingtalk_work`
+14. `feishu_robot`
+15. `feishu_group`
 
 这批 provider 已具备 capability metadata、默认 schema、build request/mock 路径或兼容路径，但除可由本地假服务验证的 Webhook 外，不应声称已经真实联调成功。
 
@@ -434,7 +428,7 @@ Delivery adapter 输出 final request。日志快照记录 `target_context`、`r
 1. 真实联调 PushPlus、WxPusher、Server酱、企微、钉钉、飞书、SMTP/self，并记录账号、白名单、速率限制和失败响应。
 2. 为阿里云、腾讯云、百度短信补测试账号、签名、模板 ID、区域和真实错误码映射。
 3. 保持模板语义：模板输出内部消息内容，不输出最终平台 HTTP body，不保存接收人字段。
-4. 保持 adapter 边界：内置 provider 生成 final request，Webhook/custom_token 继续保留高级映射。
+4. 保持 adapter 边界：内置 provider 生成 final request，Webhook 继续保留高级映射。
 6. 检查日志详情是否持续展示 target context、rendered message、resolved recipients、final request 和 upstream response。
 
 ## 6. 参考链接

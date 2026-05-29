@@ -22,8 +22,7 @@ export const providerTypeOptions: Array<{ label: string; value: ProviderKind }> 
   { label: '腾讯云短信', value: 'tencent_sms' },
   { label: '百度智能云短信', value: 'baidu_sms' },
   { label: '通用 Webhook', value: 'webhook' },
-  { label: '本平台级联', value: 'self' },
-  { label: '自定义 Token 平台', value: 'custom_token' },
+  { label: 'MVP-PUSH', value: 'self' },
   { label: 'ntfy', value: 'ntfy' },
   { label: 'Gotify', value: 'gotify' },
 ];
@@ -162,21 +161,9 @@ export const providerBrandMeta: Record<ProviderKind, ProviderBrandDetail> = {
   self: {
     color: '#722ED1',
     rgb: '114, 46, 209',
-    desc: '网关级联，将规划后的推送任务作为入站消息直接路由至下级网关。',
-    tags: ['平台级联', '网关间通信'],
+    desc: 'MVP-PUSH 网关级联，将规划后的推送任务作为入站消息直接路由至下级网关。',
+    tags: ['MVP-PUSH', '网关间通信'],
     icon: <img src="/icons/mvp-push.ico" alt="" />
-  },
-  custom_token: {
-    color: '#13C2C2',
-    rgb: '19, 194, 194',
-    desc: '定制 Token 出站协议，完成动态令牌换取、参数映射及成功拦截。',
-    tags: ['接口授权', '动态凭证'],
-    icon: (
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" className="svg-logo">
-        <rect x="3" y="11" width="18" height="10" rx="2" />
-        <path d="M12 2a5 5 0 0 0-5 5v4h10V7a5 5 0 0 0-5-5z" />
-      </svg>
-    )
   },
   ntfy: {
     color: '#FA541C',
@@ -224,11 +211,10 @@ const fallbackMessageTypesByProvider: Record<ProviderKind, string[]> = {
   baidu_sms: ['template', 'text'],
   wecom_robot: ['text'],
   wecom_app: ['text', 'card'],
-  dingtalk_robot: ['markdown'],
-  dingtalk_work: ['text', 'card'],
+  dingtalk_robot: ['text', 'markdown'],
+  dingtalk_work: ['sampleMarkdown', 'sampleText'],
   feishu_robot: ['text'],
   feishu_group: ['text'],
-  custom_token: ['text'],
 };
 
 export function fallbackMessageTypes(providerType: ProviderKind): string[] {

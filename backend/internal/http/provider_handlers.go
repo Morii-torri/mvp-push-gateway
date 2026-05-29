@@ -101,6 +101,10 @@ type feishuResolveOpenIDRequest struct {
 	Mobiles []string `json:"mobiles"`
 }
 
+type dingTalkResolveUserIDRequest struct {
+	QueryWords []string `json:"query_words"`
+}
+
 func (h *Handler) providerCapabilitiesHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		methodNotAllowed(w, http.MethodGet)
@@ -200,6 +204,10 @@ func (h *Handler) channelDetailHandler(w http.ResponseWriter, r *http.Request) {
 		h.channelFeishuResolveOpenIDHandler(w, r, channelID)
 		return
 	}
+	if len(parts) == 3 && parts[1] == "dingtalk" && parts[2] == "resolve-user-id" {
+		h.channelDingTalkResolveUserIDHandler(w, r, channelID)
+		return
+	}
 	if len(parts) != 1 {
 		writeAPIError(w, http.StatusNotFound, "MGP-CHN-001", "平台实例不存在")
 		return
@@ -292,6 +300,25 @@ func (h *Handler) channelFeishuResolveOpenIDHandler(w http.ResponseWriter, r *ht
 		return
 	}
 	result, err := h.providers.ResolveFeishuOpenID(r.Context(), channelID, request.Mobiles)
+	if err != nil {
+		status, code, message := providerErrorStatus(err)
+		writeAPIError(w, status, code, message)
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
+}
+
+func (h *Handler) channelDingTalkResolveUserIDHandler(w http.ResponseWriter, r *http.Request, channelID string) {
+	if r.Method != http.MethodPost {
+		methodNotAllowed(w, http.MethodPost)
+		return
+	}
+	var request dingTalkResolveUserIDRequest
+	if err := decodeJSON(r, &request); err != nil {
+		writeAPIError(w, http.StatusBadRequest, "MGP-REQ-001", "请求 JSON 不合法")
+		return
+	}
+	result, err := h.providers.ResolveDingTalkUserID(r.Context(), channelID, request.QueryWords)
 	if err != nil {
 		status, code, message := providerErrorStatus(err)
 		writeAPIError(w, status, code, message)

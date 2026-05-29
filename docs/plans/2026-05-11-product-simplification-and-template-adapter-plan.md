@@ -10,7 +10,7 @@
 - 模板只负责“消息内容”，不负责“发给谁”。
 - 路由只负责“什么时候发、发给谁、执行哪个发送动作组”。
 - Provider adapter 负责把“消息内容 + 接收人 + 渠道实例配置”转换成最终请求。
-- Webhook / custom_token 高级模式保留映射能力，但默认折叠，不作为普通用户主路径。
+- Webhook 高级模式保留映射能力，但默认折叠，不作为普通用户主路径。
 
 ## Current Progress
 
@@ -33,7 +33,7 @@
 - 路由规则已改为发送动作组 `action.targets[]`；每个 target 绑定一个渠道实例和一个兼容模板版本，legacy `template_version_id + channel_ids` 仍兼容。
 - Planning worker 已按 action targets fan-out，每个 target 单独加载渠道/模板、校验 provider type、渲染模板、解析接收人并生成 delivery attempt。
 - Delivery adapter boundary 已明确：输入 channel config、rendered message、resolved recipients、target context 和 token，输出 final request；日志快照包含 `target_context`、`rendered_message`、`resolved_recipients`、`final_request`、`upstream_response`。
-- 第一批 provider defaults 已实现 build-request/mock 级别支持：`webhook`、`self`、`pushplus`、`wxpusher`、`serverchan`、`email`、`aliyun_sms`、`tencent_sms`、`baidu_sms`、`wecom_robot`、`wecom_app`、legacy `wecom`、`dingtalk_robot`、`dingtalk_work`、legacy `dingtalk`、`feishu_robot`、legacy `feishu`、legacy `sms` 和高级 `custom_token`。
+- 第一批 provider defaults 已实现 build-request/mock 级别支持：`webhook`、`self`、`pushplus`、`wxpusher`、`serverchan`、`email`、`aliyun_sms`、`tencent_sms`、`baidu_sms`、`wecom_robot`、`wecom_app`、`dingtalk_robot`、`dingtalk_work`、`feishu_robot`、`feishu_group`。
 - P2 provider defaults 已实现 build-request/mock 级别支持：`ntfy`、`gotify`、`bark`、`pushme`。
 - Provider type registry 已引入，后续新增 provider type 不应再频繁修改数据库 CHECK constraint。
 - 前端过大的 `ConsolePages.tsx` 已拆出 provider config form、template editor、route rule form、message log detail 和 shared helpers。
@@ -52,7 +52,7 @@
 
 在上级平台账号和测试环境准备完成前，后续 agent 必须遵守：
 
-- 允许做：schema/capability 补齐、build-request、request snapshot、mock adapter、fake server、本地 webhook、自测用本平台级联。
+- 允许做：schema/capability 补齐、build-request、request snapshot、mock adapter、fake server、本地 webhook、自测用 MVP-PUSH 级联。
 - 允许做：`test-send` 的 dry-run/build-only 模式，展示将要发送的 URL/header/query/body 和缺失配置提示。
 - 不允许做：主动调用真实 PushPlus、WxPusher、Server酱、短信、企微、钉钉、飞书、SMTP、ntfy、Gotify、Bark、PushMe 等上级真实发送接口。
 - 不允许把“build-request/mock 通过”描述成“真实发送成功”。
@@ -148,7 +148,7 @@ Rendered message content
 - 邮箱：接收人进入 `to/cc/bcc`，标题进入 `subject`，内容进入 text/html。
 - 短信：手机号进入平台要求字段，内容进入模板参数。
 
-只有 Webhook/custom_token 高级模式开放：
+只有 Webhook 高级模式开放：
 
 - token 获取方式。
 - token 返回字段路径。

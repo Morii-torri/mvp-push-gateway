@@ -70,6 +70,7 @@ type providerService interface {
 	TestSend(context.Context, string, provider.TestSendInput) (provider.TestSendResult, error)
 	RefreshToken(context.Context, string) (provider.TokenCacheStatus, error)
 	ResolveFeishuOpenID(context.Context, string, []string) (provider.FeishuOpenIDResolveResult, error)
+	ResolveDingTalkUserID(context.Context, string, []string) (provider.DingTalkUserIDResolveResult, error)
 }
 
 type recipientService interface {
