@@ -678,9 +678,11 @@ func TestDingTalkRobotCapabilityUsesMarkdownAndRecipientAccessToken(t *testing.T
 	assertJSONField(t, capability.ChannelConfigSchema, "properties.base_url.default", "https://oapi.dingtalk.com")
 	assertJSONField(t, capability.ChannelConfigSchema, "properties.isAtAll.default", false)
 	assertJSONField(t, capability.MessageSchema, "properties.msgtype", nil)
+	assertJSONStringListField(t, capability.MessageSchema, "field_order", []string{"title", "text"})
 	assertJSONField(t, capability.MessageSchema, "properties.title.type", "string")
 	assertJSONField(t, capability.MessageSchema, "properties.text.type", "string")
 	assertJSONField(t, textCapability.MessageSchema, "properties.content.type", "string")
+	assertJSONField(t, textCapability.MessageSchema, "properties.content.title", "content")
 	if capability.IdentityKind != "dingtalk_robot_access_token" || !capability.RecipientRequired || capability.AllowNoRecipient {
 		t.Fatalf("expected DingTalk robot access token as required recipient identity, got identity=%q required=%v allow=%v", capability.IdentityKind, capability.RecipientRequired, capability.AllowNoRecipient)
 	}
@@ -698,6 +700,7 @@ func TestDingTalkWorkCapabilityUsesRobotBatchSendAndUserIDs(t *testing.T) {
 	assertJSONField(t, markdown.CredentialSchema, "properties.client_secret.format", "password")
 	assertJSONField(t, markdown.ChannelConfigSchema, "properties.robot_code.type", "string")
 	assertJSONField(t, markdown.ChannelConfigSchema, "properties.base_url.default", "https://api.dingtalk.com")
+	assertJSONStringListField(t, markdown.MessageSchema, "field_order", []string{"title", "text"})
 	assertJSONField(t, markdown.MessageSchema, "properties.title.type", "string")
 	assertJSONField(t, markdown.MessageSchema, "properties.text.type", "string")
 	assertJSONField(t, text.MessageSchema, "properties.content.type", "string")
@@ -1189,6 +1192,7 @@ func TestBuildDeliveryRequestUsesBuiltInProviderDefaultsWithoutLegacyURL(t *test
 			assert: func(t *testing.T, request BuiltRequest) {
 				requireRequest(t, request, "POST", "https://api.dingtalk.com/v1.0/robot/oToMessages/batchSend")
 				body := decodeRequestBody(t, request)
+				requireStringListField(t, body, "userIds", []string{"u1"})
 				requireBodyField(t, body, "msgKey", "sampleText")
 				var msgParam map[string]string
 				if err := json.Unmarshal([]byte(fmt.Sprint(body["msgParam"])), &msgParam); err != nil {
@@ -1942,6 +1946,27 @@ func assertJSONField(t *testing.T, raw json.RawMessage, path string, expected an
 	actual := jsonPathValue(object, strings.Split(path, "."))
 	if actual != expected {
 		t.Fatalf("expected %s=%v, got %v in %s", path, expected, actual, raw)
+	}
+}
+
+func assertJSONStringListField(t *testing.T, raw json.RawMessage, path string, expected []string) {
+	t.Helper()
+
+	var object any
+	if err := json.Unmarshal(raw, &object); err != nil {
+		t.Fatalf("decode json: %v", err)
+	}
+	actual, ok := jsonPathValue(object, strings.Split(path, ".")).([]any)
+	if !ok {
+		t.Fatalf("expected %s to be a string list, got %v in %s", path, actual, raw)
+	}
+	if len(actual) != len(expected) {
+		t.Fatalf("expected %s=%v, got %v in %s", path, expected, actual, raw)
+	}
+	for index, item := range actual {
+		if item != expected[index] {
+			t.Fatalf("expected %s=%v, got %v in %s", path, expected, actual, raw)
+		}
 	}
 }
 

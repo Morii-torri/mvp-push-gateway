@@ -47,11 +47,11 @@ func robotTextContentSchema() json.RawMessage {
 }
 
 func dingTalkRobotTextContentSchema() json.RawMessage {
-	return rawJSON(`{"type":"object","required":["content"],"properties":{"content":{"type":"string","title":"text","default":"{{ payload.content }}"}}}`)
+	return rawJSON(`{"type":"object","required":["content"],"properties":{"content":{"type":"string","title":"content","default":"{{ payload.content }}"}}}`)
 }
 
 func dingTalkRobotMarkdownContentSchema() json.RawMessage {
-	return rawJSON(`{"type":"object","required":["title","text"],"properties":{"title":{"type":"string","title":"Markdown 标题","default":"{{ payload.title }}"},"text":{"type":"string","title":"Markdown 内容","default":"{{ payload.content }}","format_hint":"支持标准 Markdown；换行用 \\n，空格可用 &nbsp;"}}}`)
+	return rawJSON(`{"type":"object","required":["title","text"],"field_order":["title","text"],"properties":{"title":{"type":"string","title":"Markdown 标题","default":"{{ payload.title }}"},"text":{"type":"string","title":"Markdown 内容","default":"{{ payload.content }}","format_hint":"支持标准 Markdown；换行用 \\n，空格可用 &nbsp;"}}}`)
 }
 
 func dingTalkWorkTextContentSchema() json.RawMessage {
@@ -59,7 +59,7 @@ func dingTalkWorkTextContentSchema() json.RawMessage {
 }
 
 func dingTalkWorkMarkdownContentSchema() json.RawMessage {
-	return rawJSON(`{"type":"object","required":["title","text"],"properties":{"title":{"type":"string","title":"title","default":"{{ payload.title }}"},"text":{"type":"string","title":"text","default":"{{ payload.content }}","format_hint":"支持标准 Markdown；换行用 \\n，空格可用 &nbsp;"}}}`)
+	return rawJSON(`{"type":"object","required":["title","text"],"field_order":["title","text"],"properties":{"title":{"type":"string","title":"title","default":"{{ payload.title }}"},"text":{"type":"string","title":"text","default":"{{ payload.content }}","format_hint":"支持标准 Markdown；换行用 \\n，空格可用 &nbsp;"}}}`)
 }
 
 func feishuGroupContentSchema() json.RawMessage {

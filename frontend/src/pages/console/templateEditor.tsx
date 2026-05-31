@@ -104,6 +104,8 @@ const messageTypeLabels: Record<string, string> = {
   text: '文本',
   markdown: 'Markdown',
   html: 'HTML',
+  sampleText: '文本（sampleText）',
+  sampleMarkdown: 'Markdown（sampleMarkdown）',
 };
 
 const templateGlobalDefaultValue = '-';
@@ -455,13 +457,13 @@ const fallbackTemplateSchemas: Record<ProviderKind, Record<string, { label: stri
   dingtalk_robot: {
     text: {
       label: '文本',
-      fields: [contentField('content', 'text', 'string', '通知', '{{ payload.content }}')],
+      fields: [contentField('content', 'content', 'string', '通知', '{{ payload.content }}')],
     },
     markdown: {
       label: 'Markdown',
       fields: [
-        contentField('text', 'Markdown 内容', 'string', '', '{{ payload.content }}', true, '支持标准 Markdown；换行用 \\n，空格可用 &nbsp;'),
         contentField('title', 'Markdown 标题', 'string', '通知', '{{ payload.title }}'),
+        contentField('text', 'Markdown 内容', 'string', '', '{{ payload.content }}', true, '支持标准 Markdown；换行用 \\n，空格可用 &nbsp;'),
       ],
     },
   },
@@ -551,6 +553,17 @@ function lockedTemplateMessageType(providerType: ProviderKind, messageType?: str
     return messageType === 'json' ? 'text' : messageType;
   }
   return messageType && locked.includes(messageType) ? messageType : locked[0];
+}
+
+function shouldShowTemplateMessageTypeSelector(providerType: ProviderKind, messageTypes: string[]): boolean {
+  return messageTypes.length > 1 && (providerType === 'dingtalk_robot' || providerType === 'dingtalk_work');
+}
+
+function templateMessageTypeOptions(messageTypes: string[]): Array<{ label: string; value: string }> {
+  return messageTypes.map((messageType) => ({
+    label: messageTypeLabels[messageType] ?? messageType,
+    value: messageType,
+  }));
 }
 
 function templateCapabilityRecords(
@@ -1603,6 +1616,7 @@ export function TemplateEditorForm({
   const barkBodyFormat = selectedBarkBodyFormat(value);
   const omitted = omittedTemplateFieldKeys(value);
   const visibleFields = view.fields.filter((field) => !omitted.has(field.key));
+  const showMessageTypeSelector = shouldShowTemplateMessageTypeSelector(value.targetProviderType, view.messageTypes);
   const updateBarkBodyFormat = (nextFormat: BarkBodyFormat) => {
     const nextDraft = {
       ...value,
@@ -1683,7 +1697,20 @@ export function TemplateEditorForm({
               />
             </Form.Item>
           ) : null}
-          <div className="template-content-fields">
+          <div className="template-content-fields" key={`${value.targetProviderType}:${view.messageType}`}>
+            {showMessageTypeSelector ? (
+              <div className="template-content-field template-content-field--format">
+                <div className="template-content-field__controls">
+                  <Form.Item label="内容格式" required>
+                    <Select
+                      value={view.messageType}
+                      options={templateMessageTypeOptions(view.messageTypes)}
+                      onChange={(messageType) => onChange(switchTemplateMessageType(value, messageType, capabilities))}
+                    />
+                  </Form.Item>
+                </div>
+              </div>
+            ) : null}
             {visibleFields.map((field) => {
               const fieldValue = value.fieldValues[field.key] ?? {
                 expression: '',

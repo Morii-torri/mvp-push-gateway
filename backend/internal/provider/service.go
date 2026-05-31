@@ -1546,6 +1546,12 @@ func formatRecipient(recipient any, format string) any {
 	case nil:
 		return ""
 	case string:
+		if format == "array" {
+			if strings.TrimSpace(typed) == "" {
+				return []string{}
+			}
+			return []string{typed}
+		}
 		return typed
 	case []string:
 		switch format {

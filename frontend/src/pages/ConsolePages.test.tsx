@@ -1131,11 +1131,12 @@ describe('critical console pages', () => {
     const dingTalkInput = templateVersionInputFromDraft(createTemplateDraft([], [], 'dingtalk_robot', 'markdown'));
     const dingTalkBody = JSON.parse(dingTalkInput.template_body) as Record<string, string>;
     expect(dingTalkMarkup).toContain('钉钉群机器人');
+    expect(dingTalkMarkup).toContain('内容格式');
     expect(dingTalkMarkup).toContain('title');
     expect(dingTalkMarkup).toContain('text');
     expect(dingTalkMarkup).toContain('支持标准 Markdown');
     expect(dingTalkMarkup).not.toContain('msgtype');
-    expect(Object.keys(dingTalkBody)).toEqual(['text', 'title']);
+    expect(Object.keys(dingTalkBody)).toEqual(['title', 'text']);
 
     for (const [providerType, label] of appTypes) {
       const markup = renderPage(
@@ -1163,11 +1164,37 @@ describe('critical console pages', () => {
     expect(dingTalkWorkInput.message_type).toBe('sampleMarkdown');
     expect(Object.keys(dingTalkWorkBody)).toEqual(['title', 'text']);
     expect(dingTalkWorkMarkup).toContain('钉钉工作消息');
+    expect(dingTalkWorkMarkup).toContain('内容格式');
+    expect(dingTalkWorkMarkup).toContain('sampleMarkdown');
 
     const dingTalkWorkText = templateVersionInputFromDraft(createTemplateDraft([], [], 'dingtalk_work', 'sampleText'));
     const dingTalkWorkTextBody = JSON.parse(dingTalkWorkText.template_body) as Record<string, string>;
     expect(dingTalkWorkText.message_type).toBe('sampleText');
     expect(Object.keys(dingTalkWorkTextBody)).toEqual(['content']);
+  });
+
+  it('switches DingTalk template fields from the content format selector', () => {
+    const robotDraft = createTemplateDraft([], [], 'dingtalk_robot', 'markdown');
+    const robotText = switchTemplateMessageType(robotDraft, 'text');
+    expect(robotText.messageType).toBe('text');
+    expect(Object.keys(JSON.parse(templateVersionInputFromDraft(robotText).template_body) as Record<string, string>)).toEqual(['content']);
+    const robotMarkdown = switchTemplateMessageType(robotText, 'markdown');
+    expect(robotMarkdown.messageType).toBe('markdown');
+    expect(Object.keys(JSON.parse(templateVersionInputFromDraft(robotMarkdown).template_body) as Record<string, string>)).toEqual([
+      'title',
+      'text',
+    ]);
+
+    const workDraft = createTemplateDraft([], [], 'dingtalk_work', 'sampleMarkdown');
+    const workText = switchTemplateMessageType(workDraft, 'sampleText');
+    expect(workText.messageType).toBe('sampleText');
+    expect(Object.keys(JSON.parse(templateVersionInputFromDraft(workText).template_body) as Record<string, string>)).toEqual(['content']);
+    const workMarkdown = switchTemplateMessageType(workText, 'sampleMarkdown');
+    expect(workMarkdown.messageType).toBe('sampleMarkdown');
+    expect(Object.keys(JSON.parse(templateVersionInputFromDraft(workMarkdown).template_body) as Record<string, string>)).toEqual([
+      'title',
+      'text',
+    ]);
   });
 
   it('uses Feishu app robot text-only template and app credentials', () => {
@@ -1221,7 +1248,7 @@ describe('critical console pages', () => {
     const input = templateVersionInputFromDraft(templateDraft);
     const body = JSON.parse(input.template_body) as Record<string, string>;
     expect(input.message_type).toBe('markdown');
-    expect(Object.keys(body)).toEqual(['text', 'title']);
+    expect(Object.keys(body)).toEqual(['title', 'text']);
     expect(templateMarkup).toContain('title');
     expect(templateMarkup).toContain('text');
     expect(templateMarkup).toContain('支持标准 Markdown');
