@@ -1,7 +1,7 @@
 -- +goose Up
 
 ALTER TABLE inbound_sources
-    ADD COLUMN do_not_disturb_config jsonb NOT NULL DEFAULT '{"enabled":false,"windows":[]}'::jsonb;
+    ADD COLUMN IF NOT EXISTS do_not_disturb_config jsonb NOT NULL DEFAULT '{"enabled":false,"windows":[]}'::jsonb;
 
 ALTER TABLE message_records
     DROP CONSTRAINT IF EXISTS message_records_status_check;

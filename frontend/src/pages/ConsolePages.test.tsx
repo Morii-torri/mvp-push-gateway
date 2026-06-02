@@ -79,12 +79,14 @@ import {
   providerTestSendPreview,
   providerTestPayload,
   providerShowsTokenCacheStatus,
+  InboundStatusCell,
   ProviderTypeCell,
   SourceAuthModeCell,
   SourceAllowlistCell,
   SourceCodeCell,
   UserIdentitySummaryCell,
   buildSourceAccessGuide,
+  overviewPlatformRankingRowKey,
 } from './ConsolePages';
 import type { ChannelApiRecord, OrgUnitApiRecord, ProviderCapabilityApiRecord, TemplateApiRecord, TemplateVersionApiRecord } from '../api/console';
 import { getProviderTypeLabel } from '../utils/labels';
@@ -191,6 +193,25 @@ describe('critical console pages', () => {
     expect(queueMarkup).not.toContain('任务类型：出站发送');
   });
 
+  it('uses channel id as the stable overview platform ranking row key', () => {
+    expect(
+      overviewPlatformRankingRowKey({
+        id: 'channel-1',
+        channelId: 'channel-1',
+        name: 'Webhook A',
+        providerType: '通用 Webhook',
+        sent: '2',
+        success: '50.00%',
+        qps: '0.01',
+        failures: '1',
+        rateLimited: 0,
+        latency: '100 ms',
+        p95: '100 ms',
+        lastError: '-',
+      }),
+    ).toBe('channel-1');
+  });
+
   it('renders source and provider pages with chinese status and platform mappings', () => {
     const sourcesMarkup = renderPage(
       <SourcesPage lastUpdated={lastUpdated} onRefresh={() => undefined} />,
@@ -236,6 +257,14 @@ describe('critical console pages', () => {
 
     expect(markup).toContain('Token + HMAC 双校验');
     expect(markup).toContain('source-auth-mode-cell');
+    expect(markup).not.toContain('premium-status-tag');
+  });
+
+  it('renders inbound status as quiet inline text instead of a status pill', () => {
+    const markup = renderPage(<InboundStatusCell value="accepted" />);
+
+    expect(markup).toContain('已接收');
+    expect(markup).toContain('inbound-status-cell');
     expect(markup).not.toContain('premium-status-tag');
   });
 

@@ -543,7 +543,7 @@ func (r Repository) getOverviewSummary(ctx context.Context, windowStart, now tim
 	err := r.pool.QueryRow(ctx, `
 		WITH delivery_summary AS (
 			SELECT
-				count(*) FILTER (WHERE status IN ('sent', 'failed', 'deduped', 'skipped'))::integer AS total_sent,
+				count(*) FILTER (WHERE status IN ('sent', 'failed'))::integer AS total_sent,
 				count(*) FILTER (WHERE status = 'sent')::integer AS successful,
 				count(*) FILTER (WHERE status = 'failed')::integer AS failed
 			FROM delivery_attempts
@@ -591,7 +591,7 @@ func (r Repository) getOverviewTrend(ctx context.Context, windowStart, now time.
 		attempts AS (
 			SELECT
 				date_bin($3::interval, COALESCE(finished_at, queued_at), $4::timestamptz) AS bucket_start,
-				count(*) FILTER (WHERE status IN ('sent', 'failed', 'deduped', 'skipped'))::integer AS sent,
+				count(*) FILTER (WHERE status IN ('sent', 'failed'))::integer AS sent,
 				count(*) FILTER (WHERE status = 'sent')::integer AS successful,
 				count(*) FILTER (WHERE status = 'failed')::integer AS failed
 			FROM delivery_attempts
@@ -636,7 +636,7 @@ func (r Repository) getPlatformRankings(ctx context.Context, windowStart, now ti
 		WITH attempt_stats AS (
 			SELECT
 				channel_id,
-				count(*) FILTER (WHERE status IN ('sent', 'failed', 'deduped', 'skipped'))::integer AS sent,
+				count(*) FILTER (WHERE status IN ('sent', 'failed'))::integer AS sent,
 				count(*) FILTER (WHERE status = 'sent')::integer AS successful,
 				count(*) FILTER (WHERE status = 'failed')::integer AS failed,
 				COALESCE(
@@ -649,6 +649,7 @@ func (r Repository) getPlatformRankings(ctx context.Context, windowStart, now ti
 				)::integer AS p95_duration_ms
 			FROM delivery_attempts
 			WHERE channel_id IS NOT NULL
+				AND status IN ('sent', 'failed')
 				AND COALESCE(finished_at, queued_at) >= $1
 				AND COALESCE(finished_at, queued_at) <= $2
 			GROUP BY channel_id

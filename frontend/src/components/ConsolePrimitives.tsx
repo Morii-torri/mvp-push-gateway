@@ -370,25 +370,53 @@ export function LineChart({
   points,
   labels,
   seriesLabel = '趋势',
+  series,
 }: {
   points: number[];
   labels?: string[];
   seriesLabel?: string;
+  series?: Array<{
+    key: string;
+    label: string;
+    color: string;
+    points: number[];
+  }>;
 }) {
   const width = 720;
   const height = 260;
   const padding = { top: 24, right: 26, bottom: 40, left: 50 };
-  const max = Math.max(...points, 1);
-  const min = Math.min(...points, 0);
+  const normalizedSeries =
+    series && series.length > 0
+      ? series
+      : [
+          {
+            key: 'default',
+            label: seriesLabel,
+            color: '#1677ff',
+            points,
+          },
+        ];
+  const allPoints = normalizedSeries.flatMap((item) => item.points);
+  const primarySeries = normalizedSeries[0];
+  const max = Math.max(...allPoints, 1);
+  const min = Math.min(...allPoints, 0);
   const range = Math.max(max - min, 1);
   const innerWidth = width - padding.left - padding.right;
   const innerHeight = height - padding.top - padding.bottom;
-  const coords = points.map((point, index) => {
-    const x = padding.left + (innerWidth * index) / Math.max(points.length - 1, 1);
+  const seriesCoords = normalizedSeries.map((item) => ({
+    ...item,
+    coords: item.points.map((point, index) => {
+      const x = padding.left + (innerWidth * index) / Math.max(item.points.length - 1, 1);
+      const y = padding.top + innerHeight - ((point - min) / range) * innerHeight;
+      return { x, y, point };
+    }),
+  }));
+  const primaryCoords = primarySeries.points.map((point, index) => {
+    const x = padding.left + (innerWidth * index) / Math.max(primarySeries.points.length - 1, 1);
     const y = padding.top + innerHeight - ((point - min) / range) * innerHeight;
     return { x, y, point };
   });
-  const linePath = coords.map(({ x, y }, index) => `${index === 0 ? 'M' : 'L'} ${x} ${y}`).join(' ');
+  const linePath = primaryCoords.map(({ x, y }, index) => `${index === 0 ? 'M' : 'L'} ${x} ${y}`).join(' ');
   const areaPath = `${linePath} L ${padding.left + innerWidth} ${padding.top + innerHeight} L ${padding.left} ${
     padding.top + innerHeight
   } Z`;
@@ -398,7 +426,9 @@ export function LineChart({
     .map((label, index) => ({ label, index }))
     .filter((_, index) => shouldRenderAxisLabel(index, xLabels.length));
   const xLabelDenominator =
-    labels?.length === points.length ? Math.max(points.length - 1, 1) : Math.max(xLabels.length - 1, 1);
+    labels?.length === primarySeries.points.length
+      ? Math.max(primarySeries.points.length - 1, 1)
+      : Math.max(xLabels.length - 1, 1);
 
   return (
     <div className="line-chart" aria-label={seriesLabel}>
@@ -443,16 +473,19 @@ export function LineChart({
           );
         })}
         <path d={areaPath} fill={`url(#chart-area-${seriesLabel})`} />
-        <path d={linePath} className="chart-line" />
-        {coords.map(({ x, y, point }, index) =>
-          shouldRenderPointLabel(point, index, coords.length) ? (
+        {seriesCoords.map((item) => {
+          const path = item.coords.map(({ x, y }, index) => `${index === 0 ? 'M' : 'L'} ${x} ${y}`).join(' ');
+          return <path key={item.key} d={path} className="chart-line" style={{ stroke: item.color }} />;
+        })}
+        {primaryCoords.map(({ x, y, point }, index) =>
+          shouldRenderPointLabel(point, index, primaryCoords.length) ? (
             <g key={`${point}-${index}`}>
-              <circle cx={x} cy={y} r="4" className="chart-point" />
+              <circle cx={x} cy={y} r="4" className="chart-point" style={{ fill: primarySeries.color }} />
               <text
                 x={x}
                 y={y - 10}
-                dx={pointLabelOffset(index, coords.length)}
-                textAnchor={pointLabelAnchor(index, coords.length)}
+                dx={pointLabelOffset(index, primaryCoords.length)}
+                textAnchor={pointLabelAnchor(index, primaryCoords.length)}
                 className="chart-point-label"
               >
                 {point}
@@ -461,6 +494,15 @@ export function LineChart({
           ) : null,
         )}
       </svg>
+      {series && series.length > 0 ? (
+        <div className="legend-row">
+          {normalizedSeries.map((item) => (
+            <Tag key={item.key} color={item.color}>
+              {item.label}
+            </Tag>
+          ))}
+        </div>
+      ) : null}
     </div>
   );
 }

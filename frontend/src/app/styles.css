@@ -1188,6 +1188,64 @@ body {
   --source-auth-color: #98a2b3;
 }
 
+.inbound-status-cell {
+  --inbound-status-color: #64748b;
+  display: inline-flex;
+  max-width: 100%;
+  min-width: 0;
+  align-items: center;
+  gap: 7px;
+  color: #344054;
+  font-size: 13px;
+  font-weight: 550;
+  line-height: 1.3;
+  vertical-align: middle;
+}
+
+.inbound-status-cell__dot {
+  width: 7px;
+  height: 7px;
+  flex: 0 0 7px;
+  border-radius: 999px;
+  background: var(--inbound-status-color);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--inbound-status-color) 12%, transparent);
+}
+
+.inbound-status-cell__label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.inbound-status-cell--processing {
+  --inbound-status-color: #1677ff;
+}
+
+.inbound-status-cell--success {
+  --inbound-status-color: #12b76a;
+}
+
+.inbound-status-cell--cyan {
+  --inbound-status-color: #0891b2;
+}
+
+.inbound-status-cell--orange {
+  --inbound-status-color: #f97316;
+}
+
+.inbound-status-cell--warning {
+  --inbound-status-color: #f79009;
+}
+
+.inbound-status-cell--error {
+  --inbound-status-color: #f04438;
+}
+
+.inbound-status-cell--default {
+  --inbound-status-color: #98a2b3;
+}
+
 .provider-type-cell {
   display: inline-flex;
   max-width: 100%;

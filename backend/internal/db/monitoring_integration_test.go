@@ -160,6 +160,7 @@ func TestRepositoryGetOverviewStatisticsBuildsStable24hDashboard(t *testing.T) {
 	now := time.Date(2026, 5, 9, 12, 0, 0, 0, time.UTC)
 	channelA := createTestChannel(t, ctx, repository, "overview-webhook-a")
 	channelB := createTestChannel(t, ctx, repository, "overview-webhook-b")
+	channelC := createTestChannel(t, ctx, repository, "overview-webhook-c")
 
 	insertWorkerMetric(t, ctx, pool, workerMetricRow{
 		ID:            testUUID(12101),
@@ -224,17 +225,67 @@ func TestRepositoryGetOverviewStatisticsBuildsStable24hDashboard(t *testing.T) {
 		FinishedAt: now.Add(-45*time.Minute + 2*time.Second),
 		DurationMS: 1000,
 	})
+	insertDeliveryAttemptForStats(t, ctx, pool, deliveryAttemptRow{
+		SourceID:   testUUID(12112),
+		MessageID:  testUUID(12113),
+		AttemptID:  testUUID(12114),
+		ChannelID:  channelA.ID,
+		Status:     "deduped",
+		AttemptNo:  1,
+		QueuedAt:   now.Add(-30 * time.Minute),
+		StartedAt:  now.Add(-30*time.Minute + time.Second),
+		FinishedAt: now.Add(-30*time.Minute + 2*time.Second),
+		DurationMS: 1000,
+	})
+	insertDeliveryAttemptForStats(t, ctx, pool, deliveryAttemptRow{
+		SourceID:   testUUID(12115),
+		MessageID:  testUUID(12116),
+		AttemptID:  testUUID(12117),
+		ChannelID:  channelA.ID,
+		Status:     "skipped",
+		AttemptNo:  1,
+		QueuedAt:   now.Add(-15 * time.Minute),
+		StartedAt:  now.Add(-15*time.Minute + time.Second),
+		FinishedAt: now.Add(-15*time.Minute + 2*time.Second),
+		DurationMS: 1000,
+	})
+	insertDeliveryAttemptForStats(t, ctx, pool, deliveryAttemptRow{
+		SourceID:   testUUID(12118),
+		MessageID:  testUUID(12119),
+		AttemptID:  testUUID(12120),
+		ChannelID:  channelC.ID,
+		Status:     "skipped",
+		AttemptNo:  1,
+		QueuedAt:   now.Add(-10 * time.Minute),
+		StartedAt:  now.Add(-10*time.Minute + time.Second),
+		FinishedAt: now.Add(-10*time.Minute + 2*time.Second),
+		DurationMS: 1000,
+	})
 
 	overview, err := repository.GetOverviewStatistics(ctx, statistics.QueryParams{Now: now})
 	if err != nil {
 		t.Fatalf("get overview statistics: %v", err)
 	}
 
-	if overview.Summary.TotalSent != 3 {
-		t.Fatalf("expected total sent 3, got %d", overview.Summary.TotalSent)
+	var totalAttempts int
+	var auxiliaryAttempts int
+	if err := pool.QueryRow(ctx, `
+		SELECT
+			count(*)::integer,
+			count(*) FILTER (WHERE status IN ('deduped', 'skipped'))::integer
+		FROM delivery_attempts
+	`).Scan(&totalAttempts, &auxiliaryAttempts); err != nil {
+		t.Fatalf("count delivery attempts: %v", err)
 	}
-	if overview.Summary.TotalReceived != 3 {
-		t.Fatalf("expected total received 3, got %d", overview.Summary.TotalReceived)
+	if totalAttempts != 6 || auxiliaryAttempts != 3 {
+		t.Fatalf("expected 6 attempts including 3 deduped/skipped rows, got total=%d auxiliary=%d", totalAttempts, auxiliaryAttempts)
+	}
+
+	if overview.Summary.TotalSent != 3 {
+		t.Fatalf("expected total sent to exclude deduped/skipped attempts, got %d", overview.Summary.TotalSent)
+	}
+	if overview.Summary.TotalReceived != 6 {
+		t.Fatalf("expected total received 6, got %d", overview.Summary.TotalReceived)
 	}
 	if overview.Summary.SuccessRate != 66.67 {
 		t.Fatalf("expected success rate 66.67, got %v", overview.Summary.SuccessRate)
@@ -242,14 +293,33 @@ func TestRepositoryGetOverviewStatisticsBuildsStable24hDashboard(t *testing.T) {
 	if overview.Summary.Failed != 1 {
 		t.Fatalf("expected failed 1, got %d", overview.Summary.Failed)
 	}
-	if len(overview.Trend) != 24 {
-		t.Fatalf("expected 24 trend buckets, got %d", len(overview.Trend))
+	if len(overview.Trend) != 25 {
+		t.Fatalf("expected 25 trend buckets for inclusive 24h window, got %d", len(overview.Trend))
+	}
+	totalTrendSent := 0
+	totalTrendSuccessful := 0
+	totalTrendFailed := 0
+	for _, point := range overview.Trend {
+		totalTrendSent += point.Sent
+		totalTrendSuccessful += point.Successful
+		totalTrendFailed += point.Failed
+	}
+	if totalTrendSent != 3 || totalTrendSuccessful != 2 || totalTrendFailed != 1 {
+		t.Fatalf("expected trend totals to ignore deduped/skipped, got sent=%d successful=%d failed=%d", totalTrendSent, totalTrendSuccessful, totalTrendFailed)
 	}
 	if len(overview.PlatformRankings) != 2 {
 		t.Fatalf("expected 2 platform ranking rows, got %d", len(overview.PlatformRankings))
 	}
-	if overview.PlatformRankings[0].Sent < overview.PlatformRankings[1].Sent {
-		t.Fatalf("expected rankings sorted by send volume descending, got %+v", overview.PlatformRankings)
+	if overview.PlatformRankings[0].ChannelID != channelA.ID || overview.PlatformRankings[0].Sent != 2 || overview.PlatformRankings[0].Failures != 1 || overview.PlatformRankings[0].SuccessRate != 50 {
+		t.Fatalf("expected channel A to rank by 2 real sent/failed attempts, got %+v", overview.PlatformRankings[0])
+	}
+	if overview.PlatformRankings[1].ChannelID != channelB.ID || overview.PlatformRankings[1].Sent != 1 || overview.PlatformRankings[1].Failures != 0 || overview.PlatformRankings[1].SuccessRate != 100 {
+		t.Fatalf("expected channel B to rank by 1 real sent/failed attempt, got %+v", overview.PlatformRankings[1])
+	}
+	for _, ranking := range overview.PlatformRankings {
+		if ranking.ChannelID == channelC.ID {
+			t.Fatalf("expected auxiliary-only channel C to be excluded from platform rankings, got %+v", overview.PlatformRankings)
+		}
 	}
 	if len(overview.FailureRankings) == 0 || overview.FailureRankings[0].Reason != "目标平台超时" {
 		t.Fatalf("expected timeout in failure rankings, got %+v", overview.FailureRankings)

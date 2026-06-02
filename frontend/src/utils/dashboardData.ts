@@ -108,6 +108,8 @@ export type CleanupRow = {
 };
 
 export type PlatformRankingRow = {
+  id: string;
+  channelId: string;
   name: string;
   providerType: string;
   sent: string;
@@ -118,6 +120,13 @@ export type PlatformRankingRow = {
   latency: string;
   p95: string;
   lastError: string;
+};
+
+export type TrendSeries = {
+  key: string;
+  label: string;
+  color: string;
+  points: number[];
 };
 
 export type FailureReasonRow = {
@@ -138,6 +147,7 @@ export type OverviewViewModel = {
   metrics: Metric[];
   trendPoints: number[];
   trendLabels: string[];
+  trendSeries: TrendSeries[];
   platformRanking: PlatformRankingRow[];
   failureReasons: FailureReasonRow[];
   recentAnomalies: RecentAnomalyRow[];
@@ -153,17 +163,19 @@ export type QueueMonitoringViewModel = {
 };
 
 export function defaultOverviewViewModel(): OverviewViewModel {
+  const defaultWindow = '24h';
   return {
     metrics: [
-      metricCard('received', '总接收量', '0 条', '入站消息总量', 'flat', 'blue'),
-      metricCard('sent', '总发送量', '0 条', '24 小时窗口', 'flat', 'blue'),
-      metricCard('successful', '成功发送量', '0 条', '用于总览成功吞吐', 'flat', 'green'),
-      metricCard('failed', '失败发送量', '0 条', '24 小时失败总量', 'flat', 'red'),
-      metricCard('success', '成功率', '0.00%', '0 条成功', 'flat', 'green'),
-      metricCard('ops', '平均 OPS', '0', '按 24 小时平均计算', 'flat', 'purple'),
+      metricCard('received', '总接收量', '0 条', `${windowCopy(defaultWindow)}入站总量`, 'flat', 'blue'),
+      metricCard('sent', '总发送量', '0 条', `${windowCopy(defaultWindow)}窗口`, 'flat', 'blue'),
+      metricCard('successful', '成功发送量', '0 条', `${windowCopy(defaultWindow)}成功总量`, 'flat', 'green'),
+      metricCard('failed', '失败发送量', '0 条', `${windowCopy(defaultWindow)}失败总量`, 'flat', 'red'),
+      metricCard('success', '成功率', '0.00%', `${windowCopy(defaultWindow)}成功 0 条`, 'flat', 'green'),
+      metricCard('ops', '平均 OPS', '0', `按${windowCopy(defaultWindow)}平均计算`, 'flat', 'purple'),
     ],
     trendPoints: zeroTrendPoints(),
     trendLabels: zeroTrendLabels(),
+    trendSeries: defaultOverviewTrendSeries(),
     platformRanking: [],
     failureReasons: [],
     recentAnomalies: [],
@@ -194,18 +206,22 @@ export function defaultQueueMonitoringViewModel(): QueueMonitoringViewModel {
 }
 
 export function buildOverviewViewModel(data: OverviewApiResponse, window: DashboardWindow = '24h'): OverviewViewModel {
+  const trendSeries = overviewTrendSeries(data);
   return {
     metrics: [
-      metricCard('received', '总接收量', `${formatInteger(data.summary.total_received)} 条`, '入站消息总量', 'flat', 'blue'),
-      metricCard('sent', '总发送量', `${formatInteger(data.summary.total_sent)} 条`, '24 小时窗口', 'flat', 'blue'),
-      metricCard('successful', '成功发送量', `${formatInteger(data.summary.successful)} 条`, '用于总览成功吞吐', 'flat', 'green'),
-      metricCard('failed', '失败发送量', `${formatInteger(data.summary.failed)} 条`, '24 小时失败总量', 'up', 'red'),
-      metricCard('success', '成功率', `${formatPercent(data.summary.success_rate)}`, `${formatInteger(data.summary.successful)} 条成功`, 'up', 'green'),
-      metricCard('ops', '平均 OPS', `${formatDecimal(data.summary.average_qps)}`, '按 24 小时平均计算', 'flat', 'purple'),
+      metricCard('received', '总接收量', `${formatInteger(data.summary.total_received)} 条`, `${windowCopy(window)}入站总量`, 'flat', 'blue'),
+      metricCard('sent', '总发送量', `${formatInteger(data.summary.total_sent)} 条`, `${windowCopy(window)}窗口`, 'flat', 'blue'),
+      metricCard('successful', '成功发送量', `${formatInteger(data.summary.successful)} 条`, `${windowCopy(window)}成功总量`, 'flat', 'green'),
+      metricCard('failed', '失败发送量', `${formatInteger(data.summary.failed)} 条`, `${windowCopy(window)}失败总量`, 'up', 'red'),
+      metricCard('success', '成功率', `${formatPercent(data.summary.success_rate)}`, `${windowCopy(window)}成功 ${formatInteger(data.summary.successful)} 条`, 'up', 'green'),
+      metricCard('ops', '平均 OPS', `${formatDecimal(data.summary.average_qps)}`, `按${windowCopy(window)}平均计算`, 'flat', 'purple'),
     ],
-    trendPoints: data.trend.map((item) => item.sent),
+    trendPoints: trendSeries[0]?.points ?? [],
     trendLabels: trendBucketLabels(data.trend, window),
+    trendSeries,
     platformRanking: data.platform_rankings.map((item) => ({
+      id: item.channel_id,
+      channelId: item.channel_id,
       name: item.name,
       providerType: getProviderTypeLabel(item.provider_type),
       sent: formatInteger(item.sent),
@@ -343,6 +359,32 @@ function queueTrendPoints(data: QueueMonitoringApiResponse): number[] {
   );
 }
 
+function defaultOverviewTrendSeries(): TrendSeries[] {
+  return [
+    { key: 'sent', label: '发送量', color: '#1677ff', points: zeroTrendPoints() },
+    { key: 'successful', label: '成功量', color: '#22c55e', points: zeroTrendPoints() },
+    { key: 'failed', label: '失败量', color: '#ef4444', points: zeroTrendPoints() },
+    { key: 'qps', label: 'QPS', color: '#7c3aed', points: zeroTrendPoints() },
+  ];
+}
+
+function overviewTrendSeries(data: OverviewApiResponse): TrendSeries[] {
+  if (data.trend.length === 0) {
+    return defaultOverviewTrendSeries();
+  }
+  return [
+    { key: 'sent', label: '发送量', color: '#1677ff', points: data.trend.map((item) => normalizeTrendPoint(item.sent)) },
+    {
+      key: 'successful',
+      label: '成功量',
+      color: '#22c55e',
+      points: data.trend.map((item) => normalizeTrendPoint(item.successful)),
+    },
+    { key: 'failed', label: '失败量', color: '#ef4444', points: data.trend.map((item) => normalizeTrendPoint(item.failed)) },
+    { key: 'qps', label: 'QPS', color: '#7c3aed', points: data.trend.map((item) => normalizeTrendPoint(item.qps)) },
+  ];
+}
+
 function trendBucketLabels(items: Array<{ bucket_start: string }>, window: DashboardWindow): string[] {
   if (items.length === 0) {
     return zeroTrendLabels();
@@ -368,6 +410,29 @@ function formatTrendBucketLabel(value: string, window: DashboardWindow): string 
     minute: '2-digit',
     hour12: false,
   }).format(date);
+}
+
+function windowCopy(window: DashboardWindow): string {
+  switch (window) {
+    case '15m':
+      return '最近 15 分钟';
+    case '1h':
+      return '最近 1 小时';
+    case '6h':
+      return '最近 6 小时';
+    case '7d':
+      return '最近 7 天';
+    case '24h':
+    default:
+      return '最近 24 小时';
+  }
+}
+
+function normalizeTrendPoint(value: number): number {
+  if (value === undefined || value === null || Number.isNaN(value) || typeof value !== 'number') {
+    return 0;
+  }
+  return Math.max(0, value);
 }
 
 function formatInteger(value: number): string {

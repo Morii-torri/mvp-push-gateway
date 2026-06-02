@@ -839,6 +839,16 @@ export function SourceAuthModeCell({ value }: { value: SourceRecord['authMode'] 
   );
 }
 
+export function InboundStatusCell({ value }: { value: MessageLog['status'] }) {
+  const meta = getInboundStatusMeta(value);
+  return (
+    <span className={`inbound-status-cell inbound-status-cell--${meta.color || 'default'}`}>
+      <span className="inbound-status-cell__dot" />
+      <span className="inbound-status-cell__label">{meta.label}</span>
+    </span>
+  );
+}
+
 export function ProviderTypeCell({ value }: { value: ProviderRecord['providerType'] }) {
   const meta = providerBrandMeta[value] || defaultBrandMeta;
   return (
@@ -1897,13 +1907,12 @@ export function OverviewPage({ lastUpdated, onRefresh }: ConsolePageProps) {
               onChange={(value) => setWindowValue(value as DashboardWindow)}
             />
           </div>
-          <LineChart points={viewModel.trendPoints} labels={viewModel.trendLabels} seriesLabel="消息发送趋势" />
-          <div className="legend-row">
-            <Tag color="blue">发送量</Tag>
-            <Tag color="green">成功量</Tag>
-            <Tag color="red">失败量</Tag>
-            <Tag color="purple">QPS</Tag>
-          </div>
+          <LineChart
+            points={viewModel.trendPoints}
+            labels={viewModel.trendLabels}
+            series={viewModel.trendSeries}
+            seriesLabel="消息发送趋势"
+          />
         </section>
 
         <section className="analytics-panel">
@@ -1950,7 +1959,7 @@ export function OverviewPage({ lastUpdated, onRefresh }: ConsolePageProps) {
         className="overview-ranking-list"
       >
         <Table
-          rowKey="name"
+          rowKey={overviewPlatformRankingRowKey}
           size="middle"
           pagination={false}
           columns={rankingColumns}
@@ -1961,6 +1970,10 @@ export function OverviewPage({ lastUpdated, onRefresh }: ConsolePageProps) {
       </ListContainer>
     </PageFrame>
   );
+}
+
+export function overviewPlatformRankingRowKey(record: OverviewViewModel['platformRanking'][number]): string {
+  return record.channelId || record.id || record.name;
 }
 
 export function SourcesPage({ lastUpdated, onRefresh }: ConsolePageProps) {
@@ -7524,7 +7537,7 @@ export function MessageLogsPage({ lastUpdated, onRefresh }: ConsolePageProps) {
       title: '入站状态',
       dataIndex: 'status',
       width: 110,
-      render: (value: MessageLog['status']) => <StatusTag meta={getInboundStatusMeta(value)} />,
+      render: (value: MessageLog['status']) => <InboundStatusCell value={value} />,
     },
     { title: '命中路由', dataIndex: 'matchedRoute', width: 150 },
     {

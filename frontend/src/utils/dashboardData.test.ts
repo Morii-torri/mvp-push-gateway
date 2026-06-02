@@ -62,9 +62,18 @@ describe('dashboard data mapping', () => {
     expect(viewModel.metrics[0]?.value).toBe('300 条');
     expect(viewModel.metrics[1]?.label).toBe('总发送量');
     expect(viewModel.metrics[1]?.value).toBe('240 条');
+    expect(buildOverviewViewModel(overview, '1h').metrics[1]?.delta).toBe('最近 1 小时窗口');
+    expect(buildOverviewViewModel(overview, '7d').metrics[5]?.delta).toBe('按最近 7 天平均计算');
     expect(viewModel.metrics[4]?.value).toBe('87.50%');
     expect(viewModel.trendPoints).toEqual([12]);
+    expect(viewModel.trendSeries).toEqual([
+      { key: 'sent', label: '发送量', points: [12], color: '#1677ff' },
+      { key: 'successful', label: '成功量', points: [10], color: '#22c55e' },
+      { key: 'failed', label: '失败量', points: [2], color: '#ef4444' },
+      { key: 'qps', label: 'QPS', points: [0.2], color: '#7c3aed' },
+    ]);
     expect(buildOverviewViewModel(overview, '1h').trendLabels).toEqual(['18:00']);
+    expect(viewModel.platformRanking[0]?.id).toBe('channel-1');
     expect(viewModel.platformRanking[0]?.providerType).toBe('通用 Webhook');
     expect(viewModel.platformRanking[0]?.lastError).toBe('目标平台超时');
     expect(viewModel.failureReasons[0]?.reason).toBe('目标平台超时');

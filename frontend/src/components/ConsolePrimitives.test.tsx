@@ -44,4 +44,22 @@ describe('LineChart', () => {
     expect(markup).toContain('text-anchor="end"');
     expect(markup).toContain('dx="-6"');
   });
+
+  it('renders supplied multi-series lines and labels', () => {
+    const markup = renderToStaticMarkup(
+      <LineChart
+        points={[1, 2]}
+        labels={['16:10', '16:15']}
+        series={[
+          { key: 'sent', label: '发送量', points: [1, 2], color: '#1677ff' },
+          { key: 'qps', label: 'QPS', points: [0.1, 0.2], color: '#7c3aed' },
+        ]}
+        seriesLabel="消息发送趋势"
+      />,
+    );
+
+    expect(markup).toContain('发送量');
+    expect(markup).toContain('QPS');
+    expect(markup.match(/chart-line/g)?.length).toBeGreaterThanOrEqual(2);
+  });
 });
