@@ -15,7 +15,7 @@ import Typography from 'antd/es/typography';
 import Segmented from 'antd/es/segmented';
 import Tag from 'antd/es/tag';
 import Alert from 'antd/es/alert';
-import { ReloadOutlined, SyncOutlined } from '@ant-design/icons';
+import { DeleteOutlined, PlusOutlined, ReloadOutlined, SyncOutlined } from '@ant-design/icons';
 
 
 import {
@@ -55,7 +55,7 @@ type ProviderConfigField = {
   options?: Array<{ label: string; value: string }>;
 };
 
-type ProviderFieldValue = string | number | boolean;
+type ProviderFieldValue = string | number | boolean | Record<string, string>;
 type ProviderFieldValues = Record<string, ProviderFieldValue>;
 
 type ProviderCapabilityView = {
@@ -176,8 +176,7 @@ const emailSecurityOptions = [
 
 const webhookMethodOptions = [
   { label: 'POST', value: 'POST' },
-  { label: 'PUT', value: 'PUT' },
-  { label: 'PATCH', value: 'PATCH' },
+  { label: 'GET', value: 'GET' },
 ];
 
 const selfAuthModeOptions = [
@@ -207,7 +206,7 @@ const providerPresets: Record<ProviderKind, ProviderPreset> = {
     tokenResponsePath: '-',
     tokenPlacement: '-',
     sendEndpoint: '',
-    recipientMapping: 'Webhook URL 可使用接收人或消息上下文占位符',
+    recipientMapping: 'Webhook URL 可使用 {{ identity }} 占位符',
     bodyMapping: '模板正文直接作为 JSON Body',
     qps: 50,
     concurrency: 16,
@@ -215,8 +214,8 @@ const providerPresets: Record<ProviderKind, ProviderPreset> = {
     retryPolicy: '3 次指数退避',
     retryInterval: '1s / 3s / 9s',
     deadLetterPolicy: '全局默认：重试耗尽或上级错误进入死信',
-    testRecipient: '-',
-    testBody: 'Webhook 测试消息',
+    testRecipient: '',
+    testBody: '{\n  "title": "告警标题",\n  "level": "critical",\n  "content": "告警内容",\n  "biz_id": "order-10001",\n  "timestamp": "2026-06-02T10:00:00+08:00"\n}',
   },
   self: {
     tokenEndpoint: '下级来源 Token / HMAC',
@@ -576,7 +575,7 @@ export function providerCapabilityView(
 
 function providerVisibleConfigFields(providerType: ProviderKind, fields: ProviderConfigField[]): ProviderConfigField[] {
   const hiddenKeysByProvider: Partial<Record<ProviderKind, Set<string>>> = {
-    webhook: new Set(['secret', 'headers', 'body', 'recipient']),
+    webhook: new Set(['secret', 'body', 'recipient']),
     self: new Set(['api_prefix', 'payload_mode', 'include_trace_id', 'include_source_context']),
     pushplus: new Set(['token', 'topic', 'template', 'channel']),
     wxpusher: new Set(['spt', 'mode', 'content_type']),
@@ -590,6 +589,9 @@ function providerVisibleConfigFields(providerType: ProviderKind, fields: Provide
       if (providerType === 'self' && field.target === 'send_config' && field.key === 'source_code') {
         return false;
       }
+      if (providerType === 'webhook' && field.key === 'headers' && field.target !== 'send_config') {
+        return false;
+      }
       return hidden ? !hidden.has(field.key) : true;
     })
     .map((field) => normalizeProviderConfigField(providerType, field));
@@ -601,7 +603,7 @@ function normalizeProviderConfigField(providerType: ProviderKind, field: Provide
       return {
         ...field,
         label: 'Webhook URL',
-        placeholder: field.placeholder || 'https://example.com/webhook/{{ recipient }}',
+        placeholder: field.placeholder || 'https://example.com/webhook/{{ identity }}',
       };
     }
     if (field.key === 'method') {
@@ -611,6 +613,12 @@ function normalizeProviderConfigField(providerType: ProviderKind, field: Provide
         inputType: 'select',
         defaultValue: field.defaultValue || 'POST',
         options: webhookMethodOptions,
+      };
+    }
+    if (field.key === 'headers') {
+      return {
+        ...field,
+        label: '请求 Header',
       };
     }
   }
@@ -656,7 +664,7 @@ function normalizedProviderMessageTypes(messageTypes: string[]): string[] {
   const normalized = Array.from(
     new Set(
       messageTypes.map((messageType) =>
-        messageType === 'html' || messageType === 'markdown' ? messageType : 'text',
+        messageType === 'json' || messageType === 'html' || messageType === 'markdown' ? messageType : 'text',
       ),
     ),
   );
@@ -779,6 +787,9 @@ function providerFieldOptionsFromSchema(value: Record<string, JSONValue>): Array
 function providerFieldDefaultValue(value: JSONValue | undefined): ProviderFieldValue | undefined {
   if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
     return value;
+  }
+  if (isRecord(value)) {
+    return stringRecordFromJSON(value);
   }
   return undefined;
 }
@@ -979,8 +990,9 @@ function fallbackProviderFields(providerType: ProviderKind): ProviderConfigField
   }
   if (providerType === 'webhook') {
     return [
-      field('url', 'Webhook URL', 'send_config', 'text', true, 'https://example.com/webhook/{{ recipient }}'),
+      field('url', 'Webhook URL', 'send_config', 'text', true, 'https://example.com/webhook/{{ identity }}'),
       field('method', '请求方法', 'send_config', 'select', false, '', 'POST', 'string', '', webhookMethodOptions),
+      field('headers', '请求 Header', 'send_config', 'textarea', false, '', {}),
     ];
   }
   if (providerType === 'pushplus') {
@@ -1178,6 +1190,8 @@ function fieldValuesFromConfigs(
       const rawValue = config[field.key];
       if (typeof rawValue === 'string' || typeof rawValue === 'number' || typeof rawValue === 'boolean') {
         values[providerFieldValueKey(field)] = rawValue;
+      } else if (field.key === 'headers' && isRecord(rawValue)) {
+        values[providerFieldValueKey(field)] = stringRecordFromJSON(rawValue);
       } else if (rawValue !== undefined && rawValue !== null) {
         values[providerFieldValueKey(field)] = stringifyJSON(rawValue);
       }
@@ -1215,6 +1229,9 @@ function configRecordsFromFieldValues(
 }
 
 function providerFieldValueToJSON(value: ProviderFieldValue, field: ProviderConfigField): JSONValue {
+  if (field.key === 'headers' && isRecord(value)) {
+    return stringRecordFromJSON(value);
+  }
   if (providerFieldUsesDelimitedList(field)) {
     return delimitedFieldValueToList(value, field);
   }
@@ -1232,6 +1249,17 @@ function providerFieldValueToJSON(value: ProviderFieldValue, field: ProviderConf
     }
   }
   return value;
+}
+
+function stringRecordFromJSON(value: Record<string, JSONValue> | Record<string, string>): Record<string, string> {
+  return Object.entries(value).reduce<Record<string, string>>((record, [key, item]) => {
+    const normalizedKey = key.trim();
+    const normalizedValue = typeof item === 'string' ? item.trim() : String(item ?? '').trim();
+    if (normalizedKey && normalizedValue) {
+      record[normalizedKey] = normalizedValue;
+    }
+    return record;
+  }, {});
 }
 
 function providerFieldUsesDelimitedList(field: ProviderConfigField): boolean {
@@ -1277,12 +1305,28 @@ function coerceDelimitedItems(items: string[], field: ProviderConfigField): JSON
 
 function providerFieldExtra(field: ProviderConfigField): string | undefined {
   if (field.target === 'send_config' && field.key === 'url') {
-    return '支持通用占位符，例如 {{ recipient }}、{{ message.id }}、{{ payload.xxx }}。';
+    return '{{ identity }} 表示当前接收人的平台身份字段值。';
   }
   if (providerFieldUsesDelimitedList(field)) {
     return '多个值用英文逗号 , 或竖线 | 分隔。';
   }
   return field.advanced ? '该字段来自高级能力 schema，可按平台要求填写。' : undefined;
+}
+
+function providerFieldItemClassName(providerType: ProviderKind, field: ProviderConfigField): string | undefined {
+  if (providerType !== 'webhook' || field.target !== 'send_config') {
+    return undefined;
+  }
+  if (field.key === 'url') {
+    return 'provider-field-item--webhook-url';
+  }
+  if (field.key === 'method') {
+    return 'provider-field-item--webhook-method';
+  }
+  if (field.key === 'headers') {
+    return 'provider-field-item--webhook-headers';
+  }
+  return undefined;
 }
 
 export function parseJSONOrEmpty(value: string): JSONValue {
@@ -1556,6 +1600,17 @@ function providerTestBodyValue(value: ProviderRow): JSONValue {
       body: value.testBody.trim(),
     };
   }
+  if (value.providerType === 'webhook') {
+    const trimmed = value.testBody.trim();
+    if (!trimmed) {
+      return { body: {} };
+    }
+    try {
+      return { body: JSON.parse(trimmed) as JSONValue };
+    } catch {
+      return { body: value.testBody };
+    }
+  }
   const trimmed = value.testBody.trim();
   if (!trimmed) {
     return {};
@@ -1571,7 +1626,18 @@ function providerTestNeedsRecipient(value: ProviderRow): boolean {
   if (value.providerType === 'wxpusher') {
     return false;
   }
+  if (value.providerType === 'webhook') {
+    return providerWebhookUsesIdentity(value);
+  }
   return value.testRecipient.trim() !== '-';
+}
+
+function providerWebhookUsesIdentity(value: ProviderRow): boolean {
+  if (value.providerType !== 'webhook') {
+    return false;
+  }
+  const rawURL = String(value.fieldValues['send_config.url'] ?? '').trim();
+  return /\{\{\s*identity\s*\}\}/.test(rawURL) || /%7b%7b(?:%20|\+)*identity(?:%20|\+)*%7d%7d/i.test(rawURL);
 }
 
 function normalizedProviderTestRecipient(value: ProviderRow): string {
@@ -2035,11 +2101,84 @@ export function channelInputFromProvider(value: ProviderRow): ChannelInput {
   };
 }
 
+function WebhookHeadersEditor({
+  value,
+  onChange,
+}: {
+  value: ProviderFieldValue | undefined;
+  onChange: (value: Record<string, string>) => void;
+}) {
+  const headers = isRecord(value) ? stringRecordFromJSON(value) : {};
+  const entries = Object.entries(headers);
+  const [rows, setRows] = useState<Array<[string, string]>>(entries.length ? entries : [['', '']]);
+  const updateRows = (nextRows: Array<[string, string]>) => {
+    const visibleRows = nextRows.length ? nextRows : [['', ''] as [string, string]];
+    setRows(visibleRows);
+    onChange(
+      visibleRows.reduce<Record<string, string>>((record, [key, item]) => {
+        const normalizedKey = key.trim();
+        const normalizedValue = item.trim();
+        if (normalizedKey && normalizedValue) {
+          record[normalizedKey] = normalizedValue;
+        }
+        return record;
+      }, {}),
+    );
+  };
+  return (
+    <div className="webhook-headers-editor">
+      <div className="webhook-headers-editor__head">
+        <span className="webhook-headers-editor__title">请求 Header</span>
+        <Button
+          type="primary"
+          size="small"
+          icon={<PlusOutlined />}
+          onClick={() => updateRows([...rows, ['', '']])}
+        >
+          添加 Header
+        </Button>
+      </div>
+      {rows.map(([key, item], index) => (
+        <Space.Compact key={`webhook-header-${index}`} className="webhook-headers-editor__row">
+          <Input
+            aria-label="Header Key"
+            placeholder="Key"
+            value={key}
+            onChange={(event) => {
+              const nextRows = [...rows] as Array<[string, string]>;
+              nextRows[index] = [event.target.value, item];
+              updateRows(nextRows);
+            }}
+          />
+          <Input
+            aria-label="Header Value"
+            placeholder="Value"
+            value={item}
+            onChange={(event) => {
+              const nextRows = [...rows] as Array<[string, string]>;
+              nextRows[index] = [key, event.target.value];
+              updateRows(nextRows);
+            }}
+          />
+          <Button
+            aria-label="删除 Header"
+            icon={<DeleteOutlined />}
+            onClick={() => updateRows(rows.filter((_, rowIndex) => rowIndex !== index))}
+          />
+        </Space.Compact>
+      ))}
+    </div>
+  );
+}
+
 function renderProviderFieldInput(
   field: ProviderConfigField,
   value: ProviderFieldValue | undefined,
   onChange: (field: ProviderConfigField, value: ProviderFieldValue) => void,
 ): ReactNode {
+  if (field.target === 'send_config' && field.key === 'headers') {
+    return <WebhookHeadersEditor value={value} onChange={(nextValue) => onChange(field, nextValue)} />;
+  }
   if (providerFieldUsesDelimitedList(field)) {
     return (
       <Input
@@ -2277,13 +2416,14 @@ export function ProviderConfigForm({
                 />
               </Form.Item>
               <Divider orientation="left">基础配置字段</Divider>
-              <div className="two-column-form provider-field-grid">
+              <div className={`two-column-form provider-field-grid ${value.providerType === 'webhook' ? 'provider-field-grid--webhook' : ''}`}>
                 {visibleConfigFields.map((field) => (
                   <Form.Item
                     key={providerFieldValueKey(field)}
-                    label={field.label}
+                    label={value.providerType === 'webhook' && field.target === 'send_config' && field.key === 'headers' ? undefined : field.label}
                     required={field.required}
                     extra={providerFieldExtra(field)}
+                    className={providerFieldItemClassName(value.providerType, field)}
                   >
                     {renderProviderFieldInput(field, value.fieldValues[providerFieldValueKey(field)], updateFieldValue)}
                   </Form.Item>
@@ -2654,6 +2794,10 @@ export function ProviderTestPanel({
       message.error('请填写邮件正文');
       return false;
     }
+    if (value.providerType === 'webhook' && providerWebhookUsesIdentity(value) && !value.testRecipient.trim()) {
+      message.error('请填写测试接收人（identity）');
+      return false;
+    }
     return true;
   };
   const runTest = async (send: boolean, liveSendConfirmed = false) => {
@@ -3003,7 +3147,7 @@ export function ProviderTestPanel({
       ) : (
         <>
           {providerTestNeedsRecipient(value) ? (
-            <Form.Item label="测试接收人">
+            <Form.Item label={value.providerType === 'webhook' ? '测试接收人（identity）' : '测试接收人'}>
               <Input value={value.testRecipient} onChange={(event) => update({ testRecipient: event.target.value })} />
             </Form.Item>
           ) : null}

@@ -127,7 +127,7 @@ func TestWorkerProcessBatchScopesSendDedupeByTemplateVersion(t *testing.T) {
 		Enabled:          true,
 		ConcurrencyLimit: 1,
 		TimeoutMS:        500,
-		SendConfig:       json.RawMessage(`{"method":"POST","url":"` + server.URL + `/send","recipient":{"location":"none"}}`),
+		SendConfig:       json.RawMessage(`{"method":"POST","url":"` + server.URL + `/send"}`),
 	}
 	store.channels[channel.ID] = channel
 
@@ -147,7 +147,7 @@ func TestWorkerProcessBatchScopesSendDedupeByTemplateVersion(t *testing.T) {
 			DedupeKey:         "same-trace-id",
 			DedupeTTLSeconds:  3600,
 			MessageType:       "json",
-			Body:              json.RawMessage(`{"title":"` + item.title + `"}`),
+			Body:              json.RawMessage(`{"body":{"title":"` + item.title + `"}}`),
 		}))
 	}
 
@@ -197,7 +197,7 @@ func TestWorkerProcessOneBuildsRequestResolvesTokenAndStoresSnapshots(t *testing
 		case "/token":
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = w.Write([]byte(`{"access_token":"resolved-token"}`))
-		case "/send":
+		case "/cgi-bin/message/send":
 			authHeader = r.Header.Get("Authorization")
 			body, _ := io.ReadAll(r.Body)
 			requestBody = string(body)
@@ -213,8 +213,8 @@ func TestWorkerProcessOneBuildsRequestResolvesTokenAndStoresSnapshots(t *testing
 	store := newMemoryRepository()
 	store.channels["channel-1"] = provider.Channel{
 		ID:               "channel-1",
-		ProviderType:     provider.ProviderWebhook,
-		Name:             "Webhook",
+		ProviderType:     provider.ProviderWeComApp,
+		Name:             "WeCom App",
 		Enabled:          true,
 		ConcurrencyLimit: 1,
 		TimeoutMS:        1000,
@@ -224,10 +224,8 @@ func TestWorkerProcessOneBuildsRequestResolvesTokenAndStoresSnapshots(t *testing
 			"placement":{"location":"header","field_name":"Authorization","prefix":"Bearer "}
 		}`),
 		SendConfig: json.RawMessage(`{
-			"method":"POST",
-			"url":"` + server.URL + `/send",
-			"body":{"msgtype":"text"},
-			"recipient":{"location":"body","path":"touser","format":"array"}
+			"base_url":"` + server.URL + `",
+			"agentid":1000001
 		}`),
 	}
 	store.addAttempt(Attempt{
@@ -241,7 +239,7 @@ func TestWorkerProcessOneBuildsRequestResolvesTokenAndStoresSnapshots(t *testing
 	job := newSendJob("job-1", "channel-1", 3, time.Now().Add(-time.Second), SendMessageJobPayload{
 		DeliveryAttemptID: "attempt-1",
 		Recipient:         []any{"u1", "u2"},
-		Body:              json.RawMessage(`{"text":{"content":"hello"}}`),
+		Body:              json.RawMessage(`{"content":"hello"}`),
 	})
 	store.addJob(job)
 
@@ -261,8 +259,8 @@ func TestWorkerProcessOneBuildsRequestResolvesTokenAndStoresSnapshots(t *testing
 	if authHeader != "Bearer resolved-token" {
 		t.Fatalf("expected resolved token in send request, got %q", authHeader)
 	}
-	if !strings.Contains(requestBody, `"touser":["u1","u2"]`) {
-		t.Fatalf("expected recipient array in request body, got %s", requestBody)
+	if !strings.Contains(requestBody, `"touser":"u1|u2"`) {
+		t.Fatalf("expected WeCom recipient pipe string in request body, got %s", requestBody)
 	}
 
 	attempt := store.attempts["attempt-1"]
@@ -290,8 +288,8 @@ func TestWorkerProcessOneBuildsRequestResolvesTokenAndStoresSnapshots(t *testing
 		"delivery_attempt_id": "attempt-1",
 		"message_id":          "message-1",
 		"channel_id":          "channel-1",
-		"channel_name":        "Webhook",
-		"provider_type":       string(provider.ProviderWebhook),
+		"channel_name":        "WeCom App",
+		"provider_type":       string(provider.ProviderWeComApp),
 		"template_version_id": "template-version-1",
 		"job_id":              "job-1",
 	} {
@@ -303,8 +301,7 @@ func TestWorkerProcessOneBuildsRequestResolvesTokenAndStoresSnapshots(t *testing
 	if !ok {
 		t.Fatalf("expected request snapshot rendered_message, got %s", attempt.RequestSnapshot)
 	}
-	text, ok := renderedMessage["text"].(map[string]any)
-	if !ok || text["content"] != "hello" {
+	if renderedMessage["content"] != "hello" {
 		t.Fatalf("expected rendered_message to mirror job payload body, got %+v", renderedMessage)
 	}
 	resolvedRecipients, ok := requestSnapshot["resolved_recipients"].([]any)
@@ -350,16 +347,16 @@ func TestWorkerUsesCapabilityTokenPlacementWhenChannelHasNoExplicitPlacement(t *
 	store := newMemoryRepository()
 	store.channels["channel-capability-token"] = provider.Channel{
 		ID:               "channel-capability-token",
-		ProviderType:     provider.ProviderWebhook,
+		ProviderType:     provider.ProviderWeComApp,
 		Name:             "Capability Token",
 		Enabled:          true,
 		ConcurrencyLimit: 1,
 		TimeoutMS:        1000,
-		SendConfig:       json.RawMessage(`{"method":"POST","url":"` + server.URL + `/send","recipient":{"location":"none"}}`),
+		SendConfig:       json.RawMessage(`{"base_url":"` + server.URL + `","agentid":1000001}`),
 	}
-	store.capabilities[capabilityKey(provider.ProviderWebhook, "json")] = provider.Capability{
-		ProviderType:  provider.ProviderWebhook,
-		MessageType:   "json",
+	store.capabilities[capabilityKey(provider.ProviderWeComApp, "text")] = provider.Capability{
+		ProviderType:  provider.ProviderWeComApp,
+		MessageType:   "text",
 		TokenStrategy: json.RawMessage(`{"strategy":"static_token","placement":{"location":"query","field_name":"access_token"}}`),
 		SuccessRule:   json.RawMessage(`{"type":"status_code","status_codes":[200]}`),
 		RetryRule:     json.RawMessage(`{"status_codes":[408,429,500,502,503,504],"network_errors":true}`),
@@ -367,9 +364,10 @@ func TestWorkerUsesCapabilityTokenPlacementWhenChannelHasNoExplicitPlacement(t *
 	store.addAttempt(Attempt{ID: "attempt-capability-token", MessageID: "message-capability-token", ChannelID: "channel-capability-token", TemplateVersionID: "template-token", Status: StatusQueued})
 	store.addJob(newSendJob("job-capability-token", "channel-capability-token", 3, time.Now().Add(-time.Second), SendMessageJobPayload{
 		DeliveryAttemptID: "attempt-capability-token",
-		MessageType:       "json",
+		MessageType:       "text",
 		Token:             "capability-token",
-		Body:              json.RawMessage(`{"title":"hello"}`),
+		Recipient:         "u1",
+		Body:              json.RawMessage(`{"content":"hello"}`),
 	}))
 
 	worker := NewWorker(store,
@@ -681,7 +679,7 @@ func TestWorkerClassifiesSuccessWithCapabilityRules(t *testing.T) {
 		store.addJob(newSendJob("job-status-fail", "channel-status-fail", 3, time.Now().Add(-time.Second), SendMessageJobPayload{
 			DeliveryAttemptID: "attempt-status-fail",
 			MessageType:       "json",
-			Body:              json.RawMessage(`{"title":"hello"}`),
+			Body:              json.RawMessage(`{"body":{"title":"hello"}}`),
 		}))
 
 		worker := NewWorker(store,

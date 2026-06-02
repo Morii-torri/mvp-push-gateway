@@ -15,6 +15,9 @@ func builtInRequestConfig(channel Channel, input BuildRequestInput) (requestConf
 	}
 
 	switch channel.ProviderType {
+	case ProviderWebhook:
+		config, err := webhookRequestConfig(send, content, input.Recipient)
+		return config, true, err
 	case ProviderPushPlus:
 		config, err := pushPlusRequestConfig(auth, send, content, input.Recipient)
 		return config, true, err

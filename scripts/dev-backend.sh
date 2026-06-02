@@ -11,4 +11,5 @@ if ! command -v go >/dev/null 2>&1; then
 fi
 
 cd "$ROOT_DIR/backend"
-exec go run ./cmd/server
+go build -o /tmp/mgp-server-current ./cmd/server
+exec /tmp/mgp-server-current

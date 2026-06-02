@@ -101,6 +101,7 @@ export function createTemplateFeedback(): TemplateFeedback {
 }
 
 const messageTypeLabels: Record<string, string> = {
+  json: 'JSON',
   text: '文本',
   markdown: 'Markdown',
   html: 'HTML',
@@ -313,17 +314,17 @@ function smsTemplateFields(): TemplateContentField[] {
 
 const fallbackTemplateSchemas: Record<ProviderKind, Record<string, { label: string; fields: TemplateContentField[] }>> = {
   webhook: {
-    text: {
-      label: '文本',
+    json: {
+      label: 'JSON',
       fields: [
-        contentField('event', '事件名', 'string', 'message.push', '{{ payload.event }}'),
-        contentField('title', '标题', 'string', '通知', '{{ payload.title }}'),
-        contentField('body', '正文', 'string', '', '{{ payload.content }}'),
+        contentField(
+          'body',
+          'body',
+          'object',
+          '{\n  "title": "告警标题",\n  "level": "critical",\n  "content": "告警内容",\n  "biz_id": "order-10001",\n  "timestamp": "2026-06-02T10:00:00+08:00"\n}',
+          '{\n  "title": "告警标题",\n  "level": "critical",\n  "content": "告警内容",\n  "biz_id": "order-10001",\n  "timestamp": "2026-06-02T10:00:00+08:00"\n}',
+        ),
       ],
-    },
-    markdown: {
-      label: 'Markdown',
-      fields: [contentField('markdown', 'Markdown 内容', 'string', '', '{{ payload.content }}')],
     },
   },
   self: {
@@ -541,16 +542,14 @@ function normalizeTemplateMessageFormat(messageType: string | undefined): Templa
 }
 
 function normalizeTemplateMessageTypes(messageTypes: string[]): string[] {
-  const normalized = uniqueStrings(
-    messageTypes.map((messageType) => (messageType === 'json' ? 'text' : messageType)),
-  );
+  const normalized = uniqueStrings(messageTypes);
   return normalized.length ? normalized : ['text'];
 }
 
 function lockedTemplateMessageType(providerType: ProviderKind, messageType?: string): string | undefined {
   const locked = lockedTemplateMessageTypes[providerType];
   if (!locked?.length) {
-    return messageType === 'json' ? 'text' : messageType;
+    return messageType;
   }
   return messageType && locked.includes(messageType) ? messageType : locked[0];
 }
@@ -842,9 +841,12 @@ function templateFieldFromSchemaRecord(value: JSONValue, fallbackKey = ''): Temp
   if (!key || isRecipientLikeField(key)) {
     return null;
   }
-  const defaultValue = jsonScalarToText(value.default) || jsonScalarToText(value.default_value) || jsonScalarToText(value.fallback);
+  const defaultValue = jsonTemplateDefaultToText(value.default) || jsonTemplateDefaultToText(value.default_value) || jsonTemplateDefaultToText(value.fallback);
   let defaultExpression =
     firstString(value.expression, value.template, value.template_expression) || `{{ payload.${payloadKeyForContentField(key)} }}`;
+  if (defaultValue && !firstString(value.expression, value.template, value.template_expression)) {
+    defaultExpression = defaultValue;
+  }
   const enumDescriptions = enumDescriptionRecord(value);
   const options = Array.isArray(value.enum)
     ? value.enum
@@ -902,6 +904,17 @@ function jsonScalarToText(value: JSONValue | undefined): string {
   return '';
 }
 
+function jsonTemplateDefaultToText(value: JSONValue | undefined): string {
+  const scalar = jsonScalarToText(value);
+  if (scalar) {
+    return scalar;
+  }
+  if (Array.isArray(value) || isRecord(value)) {
+    return stringifyJSON(value);
+  }
+  return '';
+}
+
 function isRecipientLikeField(key: string): boolean {
   const lowerKey = key.toLowerCase();
   const last = lowerKey.split('.').pop() ?? lowerKey;
@@ -940,7 +953,9 @@ function defaultTemplateFieldValues(
   return fields.reduce<TemplateFieldValues>((values, field) => {
     values[field.key] = currentValues[field.key] ?? {
       expression:
-        field.options?.length && field.defaultExpression && !field.defaultExpression.includes('{{')
+        (field.options?.length || ['json', 'object', 'array'].includes(field.type.toLowerCase())) &&
+        field.defaultExpression &&
+        !field.defaultExpression.includes('{{')
           ? field.defaultExpression
           : '',
       defaultValue: '',
@@ -1062,9 +1077,20 @@ function stringifyTemplateBodyFromFieldValues(values: TemplateFieldValues, omitt
 }
 
 export function templateBodyTextFromDraft(draft: TemplateDraft): string {
+  if (draft.targetProviderType === 'webhook') {
+    return JSON.stringify({ body: webhookBodyTemplateTextFromDraft(draft) }, null, 2);
+  }
   return draft.contentMode === 'custom_json'
     ? draft.customJsonText
     : stringifyTemplateBodyFromFieldValues(draft.fieldValues, omittedTemplateFieldKeys(draft));
+}
+
+function webhookBodyTemplateTextFromDraft(draft: TemplateDraft): string {
+  if (draft.contentMode === 'custom_json') {
+    return draft.customJsonText;
+  }
+  const bodyValue = draft.fieldValues.body ?? { expression: '', defaultValue: '' };
+  return templateExpressionWithDefault(bodyValue);
 }
 
 function parseTemplateBodyRecord(value: string): Record<string, JSONValue> | null {
@@ -1147,7 +1173,7 @@ export function createTemplateDraft(
   };
   return {
     ...draft,
-    customJsonText: templateBodyTextFromDraft(draft),
+    customJsonText: templateCustomJsonTextFromDraft(draft),
   };
 }
 
@@ -1177,7 +1203,9 @@ export function draftFromTemplate(
     targetProviderType,
     contentMode: parsedBody ? 'fields' : base.contentMode,
     fieldValues,
-    customJsonText: parsedBody ? stringifyJSON(parsedBody) : templateBodyTextFromDraft({ ...base, fieldValues }),
+    customJsonText: targetProviderType === 'webhook'
+      ? webhookBodyTemplateTextFromDraft({ ...base, fieldValues })
+      : parsedBody ? stringifyJSON(parsedBody) : templateBodyTextFromDraft({ ...base, fieldValues }),
     messageBodySchemaText: stringifyJSON(schema),
     samplePayloadText: stringifyJSON(currentVersion?.sample_payload ?? record.raw?.sample_payload ?? parseJSONOrEmpty(base.samplePayloadText)),
     barkBodyFormat:
@@ -1237,7 +1265,7 @@ export function switchTemplateProviderType(
   };
   return {
     ...nextDraft,
-    customJsonText: templateBodyTextFromDraft(nextDraft),
+    customJsonText: templateCustomJsonTextFromDraft(nextDraft),
   };
 }
 
@@ -1258,7 +1286,7 @@ export function switchTemplateMessageType(
   };
   return {
     ...nextDraft,
-    customJsonText: templateBodyTextFromDraft(nextDraft),
+    customJsonText: templateCustomJsonTextFromDraft(nextDraft),
   };
 }
 
@@ -1281,9 +1309,16 @@ export function switchTemplateContentMode(draft: TemplateDraft, contentMode: Tem
     contentMode,
     customJsonText:
       contentMode === 'custom_json' && !draft.customJsonText.trim()
-        ? templateBodyTextFromDraft({ ...draft, contentMode: 'fields' })
+        ? templateCustomJsonTextFromDraft({ ...draft, contentMode: 'fields' })
         : draft.customJsonText,
   };
+}
+
+function templateCustomJsonTextFromDraft(draft: TemplateDraft): string {
+  if (draft.targetProviderType === 'webhook') {
+    return webhookBodyTemplateTextFromDraft({ ...draft, contentMode: 'fields' });
+  }
+  return templateBodyTextFromDraft(draft);
 }
 
 export function templateInputFromDraft(draft: TemplateDraft): TemplateInput {
@@ -1374,7 +1409,15 @@ function renderTemplateTextWithPayload(templateText: string, payload: JSONValue)
 }
 
 export function templateRenderedPreviewValue(draft: TemplateDraft): JSONValue {
+  if (draft.targetProviderType === 'webhook') {
+    return renderWebhookBodyPreviewValue(draft);
+  }
   const rendered = renderTemplateTextWithPayload(templateBodyTextFromDraft(draft), safeJSONPreview(draft.samplePayloadText));
+  return safeJSONPreview(rendered);
+}
+
+function renderWebhookBodyPreviewValue(draft: TemplateDraft): JSONValue {
+  const rendered = renderTemplateTextWithPayload(webhookBodyTemplateTextFromDraft(draft), safeJSONPreview(draft.samplePayloadText));
   return safeJSONPreview(rendered);
 }
 
@@ -1748,7 +1791,10 @@ export function TemplateEditorForm({
           </div>
         </>
       ) : (
-        <Form.Item label="完整消息内容 JSON" extra="这里是内部消息内容 JSON，不是最终平台 HTTP 请求体。">
+        <Form.Item
+          label={value.targetProviderType === 'webhook' ? 'Webhook Body JSON' : '完整消息内容 JSON'}
+          extra={value.targetProviderType === 'webhook' ? '这里填写最终发送给 Webhook 的 JSON Body。' : '这里是内部消息内容 JSON，不是最终平台 HTTP 请求体。'}
+        >
           <Input.TextArea
             rows={10}
             value={value.customJsonText}

@@ -2,6 +2,7 @@ package provider
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"crypto/tls"
 	"encoding/json"
@@ -738,6 +739,15 @@ func TestDefaultCapabilitiesDistinguishWebhookAndBuiltInProviders(t *testing.T) 
 	if !webhook.CustomBodyAllowed {
 		t.Fatal("webhook should allow custom JSON bodies")
 	}
+	assertJSONField(t, webhook.MessageSchema, "properties.body.type", "object")
+	assertJSONStringListField(t, webhook.ChannelConfigSchema, "properties.method.enum", []string{"POST", "GET"})
+	assertJSONField(t, webhook.SendAPI, "url_template", "{{ channel.url }}")
+	assertJSONDoesNotContain(t, webhook.CredentialSchema, "note")
+	assertJSONDoesNotContain(t, webhook.CredentialSchema, "secret")
+	assertJSONDoesNotContain(t, webhook.MessageSchema, "payload")
+	assertJSONDoesNotContain(t, webhook.MessageSchema, "headers")
+	assertJSONDoesNotContain(t, webhook.ChannelConfigSchema, "recipient")
+	assertJSONDoesNotContain(t, webhook.ChannelConfigSchema, `"body"`)
 
 	wecom := findCapability(t, ProviderWeComApp, "text")
 	if !wecom.RecipientRequired || wecom.RecipientRequirement != "system" {
@@ -1528,25 +1538,21 @@ func TestBuildDeliveryRequestUsesRenderedMessageRecipientsAndTargetContext(t *te
 	}
 }
 
-func TestBuildDeliveryRequestKeepsWebhookAdvancedMapping(t *testing.T) {
+func TestBuildDeliveryRequestUsesWebhookIdentityHeadersAndBody(t *testing.T) {
 	request, err := BuildDeliveryRequest(Channel{
 		ID:           "channel-webhook",
 		ProviderType: ProviderWebhook,
 		Name:         "Webhook",
-		TokenConfig:  json.RawMessage(`{"location":"header","field_name":"X-Token","prefix":"Bearer "}`),
 		SendConfig: json.RawMessage(`{
-			"method":"PATCH",
-			"url":"https://example.test/hooks/{recipient}",
-			"headers":{"X-Static":"yes"},
-			"body":{"kind":"alert"},
-			"recipient":{"location":"path","field_name":"recipient"}
+			"method":"POST",
+			"url":"https://example.test/hooks/{{ identity }}",
+			"headers":{"X-App-Id":"app-1","X-Token":"token-1"}
 		}`),
 	}, BuildDeliveryRequestInput{
-		Token: "token-2",
 		RenderedMessage: RenderedMessage{
 			ProviderType: ProviderWebhook,
 			MessageType:  "json",
-			Content:      json.RawMessage(`{"summary":"disk full"}`),
+			Content:      json.RawMessage(`{"body":{"title":"告警标题","level":"critical","content":"告警内容","biz_id":"order-10001"}}`),
 		},
 		ResolvedRecipients: []ResolvedRecipient{{Value: "ops room"}},
 		TargetContext: DeliveryTargetContext{
@@ -1562,21 +1568,133 @@ func TestBuildDeliveryRequestKeepsWebhookAdvancedMapping(t *testing.T) {
 	if err != nil {
 		t.Fatalf("build delivery request: %v", err)
 	}
-	if request.Method != "PATCH" {
-		t.Fatalf("expected custom method to remain, got %s", request.Method)
+	if request.Method != "POST" {
+		t.Fatalf("expected POST method, got %s", request.Method)
 	}
 	if request.URL != "https://example.test/hooks/ops%20room" {
-		t.Fatalf("expected path recipient mapping to remain, got %s", request.URL)
+		t.Fatalf("expected identity placeholder in URL, got %s", request.URL)
 	}
-	if request.Headers["X-Static"] != "yes" || request.Headers["X-Token"] != "Bearer token-2" {
-		t.Fatalf("expected advanced headers to remain, got %+v", request.Headers)
+	if request.Headers["X-App-Id"] != "app-1" || request.Headers["X-Token"] != "token-1" {
+		t.Fatalf("expected configured webhook headers, got %+v", request.Headers)
+	}
+	if request.Headers["Content-Type"] != "application/json" {
+		t.Fatalf("expected JSON content type, got %+v", request.Headers)
 	}
 	var body map[string]any
 	if err := json.Unmarshal(request.Body, &body); err != nil {
 		t.Fatalf("decode adapter body: %v", err)
 	}
-	if body["kind"] != "alert" || body["summary"] != "disk full" {
-		t.Fatalf("expected advanced base body and rendered content to merge, got %+v", body)
+	if body["title"] != "告警标题" || body["level"] != "critical" || body["content"] != "告警内容" || body["biz_id"] != "order-10001" {
+		t.Fatalf("expected raw template body object, got %+v", body)
+	}
+	if _, ok := body["body"]; ok {
+		t.Fatalf("webhook request body must not keep the template wrapper: %+v", body)
+	}
+	if _, ok := body["payload"]; ok {
+		t.Fatalf("webhook request body must not use legacy payload wrapper: %+v", body)
+	}
+	if _, ok := body["headers"]; ok {
+		t.Fatalf("webhook request body must not include headers wrapper: %+v", body)
+	}
+}
+
+func TestBuildDeliveryRequestUsesWebhookGetBodyAsQuery(t *testing.T) {
+	request, err := BuildDeliveryRequest(Channel{
+		ID:           "channel-webhook",
+		ProviderType: ProviderWebhook,
+		Name:         "Webhook",
+		SendConfig: json.RawMessage(`{
+			"method":"GET",
+			"url":"https://example.test/hooks/{{ identity }}?fixed=1",
+			"headers":{"X-App-Id":"app-1"}
+		}`),
+	}, BuildDeliveryRequestInput{
+		RenderedMessage: RenderedMessage{
+			ProviderType: ProviderWebhook,
+			MessageType:  "json",
+			Content:      json.RawMessage(`{"body":{"title":"告警标题","level":"critical","tags":["ops","db"]}}`),
+		},
+		ResolvedRecipients: []ResolvedRecipient{{Value: "ops room"}},
+	})
+	if err != nil {
+		t.Fatalf("build webhook GET request: %v", err)
+	}
+	if request.Method != "GET" {
+		t.Fatalf("expected GET method, got %s", request.Method)
+	}
+	parsed, err := url.Parse(request.URL)
+	if err != nil {
+		t.Fatalf("parse request URL: %v", err)
+	}
+	values := parsed.Query()
+	if parsed.Scheme != "https" || parsed.Host != "example.test" || parsed.Path != "/hooks/ops room" {
+		t.Fatalf("unexpected request URL: %s", request.URL)
+	}
+	if values.Get("fixed") != "1" || values.Get("title") != "告警标题" || values.Get("level") != "critical" {
+		t.Fatalf("expected webhook body fields as query params, got %s", parsed.RawQuery)
+	}
+	if values.Get("tags") != `["ops","db"]` {
+		t.Fatalf("expected array query value to be JSON encoded, got %q", values.Get("tags"))
+	}
+	if len(bytes.TrimSpace(request.Body)) != 0 {
+		t.Fatalf("GET webhook request must not carry a JSON body, got %s", request.Body)
+	}
+}
+
+func TestBuildDeliveryRequestReplacesURLEncodedWebhookIdentity(t *testing.T) {
+	request, err := BuildDeliveryRequest(Channel{
+		ID:           "channel-webhook",
+		ProviderType: ProviderWebhook,
+		Name:         "Webhook",
+		SendConfig: json.RawMessage(`{
+			"method":"GET",
+			"url":"https://21329.push.ft07.com/send/%7B%7B%20identity%20%7D%7D.send"
+		}`),
+	}, BuildDeliveryRequestInput{
+		RenderedMessage: RenderedMessage{
+			ProviderType: ProviderWebhook,
+			MessageType:  "json",
+			Content:      json.RawMessage(`{"body":{"title":"告警标题","content":"告警内容"}}`),
+		},
+		ResolvedRecipients: []ResolvedRecipient{{Value: "send-key-1"}},
+	})
+	if err != nil {
+		t.Fatalf("build webhook encoded identity request: %v", err)
+	}
+	if strings.Contains(request.URL, "%7B%7B") || strings.Contains(request.URL, "identity") {
+		t.Fatalf("expected encoded identity placeholder to be replaced, got %s", request.URL)
+	}
+	parsed, err := url.Parse(request.URL)
+	if err != nil {
+		t.Fatalf("parse request URL: %v", err)
+	}
+	if parsed.Path != "/send/send-key-1.send" {
+		t.Fatalf("expected identity in path, got %s", parsed.Path)
+	}
+	if parsed.Query().Get("title") != "告警标题" || parsed.Query().Get("content") != "告警内容" {
+		t.Fatalf("expected body fields as query params, got %s", parsed.RawQuery)
+	}
+	if len(bytes.TrimSpace(request.Body)) != 0 {
+		t.Fatalf("GET webhook request must not carry body, got %s", request.Body)
+	}
+}
+
+func TestBuildDeliveryRequestRejectsLegacyWebhookPlaceholders(t *testing.T) {
+	_, err := BuildDeliveryRequest(Channel{
+		ID:           "channel-webhook",
+		ProviderType: ProviderWebhook,
+		Name:         "Webhook",
+		SendConfig:   json.RawMessage(`{"method":"POST","url":"https://example.test/hooks/{{ recipient }}"}`),
+	}, BuildDeliveryRequestInput{
+		RenderedMessage: RenderedMessage{
+			ProviderType: ProviderWebhook,
+			MessageType:  "json",
+			Content:      json.RawMessage(`{"body":{"title":"告警标题"}}`),
+		},
+		ResolvedRecipients: []ResolvedRecipient{{Value: "ops room"}},
+	})
+	if err == nil {
+		t.Fatal("expected legacy webhook placeholder to be rejected")
 	}
 }
 
@@ -1589,9 +1707,7 @@ func TestTestSendDryRunSnapshotIncludesAdapterContext(t *testing.T) {
 			SendConfig: json.RawMessage(`{
 				"method":"POST",
 				"url":"http://127.0.0.1:18081/webhook",
-				"headers":{"X-Test":"dry-run"},
-				"body":{"gateway":"mvp-push"},
-				"recipient":{"location":"none"}
+				"headers":{"X-Test":"dry-run"}
 			}`),
 			TimeoutMS: 1000,
 		},
@@ -1599,8 +1715,7 @@ func TestTestSendDryRunSnapshotIncludesAdapterContext(t *testing.T) {
 
 	result, err := service.TestSend(context.Background(), "channel-webhook", TestSendInput{
 		BuildRequestInput: BuildRequestInput{
-			Recipient: map[string]any{"system_user_id": "ops-1"},
-			Body:      json.RawMessage(`{"title":"dry run","content":"只生成请求"}`),
+			Body: json.RawMessage(`{"body":{"title":"dry run","content":"只生成请求"}}`),
 		},
 	})
 	if err != nil {
@@ -1628,6 +1743,53 @@ func TestTestSendDryRunSnapshotIncludesAdapterContext(t *testing.T) {
 	}
 	if finalRequest["url"] != "http://127.0.0.1:18081/webhook" || finalRequest["method"] != "POST" {
 		t.Fatalf("unexpected final request summary: %+v", finalRequest)
+	}
+}
+
+func TestTestSendDryRunBuildsWebhookIdentityRequest(t *testing.T) {
+	service := NewService(singleChannelStore{
+		channel: Channel{
+			ID:           "channel-webhook",
+			ProviderType: ProviderWebhook,
+			Name:         "Webhook",
+			SendConfig: json.RawMessage(`{
+				"method":"POST",
+				"url":"https://21329.push.ft07.com/send/{{ identity }}.send"
+			}`),
+			TimeoutMS: 1000,
+		},
+	})
+
+	result, err := service.TestSend(context.Background(), "channel-webhook", TestSendInput{
+		BuildRequestInput: BuildRequestInput{
+			Recipient: "send-key-1",
+			Body:      json.RawMessage(`{"body":{"title":"告警标题","content":"告警内容"}}`),
+		},
+	})
+	if err != nil {
+		t.Fatalf("dry-run webhook test send: %v", err)
+	}
+
+	var snapshot map[string]any
+	if err := json.Unmarshal(result.RequestSnapshot, &snapshot); err != nil {
+		t.Fatalf("decode dry-run snapshot: %v", err)
+	}
+	finalRequest, ok := snapshot["final_request"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected final_request object, got %+v", snapshot["final_request"])
+	}
+	if finalRequest["url"] != "https://21329.push.ft07.com/send/send-key-1.send" || finalRequest["method"] != "POST" {
+		t.Fatalf("expected identity-substituted webhook request, got %+v", finalRequest)
+	}
+	body, ok := finalRequest["body"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected final_request body object, got %+v", finalRequest["body"])
+	}
+	if body["title"] != "告警标题" || body["content"] != "告警内容" {
+		t.Fatalf("expected unwrapped webhook body, got %+v", body)
+	}
+	if _, ok := body["body"]; ok {
+		t.Fatalf("webhook test-send body must not keep wrapper: %+v", body)
 	}
 }
 
@@ -1844,7 +2006,7 @@ func TestTestSendRequiresExplicitLiveSendConfirmation(t *testing.T) {
 	_, err := service.TestSend(context.Background(), "channel-webhook", TestSendInput{
 		Send: true,
 		BuildRequestInput: BuildRequestInput{
-			Body: json.RawMessage(`{"title":"live send"}`),
+			Body: json.RawMessage(`{"body":{"title":"live send"}}`),
 		},
 	})
 	if err == nil || !strings.Contains(err.Error(), "真实发送需要二次确认") {
@@ -1953,6 +2115,14 @@ func assertJSONField(t *testing.T, raw json.RawMessage, path string, expected an
 	actual := jsonPathValue(object, strings.Split(path, "."))
 	if actual != expected {
 		t.Fatalf("expected %s=%v, got %v in %s", path, expected, actual, raw)
+	}
+}
+
+func assertJSONDoesNotContain(t *testing.T, raw json.RawMessage, text string) {
+	t.Helper()
+
+	if strings.Contains(string(raw), text) {
+		t.Fatalf("expected JSON not to contain %q, got %s", text, raw)
 	}
 }
 

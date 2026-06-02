@@ -829,6 +829,16 @@ export function SourceAllowlistCell({ items }: { items: string[] }) {
   return <>{items.map((item) => <Tag key={item}>{item}</Tag>)}</>;
 }
 
+export function SourceAuthModeCell({ value }: { value: SourceRecord['authMode'] }) {
+  const meta = getAuthModeMeta(value);
+  return (
+    <span className={`source-auth-mode-cell source-auth-mode-cell--${meta.color || 'default'}`}>
+      <span className="source-auth-mode-cell__mark" />
+      <span className="source-auth-mode-cell__label">{meta.label}</span>
+    </span>
+  );
+}
+
 export function ProviderTypeCell({ value }: { value: ProviderRecord['providerType'] }) {
   const meta = providerBrandMeta[value] || defaultBrandMeta;
   return (
@@ -2148,7 +2158,7 @@ export function SourcesPage({ lastUpdated, onRefresh }: ConsolePageProps) {
       title: '鉴权方式',
       dataIndex: 'authMode',
       width: 140,
-      render: (value: SourceRecord['authMode']) => <StatusTag meta={getAuthModeMeta(value)} />,
+      render: (value: SourceRecord['authMode']) => <SourceAuthModeCell value={value} />,
     },
     {
       title: 'IP 白名单',
@@ -2824,16 +2834,79 @@ type CanvasNodeEditorState = {
   ruleId?: string;
 } | null;
 
-function RouteFlowNodeView({ data, selected }: NodeProps<RouteFlowNode>) {
+function routeConditionNodeSummary(data: RouteNodeData) {
+  const draft = data.routeDraft;
+  const candidate = draft && typeof draft === 'object' && !Array.isArray(draft)
+    ? (draft as Partial<RouteRuleDraft>)
+    : null;
+  const conditions = Array.isArray(candidate?.conditions) ? candidate.conditions : [];
+  if (conditions.length === 0) {
+    const primary = typeof data.condition === 'string' && data.condition.trim()
+      ? data.condition.trim()
+      : typeof data.description === 'string' && data.description.trim()
+        ? data.description.trim()
+        : '无条件';
+    return {
+      meta: primary === '无条件' ? '无条件' : '',
+      primary,
+      hiddenCount: 0,
+    };
+  }
+
+  const operator = candidate?.conditionGroupOperator === 'or' ? 'OR' : 'AND';
+  const firstTree = buildRouteConditionTree([conditions[0]], candidate?.conditionGroupOperator === 'or' ? 'or' : 'and');
+  return {
+    meta: `${operator} · ${conditions.length} 条条件`,
+    primary: summarizeRouteConditionTree(firstTree),
+    hiddenCount: Math.max(0, conditions.length - 1),
+  };
+}
+
+export function RouteFlowNodeView({ data, selected }: NodeProps<RouteFlowNode>) {
   const nodeDefault = routeNodeDefaults[data.kind] ?? routeNodeDefaults.send_group;
+  const nodeTitle = data.kind === 'source' && !data.title.startsWith('开始：') ? `开始：${data.title}` : data.title;
+  const nodeDescription = data.kind === 'source' ? data.description.replace(/^来源编码：/, '') : data.description;
+  if (data.kind === 'end') {
+    return (
+      <div className={`route-flow-node route-flow-node--end route-flow-node--terminal${selected ? ' route-flow-node--selected' : ''}`}>
+        <Handle type="target" position={Position.Left} />
+        <div className="route-flow-node__terminal-content">
+          <strong>结束</strong>
+          <span>END</span>
+        </div>
+      </div>
+    );
+  }
+  if (data.kind === 'source') {
+    return (
+      <div className={`route-flow-node route-flow-node--source route-flow-node--start${selected ? ' route-flow-node--selected' : ''}`}>
+        <div className="route-flow-node__start-content">
+          <strong>{nodeTitle}</strong>
+          {nodeDescription ? <span className="route-flow-node__summary">{nodeDescription}</span> : null}
+        </div>
+        <Handle type="source" position={Position.Right} />
+      </div>
+    );
+  }
+  const conditionSummary = data.kind === 'condition' ? routeConditionNodeSummary(data) : null;
   return (
     <div className={`route-flow-node route-flow-node--${data.kind}${selected ? ' route-flow-node--selected' : ''}`}>
-      {data.kind !== 'source' ? <Handle type="target" position={Position.Left} /> : null}
+      <Handle type="target" position={Position.Left} />
       <div className="route-flow-node__type">{nodeDefault.title}</div>
-      <strong>{data.title}</strong>
-      <span>{data.description}</span>
+      <strong>{nodeTitle}</strong>
+      {conditionSummary ? (
+        <>
+          {conditionSummary.meta ? <span className="route-flow-node__meta">{conditionSummary.meta}</span> : null}
+          <span className="route-flow-node__summary">
+            {conditionSummary.primary}
+            {conditionSummary.hiddenCount > 0 ? <b>+{conditionSummary.hiddenCount}</b> : null}
+          </span>
+        </>
+      ) : nodeDescription ? (
+        <span className="route-flow-node__summary">{nodeDescription}</span>
+      ) : null}
       {typeof data.hitCount === 'number' ? <em>命中 {formatHitCount(data.hitCount)}</em> : null}
-      {data.kind !== 'end' ? <Handle type="source" position={Position.Right} /> : null}
+      <Handle type="source" position={Position.Right} />
     </div>
   );
 }
@@ -2882,6 +2955,10 @@ function canvasNodeEditorTitle(editor: CanvasNodeEditorState) {
     return '来源开始';
   }
   return `编辑${routeNodeDefaults[editor.kind]?.title ?? '节点'}节点`;
+}
+
+export function canvasNodeEditorFooter(editor: CanvasNodeEditorState) {
+  return editor?.kind === 'source' ? null : undefined;
 }
 
 function routeDraftFromCanvasNodeData(
@@ -3478,7 +3555,7 @@ export function RoutesPage({ lastUpdated, onRefresh }: ConsolePageProps) {
   };
   const openCreateRule = () => {
     setEditingRuleId(null);
-    setRuleDraft(createRouteRuleDraft(templateRows, channelRows));
+    setRuleDraft(createRouteRuleDraft(templateRows, channelRows, routePayloadFieldOptions));
     openRuleDrawer('新增路由规则');
   };
   const openEditRule = (rule: RouteRuleRow) => {
@@ -3669,7 +3746,7 @@ export function RoutesPage({ lastUpdated, onRefresh }: ConsolePageProps) {
         id: `${kind}-${Date.now()}`,
         type: 'routeNode',
         position: position ?? { x: 260 + flowNodes.length * 24, y: 80 + flowNodes.length * 18 },
-        deletable: kind !== 'source',
+        deletable: kind !== 'source' && kind !== 'end',
         data: {
           kind,
           title: preset.title,
@@ -3704,6 +3781,9 @@ export function RoutesPage({ lastUpdated, onRefresh }: ConsolePageProps) {
   const openCanvasNodeConfig = useCallback(
     (node: RouteFlowNode) => {
       setSelectedElement({ type: 'node', id: node.id });
+      if (node.data.kind === 'end') {
+        return;
+      }
       const linkedRule = groupRules.find((rule) =>
         [`${rule.id}-condition`, `${rule.id}-recipient`, `${rule.id}-send-group`, `${rule.id}-end`].includes(node.id),
       );
@@ -3763,7 +3843,7 @@ export function RoutesPage({ lastUpdated, onRefresh }: ConsolePageProps) {
     if (selectedElement.type === 'node') {
       const targetNode = flowNodes.find((node) => node.id === selectedElement.id);
       if (targetNode?.deletable === false || targetNode?.data.kind === 'source') {
-        message.warning('开始节点由路由组来源自动生成，不能删除');
+        message.warning('开始节点不能删除');
         return;
       }
       setFlowNodes((current) => current.filter((node) => node.id !== selectedElement.id));
@@ -4050,21 +4130,13 @@ export function RoutesPage({ lastUpdated, onRefresh }: ConsolePageProps) {
       title: '条件',
       dataIndex: 'condition',
       width: 240,
-      render: (value: string) => (
-        <Typography.Text ellipsis={{ tooltip: value }} style={{ display: 'inline-block', maxWidth: 220 }}>
-          {value || '-'}
-        </Typography.Text>
-      ),
+      render: (value: string) => <RouteConditionSummaryCell value={value} maxWidth={220} />,
     },
     {
       title: '发送动作组',
       dataIndex: 'sendGroupSummary',
       width: 320,
-      render: (value: string) => (
-        <Typography.Text ellipsis={{ tooltip: value }} style={{ display: 'inline-block', maxWidth: 300 }}>
-          {value || '-'}
-        </Typography.Text>
-      ),
+      render: (value: string) => <RouteSendGroupSummaryCell value={value} maxWidth={300} />,
     },
     { title: '接收人策略', dataIndex: 'recipientStrategy', width: 140 },
     { title: '发送前去重', dataIndex: 'dedupe', width: 150 },
@@ -4440,6 +4512,7 @@ export function RoutesPage({ lastUpdated, onRefresh }: ConsolePageProps) {
         onOk={() => void saveCanvasNodeEditor()}
         okText={canvasNodeEditor?.kind === 'source' ? '关闭' : '保存节点'}
         cancelText="取消"
+        footer={canvasNodeEditorFooter(canvasNodeEditor)}
         width={780}
       >
         <div className="canvas-node-editor-modal">
@@ -4449,7 +4522,6 @@ export function RoutesPage({ lastUpdated, onRefresh }: ConsolePageProps) {
                 <Descriptions.Item label="绑定来源">{selectedGroup?.sourceName ?? '-'}</Descriptions.Item>
                 <Descriptions.Item label="来源编码">{selectedGroup?.sourceCode ?? '-'}</Descriptions.Item>
               </Descriptions>
-              <Alert type="info" showIcon message="开始节点由路由组绑定来源自动生成。" />
             </>
           ) : null}
           {canvasNodeEditor?.kind === 'condition' ? (
@@ -4762,13 +4834,13 @@ export function RouteVersionHistoryContent({
     {
       title: '条件',
       dataIndex: 'condition',
-      render: (value: string) => <Typography.Text ellipsis={{ tooltip: value }}>{value || '-'}</Typography.Text>,
+      render: (value: string) => <RouteConditionSummaryCell value={value} maxWidth={220} />,
     },
     {
       title: '发送动作组',
       dataIndex: 'sendGroupSummary',
       width: 240,
-      render: (value: string) => <Typography.Text ellipsis={{ tooltip: value }}>{value || '-'}</Typography.Text>,
+      render: (value: string) => <RouteSendGroupSummaryCell value={value} maxWidth={220} />,
     },
     { title: '状态', dataIndex: 'enabled', width: 90, render: (enabled: boolean) => (enabled ? '启用' : '停用') },
   ];
@@ -5592,6 +5664,90 @@ export function UserIdentitySummaryCell({ identities }: { identities: Array<Pick
     >
       <Typography.Text className="identity-summary-cell" aria-label={detailText} ellipsis={{ tooltip: false }}>
         {summary}
+      </Typography.Text>
+    </Tooltip>
+  );
+}
+
+function routeSendGroupItems(value: string): string[] {
+  return value
+    .split('、')
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function routeConditionItems(value: string): string[] {
+  return value
+    .split(/\s+(?:且|或)\s+/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+export function RouteConditionTooltipCard({ items }: { items: string[] }) {
+  return (
+    <div className="route-condition-tooltip-card">
+      {items.map((item, index) => (
+        <div className="route-condition-tooltip-row" key={`${item}-${index}`}>
+          {item}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+export function RouteConditionSummaryCell({ value, maxWidth = 220 }: { value: string; maxWidth?: number }) {
+  const items = routeConditionItems(value);
+  if (!items.length) {
+    return <span>-</span>;
+  }
+  return (
+    <Tooltip
+      color="#ffffff"
+      classNames={{ root: 'route-condition-tooltip-overlay' }}
+      title={<RouteConditionTooltipCard items={items} />}
+    >
+      <Typography.Text
+        className="route-condition-summary"
+        aria-label={items.join('\n')}
+        ellipsis={{ tooltip: false }}
+        style={{ display: 'inline-block', maxWidth }}
+      >
+        {value}
+      </Typography.Text>
+    </Tooltip>
+  );
+}
+
+export function RouteSendGroupTooltipCard({ items }: { items: string[] }) {
+  return (
+    <div className="route-send-group-tooltip-card">
+      {items.map((item, index) => (
+        <div className="route-send-group-tooltip-row" key={`${item}-${index}`}>
+          {item}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+export function RouteSendGroupSummaryCell({ value, maxWidth = 300 }: { value: string; maxWidth?: number }) {
+  const items = routeSendGroupItems(value);
+  if (!items.length) {
+    return <span>-</span>;
+  }
+  return (
+    <Tooltip
+      color="#ffffff"
+      classNames={{ root: 'route-send-group-tooltip-overlay' }}
+      title={<RouteSendGroupTooltipCard items={items} />}
+    >
+      <Typography.Text
+        className="route-send-group-summary"
+        aria-label={items.join('\n')}
+        ellipsis={{ tooltip: false }}
+        style={{ display: 'inline-block', maxWidth }}
+      >
+        {value}
       </Typography.Text>
     </Tooltip>
   );

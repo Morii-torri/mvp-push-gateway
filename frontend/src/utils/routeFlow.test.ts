@@ -150,11 +150,11 @@ describe('route flow helpers', () => {
       ],
     });
     expect(summarizeRouteConditionTree(tree)).toBe(
-      'payload.status ≠ closed 且 payload.deletedAt 字段不存在 且 标题 匹配正则 ^P[0-9]+ 且 payload.count ≥ 10',
+      'payload.status ≠ closed 且 payload.deletedAt 字段不存在 且 payload.title 匹配正则 ^P[0-9]+ 且 payload.count ≥ 10',
     );
   });
 
-  it('summarizes route condition trees with Chinese labels and match group names', () => {
+  it('summarizes route condition trees with raw payload paths and match group names', () => {
     expect(
       summarizeRouteConditionTree(
         {
@@ -176,7 +176,7 @@ describe('route flow helpers', () => {
           },
         },
       ),
-    ).toBe('业务类型 = 民生诉求 且 标题 字段存在 且 消息级别 不属于匹配组[紧急等级]');
+    ).toBe('payload.bizType = 民生诉求 且 payload.title 字段存在 且 payload.level 不属于匹配组[紧急等级]');
   });
 
   it('keeps legacy expression summaries readable', () => {
@@ -193,7 +193,16 @@ describe('route flow helpers', () => {
 
     expect(routeNodeCatalog.map((item) => item.kind)).toEqual(['condition', 'recipient', 'send_group', 'end']);
     expect(snapshot.nodes.map((node) => node.data.kind)).toEqual(['source', 'condition', 'recipient', 'send_group', 'end']);
+    expect(snapshot.nodes.find((node) => node.id === 'source-start')?.data).toMatchObject({
+      title: '开始：来源 A',
+      description: 'sourceA',
+    });
     expect(snapshot.nodes.find((node) => node.id === 'source-start')?.deletable).toBe(false);
+    expect(snapshot.nodes.find((node) => node.id === 'rule-2-end')?.deletable).toBe(false);
+    expect(snapshot.nodes.find((node) => node.id === 'rule-2-end')?.position.y).toBe(57);
+    expect(snapshot.nodes.find((node) => node.id === 'rule-2-recipient')?.data.description).toBe('');
+    expect(snapshot.nodes.find((node) => node.id === 'rule-2-send-group')?.data.title).toBe('平台 A');
+    expect(snapshot.nodes.find((node) => node.id === 'rule-2-send-group')?.data.description).toBe('');
     expect(snapshot.nodes.some((node) => node.data.kind === 'template')).toBe(false);
     expect(snapshot.edges.map((edge) => [edge.source, edge.target])).toEqual([
       ['source-start', 'rule-2-condition'],

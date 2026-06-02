@@ -64,6 +64,7 @@ type RouteNodeCatalogItem = {
 
 type RouteRuleFlowSummary = RouteRule & {
   sendGroupSummary?: string;
+  recipientStrategyConfig?: unknown;
 };
 
 export const routeNodeCatalog: RouteNodeCatalogItem[] = [
@@ -79,18 +80,6 @@ export const routeNodeDefaults: Record<RouteNodeKind, RouteNodeCatalogItem> = {
   template: { kind: 'template', title: '模板渲染', description: '历史节点' },
   platform: { kind: 'platform', title: '发送平台', description: '历史节点' },
 } as Record<RouteNodeKind, RouteNodeCatalogItem>;
-
-const defaultFieldLabels: Record<string, string> = {
-  'payload.bizType': '业务类型',
-  'payload.scope': '影响范围',
-  'payload.level': '消息级别',
-  'payload.source': '来源',
-  'payload.title': '标题',
-  'payload.content': '内容',
-  'payload.sender.name': '发送人',
-  'payload.sender.department': '发送部门',
-  'payload.sentAt': '发送时间',
-};
 
 const operatorLabels: Record<string, string> = {
   equals: '=',
@@ -136,6 +125,7 @@ export function buildInitialRouteFlow<T extends RouteRuleFlowSummary>(
   const edges: RouteFlowEdge[] = [];
   const rowStep = 118;
   const startY = groupRules.length > 1 ? 36 + ((groupRules.length - 1) * rowStep) / 2 : 36;
+  const endNodeCenterOffsetY = 21;
 
   nodes.push({
     id: 'source-start',
@@ -144,8 +134,8 @@ export function buildInitialRouteFlow<T extends RouteRuleFlowSummary>(
     deletable: false,
     data: {
       kind: 'source',
-      title: group.sourceName || group.sourceCode || '来源开始',
-      description: group.sourceCode ? `来源编码：${group.sourceCode}` : '路由组固定来源入口',
+      title: `开始：${group.sourceName || group.sourceCode || '-'}`,
+      description: group.sourceCode || '',
     },
   });
 
@@ -173,7 +163,7 @@ export function buildInitialRouteFlow<T extends RouteRuleFlowSummary>(
         id: recipientId,
         type: 'routeNode',
         position: { x: 472, y },
-        data: { kind: 'recipient', title: rule.recipientStrategy, description: '解析接收人并映射身份字段' },
+        data: { kind: 'recipient', title: rule.recipientStrategy, description: routeRecipientNodeSummary(rule.recipientStrategyConfig) },
       },
       {
         id: sendGroupId,
@@ -181,14 +171,15 @@ export function buildInitialRouteFlow<T extends RouteRuleFlowSummary>(
         position: { x: 692, y },
         data: {
           kind: 'send_group',
-          title: rule.sendGroupSummary || rule.targetProviders.join('、') || rule.template || '-',
-          description: '命中后按发送目标逐个渲染和投递',
+          title: routeSendGroupNodeTitle(rule),
+          description: '',
         },
       },
       {
         id: endId,
         type: 'routeNode',
-        position: { x: 912, y },
+        position: { x: 912, y: y + endNodeCenterOffsetY },
+        deletable: false,
         data: {
           kind: 'end',
           title: '结束',
@@ -215,6 +206,38 @@ export function buildInitialRouteFlow<T extends RouteRuleFlowSummary>(
   });
 
   return { nodes, edges };
+}
+
+function routeRecipientNodeSummary(config: unknown): string {
+  if (!config || typeof config !== 'object' || Array.isArray(config)) {
+    return '';
+  }
+  const record = config as Record<string, unknown>;
+  if (record.mode === 'payload') {
+    return typeof record.payload_recipient_path === 'string' ? record.payload_recipient_path : '';
+  }
+  if (record.mode === 'system') {
+    const userCount = Array.isArray(record.user_ids) ? record.user_ids.length : 0;
+    const groupCount = Array.isArray(record.recipient_group_ids)
+      ? record.recipient_group_ids.length
+      : Array.isArray(record.group_ids)
+        ? record.group_ids.length
+        : 0;
+    return `${userCount} 人 / ${groupCount} 组`;
+  }
+  return '';
+}
+
+function routeSendGroupNodeTitle(rule: RouteRuleFlowSummary): string {
+  const summary = rule.sendGroupSummary || '';
+  if (summary) {
+    return summary
+      .split('、')
+      .map((item) => item.split(' -> ')[0]?.trim())
+      .filter(Boolean)
+      .join('、') || '-';
+  }
+  return rule.targetProviders.join('、') || '-';
 }
 
 export function buildRouteConditionTree(
@@ -318,8 +341,8 @@ function summarizeTreeNode(tree: RouteConditionTree, options: ConditionSummaryOp
   return `${field} ${label} ${formatConditionValue(tree.value)}`;
 }
 
-function labelForField(path: string, options: ConditionSummaryOptions): string {
-  return options.fieldLabels?.[path] ?? defaultFieldLabels[path] ?? path;
+function labelForField(path: string, _options: ConditionSummaryOptions): string {
+  return path;
 }
 
 function labelForMatchGroup(id: string, options: ConditionSummaryOptions): string {

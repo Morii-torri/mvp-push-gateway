@@ -1,4 +1,5 @@
 import { App } from 'antd';
+import { ReactFlowProvider } from '@xyflow/react';
 import type { ReactElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
@@ -13,6 +14,11 @@ import {
   RouteRuleForm,
   RouteSimulationResultView,
   RouteGroupRowActions,
+  RouteFlowNodeView,
+  RouteConditionSummaryCell,
+  RouteConditionTooltipCard,
+  RouteSendGroupTooltipCard,
+  RouteSendGroupSummaryCell,
   RouteRuleRowActions,
   SourceRowActions,
   TemplateEditorForm,
@@ -74,6 +80,7 @@ import {
   providerTestPayload,
   providerShowsTokenCacheStatus,
   ProviderTypeCell,
+  SourceAuthModeCell,
   SourceAllowlistCell,
   SourceCodeCell,
   UserIdentitySummaryCell,
@@ -222,6 +229,14 @@ describe('critical console pages', () => {
     expect(markup).toContain('newsource02');
     expect(markup).not.toMatch(/<code>newsource02<\/code>/);
     expect(markup).toContain('复制接入说明');
+  });
+
+  it('renders source auth mode as quiet inline text instead of a status pill', () => {
+    const markup = renderPage(<SourceAuthModeCell value="token_and_hmac" />);
+
+    expect(markup).toContain('Token + HMAC 双校验');
+    expect(markup).toContain('source-auth-mode-cell');
+    expect(markup).not.toContain('premium-status-tag');
   });
 
   it('builds source access guide with real source code auth values and generic body', async () => {
@@ -815,6 +830,36 @@ describe('critical console pages', () => {
 
     expect(payload.recipient).toBe('userid_001');
     expect(payload.resolved_recipients).toEqual([{ value: 'userid_001' }]);
+  });
+
+  it('builds generic webhook GET test payload with identity recipient and body wrapper', () => {
+    const draft = {
+      ...createProviderDraft('webhook', 1),
+      fieldValues: {
+        ...createProviderDraft('webhook', 1).fieldValues,
+        'send_config.url': 'https://21329.push.ft07.com/send/%7B%7B%20identity%20%7D%7D.send',
+        'send_config.method': 'GET',
+      },
+      testRecipient: 'send-key-1',
+      testBody: '{"title":"告警标题","content":"告警内容"}',
+    };
+    const markup = renderPage(<ProviderTestPanel value={draft} onChange={() => undefined} />);
+    const payload = providerTestPayload(draft, false) as {
+      recipient: string;
+      body: Record<string, unknown>;
+      rendered_message: { provider_type: string; message_type: string; content: Record<string, unknown> };
+      resolved_recipients: Array<{ value: string }>;
+    };
+
+    expect(markup).toContain('测试接收人（identity）');
+    expect(payload.recipient).toBe('send-key-1');
+    expect(payload.body).toEqual({ body: { title: '告警标题', content: '告警内容' } });
+    expect(payload.rendered_message).toEqual({
+      provider_type: 'webhook',
+      message_type: 'json',
+      content: payload.body,
+    });
+    expect(payload.resolved_recipients).toEqual([{ value: 'send-key-1' }]);
   });
 
   it('builds SMTP email test payload with subject and body fields', () => {
@@ -1472,7 +1517,6 @@ describe('critical console pages', () => {
         display_name: 'Generic Webhook',
         credential_schema: {
           properties: {
-            secret: { type: 'string', format: 'password' },
             headers: { type: 'object' },
           },
         },
@@ -1480,10 +1524,8 @@ describe('critical console pages', () => {
           required: ['url'],
           properties: {
             url: { type: 'string' },
-            method: { type: 'string', default: 'POST' },
+            method: { type: 'string', default: 'POST', enum: ['POST', 'GET'] },
             headers: { type: 'object' },
-            body: { type: 'object' },
-            recipient: { type: 'object' },
           },
         },
       },
@@ -1496,16 +1538,70 @@ describe('critical console pages', () => {
     expect(builtInMarkup).not.toContain('请求映射');
     expect(builtInMarkup).not.toContain('高级 JSON 配置');
     expect(webhookMarkup).toContain('Webhook URL');
-    expect(webhookMarkup).toContain('支持通用占位符');
+    expect(webhookMarkup).toContain('{{ identity }} 表示当前接收人的平台身份字段值。');
     expect(webhookMarkup).toContain('请求方法');
     expect(webhookMarkup).toContain('POST');
+    expect(
+      createProviderDraft('webhook', 1, webhookCapabilities).configFields.find((field) => field.key === 'method')?.options,
+    ).toEqual([
+      { label: 'POST', value: 'POST' },
+      { label: 'GET', value: 'GET' },
+    ]);
+    expect(webhookMarkup).not.toContain('PUT');
+    expect(webhookMarkup).not.toContain('PATCH');
     expect(webhookMarkup).not.toContain('secret');
-    expect(webhookMarkup).not.toContain('请求 Header');
+    expect(webhookMarkup).toContain('请求 Header');
+    expect(webhookMarkup).toContain('provider-field-grid--webhook');
+    expect(webhookMarkup).toContain('provider-field-item--webhook-url');
+    expect(webhookMarkup).toContain('provider-field-item--webhook-method');
+    expect(webhookMarkup).toContain('provider-field-item--webhook-headers');
+    expect(webhookMarkup).not.toContain('按行维护请求 Header，发送时自动拼接到 HTTP 请求头。');
+    expect((webhookMarkup.match(/请求 Header/g) ?? []).length).toBe(1);
     expect(webhookMarkup).not.toContain('title="recipient"');
     expect(webhookMarkup).not.toContain('令牌获取');
     expect(webhookMarkup).not.toContain('请求映射');
     expect(webhookMarkup).not.toContain('Body 映射模板');
     expect(webhookMarkup).not.toContain('高级 JSON 配置');
+  });
+
+  it('saves generic webhook headers as send_config headers', () => {
+    const draft = createProviderDraft('webhook', 1);
+    const input = channelInputFromProvider({
+      ...draft,
+      fieldValues: {
+        ...draft.fieldValues,
+        'send_config.url': 'https://example.test/hooks/{{ identity }}',
+        'send_config.method': 'POST',
+        'send_config.headers': {
+          'X-App-Id': 'app-1',
+          'X-Token': 'token-1',
+        },
+      },
+    });
+
+    expect(input.send_config).toEqual({
+      url: 'https://example.test/hooks/{{ identity }}',
+      method: 'POST',
+      headers: {
+        'X-App-Id': 'app-1',
+        'X-Token': 'token-1',
+      },
+    });
+  });
+
+  it('renders generic webhook templates as raw body preview while saving body wrapper', () => {
+    const draft = createTemplateDraft([], [], 'webhook', 'json');
+    const input = templateVersionInputFromDraft(draft);
+    const savedBody = JSON.parse(input.template_body) as Record<string, string>;
+    const preview = templateRenderedPreview(draft);
+
+    expect(input.message_type).toBe('json');
+    expect(Object.keys(savedBody)).toEqual(['body']);
+    expect(savedBody.body).toContain('"title": "告警标题"');
+    expect(preview).toContain('"title": "告警标题"');
+    expect(preview).not.toContain('"body"');
+    expect(preview).not.toContain('"payload"');
+    expect(preview).not.toContain('"headers"');
   });
 
   it('shows only required MVP-PUSH cascade fields for the selected auth mode', () => {
@@ -1959,7 +2055,7 @@ describe('critical console pages', () => {
       },
     ] as any;
     const draft = {
-      ...createRouteRuleDraft(templateRows, channelRows),
+      ...createRouteRuleDraft(templateRows, channelRows, [{ label: '严重程度', value: 'payload.severity', type: 'string' }]),
       targets: [
         { id: 'target-1', channelId: 'channel-wecom', templateVersionId: 'version-wecom', enabled: true },
         { id: 'target-2', channelId: 'channel-email', templateVersionId: 'version-email', enabled: true },
@@ -2003,6 +2099,10 @@ describe('critical console pages', () => {
     );
 
     expect(markup).toContain('条件组');
+    expect(markup).toContain('条件表达式：payload.severity =');
+    expect(markup).not.toContain('预览：');
+    expect(markup).not.toContain('业务类型 = 民生诉求');
+    expect(markup).not.toContain('内容 = 内容');
     expect(markup).not.toContain('结构化匹配条件');
     expect(markup).not.toContain('或输入 payload.xxx');
     expect(markup).toContain('发送动作组');
@@ -2011,7 +2111,11 @@ describe('critical console pages', () => {
     expect(markup).toContain('接收人');
     expect(markup).toContain('接收人组');
     expect(markup).not.toContain('启停');
-    expect(markup.match(/删除/g)?.length).toBeGreaterThanOrEqual(2);
+    expect(markup).toContain('aria-label="删除条件 1"');
+    expect(markup).toContain('aria-label="删除发送目标 1"');
+    expect(markup.match(/identity-delete-icon-button/g)?.length).toBeGreaterThanOrEqual(2);
+    expect(markup.match(/ant-btn-text/g)?.length).toBeGreaterThanOrEqual(2);
+    expect(markup).not.toContain('>删除</');
   });
 
   it('renders condition group node editing with an editable name instead of basic node metadata only', () => {
@@ -2040,11 +2144,157 @@ describe('critical console pages', () => {
     const draft = {
       ...createRouteRuleDraft([], []),
       name: '只编辑条件',
+      conditions: [{ fieldPath: 'payload.severity', operator: 'equals' as const, value: '严重', matchGroupIds: [] }],
       targets: [],
     };
 
     expect(validateRouteConditionDraft(draft)).toBe('');
     expect(validateRouteRuleDraft(draft, [], [])).toBe('请至少配置一个发送目标');
+  });
+
+  it('renders route condition canvas nodes as compact summaries', () => {
+    const NodeView = RouteFlowNodeView as any;
+    const markup = renderPage(
+      <ReactFlowProvider>
+        <NodeView
+          selected={false}
+          data={{
+            kind: 'condition',
+            title: '高优先级条件组',
+            description: 'payload.level = critical 且 payload.scope 包含 华东 且 payload.sender.department = 应急办 且 payload.title 匹配正则 ^P[0-9]+',
+            routeDraft: {
+              conditionGroupOperator: 'and',
+              conditions: [
+                { fieldPath: 'payload.level', operator: 'equals', value: 'critical', matchGroupIds: [] },
+                { fieldPath: 'payload.scope', operator: 'contains', value: '华东', matchGroupIds: [] },
+                { fieldPath: 'payload.sender.department', operator: 'equals', value: '应急办', matchGroupIds: [] },
+                { fieldPath: 'payload.title', operator: 'regex', value: '^P[0-9]+', matchGroupIds: [] },
+              ],
+            },
+            hitCount: 12,
+          }}
+        />
+      </ReactFlowProvider>,
+    );
+
+    expect(markup).toContain('高优先级条件组');
+    expect(markup).toContain('AND · 4 条条件');
+    expect(markup).toContain('payload.level = critical');
+    expect(markup).toContain('+3');
+    expect(markup).not.toContain('发送部门 = 应急办');
+    expect(markup).not.toContain('标题 匹配正则');
+  });
+
+  it('renders route send action summaries with separated white tooltip rows', () => {
+    const markup = renderPage(
+      <RouteSendGroupSummaryCell value="企业微信实例 -> 企微模板、邮件实例 -> 邮件模板" maxWidth={300} />,
+    );
+    const tooltipMarkup = renderPage(
+      <RouteSendGroupTooltipCard items={['企业微信实例 -> 企微模板', '邮件实例 -> 邮件模板']} />,
+    );
+
+    expect(markup).toContain('route-send-group-summary');
+    expect(markup).toContain('企业微信实例 -&gt; 企微模板');
+    expect(markup).toContain('邮件实例 -&gt; 邮件模板');
+    expect(markup).toContain('企业微信实例 -&gt; 企微模板\n邮件实例 -&gt; 邮件模板');
+    expect(tooltipMarkup).toContain('route-send-group-tooltip-card');
+    expect(tooltipMarkup.match(/route-send-group-tooltip-row/g)).toHaveLength(2);
+    expect(tooltipMarkup).toContain('企业微信实例 -&gt; 企微模板');
+    expect(tooltipMarkup).toContain('邮件实例 -&gt; 邮件模板');
+  });
+
+  it('renders route condition summaries with separated white tooltip rows', () => {
+    const value = 'payload.severity = 严重 且 payload.env = prod 或 payload.source = ops';
+    const markup = renderPage(<RouteConditionSummaryCell value={value} maxWidth={220} />);
+    const tooltipMarkup = renderPage(
+      <RouteConditionTooltipCard items={['payload.severity = 严重', 'payload.env = prod', 'payload.source = ops']} />,
+    );
+
+    expect(markup).toContain('route-condition-summary');
+    expect(markup).toContain('payload.severity = 严重');
+    expect(markup).toContain('payload.env = prod');
+    expect(markup).toContain('payload.severity = 严重\npayload.env = prod\npayload.source = ops');
+    expect(tooltipMarkup).toContain('route-condition-tooltip-card');
+    expect(tooltipMarkup.match(/route-condition-tooltip-row/g)).toHaveLength(3);
+    expect(tooltipMarkup).toContain('payload.source = ops');
+  });
+
+  it('renders simple canvas nodes without noisy source and fallback descriptions', () => {
+    const NodeView = RouteFlowNodeView as any;
+    const markup = renderPage(
+      <ReactFlowProvider>
+        <NodeView
+          selected={false}
+          data={{
+            kind: 'source',
+            title: '来源-01',
+            description: '来源编码：newsource',
+          }}
+        />
+        <NodeView
+          selected={false}
+          data={{
+            kind: 'condition',
+            title: '普通条件组',
+            description: 'payload.bizType = 民生诉求',
+            condition: 'payload.bizType = 民生诉求',
+          }}
+        />
+        <NodeView
+          selected={false}
+          data={{
+            kind: 'recipient',
+            title: '系统接收人',
+            description: '',
+          }}
+        />
+        <NodeView
+          selected={false}
+          data={{
+            kind: 'send_group',
+            title: '企业微信应用消息',
+            description: '',
+          }}
+        />
+      </ReactFlowProvider>,
+    );
+
+    expect(markup).toContain('route-flow-node--start');
+    expect(markup).toContain('route-flow-node__start-content');
+    expect(markup).toContain('开始：来源-01');
+    expect(markup).toContain('newsource');
+    expect(markup).not.toContain('来源开始');
+    expect(markup).not.toContain('来源编码：');
+    expect(markup).toContain('payload.bizType = 民生诉求');
+    expect(markup).not.toContain('<span class="route-flow-node__meta">无条件</span>');
+    expect(markup).not.toContain('解析接收人并映射身份字段');
+    expect(markup).not.toContain('命中后按发送目标逐个渲染和投递');
+  });
+
+  it('renders end canvas nodes as compact non-editable terminators', () => {
+    const NodeView = RouteFlowNodeView as any;
+    const markup = renderPage(
+      <ReactFlowProvider>
+        <NodeView
+          selected={false}
+          data={{
+            kind: 'end',
+            title: '结束',
+            description: '发送动作组执行后停止继续匹配',
+          }}
+        />
+      </ReactFlowProvider>,
+    );
+
+    expect(markup).toContain('route-flow-node--terminal');
+    expect(markup).toContain('结束');
+    expect(markup).toContain('END');
+    expect(markup).not.toContain('发送动作组执行后停止继续匹配');
+  });
+
+  it('hides the source canvas editor footer because the modal close icon is enough', () => {
+    expect(ConsolePages.canvasNodeEditorFooter({ nodeId: 'source-start', kind: 'source' } as any)).toBeNull();
+    expect(ConsolePages.canvasNodeEditorFooter({ nodeId: 'rule-1-condition', kind: 'condition' } as any)).toBeUndefined();
   });
 
   it('renders payload recipient path only for payload recipient strategy', () => {
@@ -3132,7 +3382,7 @@ describe('critical console pages', () => {
     expect(textPreview.format).toBe('text');
     expect(textPreview.html).toContain('&lt;b&gt;CPU 90%&lt;/b&gt;');
     expect(textPreview.html).not.toContain('<b>CPU 90%</b>');
-    expect(templateVersionInputFromDraft(textDraft).message_type).toBe('text');
+    expect(templateVersionInputFromDraft(textDraft).message_type).toBe('json');
   });
 
   it('does not stringify the SMTP email payload as body when email body is empty', () => {
@@ -3481,7 +3731,7 @@ describe('critical console pages', () => {
       [{ id: 'src-1', code: 'source-a', name: '来源 A' }],
     );
 
-    expect(row.messageType).toBe('text');
+    expect(row.messageType).toBe('json');
   });
 
   it('renders organization tree inside person management without an organization list page', () => {

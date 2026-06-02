@@ -196,7 +196,7 @@ export const defaultBrandMeta: ProviderBrandDetail = {
 };
 
 const fallbackMessageTypesByProvider: Record<ProviderKind, string[]> = {
-  webhook: ['text', 'markdown'],
+  webhook: ['json'],
   self: ['text'],
   pushplus: ['html'],
   wxpusher: ['html'],

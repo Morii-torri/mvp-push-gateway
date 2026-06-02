@@ -1,4 +1,5 @@
 import type { ReactNode } from 'react';
+import { DeleteOutlined } from '@ant-design/icons';
 import Alert from 'antd/es/alert';
 import Button from 'antd/es/button';
 import Form from 'antd/es/form';
@@ -73,11 +74,11 @@ const routeConditionOperatorOptions: Array<{ label: string; value: RouteConditio
   { label: '不属于匹配组', value: 'not_in_match_group' },
 ];
 
-function createDefaultConditionDraft(): RouteConditionDraft {
+function createDefaultConditionDraft(payloadFieldOptions?: Array<{ label: string; value: string; type: string }>): RouteConditionDraft {
   return {
-    fieldPath: 'payload.bizType',
+    fieldPath: payloadFieldOptions?.[0]?.value ?? '',
     operator: 'equals',
-    value: '民生诉求',
+    value: '',
     matchGroupIds: [],
   };
 }
@@ -85,11 +86,12 @@ function createDefaultConditionDraft(): RouteConditionDraft {
 export function createRouteRuleDraft(
   templateRows: Array<TemplateRecord & { raw?: TemplateApiRecord }>,
   channelRows: ProviderRow[],
+  payloadFieldOptions?: Array<{ label: string; value: string; type: string }>,
 ): RouteRuleDraft {
   return {
     name: '新路由规则',
     conditionGroupOperator: 'and',
-    conditions: [createDefaultConditionDraft()],
+    conditions: [createDefaultConditionDraft(payloadFieldOptions)],
     targets: [createDefaultRouteTarget(channelRows, templateRows)],
     recipientMode: 'system',
     recipientUserIds: [],
@@ -198,11 +200,11 @@ export function RouteConditionEditor({
     });
   };
   const addCondition = () => {
-    onChange({ ...value, conditions: [...value.conditions, createDefaultConditionDraft()] });
+    onChange({ ...value, conditions: [...value.conditions, createDefaultConditionDraft(payloadFieldOptions)] });
   };
   const removeCondition = (index: number) => {
     const nextConditions = value.conditions.filter((_item, itemIndex) => itemIndex !== index);
-    onChange({ ...value, conditions: nextConditions.length ? nextConditions : [createDefaultConditionDraft()] });
+    onChange({ ...value, conditions: nextConditions.length ? nextConditions : [createDefaultConditionDraft(payloadFieldOptions)] });
   };
   const fieldOptions = routePayloadFieldSelectOptions(payloadFieldOptions);
   const matchGroupOptionsForField = (fieldPath: string) => routeMatchGroupOptionsForField(matchGroupRows, fieldPath);
@@ -275,16 +277,17 @@ export function RouteConditionEditor({
               />
             )}
             <Button
+              aria-label={`删除条件 ${index + 1}`}
+              className="identity-delete-icon-button"
               danger
-              type="link"
+              icon={<DeleteOutlined />}
+              type="text"
               onClick={() => removeCondition(index)}
-            >
-              删除
-            </Button>
+            />
           </div>
         );
       })}
-      <Alert type="info" showIcon message={`预览：${conditionPreview}`} />
+      <Alert type="info" showIcon message={`条件表达式：${conditionPreview}`} />
     </div>
   );
 }
@@ -359,9 +362,14 @@ export function RouteTargetsEditor({
               unCheckedChildren="停用"
               onChange={(enabled) => updateTarget(index, { enabled })}
             />
-            <Button danger type="link" onClick={() => removeTarget(index)}>
-              删除
-            </Button>
+            <Button
+              aria-label={`删除发送目标 ${index + 1}`}
+              className="identity-delete-icon-button"
+              danger
+              icon={<DeleteOutlined />}
+              type="text"
+              onClick={() => removeTarget(index)}
+            />
             {providerTypeUnknown ? (
               <Typography.Text type="secondary" className="send-action-row__hint">
                 模板未声明推送渠道类型，已按兼容处理
@@ -454,7 +462,7 @@ export function RouteRecipientEditor({
 
 function routePayloadFieldSelectOptions(payloadFieldOptions?: Array<{ label: string; value: string; type: string }>) {
   return (payloadFieldOptions ?? []).map((field) => ({
-    label: field.label,
+    label: field.value,
     value: field.value,
   }));
 }
@@ -673,7 +681,7 @@ function routeConditionDraftsFromTree(value: JSONValue): RouteConditionDraft[] {
   ) {
     return [
       {
-        fieldPath: String(tree.path ?? 'payload.bizType'),
+        fieldPath: String(tree.path ?? ''),
         operator: operator as RouteConditionOperator,
         value: operator === 'exists' || operator === 'not_exists'
           ? ''

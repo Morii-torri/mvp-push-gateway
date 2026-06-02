@@ -631,7 +631,7 @@ func smsContentSchema() json.RawMessage {
 }
 
 func webhookContentSchema() json.RawMessage {
-	return rawJSON(`{"type":"object","properties":{"payload":{"type":"object","title":"Payload","additionalProperties":true},"headers":{"type":"object","additionalProperties":{"type":"string"}}},"additionalProperties":true}`)
+	return rawJSON(`{"type":"object","required":["body"],"field_order":["body"],"properties":{"body":{"type":"object","title":"Body","additionalProperties":true,"default":{"title":"告警标题","level":"critical","content":"告警内容","biz_id":"order-10001","timestamp":"2026-06-02T10:00:00+08:00"}}},"additionalProperties":false}`)
 }
 
 func normalizeChannelInput(input CreateChannelInput) (CreateChannelParams, error) {
@@ -788,6 +788,7 @@ type requestConfig struct {
 	Token             placementConfig   `json:"token"`
 	Recipient         placementConfig   `json:"recipient"`
 	SkipRenderedMerge bool              `json:"-"`
+	OmitBody          bool              `json:"-"`
 }
 
 type placementConfig struct {
@@ -876,9 +877,12 @@ func buildRequest(channel Channel, input BuildRequestInput) (BuiltRequest, error
 		requestURL = parsed.String()
 	}
 
-	body, err := json.Marshal(bodyMap)
-	if err != nil {
-		return BuiltRequest{}, ErrInvalidInput
+	var body json.RawMessage
+	if !config.OmitBody {
+		body, err = json.Marshal(bodyMap)
+		if err != nil {
+			return BuiltRequest{}, ErrInvalidInput
+		}
 	}
 	return BuiltRequest{
 		Method:  config.Method,
@@ -1067,7 +1071,7 @@ func sendBuiltRequest(ctx context.Context, channel Channel, built BuiltRequest) 
 		return sendSMTPBuiltRequest(ctx, channel, built)
 	}
 	body := built.Body
-	if len(bytes.TrimSpace(body)) == 0 {
+	if len(bytes.TrimSpace(body)) == 0 && !strings.EqualFold(built.Method, "GET") {
 		body = json.RawMessage(`{}`)
 	}
 	req, err := http.NewRequestWithContext(ctx, built.Method, built.URL, bytes.NewReader(body))
@@ -1404,7 +1408,7 @@ func requestConfigFrom(channel Channel, input BuildRequestInput) (requestConfig,
 	if err := decodeInto(channel.SendConfig, &config); err != nil {
 		return requestConfig{}, err
 	}
-	if channel.ProviderType == ProviderServerChan || strings.TrimSpace(config.URL) == "" {
+	if channel.ProviderType == ProviderWebhook || channel.ProviderType == ProviderServerChan || strings.TrimSpace(config.URL) == "" {
 		defaultConfig, ok, err := builtInRequestConfig(channel, input)
 		if err != nil {
 			return requestConfig{}, err
