@@ -172,17 +172,18 @@ func normalizeGroup(input GroupInput) (CreateGroupParams, error) {
 	input.GroupType = strings.TrimSpace(input.GroupType)
 	input.Description = strings.TrimSpace(input.Description)
 	if input.GroupType == "" {
-		input.GroupType = "business"
+		input.GroupType = "text"
 	}
 	if input.Name == "" || !validGroupType(input.GroupType) {
 		return CreateGroupParams{}, ErrInvalidInput
 	}
+	input.Enabled = true
 	return input, nil
 }
 
 func validGroupType(groupType string) bool {
 	switch groupType {
-	case "business", "ip", "system":
+	case "text", "ip":
 		return true
 	default:
 		return false

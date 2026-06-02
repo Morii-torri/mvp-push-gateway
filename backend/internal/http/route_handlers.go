@@ -21,6 +21,8 @@ type routeFlowResponse struct {
 	Enabled          bool   `json:"enabled"`
 	Mode             string `json:"mode"`
 	CurrentVersionID string `json:"current_version_id"`
+	RuleCount        int    `json:"rule_count"`
+	TotalHitCount    int    `json:"total_hit_count"`
 	CreatedAt        string `json:"created_at"`
 	UpdatedAt        string `json:"updated_at"`
 }
@@ -223,6 +225,14 @@ func (h *Handler) routeFlowDetailHandler(w http.ResponseWriter, r *http.Request)
 			h.routeVersionsHandler(w, r, flowID)
 			return
 		}
+		if len(parts) == 3 && r.Method == http.MethodDelete {
+			h.routeDeleteVersionHandler(w, r, flowID, parts[2], adminUser)
+			return
+		}
+		if len(parts) == 4 && parts[3] == "rules" && r.Method == http.MethodGet {
+			h.routeVersionRulesHandler(w, r, flowID, parts[2])
+			return
+		}
 		if len(parts) == 4 && parts[3] == "activate" && r.Method == http.MethodPost {
 			h.routeActivateVersionHandler(w, r, flowID, parts[2], adminUser)
 			return
@@ -330,6 +340,17 @@ func (h *Handler) routeActivateVersionHandler(w http.ResponseWriter, r *http.Req
 	writeJSON(w, http.StatusOK, response)
 }
 
+func (h *Handler) routeDeleteVersionHandler(w http.ResponseWriter, r *http.Request, flowID string, versionID string, adminUser auth.Admin) {
+	if err := h.routes.DeleteVersion(r.Context(), flowID, versionID); err != nil {
+		status, code, message := routeErrorStatus(err)
+		writeAPIError(w, status, code, message)
+		return
+	}
+	response := okResponse{OK: true}
+	h.recordAudit(r, adminUser, "delete", "route_version", versionID, map[string]string{"flow_id": flowID}, response)
+	writeJSON(w, http.StatusOK, response)
+}
+
 func (h *Handler) routeCanvasHandler(w http.ResponseWriter, r *http.Request, flowID string, adminUser auth.Admin) {
 	switch r.Method {
 	case http.MethodGet:
@@ -405,6 +426,16 @@ func (h *Handler) routeRulesHandler(w http.ResponseWriter, r *http.Request, flow
 	default:
 		methodNotAllowed(w, http.MethodGet+", "+http.MethodPut)
 	}
+}
+
+func (h *Handler) routeVersionRulesHandler(w http.ResponseWriter, r *http.Request, flowID string, versionID string) {
+	ruleSet, err := h.routes.GetVersionRules(r.Context(), flowID, versionID)
+	if err != nil {
+		status, code, message := routeErrorStatus(err)
+		writeAPIError(w, status, code, message)
+		return
+	}
+	writeJSON(w, http.StatusOK, toRouteRulesResponse(ruleSet))
 }
 
 func (h *Handler) routeReorderHandler(w http.ResponseWriter, r *http.Request, flowID string, adminUser auth.Admin) {
@@ -484,6 +515,8 @@ func toRouteFlowResponse(flow route.Flow) routeFlowResponse {
 		Enabled:          flow.Enabled,
 		Mode:             string(flow.Mode),
 		CurrentVersionID: flow.CurrentVersionID,
+		RuleCount:        flow.RuleCount,
+		TotalHitCount:    flow.TotalHitCount,
 		CreatedAt:        formatTime(flow.CreatedAt),
 		UpdatedAt:        formatTime(flow.UpdatedAt),
 	}

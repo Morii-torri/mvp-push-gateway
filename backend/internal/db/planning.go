@@ -120,9 +120,15 @@ func (r Repository) LoadRoutePlan(ctx context.Context, sourceID string, versionI
 		}
 		return planning.RoutePlan{}, fmt.Errorf("load route version: %w", err)
 	}
-	rules, err := listRulesForVersion(ctx, r.pool, flow.ID, version.ID)
+	persistedRules, err := listRulesForVersion(ctx, r.pool, flow.ID, version.ID)
 	if err != nil {
 		return planning.RoutePlan{}, err
+	}
+	rules := persistedRules
+	if compiledRules, ok, err := route.RulesFromCompiled(version.CompiledRules, persistedRules); err != nil {
+		return planning.RoutePlan{}, fmt.Errorf("load compiled route rules: %w", err)
+	} else if ok {
+		rules = compiledRules
 	}
 	matchGroupValues, err := r.loadMatchGroupValues(ctx, rules)
 	if err != nil {
@@ -180,6 +186,10 @@ func (r Repository) loadMatchGroupValues(ctx context.Context, rules []route.Rule
 		return nil, fmt.Errorf("match group value rows: %w", err)
 	}
 	return values, nil
+}
+
+func (r Repository) LoadMatchGroupValues(ctx context.Context, rules []route.Rule) (map[string][]string, error) {
+	return r.loadMatchGroupValues(ctx, rules)
 }
 
 func (r Repository) GetTemplateVersion(ctx context.Context, id string) (msgtemplate.TemplateVersion, error) {
@@ -354,7 +364,7 @@ func (r Repository) ResolveSystemRecipients(ctx context.Context, params planning
 					WHERE excluded_membership.user_id = candidate_users.id
 						AND excluded_membership.org_id IN (SELECT id FROM excluded_orgs)
 				)
-		)
+		),
 		ranked_identities AS (
 			SELECT
 				identity.identity_value,

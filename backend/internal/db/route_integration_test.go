@@ -3,7 +3,9 @@ package db
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -122,6 +124,20 @@ func TestRouteFlowEnabledUniquenessVersionsAndCounters(t *testing.T) {
 	draft, err := repository.GetDraft(ctx, first.ID)
 	if err != nil {
 		t.Fatalf("get draft: %v", err)
+	}
+	canvas, err := repository.UpdateCanvas(ctx, first.ID, json.RawMessage(`{"nodes":[{"id":"condition-1","data":{"kind":"condition","title":"条件组"}}],"edges":[]}`), route.ModeCanvas)
+	if err != nil {
+		t.Fatalf("update canvas snapshot: %v", err)
+	}
+	if !strings.Contains(string(canvas.Version.CanvasSnapshot), `"condition-1"`) {
+		t.Fatalf("expected canvas snapshot to be persisted, got %s", canvas.Version.CanvasSnapshot)
+	}
+	flowAfterCanvas, err := repository.GetFlow(ctx, first.ID)
+	if err != nil {
+		t.Fatalf("get flow after canvas update: %v", err)
+	}
+	if flowAfterCanvas.Mode != route.ModeCanvas {
+		t.Fatalf("expected canvas save to switch flow mode, got %s", flowAfterCanvas.Mode)
 	}
 	rules, err := repository.ReplaceRules(ctx, first.ID, draft.Version.ID, []route.Rule{
 		{
@@ -307,6 +323,71 @@ func TestRouteFlowEnabledUniquenessVersionsAndCounters(t *testing.T) {
 	}
 	if afterV2.CurrentVersionID != publishedV2.ID {
 		t.Fatalf("expected current version %s after activate v2, got %s", publishedV2.ID, afterV2.CurrentVersionID)
+	}
+}
+
+func TestDeleteRouteVersionRemovesOnlyHistoricalPublishedVersion(t *testing.T) {
+	dsn := os.Getenv("MGP_TEST_DATABASE_URL")
+	if dsn == "" {
+		t.Skip("MGP_TEST_DATABASE_URL is not set")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	schemaName := createMigratedTestSchema(ctx, t, dsn)
+	defer dropTestSchema(schemaName)
+
+	poolConfig, err := pgxpool.ParseConfig(dsn)
+	if err != nil {
+		t.Fatalf("parse pool config: %v", err)
+	}
+	poolConfig.ConnConfig.RuntimeParams["search_path"] = schemaName
+
+	pool, err := pgxpool.NewWithConfig(ctx, poolConfig)
+	if err != nil {
+		t.Fatalf("open test pool: %v", err)
+	}
+	defer pool.Close()
+
+	repository := NewRepository(pool)
+	if _, err := pool.Exec(ctx, `INSERT INTO inbound_sources (id, code, name) VALUES ($1, $2, $3)`, "00000000-0000-0000-0000-00000000d010", "route-delete", "Route Delete"); err != nil {
+		t.Fatalf("insert source: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO route_flows (id, source_id, name, enabled, mode)
+		VALUES ($1, $2, 'Route Delete Flow', false, 'table')
+	`, "00000000-0000-0000-0000-00000000d020", "00000000-0000-0000-0000-00000000d010"); err != nil {
+		t.Fatalf("insert flow: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO route_versions (id, flow_id, version_no, validation_status, validation_errors, published_at)
+		VALUES
+			($1, $2, 1, 'valid', '[]'::jsonb, now()),
+			($3, $2, 2, 'valid', '[]'::jsonb, now())
+	`, "00000000-0000-0000-0000-00000000d021", "00000000-0000-0000-0000-00000000d020", "00000000-0000-0000-0000-00000000d022"); err != nil {
+		t.Fatalf("insert versions: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `
+		UPDATE route_flows
+		SET current_version_id = $2
+		WHERE id = $1
+	`, "00000000-0000-0000-0000-00000000d020", "00000000-0000-0000-0000-00000000d021"); err != nil {
+		t.Fatalf("set current version: %v", err)
+	}
+
+	if err := repository.DeleteVersion(ctx, "00000000-0000-0000-0000-00000000d020", "00000000-0000-0000-0000-00000000d022"); err != nil {
+		t.Fatalf("delete historical version: %v", err)
+	}
+	versions, err := repository.ListVersions(ctx, "00000000-0000-0000-0000-00000000d020")
+	if err != nil {
+		t.Fatalf("list versions after delete: %v", err)
+	}
+	if len(versions) != 1 || versions[0].ID != "00000000-0000-0000-0000-00000000d021" {
+		t.Fatalf("expected only current version to remain, got %+v", versions)
+	}
+	if err := repository.DeleteVersion(ctx, "00000000-0000-0000-0000-00000000d020", "00000000-0000-0000-0000-00000000d021"); !errors.Is(err, route.ErrInvalidInput) {
+		t.Fatalf("expected current version delete to return invalid input, got %v", err)
 	}
 }
 

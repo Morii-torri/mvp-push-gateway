@@ -109,6 +109,51 @@ describe('route flow helpers', () => {
     });
   });
 
+  it('builds and summarizes documented condition operators', () => {
+    const tree = buildRouteConditionTree(
+      [
+        {
+          fieldPath: 'payload.status',
+          operator: 'not_equals',
+          value: 'closed',
+          matchGroupIds: [],
+        },
+        {
+          fieldPath: 'payload.deletedAt',
+          operator: 'not_exists',
+          value: '',
+          matchGroupIds: [],
+        },
+        {
+          fieldPath: 'payload.title',
+          operator: 'regex',
+          value: '^P[0-9]+',
+          matchGroupIds: [],
+        },
+        {
+          fieldPath: 'payload.count',
+          operator: 'gte',
+          value: '10',
+          matchGroupIds: [],
+        },
+      ],
+      'and',
+    );
+
+    expect(tree).toEqual({
+      operator: 'and',
+      conditions: [
+        { operator: 'not_equals', path: 'payload.status', value: 'closed' },
+        { operator: 'not_exists', path: 'payload.deletedAt' },
+        { operator: 'regex', path: 'payload.title', value: '^P[0-9]+' },
+        { operator: 'gte', path: 'payload.count', value: '10' },
+      ],
+    });
+    expect(summarizeRouteConditionTree(tree)).toBe(
+      'payload.status ≠ closed 且 payload.deletedAt 字段不存在 且 标题 匹配正则 ^P[0-9]+ 且 payload.count ≥ 10',
+    );
+  });
+
   it('summarizes route condition trees with Chinese labels and match group names', () => {
     expect(
       summarizeRouteConditionTree(
@@ -131,14 +176,14 @@ describe('route flow helpers', () => {
           },
         },
       ),
-    ).toBe('业务类型 = 民生诉求 且 标题 存在 且 消息级别 不属于匹配组[紧急等级]');
+    ).toBe('业务类型 = 民生诉求 且 标题 字段存在 且 消息级别 不属于匹配组[紧急等级]');
   });
 
   it('keeps legacy expression summaries readable', () => {
     expect(summarizeRouteConditionTree({ expression: '业务类型 = 民生诉求' })).toBe('业务类型 = 民生诉求');
   });
 
-  it('builds a send action group canvas without new template nodes', () => {
+  it('builds a compact send action group canvas with an automatic source start and end node', () => {
     const snapshot = buildInitialRouteFlow(groups[0], [
       {
         ...rules[1],
@@ -146,17 +191,20 @@ describe('route flow helpers', () => {
       },
     ]);
 
-    expect(routeNodeCatalog.map((item) => item.kind)).toEqual(['source', 'condition', 'recipient', 'send_group']);
-    expect(snapshot.nodes.map((node) => node.data.kind)).toEqual(['source', 'condition', 'recipient', 'send_group']);
+    expect(routeNodeCatalog.map((item) => item.kind)).toEqual(['condition', 'recipient', 'send_group', 'end']);
+    expect(snapshot.nodes.map((node) => node.data.kind)).toEqual(['source', 'condition', 'recipient', 'send_group', 'end']);
+    expect(snapshot.nodes.find((node) => node.id === 'source-start')?.deletable).toBe(false);
     expect(snapshot.nodes.some((node) => node.data.kind === 'template')).toBe(false);
     expect(snapshot.edges.map((edge) => [edge.source, edge.target])).toEqual([
       ['source-start', 'rule-2-condition'],
       ['rule-2-condition', 'rule-2-recipient'],
       ['rule-2-recipient', 'rule-2-send-group'],
+      ['rule-2-send-group', 'rule-2-end'],
     ]);
   });
 
   it('keeps legacy template and platform node defaults for saved snapshots', () => {
+    expect(routeNodeDefaults.source.title).toBe('来源开始');
     expect(routeNodeDefaults.template.title).toBe('模板渲染');
     expect(routeNodeDefaults.platform.title).toBe('发送平台');
   });

@@ -348,6 +348,7 @@ export type RouteGroup = {
   enabled: boolean;
   currentVersion: string;
   ruleIds: string[];
+  ruleCount?: number;
   totalHitCount: number;
   updatedAt: string;
 };

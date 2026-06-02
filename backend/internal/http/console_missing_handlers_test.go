@@ -22,7 +22,7 @@ func TestMatchGroupHandlersSupportGroupAndItemCRUD(t *testing.T) {
 		listResult: []matchgroup.Group{{
 			ID:          "group-1",
 			Name:        "Urgent",
-			GroupType:   "business",
+			GroupType:   "text",
 			Description: "urgent words",
 			Enabled:     true,
 			ItemCount:   1,
@@ -36,7 +36,7 @@ func TestMatchGroupHandlersSupportGroupAndItemCRUD(t *testing.T) {
 		getResult: matchgroup.Group{
 			ID:        "group-1",
 			Name:      "Urgent",
-			GroupType: "business",
+			GroupType: "text",
 			Enabled:   true,
 		},
 		itemResult: matchgroup.Item{
@@ -60,9 +60,9 @@ func TestMatchGroupHandlersSupportGroupAndItemCRUD(t *testing.T) {
 		expectedStatus int
 	}{
 		{name: "list groups", method: http.MethodGet, path: "/api/v1/match-groups", expectedStatus: http.StatusOK},
-		{name: "create group", method: http.MethodPost, path: "/api/v1/match-groups", body: `{"name":"Urgent","group_type":"business","description":"urgent words","enabled":true}`, expectedStatus: http.StatusCreated},
+		{name: "create group", method: http.MethodPost, path: "/api/v1/match-groups", body: `{"name":"Urgent","group_type":"text","description":"urgent words","enabled":true}`, expectedStatus: http.StatusCreated},
 		{name: "get group", method: http.MethodGet, path: "/api/v1/match-groups/group-1", expectedStatus: http.StatusOK},
-		{name: "update group", method: http.MethodPut, path: "/api/v1/match-groups/group-1", body: `{"name":"Urgent Updated","group_type":"business","description":"urgent words","enabled":true}`, expectedStatus: http.StatusOK},
+		{name: "update group", method: http.MethodPut, path: "/api/v1/match-groups/group-1", body: `{"name":"Urgent Updated","group_type":"text","description":"urgent words","enabled":true}`, expectedStatus: http.StatusOK},
 		{name: "list items", method: http.MethodGet, path: "/api/v1/match-groups/group-1/items", expectedStatus: http.StatusOK},
 		{name: "create item", method: http.MethodPost, path: "/api/v1/match-groups/group-1/items", body: `{"value":"urgent","value_type":"text","metadata":{"label":"Urgent"}}`, expectedStatus: http.StatusCreated},
 		{name: "get item", method: http.MethodGet, path: "/api/v1/match-groups/group-1/items/item-1", expectedStatus: http.StatusOK},

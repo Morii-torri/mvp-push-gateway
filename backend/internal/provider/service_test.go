@@ -382,6 +382,13 @@ func TestServiceResolvesDingTalkUserIDByQueryWordWithAppToken(t *testing.T) {
 	if item := result.Items[0]; item.QueryWord != "张三" || item.UserID != "093102391140051902" || item.Status != "resolved" {
 		t.Fatalf("unexpected resolve item: %+v", item)
 	}
+	channels, err := service.ListChannels(context.Background())
+	if err != nil {
+		t.Fatalf("list channels after resolving DingTalk user id: %v", err)
+	}
+	if len(channels) != 1 || !channels[0].IsCached || channels[0].TokenCacheStatus != "cached" {
+		t.Fatalf("expected DingTalk channel token cache to be reported cached after user id resolve, got %+v", channels)
+	}
 }
 
 func TestServiceDingTalkUserIDResolveMarksMultipleMatches(t *testing.T) {

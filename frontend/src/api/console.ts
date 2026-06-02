@@ -234,6 +234,8 @@ export type RouteFlowApiRecord = {
   enabled: boolean;
   mode: 'canvas' | 'table';
   current_version_id: string;
+  rule_count?: number;
+  total_hit_count?: number;
   created_at: string;
   updated_at: string;
 };
@@ -644,6 +646,18 @@ export const consoleApi = {
   },
   getRouteRules(id: string, fetcher?: ApiFetcher) {
     return apiRequest<{ version_id: string; rules: RouteRuleApiRecord[] }>(`/route-flows/${id}/rules`, { fetcher });
+  },
+  getRouteVersionRules(id: string, versionId: string, fetcher?: ApiFetcher) {
+    return apiRequest<{ version_id: string; rules: RouteRuleApiRecord[] }>(
+      `/route-flows/${id}/versions/${versionId}/rules`,
+      { fetcher },
+    );
+  },
+  deleteRouteVersion(id: string, versionId: string, fetcher?: ApiFetcher) {
+    return apiRequest<{ ok: boolean }>(`/route-flows/${id}/versions/${versionId}`, {
+      method: 'DELETE',
+      fetcher,
+    });
   },
   saveRouteRules(id: string, rules: RouteRuleInput[], fetcher?: ApiFetcher) {
     return apiRequest<{ version_id: string; rules: RouteRuleApiRecord[] }>(`/route-flows/${id}/rules`, {

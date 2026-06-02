@@ -252,7 +252,7 @@ Provider type registry，避免每新增一个 provider 都扩展 `delivery_chan
 
 ### `route_flows`
 
-路由大组。
+路由组。
 
 | 字段 | 类型 | 说明 |
 |---|---|---|
@@ -263,7 +263,9 @@ Provider type registry，避免每新增一个 provider 都扩展 `delivery_chan
 | `mode` | text | `canvas` / `table` |
 | `current_version_id` | uuid null | 当前发布版本 |
 
-每个来源只能存在一个启用的路由大组。创建或启用时必须查询同来源是否已有启用大组；如果存在，禁止保存并提示“路由组已存在”。执行版本由 `current_version_id` 决定，v1/v2 等版本属于同一个路由大组，不需要创建多个大组。
+每个来源只能存在一个启用的路由组。创建或启用时必须查询同来源是否已有启用路由组；如果存在，禁止保存并提示“路由组已存在”。执行版本由 `current_version_id` 决定，v1/v2 等版本属于同一个路由组，不需要创建多个路由组。管理台的草稿规则列表读取最新未发布版本；切换当前执行版本只改变线上执行和回滚目标，不改变草稿列表内容。
+
+管理台列表中的规则数和总命中次数不是 `route_flows` 的持久字段，而是查询最新未发布草稿版本的 `route_rules` 与 `route_rule_counters` 聚合结果。这样可以避免列表规则数与进入路由组后看到的草稿规则数量不一致。
 
 ### `route_versions`
 
@@ -274,12 +276,12 @@ Provider type registry，避免每新增一个 provider 都扩展 `delivery_chan
 | `id` | uuid pk | 版本 ID |
 | `flow_id` | uuid | 路由组 |
 | `version_no` | int | 版本号 |
-| `canvas_snapshot` | jsonb | React Flow 节点和边 |
+| `canvas_snapshot` | jsonb | React Flow 节点和边的布局快照，不作为独立执行源 |
 | `compiled_rules` | jsonb | 后端执行模型 |
 | `validation_status` | text | 校验状态 |
 | `published_at` | timestamptz null | 发布时间 |
 
-`compiled_rules` 是发布时生成的 worker 执行模型，至少包含：
+`compiled_rules` 是发布时基于已保存规则集生成的 worker 执行模型，至少包含：
 
 - `rules`：按 `sort_order` 排序后的规则数组。
 - `execution_mode`：第一版固定为 `first_match_stop`，表示第一条命中后停止继续匹配。
@@ -290,6 +292,8 @@ Provider type registry，避免每新增一个 provider 都扩展 `delivery_chan
 - `compiled_at` / `compiler_version`：编译时间和编译器版本。
 
 planning worker 使用 `source_id + current_version_id` 缓存执行模型；发布新版本后通过版本变化让缓存失效。
+
+历史版本允许清理，但只能删除已发布且不是 `current_version_id` 的版本；未发布草稿版本必须保留，否则路由组将无法继续编辑草稿规则。
 
 ### `route_rules` / `route_actions` / `route_action_targets`
 

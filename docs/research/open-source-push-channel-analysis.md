@@ -232,7 +232,7 @@ POST /api/inbound/:token
 这形成了区别于 Austin 和 MagicPush 的优势：
 
 - **下级来源优先，而不是模板 ID 或 endpoint token 优先。** 下级系统只需要知道自己的 `source_code` 和来源凭证，不需要知道最终投给哪个平台、哪个模板、哪些人。
-- **路由是核心资产。** 一个来源对应一个启用路由大组，路由有草稿、发布版本、当前版本、画布/表格两种编辑形态；执行时按版本缓存，第一条命中即停止。
+- **路由是核心资产。** 一个来源对应一个启用路由组，路由有草稿、发布版本、当前版本、画布/表格两种编辑形态；执行时按版本缓存，第一条命中即停止。
 - **接收人解析独立于渠道配置。** 路由策略负责决定接收人，系统组织/人员/平台身份把“人”映射成手机号、邮箱、企微 userid、飞书 open_id 等平台字段，避免把接收人长期固化在渠道配置里。
 - **入站、规划、发送彻底解耦。** `message_records -> route_plan job -> delivery_attempts -> send_message job` 比 MagicPush 的同步 fanout 更适合审计、重试、限流、死信和 worker 扩容。
 - **平台能力已经数据化。** `provider_capabilities` 描述 provider type、message type、接收人字段、身份类型、token 放置位置和请求示例；`delivery_channels` 保存凭证、token、发送、限流、并发、超时、重试和死信配置。

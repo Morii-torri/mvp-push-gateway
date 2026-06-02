@@ -44,112 +44,112 @@ export const providerBrandMeta: Record<ProviderKind, ProviderBrandDetail> = {
   wecom_robot: {
     color: '#04BE02',
     rgb: '4, 190, 2',
-    desc: '企业微信群聊机器人消息投递，支持 markdown 与文本格式。',
+    desc: '支持 text/markdown，按群机器人投递',
     tags: ['Markdown', '群聊报警'],
     icon: <img src="/icons/wecom-robot.ico" alt="" />
   },
   wecom_app: {
     color: '#1677FF',
     rgb: '22, 119, 255',
-    desc: '企业微信应用消息，通过工作台以卡片或文本形式点对点触达。',
+    desc: '支持 text/textcard/markdown，按 UserID 投递',
     tags: ['应用卡片', '工作台'],
     icon: <img src="/icons/wecom-app.ico" alt="" />
   },
   dingtalk_robot: {
     color: '#0079F2',
     rgb: '0, 121, 242',
-    desc: '钉钉群安全机器人，支持加签防注入、IP白名单双重安全保护。',
+    desc: '支持 text/markdown，按 access_token 投递',
     tags: ['Markdown', '安全加签'],
     icon: <img src="/icons/dingtalk-robot.ico" alt="" />
   },
   dingtalk_work: {
     color: '#0055E6',
     rgb: '0, 85, 230',
-    desc: '钉钉官方工作通知，通过专属通知流直接投递给组织人员。',
+    desc: '支持 sampleText/Markdown，按 userId 投递',
     tags: ['通知卡片', '单人投递'],
     icon: <img src="/icons/dingtalk-work.ico" alt="" />
   },
   feishu_robot: {
     color: '#00D2BE',
     rgb: '0, 210, 190',
-    desc: '飞书应用机器人，通过 tenant_access_token 向组织人员发送文本通知。',
+    desc: '支持 text，按 OpenID 投递',
     tags: ['应用机器人', 'OpenID'],
     icon: <img src="/icons/feishu.png" alt="" />
   },
   feishu_group: {
     color: '#00C2A8',
     rgb: '0, 194, 168',
-    desc: '飞书群自定义机器人，通过 webhook token 向群聊发送文本消息。',
+    desc: '支持 text，按 Webhook token 投递',
     tags: ['群机器人', 'Webhook'],
     icon: <img src="/icons/feishu.png" alt="" />
   },
   pushplus: {
     color: '#05C160',
     rgb: '5, 193, 96',
-    desc: '一键将 HTML/文本消息派发到个人微信，极简微信通知服务。',
+    desc: '支持 text/html/markdown，按 token 投递',
     tags: ['微信模板', 'HTML格式'],
     icon: <img src="/icons/pushplus.ico" alt="" />
   },
   wxpusher: {
     color: '#09BB07',
     rgb: '9, 187, 7',
-    desc: '支持扫码自动绑定、通过公众号将通知推送至订阅人的微信。',
+    desc: '支持 text/html，按 UID 或主题投递',
     tags: ['动态扫码', '公众号接收'],
     icon: <img src="/icons/wxpusher.ico" alt="" />
   },
   serverchan: {
     color: '#FF5E5B',
     rgb: '255, 94, 91',
-    desc: 'Server酱微信推送，支持微信公众号、企业微信等多端接收备份。',
+    desc: '支持 text/markdown，按 SendKey 投递',
     tags: ['微信通知', 'Markdown'],
     icon: <img src="/icons/serverchan.ico" alt="" />
   },
   bark: {
     color: '#FF4D4F',
     rgb: '255, 77, 79',
-    desc: 'Bark iOS 苹果设备极速通道，支持自定义铃声、弹窗与跳转链接。',
+    desc: '支持 body/markdown，按设备 Key 投递',
     tags: ['iOS专属', '低延迟'],
     icon: <img src="/icons/bark.png" alt="" />
   },
   pushme: {
     color: '#FA8C16',
     rgb: '250, 140, 22',
-    desc: 'PushMe 极简消息发送服务，秒级响应并安全存储推送通知。',
+    desc: '支持多种 type，按 PushKey 投递',
     tags: ['自建API', '纯文本'],
     icon: <img src="/icons/pushme.ico" alt="" />
   },
   email: {
     color: '#E6A23C',
     rgb: '230, 162, 60',
-    desc: 'SMTP 规范电子邮件，完美对接企业邮箱，支持 HTML 富文本与附件。',
+    desc: '支持 text/html，按邮箱地址投递',
     tags: ['HTML格式', '附件发送'],
     icon: <img src="/icons/email.ico" alt="" />
   },
   aliyun_sms: {
     color: '#FF6A00',
     rgb: '255, 106, 0',
-    desc: '阿里云高并发企业短信通道，提供极速下发的验证码及业务通知。',
+    desc: '支持模板短信，按手机号投递',
     tags: ['模板短信', '高并发'],
     icon: <img src="/icons/aliyun-sms.ico" alt="" />
   },
   tencent_sms: {
     color: '#00A4FF',
     rgb: '0, 164, 255',
-    desc: '腾讯云行业专属短信服务，支持国内与跨国通道的高效通信保障。',
+    desc: '支持模板短信，按手机号投递',
     tags: ['模板短信', '国际通道'],
     icon: <img src="/icons/tencent-sms.ico" alt="" />
   },
   baidu_sms: {
     color: '#389E0D',
     rgb: '56, 158, 13',
-    desc: '百度智能云通道，主打系统预警提示、高到达低延迟模板短信。',
+    desc: '支持模板短信，按手机号投递',
     tags: ['稳定预警', '系统通知'],
     icon: <img src="/icons/baidu-sms.ico" alt="" />
   },
   webhook: {
     color: '#1890FF',
     rgb: '24, 144, 255',
-    desc: '通用出站 Webhook，自由定义 JSON、支持在请求头附带凭证秘钥。',
+    desc: '支持 JSON Body，按 Webhook URL 投递',
     tags: ['HTTP出站', 'Headers自定义'],
     icon: (
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" className="svg-logo">
@@ -161,21 +161,21 @@ export const providerBrandMeta: Record<ProviderKind, ProviderBrandDetail> = {
   self: {
     color: '#722ED1',
     rgb: '114, 46, 209',
-    desc: 'MVP-PUSH 网关级联，将规划后的推送任务作为入站消息直接路由至下级网关。',
+    desc: '支持入站 Payload，按上级来源投递',
     tags: ['MVP-PUSH', '网关间通信'],
     icon: <img src="/icons/mvp-push.ico" alt="" />
   },
   ntfy: {
     color: '#FA541C',
     rgb: '250, 84, 28',
-    desc: '基于 Pub/Sub 的 ntfy 轻量自建推送订阅，无需注册即可拉取通知。',
+    desc: '支持 text/markdown，按 Topic 投递',
     tags: ['免登自建', '订阅流'],
     icon: <img src="/icons/ntfy.ico" alt="" />
   },
   gotify: {
     color: '#52C41A',
     rgb: '82, 196, 26',
-    desc: '自建轻量 Gotify 实时推送服务器，支持 WebSocket 双向低耗轮询。',
+    desc: '支持 title/message，按 App Token 投递',
     tags: ['Websocket', '极简私有'],
     icon: <img src="/icons/gotify.png" alt="" />
   }
@@ -184,7 +184,7 @@ export const providerBrandMeta: Record<ProviderKind, ProviderBrandDetail> = {
 export const defaultBrandMeta: ProviderBrandDetail = {
   color: '#8c8c8c',
   rgb: '140, 140, 140',
-  desc: '未知类型的推送渠道类型能力。',
+  desc: '支持通用内容，按渠道配置投递',
   tags: ['通用通道'],
   icon: (
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" className="svg-logo">

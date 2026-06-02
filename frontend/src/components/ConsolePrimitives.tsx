@@ -205,7 +205,13 @@ export function CopyableIdentifier({
     <span className="copyable-identifier-wrapper" style={{ maxWidth }}>
       <Typography.Text
         code={code}
-        ellipsis={{ tooltip: value }}
+        ellipsis={{
+          tooltip: {
+            title: value,
+            color: '#ffffff',
+            classNames: { root: 'copyable-identifier-tooltip-overlay' },
+          },
+        }}
         style={{ display: 'inline-block', maxWidth: maxWidth - 24, verticalAlign: 'middle', margin: 0 }}
       >
         {value}

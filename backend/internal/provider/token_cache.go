@@ -505,7 +505,11 @@ func TokenResolverCacheKey(config *TokenResolverConfig) string {
 	if config == nil {
 		return ""
 	}
-	headers, _ := json.Marshal(config.Request.Headers)
+	headersValue := config.Request.Headers
+	if headersValue == nil {
+		headersValue = map[string]string{}
+	}
+	headers, _ := json.Marshal(headersValue)
 	raw := strings.Join([]string{
 		strings.ToUpper(strings.TrimSpace(config.Request.Method)),
 		strings.TrimSpace(config.Request.URL),

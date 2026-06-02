@@ -16,11 +16,13 @@ import (
 func TestRouteFlowCRUDRequiresAdminBearerAuthentication(t *testing.T) {
 	routeService := &fakeRouteService{
 		listResult: []route.Flow{{
-			ID:       "flow-1",
-			SourceID: "source-1",
-			Name:     "Orders",
-			Enabled:  true,
-			Mode:     route.ModeTable,
+			ID:            "flow-1",
+			SourceID:      "source-1",
+			Name:          "Orders",
+			Enabled:       true,
+			Mode:          route.ModeTable,
+			RuleCount:     3,
+			TotalHitCount: 12,
 		}},
 	}
 	handler := httpapi.NewHandler(
@@ -48,6 +50,18 @@ func TestRouteFlowCRUDRequiresAdminBearerAuthentication(t *testing.T) {
 	}
 	if routeService.listCalls != 1 {
 		t.Fatalf("expected one route list call, got %d", routeService.listCalls)
+	}
+	var body struct {
+		Flows []struct {
+			RuleCount     int `json:"rule_count"`
+			TotalHitCount int `json:"total_hit_count"`
+		} `json:"flows"`
+	}
+	if err := json.NewDecoder(authenticatedRec.Body).Decode(&body); err != nil {
+		t.Fatalf("decode route flow list response: %v", err)
+	}
+	if len(body.Flows) != 1 || body.Flows[0].RuleCount != 3 || body.Flows[0].TotalHitCount != 12 {
+		t.Fatalf("expected flow stats in list response, got %+v", body.Flows)
 	}
 }
 
@@ -286,29 +300,114 @@ func assertRouteRuleTargetResponse(t *testing.T, body routeRulesJSONBody) {
 	}
 }
 
+func TestRouteVersionRulesReturnsReadOnlyHistoricalRules(t *testing.T) {
+	routeService := &fakeRouteService{
+		versionRulesResult: route.RuleSet{
+			VersionID: "version-1",
+			Rules: []route.Rule{
+				{
+					ID:            "rule-id",
+					RuleKey:       "00000000-0000-0000-0000-000000000301",
+					SortOrder:     1,
+					Name:          "Published Critical",
+					ConditionTree: json.RawMessage(`{"operator":"always"}`),
+					Enabled:       true,
+					Action: route.Action{
+						Targets: []route.ActionTarget{
+							{
+								ID:                "target-a",
+								ChannelID:         "channel-a",
+								TemplateVersionID: "tpl-a",
+								Enabled:           true,
+								SortOrder:         1,
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+	handler := httpapi.NewHandler(
+		testConfig(),
+		httpapi.WithAuthService(fakeAuthService{authenticatedToken: "admin-session"}),
+		httpapi.WithRouteService(routeService),
+	)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/route-flows/flow-1/versions/version-1/rules", nil)
+	req.Header.Set("Authorization", "Bearer admin-session")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	var body struct {
+		VersionID string `json:"version_id"`
+		Rules     []struct {
+			Name string `json:"name"`
+		} `json:"rules"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
+		t.Fatalf("decode version rules response: %v", err)
+	}
+	if body.VersionID != "version-1" || len(body.Rules) != 1 || body.Rules[0].Name != "Published Critical" {
+		t.Fatalf("unexpected version rule response: %+v", body)
+	}
+	if routeService.versionRulesFlowID != "flow-1" || routeService.versionRulesVersionID != "version-1" {
+		t.Fatalf("expected service to receive flow/version ids, got flow=%q version=%q", routeService.versionRulesFlowID, routeService.versionRulesVersionID)
+	}
+}
+
+func TestDeleteRouteVersionRemovesHistoricalVersion(t *testing.T) {
+	routeService := &fakeRouteService{}
+	handler := httpapi.NewHandler(
+		testConfig(),
+		httpapi.WithAuthService(fakeAuthService{authenticatedToken: "admin-session"}),
+		httpapi.WithRouteService(routeService),
+	)
+
+	req := httptest.NewRequest(http.MethodDelete, "/api/v1/route-flows/flow-1/versions/version-2", nil)
+	req.Header.Set("Authorization", "Bearer admin-session")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	if routeService.deleteVersionFlowID != "flow-1" || routeService.deleteVersionVersionID != "version-2" {
+		t.Fatalf("expected service to delete flow/version ids, got flow=%q version=%q", routeService.deleteVersionFlowID, routeService.deleteVersionVersionID)
+	}
+}
+
 type fakeRouteService struct {
-	listResult     []route.Flow
-	getResult      route.Flow
-	createResult   route.Flow
-	updateResult   route.Flow
-	versionsResult []route.Version
-	canvasResult   route.CanvasState
-	rulesResult    route.RuleSet
-	validateResult route.ValidationResult
-	publishResult  route.Version
-	simulateResult route.SimulationResult
+	listResult         []route.Flow
+	getResult          route.Flow
+	createResult       route.Flow
+	updateResult       route.Flow
+	versionsResult     []route.Version
+	canvasResult       route.CanvasState
+	rulesResult        route.RuleSet
+	versionRulesResult route.RuleSet
+	validateResult     route.ValidationResult
+	publishResult      route.Version
+	simulateResult     route.SimulationResult
 
-	saveRulesInput  route.SaveRulesInput
-	saveRulesFlowID string
+	saveRulesInput         route.SaveRulesInput
+	saveRulesFlowID        string
+	versionRulesFlowID     string
+	versionRulesVersionID  string
+	deleteVersionFlowID    string
+	deleteVersionVersionID string
 
-	createErr    error
-	getErr       error
-	updateErr    error
-	deleteErr    error
-	saveRulesErr error
-	validateErr  error
-	publishErr   error
-	simulateErr  error
+	createErr        error
+	getErr           error
+	updateErr        error
+	deleteErr        error
+	deleteVersionErr error
+	saveRulesErr     error
+	validateErr      error
+	publishErr       error
+	simulateErr      error
 
 	listCalls      int
 	deleteCalls    int
@@ -349,6 +448,12 @@ func (f *fakeRouteService) DeleteFlow(context.Context, string) error {
 	return f.deleteErr
 }
 
+func (f *fakeRouteService) DeleteVersion(_ context.Context, flowID string, versionID string) error {
+	f.deleteVersionFlowID = flowID
+	f.deleteVersionVersionID = versionID
+	return f.deleteVersionErr
+}
+
 func (f *fakeRouteService) ListVersions(context.Context, string) ([]route.Version, error) {
 	return f.versionsResult, nil
 }
@@ -363,6 +468,12 @@ func (f *fakeRouteService) SaveCanvas(context.Context, string, route.SaveCanvasI
 
 func (f *fakeRouteService) GetRules(context.Context, string) (route.RuleSet, error) {
 	return f.rulesResult, nil
+}
+
+func (f *fakeRouteService) GetVersionRules(_ context.Context, flowID string, versionID string) (route.RuleSet, error) {
+	f.versionRulesFlowID = flowID
+	f.versionRulesVersionID = versionID
+	return f.versionRulesResult, nil
 }
 
 func (f *fakeRouteService) SaveRules(_ context.Context, flowID string, input route.SaveRulesInput) (route.RuleSet, error) {

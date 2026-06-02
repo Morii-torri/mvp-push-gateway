@@ -258,6 +258,13 @@ func TestReorderRulesChangesSimulationOrder(t *testing.T) {
 	if len(result.RuleResults) != 2 || result.RuleResults[0].RuleKey != "rule-b" {
 		t.Fatalf("expected reordered execution order in trace, got %+v", result.RuleResults)
 	}
+	reordered, err := service.GetRules(context.Background(), "flow-1")
+	if err != nil {
+		t.Fatalf("get reordered rules: %v", err)
+	}
+	if got := []int{reordered.Rules[0].SortOrder, reordered.Rules[1].SortOrder}; got[0] != 1 || got[1] != 2 {
+		t.Fatalf("expected display-friendly sort orders 1/2 after reorder, got %+v", got)
+	}
 }
 
 func TestValidateHandlesMissingFieldWithoutPanic(t *testing.T) {
@@ -315,6 +322,243 @@ func TestValidateHandlesMissingFieldWithoutPanic(t *testing.T) {
 	}
 }
 
+func TestEvaluateConditionTreeSupportsDocumentedOperators(t *testing.T) {
+	scope := map[string]any{
+		"payload": map[string]any{
+			"title":    "critical disk alert",
+			"severity": "critical",
+			"count":    float64(12),
+			"ip":       "10.1.2.3",
+		},
+	}
+	tests := []struct {
+		name       string
+		condition  string
+		matchGroup map[string][]string
+	}{
+		{name: "not equals", condition: `{"operator":"not_equals","path":"payload.severity","value":"info"}`},
+		{name: "not exists", condition: `{"operator":"not_exists","path":"payload.missing"}`},
+		{name: "regex", condition: `{"operator":"regex","path":"payload.title","value":"disk\\s+alert"}`},
+		{name: "greater than", condition: `{"operator":"gt","path":"payload.count","value":10}`},
+		{name: "greater than or equal", condition: `{"operator":"gte","path":"payload.count","value":12}`},
+		{name: "less than", condition: `{"operator":"lt","path":"payload.count","value":13}`},
+		{name: "less than or equal", condition: `{"operator":"lte","path":"payload.count","value":12}`},
+		{name: "cidr match group", condition: `{"operator":"in_match_group","path":"payload.ip","match_group_id":"group-ip"}`, matchGroup: map[string][]string{"group-ip": {"10.1.0.0/16"}}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			matched, err := EvaluateConditionTreeWithMatchGroups(json.RawMessage(tt.condition), scope, tt.matchGroup)
+			if err != nil {
+				t.Fatalf("evaluate condition: %v", err)
+			}
+			if !matched {
+				t.Fatalf("expected %s to match", tt.name)
+			}
+		})
+	}
+}
+
+func TestSimulateUsesMatchGroupValuesFromStore(t *testing.T) {
+	store := newMemoryStore()
+	store.matchGroups = map[string][]string{
+		"group-severity": {"critical", "high"},
+	}
+	service := NewService(store)
+	if _, err := service.SaveRules(context.Background(), "flow-1", SaveRulesInput{Rules: []RuleInput{{
+		RuleKey:       "rule-severity",
+		SortOrder:     10,
+		Name:          "严重等级",
+		ConditionTree: json.RawMessage(`{"operator":"in_match_group","path":"payload.severity","match_group_id":"group-severity"}`),
+		Enabled:       true,
+		Action:        validActionInput(),
+	}}}); err != nil {
+		t.Fatalf("save rules: %v", err)
+	}
+
+	result, err := service.Simulate(context.Background(), "flow-1", SimulateInput{
+		Payload: json.RawMessage(`{"severity":"critical"}`),
+	})
+	if err != nil {
+		t.Fatalf("simulate: %v", err)
+	}
+	if result.MatchedRule == nil || result.MatchedRule.RuleKey != "rule-severity" {
+		t.Fatalf("expected match group backed rule to match, got %+v", result)
+	}
+}
+
+func TestValidateRejectsRuleWithNoEnabledTargets(t *testing.T) {
+	store := newMemoryStore()
+	service := NewService(store)
+	if _, err := service.SaveRules(context.Background(), "flow-1", SaveRulesInput{Rules: []RuleInput{{
+		RuleKey:       "rule-disabled-target",
+		SortOrder:     10,
+		Name:          "停用目标",
+		ConditionTree: json.RawMessage(`{"operator":"always"}`),
+		Enabled:       true,
+		Action: ActionInput{Targets: []ActionTargetInput{
+			{ChannelID: "channel-a", TemplateVersionID: "tpl-a", Enabled: false},
+		}},
+	}}}); err != nil {
+		t.Fatalf("save rules: %v", err)
+	}
+
+	result, err := service.Validate(context.Background(), "flow-1")
+	if err != nil {
+		t.Fatalf("validate: %v", err)
+	}
+	if result.Status != "invalid" {
+		t.Fatalf("expected invalid route when no target is enabled, got %+v", result)
+	}
+}
+
+func TestPublishRejectsReferenceValidationErrors(t *testing.T) {
+	store := newMemoryStore()
+	store.referenceErrors = []ValidationError{{
+		Code:    "MGP-ROUTE-REF",
+		Message: "发送目标引用的模板不存在或未发布",
+		Path:    "rule-a.targets[0]",
+	}}
+	service := NewService(store)
+	if _, err := service.SaveRules(context.Background(), "flow-1", SaveRulesInput{Rules: []RuleInput{{
+		RuleKey:       "rule-a",
+		SortOrder:     10,
+		Name:          "引用缺失",
+		ConditionTree: json.RawMessage(`{"operator":"always"}`),
+		Enabled:       true,
+		Action:        validActionInput(),
+	}}}); err != nil {
+		t.Fatalf("save rules: %v", err)
+	}
+
+	result, err := service.Validate(context.Background(), "flow-1")
+	if err != nil {
+		t.Fatalf("validate: %v", err)
+	}
+	if result.Status != "invalid" || len(result.Errors) != 1 || result.Errors[0].Code != "MGP-ROUTE-REF" {
+		t.Fatalf("expected reference validation error, got %+v", result)
+	}
+	if _, err := service.Publish(context.Background(), "flow-1"); !errors.Is(err, ErrInvalidConfig) {
+		t.Fatalf("expected publish to reject reference errors with ErrInvalidConfig, got %v", err)
+	}
+	if store.publishCalls != 0 {
+		t.Fatalf("expected publish store call to be skipped, got %d", store.publishCalls)
+	}
+}
+
+func TestRulesFromCompiledPreferPublishedExecutionModel(t *testing.T) {
+	persisted := []Rule{{
+		ID:            "rule-row-id",
+		FlowID:        "flow-1",
+		VersionID:     "version-1",
+		RuleKey:       "rule-a",
+		SortOrder:     10,
+		Name:          "关系表规则",
+		ConditionTree: json.RawMessage(`{"operator":"equals","path":"payload.kind","value":"table"}`),
+		Enabled:       true,
+		Action: Action{
+			ID:                "action-row-id",
+			TemplateVersionID: "tpl-table",
+			ChannelIDs:        []string{"channel-table"},
+			Targets: []ActionTarget{{
+				ID:                "target-row-id",
+				ActionID:          "action-row-id",
+				ChannelID:         "channel-table",
+				TemplateVersionID: "tpl-table",
+				Enabled:           true,
+				SortOrder:         10,
+			}},
+		},
+	}}
+	compiled := json.RawMessage(`{
+		"execution_mode": "first_match_stop",
+		"rules": [{
+			"rule_key": "rule-a",
+			"sort_order": 30,
+			"name": "发布执行规则",
+			"enabled": true,
+			"condition_tree": {"operator":"equals","path":"payload.kind","value":"compiled"},
+			"action": {
+				"targets": [{
+					"channel_id": "channel-compiled",
+					"template_version_id": "tpl-compiled",
+					"enabled": true,
+					"sort_order": 10
+				}],
+				"recipient_strategy": {"mode":"none"},
+				"send_dedupe_config": {"strategy":"trace_id"},
+				"failure_policy": {"policy":"continue"}
+			}
+		}]
+	}`)
+
+	rules, ok, err := RulesFromCompiled(compiled, persisted)
+	if err != nil {
+		t.Fatalf("parse compiled rules: %v", err)
+	}
+	if !ok || len(rules) != 1 {
+		t.Fatalf("expected one compiled rule, got ok=%v rules=%+v", ok, rules)
+	}
+	rule := rules[0]
+	if rule.ID != "rule-row-id" || rule.Action.ID != "action-row-id" {
+		t.Fatalf("expected persisted identities to be preserved, got %+v", rule)
+	}
+	if rule.SortOrder != 30 || rule.Name != "发布执行规则" || string(rule.ConditionTree) == string(persisted[0].ConditionTree) {
+		t.Fatalf("expected compiled rule data to win, got %+v", rule)
+	}
+	if len(rule.Action.Targets) != 1 || rule.Action.Targets[0].ChannelID != "channel-compiled" || rule.Action.TemplateVersionID != "tpl-compiled" {
+		t.Fatalf("expected compiled action target to win, got %+v", rule.Action)
+	}
+}
+
+func TestRulesFromCompiledKeepsPersistedFieldsForPartialCompiledRules(t *testing.T) {
+	persisted := []Rule{{
+		ID:            "rule-row-id",
+		FlowID:        "flow-1",
+		VersionID:     "version-1",
+		RuleKey:       "rule-a",
+		SortOrder:     10,
+		Name:          "持久化规则",
+		ConditionTree: json.RawMessage(`{"operator":"equals","path":"payload.kind","value":"table"}`),
+		Enabled:       true,
+		Action: Action{
+			ID:                "action-row-id",
+			RuleID:            "rule-row-id",
+			TemplateVersionID: "tpl-table",
+			ChannelIDs:        []string{"channel-table"},
+			Targets: []ActionTarget{{
+				ID:                "target-row-id",
+				ActionID:          "action-row-id",
+				ChannelID:         "channel-table",
+				TemplateVersionID: "tpl-table",
+				Enabled:           true,
+				SortOrder:         10,
+			}},
+			RecipientStrategy: json.RawMessage(`{"mode":"payload","path":"payload.to"}`),
+			SendDedupeConfig:  json.RawMessage(`{"strategy":"trace_id"}`),
+			FailurePolicy:     json.RawMessage(`{"policy":"continue"}`),
+		},
+	}}
+	compiled := json.RawMessage(`{
+		"execution_mode": "first_match_stop",
+		"rules": [{"rule_key": "rule-a"}]
+	}`)
+
+	rules, ok, err := RulesFromCompiled(compiled, persisted)
+	if err != nil {
+		t.Fatalf("parse compiled rules: %v", err)
+	}
+	if !ok || len(rules) != 1 {
+		t.Fatalf("expected one rule from partial compiled envelope, got ok=%v rules=%+v", ok, rules)
+	}
+	rule := rules[0]
+	if rule.SortOrder != persisted[0].SortOrder || rule.Name != persisted[0].Name || string(rule.ConditionTree) != string(persisted[0].ConditionTree) {
+		t.Fatalf("expected persisted rule fields to survive partial compiled envelope, got %+v", rule)
+	}
+	if len(rule.Action.Targets) != 1 || rule.Action.Targets[0].ChannelID != "channel-table" || string(rule.Action.RecipientStrategy) != string(persisted[0].Action.RecipientStrategy) {
+		t.Fatalf("expected persisted action to survive partial compiled envelope, got %+v", rule.Action)
+	}
+}
+
 func validActionInput() ActionInput {
 	return ActionInput{
 		Targets: []ActionTargetInput{
@@ -324,8 +568,11 @@ func validActionInput() ActionInput {
 }
 
 type memoryStore struct {
-	flow  Flow
-	draft Draft
+	flow            Flow
+	draft           Draft
+	matchGroups     map[string][]string
+	referenceErrors []ValidationError
+	publishCalls    int
 }
 
 func newMemoryStore() *memoryStore {
@@ -370,6 +617,17 @@ func (s *memoryStore) ListVersions(context.Context, string) ([]Version, error) {
 	return []Version{s.draft.Version}, nil
 }
 
+func (s *memoryStore) GetVersionRules(_ context.Context, _ string, versionID string) (RuleSet, error) {
+	if s.draft.Version.ID != versionID {
+		return RuleSet{}, ErrNotFound
+	}
+	return RuleSet{VersionID: s.draft.Version.ID, Rules: append([]Rule(nil), s.draft.Rules...)}, nil
+}
+
+func (s *memoryStore) DeleteVersion(context.Context, string, string) error {
+	return nil
+}
+
 func (s *memoryStore) UpdateCanvas(_ context.Context, _ string, snapshot json.RawMessage, _ FlowMode) (Draft, error) {
 	s.draft.Version.CanvasSnapshot = snapshot
 	return s.draft, nil
@@ -385,7 +643,7 @@ func (s *memoryStore) ReorderRules(_ context.Context, _ string, _ string, ruleKe
 	for idx, key := range ruleKeys {
 		for _, rule := range s.draft.Rules {
 			if rule.RuleKey == key {
-				rule.SortOrder = (idx + 1) * 10
+				rule.SortOrder = idx + 1
 				next = append(next, rule)
 			}
 		}
@@ -395,6 +653,7 @@ func (s *memoryStore) ReorderRules(_ context.Context, _ string, _ string, ruleKe
 }
 
 func (s *memoryStore) Publish(context.Context, PublishParams) (Version, error) {
+	s.publishCalls++
 	return s.draft.Version, nil
 }
 
@@ -404,4 +663,15 @@ func (s *memoryStore) ActivateVersion(context.Context, string, string) (Flow, er
 
 func (s *memoryStore) IncrementRuleCounter(context.Context, string, string, time.Time) error {
 	return nil
+}
+
+func (s *memoryStore) LoadMatchGroupValues(_ context.Context, _ []Rule) (map[string][]string, error) {
+	if s.matchGroups == nil {
+		return map[string][]string{}, nil
+	}
+	return s.matchGroups, nil
+}
+
+func (s *memoryStore) ValidateRuleReferences(context.Context, string, string, []Rule) ([]ValidationError, error) {
+	return append([]ValidationError(nil), s.referenceErrors...), nil
 }

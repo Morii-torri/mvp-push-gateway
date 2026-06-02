@@ -18,9 +18,36 @@ import (
 
 func (r Repository) ListFlows(ctx context.Context) ([]route.Flow, error) {
 	rows, err := r.pool.Query(ctx, `
-		SELECT id, source_id, name, enabled, mode, COALESCE(current_version_id::text, ''), created_at, updated_at
-		FROM route_flows
-		ORDER BY created_at DESC, name ASC
+		SELECT
+			flow.id,
+			flow.source_id,
+			flow.name,
+			flow.enabled,
+			flow.mode,
+			COALESCE(flow.current_version_id::text, ''),
+			COALESCE(stats.rule_count, 0),
+			COALESCE(stats.total_hit_count, 0),
+			flow.created_at,
+			flow.updated_at
+		FROM route_flows AS flow
+		LEFT JOIN LATERAL (
+			SELECT
+				COUNT(rule.id)::int AS rule_count,
+				COALESCE(SUM(counter.hit_count), 0)::int AS total_hit_count
+			FROM (
+				SELECT id
+				FROM route_versions
+				WHERE flow_id = flow.id
+					AND published_at IS NULL
+				ORDER BY version_no DESC
+				LIMIT 1
+			) AS draft
+			LEFT JOIN route_rules AS rule ON rule.version_id = draft.id
+				AND rule.flow_id = flow.id
+			LEFT JOIN route_rule_counters AS counter ON counter.flow_id = flow.id
+				AND counter.rule_key = rule.rule_key
+		) AS stats ON true
+		ORDER BY flow.created_at DESC, flow.name ASC
 	`)
 	if err != nil {
 		return nil, fmt.Errorf("list route flows: %w", err)
@@ -29,7 +56,7 @@ func (r Repository) ListFlows(ctx context.Context) ([]route.Flow, error) {
 
 	flows := []route.Flow{}
 	for rows.Next() {
-		item, err := scanRouteFlow(rows)
+		item, err := scanRouteFlowWithStats(rows)
 		if err != nil {
 			return nil, err
 		}
@@ -187,6 +214,58 @@ func (r Repository) ListVersions(ctx context.Context, flowID string) ([]route.Ve
 	return versions, nil
 }
 
+func (r Repository) GetVersionRules(ctx context.Context, flowID string, versionID string) (route.RuleSet, error) {
+	version, err := queryRouteVersion(r.pool.QueryRow(ctx, `
+		SELECT id, flow_id, version_no, canvas_snapshot, compiled_rules, validation_status, validation_errors, published_at, created_at, updated_at
+		FROM route_versions
+		WHERE flow_id = $1
+			AND id = $2
+	`, flowID, versionID))
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return route.RuleSet{}, route.ErrNotFound
+		}
+		return route.RuleSet{}, fmt.Errorf("get route version for rules: %w", err)
+	}
+	rules, err := listRulesForVersion(ctx, r.pool, flowID, version.ID)
+	if err != nil {
+		return route.RuleSet{}, err
+	}
+	return route.RuleSet{VersionID: version.ID, Rules: rules}, nil
+}
+
+func (r Repository) DeleteVersion(ctx context.Context, flowID string, versionID string) error {
+	var publishedAt *time.Time
+	var currentVersionID string
+	if err := r.pool.QueryRow(ctx, `
+		SELECT version.published_at, COALESCE(flow.current_version_id::text, '')
+		FROM route_versions AS version
+		JOIN route_flows AS flow ON flow.id = version.flow_id
+		WHERE version.flow_id = $1
+			AND version.id = $2
+	`, flowID, versionID).Scan(&publishedAt, &currentVersionID); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return route.ErrNotFound
+		}
+		return fmt.Errorf("get route version for delete: %w", err)
+	}
+	if publishedAt == nil || currentVersionID == versionID {
+		return route.ErrInvalidInput
+	}
+	tag, err := r.pool.Exec(ctx, `
+		DELETE FROM route_versions
+		WHERE flow_id = $1
+			AND id = $2
+	`, flowID, versionID)
+	if err != nil {
+		return fmt.Errorf("delete route version: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return route.ErrNotFound
+	}
+	return nil
+}
+
 func (r Repository) UpdateCanvas(ctx context.Context, flowID string, snapshot json.RawMessage, mode route.FlowMode) (route.Draft, error) {
 	tx, err := r.pool.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {
@@ -196,7 +275,7 @@ func (r Repository) UpdateCanvas(ctx context.Context, flowID string, snapshot js
 
 	version, err := queryRouteVersion(tx.QueryRow(ctx, `
 		UPDATE route_versions
-		SET canvas_snapshot = $3,
+		SET canvas_snapshot = $2,
 			updated_at = now()
 		WHERE id = (
 			SELECT id
@@ -208,7 +287,7 @@ func (r Repository) UpdateCanvas(ctx context.Context, flowID string, snapshot js
 		)
 			AND flow_id = $1
 		RETURNING id, flow_id, version_no, canvas_snapshot, compiled_rules, validation_status, validation_errors, published_at, created_at, updated_at
-	`, flowID, mode, defaultJSON(snapshot)))
+	`, flowID, defaultJSON(snapshot)))
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return route.Draft{}, route.ErrNotFound
@@ -374,7 +453,7 @@ func (r Repository) ReorderRules(ctx context.Context, flowID string, versionID s
 			WHERE flow_id = $1
 				AND version_id = $2
 				AND rule_key = $3::uuid
-		`, flowID, versionID, ruleKey, (idx+1)*10)
+	`, flowID, versionID, ruleKey, idx+1)
 		if err != nil {
 			return nil, fmt.Errorf("reorder route rule: %w", err)
 		}
@@ -583,6 +662,25 @@ func scanRouteFlow(row routeScanner) (route.Flow, error) {
 		&item.Enabled,
 		&item.Mode,
 		&item.CurrentVersionID,
+		&item.CreatedAt,
+		&item.UpdatedAt,
+	); err != nil {
+		return route.Flow{}, err
+	}
+	return item, nil
+}
+
+func scanRouteFlowWithStats(row routeScanner) (route.Flow, error) {
+	var item route.Flow
+	if err := row.Scan(
+		&item.ID,
+		&item.SourceID,
+		&item.Name,
+		&item.Enabled,
+		&item.Mode,
+		&item.CurrentVersionID,
+		&item.RuleCount,
+		&item.TotalHitCount,
 		&item.CreatedAt,
 		&item.UpdatedAt,
 	); err != nil {

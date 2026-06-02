@@ -48,7 +48,8 @@
 - 上述 provider 当前不要描述为已真实发送成功；PushPlus、WxPusher、Server酱、短信、企微、钉钉、飞书、SMTP/self、ntfy、Gotify、Bark、PushMe 均为 implemented but not live-tested 或 configuration-dependent。
 - 在上级平台账号、测试接收人、网络白名单准备完成前，后续实现和测试只做 dry-run/build-request、mock adapter、fake server、本地 webhook 或 MVP-PUSH 级联，不主动调用真实上级发送接口。
 - 路由发布时编译为执行模型，并按来源和版本缓存；planning 阶段先粗过滤，再完整条件判断，同时记录慢规则。
-- 每个来源只允许一个启用路由大组；v1/v2 是同一大组下的版本切换。
+- 路由语义源是规则表/规则集；画布保存 React Flow 布局快照，缺失或与规则不一致时由规则集重建，不作为第二套执行源。
+- 每个来源只允许一个启用路由组；v1/v2 是同一路由组下的版本切换。
 - 路由策略按拖拽顺序执行，第一条命中即发送并停止继续匹配；策略展示累计命中次数，最高 99999。
 - 模板绑定 provider type + message type，不绑定具体渠道实例；模板只保存消息内容，不保存接收人字段或最终 HTTP body，字段可使用 `{{ payload.summary | default('通知') }}` 这类表达式。
 - 路由规则保存发送动作组 `action.targets[]`；每个 target 绑定一个渠道实例和一个兼容模板版本。legacy `template_version_id + channel_ids` 仅用于兼容旧客户端。

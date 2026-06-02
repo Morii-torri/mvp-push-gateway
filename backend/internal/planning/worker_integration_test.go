@@ -3,6 +3,7 @@ package planning_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -720,29 +721,15 @@ func TestWorkerMarksBusinessPlanningFailuresDone(t *testing.T) {
 		}}}); err != nil {
 			t.Fatalf("save route rules: %v", err)
 		}
-		if _, err := routeService.Publish(ctx, flow.ID); err != nil {
-			t.Fatalf("publish route: %v", err)
+		validation, err := routeService.Validate(ctx, flow.ID)
+		if err != nil {
+			t.Fatalf("validate route: %v", err)
 		}
-		if _, err := sourceService.Ingest(ctx, source.IngestInput{SourceCode: "providermismatch", Method: "POST", Path: "/api/v1/ingest/providermismatch", Body: []byte(`{"title":"x"}`)}); err != nil {
-			t.Fatalf("ingest: %v", err)
+		if validation.Status != "invalid" || len(validation.Errors) == 0 {
+			t.Fatalf("expected provider mismatch to be invalid before publish, got %+v", validation)
 		}
-		worker := planning.NewWorker(repository, planning.WithWorkerID("planner-provider-mismatch"))
-		if _, err := worker.ProcessBatch(ctx, 1); err != nil {
-			t.Fatalf("process provider-mismatch batch: %v", err)
-		}
-		assertMessageAndRouteJob(t, ctx, pool, "trace-provider-mismatch", "failed", "MGP-PLAN-CHANNEL")
-
-		var attempts int
-		if err := pool.QueryRow(ctx, `
-			SELECT count(*)
-			FROM delivery_attempts AS attempt
-			JOIN message_records AS message ON message.id = attempt.message_id
-			WHERE message.trace_id = 'trace-provider-mismatch'
-		`).Scan(&attempts); err != nil {
-			t.Fatalf("query delivery attempt count: %v", err)
-		}
-		if attempts != 0 {
-			t.Fatalf("expected no delivery attempts for provider mismatch, got %d", attempts)
+		if _, err := routeService.Publish(ctx, flow.ID); !errors.Is(err, route.ErrInvalidConfig) {
+			t.Fatalf("expected provider mismatch publish to fail with ErrInvalidConfig, got %v", err)
 		}
 	})
 }

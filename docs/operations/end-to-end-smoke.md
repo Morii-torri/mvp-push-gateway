@@ -138,7 +138,7 @@ MGP_SMOKE_WEBHOOK_URL='http://host.docker.internal:18081/webhook' \
 - webhook 推送渠道实例
 - MVP-PUSH 级联来源和 self 推送渠道实例
 - webhook JSON 模板和 self JSON 模板，并发布两个模板版本
-- 路由大组和默认路由规则
+- 路由组和默认路由规则
 - 同一条规则下的两个发送动作组 target
 - 发布并激活路由版本
 - 入站 sample payload

@@ -135,6 +135,9 @@ describe('console api wrappers', () => {
       if (url.endsWith('/rules/reorder')) {
         return json({ version_id: 'draft', rules: [] });
       }
+      if (url.endsWith('/versions/version-1/rules')) {
+        return json({ version_id: 'version-1', rules: [] });
+      }
       if (url.endsWith('/simulate')) {
         return json({ version_id: 'draft', stop_reason: 'no_match', matched_rule: null, rule_results: [] });
       }
@@ -145,16 +148,20 @@ describe('console api wrappers', () => {
     });
 
     await consoleApi.saveRouteCanvas('flow-1', { nodes: [], edges: [] }, fetchMock);
+    await consoleApi.getRouteVersionRules('flow-1', 'version-1', fetchMock);
     await consoleApi.reorderRouteRules('flow-1', ['rule-a', 'rule-b'], fetchMock);
     await consoleApi.simulateRouteFlow('flow-1', { title: '测试' }, fetchMock);
     await consoleApi.publishRouteFlow('flow-1', fetchMock);
+    await consoleApi.deleteRouteVersion('flow-1', 'version-1', fetchMock);
     await consoleApi.deleteRouteFlow('flow-1', fetchMock);
 
     expect(fetchMock.mock.calls.map(([input, init]) => [String(input), init?.method])).toEqual([
       ['/api/v1/route-flows/flow-1/canvas', 'PUT'],
+      ['/api/v1/route-flows/flow-1/versions/version-1/rules', 'GET'],
       ['/api/v1/route-flows/flow-1/rules/reorder', 'PUT'],
       ['/api/v1/route-flows/flow-1/simulate', 'POST'],
       ['/api/v1/route-flows/flow-1/publish', 'POST'],
+      ['/api/v1/route-flows/flow-1/versions/version-1', 'DELETE'],
       ['/api/v1/route-flows/flow-1', 'DELETE'],
     ]);
   });

@@ -538,7 +538,7 @@ Status as of 2026-05-12: not completed. Documentation refresh is partially done;
    - 路由编排 -> 路由策略.
 2. Merge pages:
    - 日志与监控 tabs: 消息日志, 队列监控, 操作审计.
-   - 路由策略 tabs: 路由大组, 匹配组, 接收人组.
+   - 路由策略 tabs: 路由组, 匹配组, 接收人组.
    - 系统设置 tabs: 系统参数, 组织人员.
 3. Keep old routes as redirects or compatibility aliases if needed.
 4. Keep all existing CRUD behavior.

@@ -118,9 +118,11 @@ type routeService interface {
 	DeleteFlow(context.Context, string) error
 	ListVersions(context.Context, string) ([]route.Version, error)
 	ActivateVersion(context.Context, string, string) (route.Flow, error)
+	DeleteVersion(context.Context, string, string) error
 	GetCanvas(context.Context, string) (route.CanvasState, error)
 	SaveCanvas(context.Context, string, route.SaveCanvasInput) (route.CanvasState, error)
 	GetRules(context.Context, string) (route.RuleSet, error)
+	GetVersionRules(context.Context, string, string) (route.RuleSet, error)
 	SaveRules(context.Context, string, route.SaveRulesInput) (route.RuleSet, error)
 	ReorderRules(context.Context, string, route.ReorderRulesInput) (route.RuleSet, error)
 	Validate(context.Context, string) (route.ValidationResult, error)

@@ -256,22 +256,24 @@ SHA256_HEX(raw_body)
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
-| `GET` / `POST` | `/route-flows` | 路由大组 |
+| `GET` / `POST` | `/route-flows` | 路由组 |
 | `GET` / `PUT` / `DELETE` | `/route-flows/{id}` | 路由详情 |
 | `GET` | `/route-flows/{id}/versions` | 路由版本列表 |
+| `GET` | `/route-flows/{id}/versions/{version_id}/rules` | 只读查看指定版本规则 |
 | `POST` | `/route-flows/{id}/versions/{version_id}/activate` | 切换当前执行版本 |
+| `DELETE` | `/route-flows/{id}/versions/{version_id}` | 删除非当前执行的历史发布版本 |
 | `GET` | `/route-flows/{id}/canvas` | 画布快照 |
 | `PUT` | `/route-flows/{id}/canvas` | 保存画布草稿 |
-| `GET` | `/route-flows/{id}/rules` | 传统表格 |
+| `GET` | `/route-flows/{id}/rules` | 草稿规则表格 |
 | `PUT` | `/route-flows/{id}/rules` | 保存传统表格 |
 | `PUT` | `/route-flows/{id}/rules/reorder` | 拖拽排序或移动策略 |
 | `POST` | `/route-flows/{id}/validate` | 校验 |
 | `POST` | `/route-flows/{id}/publish` | 发布版本 |
 | `POST` | `/route-flows/{id}/simulate` | 用样例 payload 模拟命中 |
 
-创建或启用路由大组时，后端必须检查同来源是否已有启用路由大组；若存在，返回 `MGP-ROUTE-003` 并提示“路由组已存在”。同一来源的 v1/v2 等变更通过版本发布和版本切换完成。
+创建或启用路由组时，后端必须检查同来源是否已有启用路由组；若存在，返回 `MGP-ROUTE-003` 并提示“路由组已存在”。同一来源的 v1/v2 等变更通过版本发布和版本切换完成。`current_version_id` 是当前执行版本，影响线上 planning worker 使用的发布模型；`/route-flows/{id}/rules` 始终返回最新未发布草稿，历史发布版本通过 `/route-flows/{id}/versions/{version_id}/rules` 只读查看。`GET /route-flows` 返回的路由组摘要包含 `rule_count` 和 `total_hit_count`，两者基于最新未发布草稿规则及规则计数器聚合，用于列表和详情摘要展示。历史版本删除只允许删除已发布且不是当前执行版本的版本；当前执行版本和未发布草稿不能删除。
 
-发布路由时，后端把画布或表格配置编译为 `compiled_rules`。第一版执行模式固定为 `first_match_stop`：按 `sort_order` 从小到大执行，第一条启用且命中的策略执行动作后停止继续匹配。模拟接口必须返回粗过滤跳过结果、完整条件命中结果、最终命中策略、停止匹配原因和慢规则提示，便于发布前发现性能风险。
+发布路由时，后端把已保存规则集编译为 `compiled_rules`；画布只保存 React Flow 布局快照，不作为独立执行源。第一版执行模式固定为 `first_match_stop`：按 `sort_order` 从小到大执行，第一条启用且命中的策略执行动作后停止继续匹配。模拟接口必须返回粗过滤跳过结果、完整条件命中结果、最终命中策略、停止匹配原因和慢规则提示，便于发布前发现性能风险。
 
 `GET /route-flows/{id}/rules` 返回的每条策略需要包含：
 
@@ -403,6 +405,7 @@ SHA256_HEX(raw_body)
 | `MGP-ROUTE-001` | 无命中路由 |
 | `MGP-ROUTE-002` | 路由配置无效 |
 | `MGP-ROUTE-003` | 同来源启用路由组已存在 |
+| `MGP-ROUTE-REF` | 路由引用的渠道、模板、匹配组或接收人约束无效 |
 | `MGP-TPL-001` | 模板语法错误 |
 | `MGP-TPL-002` | 模板消息体与平台 schema 不匹配 |
 | `MGP-TPL-003` | 模板引用字段缺失或未通过样例 payload 校验 |

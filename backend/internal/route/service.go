@@ -5,8 +5,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/netip"
 	"reflect"
+	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -34,6 +37,8 @@ type Flow struct {
 	Enabled          bool
 	Mode             FlowMode
 	CurrentVersionID string
+	RuleCount        int
+	TotalHitCount    int
 	CreatedAt        time.Time
 	UpdatedAt        time.Time
 }
@@ -209,12 +214,16 @@ type Store interface {
 	DeleteFlow(ctx context.Context, id string) error
 	GetDraft(ctx context.Context, flowID string) (Draft, error)
 	ListVersions(ctx context.Context, flowID string) ([]Version, error)
+	GetVersionRules(ctx context.Context, flowID string, versionID string) (RuleSet, error)
+	DeleteVersion(ctx context.Context, flowID string, versionID string) error
 	UpdateCanvas(ctx context.Context, flowID string, snapshot json.RawMessage, mode FlowMode) (Draft, error)
 	ReplaceRules(ctx context.Context, flowID string, versionID string, rules []Rule) ([]Rule, error)
 	ReorderRules(ctx context.Context, flowID string, versionID string, ruleKeys []string) ([]Rule, error)
 	Publish(ctx context.Context, params PublishParams) (Version, error)
 	ActivateVersion(ctx context.Context, flowID string, versionID string) (Flow, error)
 	IncrementRuleCounter(ctx context.Context, flowID string, ruleKey string, hitAt time.Time) error
+	LoadMatchGroupValues(ctx context.Context, rules []Rule) (map[string][]string, error)
+	ValidateRuleReferences(ctx context.Context, flowID string, versionID string, rules []Rule) ([]ValidationError, error)
 }
 
 type Service struct {
@@ -338,6 +347,24 @@ func (s *Service) GetRules(ctx context.Context, flowID string) (RuleSet, error) 
 	return RuleSet{VersionID: draft.Version.ID, Rules: sortRules(draft.Rules)}, nil
 }
 
+func (s *Service) GetVersionRules(ctx context.Context, flowID string, versionID string) (RuleSet, error) {
+	if strings.TrimSpace(flowID) == "" || strings.TrimSpace(versionID) == "" {
+		return RuleSet{}, ErrInvalidInput
+	}
+	ruleSet, err := s.store.GetVersionRules(ctx, flowID, versionID)
+	if err != nil {
+		return RuleSet{}, err
+	}
+	return RuleSet{VersionID: ruleSet.VersionID, Rules: sortRules(ruleSet.Rules)}, nil
+}
+
+func (s *Service) DeleteVersion(ctx context.Context, flowID string, versionID string) error {
+	if strings.TrimSpace(flowID) == "" || strings.TrimSpace(versionID) == "" {
+		return ErrInvalidInput
+	}
+	return s.store.DeleteVersion(ctx, flowID, versionID)
+}
+
 func (s *Service) SaveRules(ctx context.Context, flowID string, input SaveRulesInput) (RuleSet, error) {
 	draft, err := s.getDraft(ctx, flowID)
 	if err != nil {
@@ -374,7 +401,10 @@ func (s *Service) Validate(ctx context.Context, flowID string) (ValidationResult
 	if err != nil {
 		return ValidationResult{}, err
 	}
-	errors := validateRules(draft.Rules)
+	errors, err := s.validateDraft(ctx, flowID, draft)
+	if err != nil {
+		return ValidationResult{}, err
+	}
 	status := "valid"
 	if len(errors) > 0 {
 		status = "invalid"
@@ -391,7 +421,10 @@ func (s *Service) Publish(ctx context.Context, flowID string, versionInfo ...str
 	if err != nil {
 		return Version{}, err
 	}
-	validationErrors := validateRules(draft.Rules)
+	validationErrors, err := s.validateDraft(ctx, flowID, draft)
+	if err != nil {
+		return Version{}, err
+	}
 	if len(validationErrors) > 0 {
 		return Version{}, ErrInvalidConfig
 	}
@@ -430,6 +463,10 @@ func (s *Service) Simulate(ctx context.Context, flowID string, input SimulateInp
 	}
 
 	scope := map[string]any{"payload": payload}
+	matchGroups, err := s.store.LoadMatchGroupValues(ctx, draft.Rules)
+	if err != nil {
+		return SimulationResult{}, ErrInvalidConfig
+	}
 	ruleResults := make([]RuleTrace, 0, len(draft.Rules))
 	var matchedRule *RuleTrace
 	stopReason := "no_match"
@@ -454,7 +491,7 @@ func (s *Service) Simulate(ctx context.Context, flowID string, input SimulateInp
 		}
 
 		startedAt := time.Now()
-		matched, evalErr := EvaluateConditionTree(rule.ConditionTree, scope)
+		matched, evalErr := EvaluateConditionTreeWithMatchGroups(rule.ConditionTree, scope, matchGroups)
 		trace.DurationMS = time.Since(startedAt).Milliseconds()
 		trace.Evaluated = true
 		if evalErr != nil {
@@ -484,6 +521,18 @@ func (s *Service) getDraft(ctx context.Context, flowID string) (Draft, error) {
 		return Draft{}, ErrInvalidInput
 	}
 	return s.store.GetDraft(ctx, flowID)
+}
+
+func (s *Service) validateDraft(ctx context.Context, flowID string, draft Draft) ([]ValidationError, error) {
+	validationErrors := validateRules(draft.Rules)
+	if len(validationErrors) > 0 {
+		return validationErrors, nil
+	}
+	referenceErrors, err := s.store.ValidateRuleReferences(ctx, flowID, draft.Version.ID, draft.Rules)
+	if err != nil {
+		return nil, err
+	}
+	return append(validationErrors, referenceErrors...), nil
 }
 
 func normalizeFlowInput(input CreateFlowInput, idGenerator func() string) (CreateFlowParams, error) {
@@ -666,8 +715,23 @@ func validateRules(rules []Rule) []ValidationError {
 		if _, err := parseConditionNode(rule.ConditionTree); err != nil {
 			errors = append(errors, ValidationError{Code: "MGP-ROUTE-002", Message: "条件树不合法", Path: rule.RuleKey})
 		}
+		if rule.Enabled && !hasEnabledActionTarget(rule.Action) {
+			errors = append(errors, ValidationError{Code: "MGP-ROUTE-002", Message: "发送动作组至少需要一个启用目标", Path: rule.RuleKey})
+		}
 	}
 	return errors
+}
+
+func hasEnabledActionTarget(action Action) bool {
+	for _, target := range action.Targets {
+		if target.Enabled && strings.TrimSpace(target.ChannelID) != "" && strings.TrimSpace(target.TemplateVersionID) != "" {
+			return true
+		}
+	}
+	if len(action.Targets) == 0 {
+		return strings.TrimSpace(action.TemplateVersionID) != "" && len(cleanStrings(action.ChannelIDs)) > 0
+	}
+	return false
 }
 
 type compiledActionTarget struct {
@@ -677,26 +741,38 @@ type compiledActionTarget struct {
 	SortOrder         int    `json:"sort_order"`
 }
 
+type compiledAction struct {
+	Targets           []compiledActionTarget `json:"targets"`
+	TemplateVersionID string                 `json:"template_version_id"`
+	ChannelIDs        []string               `json:"channel_ids"`
+	RecipientStrategy json.RawMessage        `json:"recipient_strategy"`
+	SendDedupeConfig  json.RawMessage        `json:"send_dedupe_config"`
+	FailurePolicy     json.RawMessage        `json:"failure_policy"`
+}
+
+type compiledRule struct {
+	ID                string          `json:"id,omitempty"`
+	ActionID          string          `json:"action_id,omitempty"`
+	RuleKey           string          `json:"rule_key"`
+	SortOrder         int             `json:"sort_order"`
+	Name              string          `json:"name"`
+	Enabled           bool            `json:"enabled"`
+	ConditionTree     json.RawMessage `json:"condition_tree"`
+	FieldDependencies []string        `json:"field_dependencies"`
+	MatchGroupIDs     []string        `json:"match_group_ids"`
+	CoarseFilter      map[string]any  `json:"coarse_filter"`
+	Action            compiledAction  `json:"action"`
+}
+
+type compiledRulesEnvelope struct {
+	ExecutionMode   string         `json:"execution_mode"`
+	CompilerVersion string         `json:"compiler_version"`
+	CompiledAt      string         `json:"compiled_at"`
+	VersionInfo     string         `json:"version_info"`
+	Rules           []compiledRule `json:"rules"`
+}
+
 func compileRules(draft Draft, compiledAt time.Time, versionInfo string) (json.RawMessage, error) {
-	type compiledAction struct {
-		Targets           []compiledActionTarget `json:"targets"`
-		TemplateVersionID string                 `json:"template_version_id"`
-		ChannelIDs        []string               `json:"channel_ids"`
-		RecipientStrategy json.RawMessage        `json:"recipient_strategy"`
-		SendDedupeConfig  json.RawMessage        `json:"send_dedupe_config"`
-		FailurePolicy     json.RawMessage        `json:"failure_policy"`
-	}
-	type compiledRule struct {
-		RuleKey           string          `json:"rule_key"`
-		SortOrder         int             `json:"sort_order"`
-		Name              string          `json:"name"`
-		Enabled           bool            `json:"enabled"`
-		ConditionTree     json.RawMessage `json:"condition_tree"`
-		FieldDependencies []string        `json:"field_dependencies"`
-		MatchGroupIDs     []string        `json:"match_group_ids"`
-		CoarseFilter      map[string]any  `json:"coarse_filter"`
-		Action            compiledAction  `json:"action"`
-	}
 	rules := make([]compiledRule, 0, len(draft.Rules))
 	for _, rule := range sortRules(draft.Rules) {
 		node, err := parseConditionNode(rule.ConditionTree)
@@ -706,6 +782,8 @@ func compileRules(draft Draft, compiledAt time.Time, versionInfo string) (json.R
 		dependencies := sortedUniqueStrings(node.dependencies())
 		matchGroupIDs := sortedUniqueStrings(node.matchGroupIDs())
 		rules = append(rules, compiledRule{
+			ID:                rule.ID,
+			ActionID:          rule.Action.ID,
 			RuleKey:           rule.RuleKey,
 			SortOrder:         rule.SortOrder,
 			Name:              rule.Name,
@@ -736,6 +814,177 @@ func compileRules(draft Draft, compiledAt time.Time, versionInfo string) (json.R
 		"rules":            rules,
 	}
 	return json.Marshal(compiled)
+}
+
+func RulesFromCompiled(raw json.RawMessage, persisted []Rule) ([]Rule, bool, error) {
+	if len(strings.TrimSpace(string(raw))) == 0 || strings.TrimSpace(string(raw)) == "{}" {
+		return nil, false, nil
+	}
+	var envelope compiledRulesEnvelope
+	if err := json.Unmarshal(raw, &envelope); err != nil {
+		return nil, false, err
+	}
+	if len(envelope.Rules) == 0 {
+		return nil, false, nil
+	}
+	persistedByKey := make(map[string]Rule, len(persisted))
+	for _, rule := range persisted {
+		persistedByKey[rule.RuleKey] = rule
+	}
+	rules := make([]Rule, 0, len(envelope.Rules))
+	for _, compiled := range envelope.Rules {
+		ruleKey := strings.TrimSpace(compiled.RuleKey)
+		if ruleKey == "" {
+			return nil, false, ErrInvalidConfig
+		}
+		base := persistedByKey[ruleKey]
+		ruleID := firstNonEmpty(compiled.ID, base.ID)
+		actionID := firstNonEmpty(compiled.ActionID, base.Action.ID)
+		action := actionFromCompiled(compiled.Action, base.Action, actionID)
+		sortOrder := compiled.SortOrder
+		if sortOrder <= 0 {
+			sortOrder = base.SortOrder
+		}
+		name := firstNonEmpty(compiled.Name, base.Name)
+		conditionTree := defaultObjectJSON(base.ConditionTree)
+		if jsonObjectPresent(compiled.ConditionTree) {
+			conditionTree = defaultObjectJSON(compiled.ConditionTree)
+		}
+		enabled := compiled.Enabled
+		if !compiledRuleHasExecutionData(compiled) {
+			enabled = base.Enabled
+		}
+		rules = append(rules, Rule{
+			ID:            ruleID,
+			FlowID:        base.FlowID,
+			VersionID:     base.VersionID,
+			RuleKey:       ruleKey,
+			SortOrder:     sortOrder,
+			Name:          name,
+			ConditionTree: conditionTree,
+			Enabled:       enabled,
+			Action:        action,
+			HitCount:      base.HitCount,
+			LastHitAt:     base.LastHitAt,
+			CreatedAt:     base.CreatedAt,
+			UpdatedAt:     base.UpdatedAt,
+		})
+	}
+	return sortRules(rules), true, nil
+}
+
+func actionFromCompiled(compiled compiledAction, base Action, actionID string) Action {
+	if compiledActionEmpty(compiled) {
+		base.ID = firstNonEmpty(actionID, base.ID)
+		return base
+	}
+	targets := targetsFromCompiled(compiled.Targets, base.Targets, actionID)
+	if len(targets) == 0 && strings.TrimSpace(compiled.TemplateVersionID) != "" {
+		targets = targetsFromLegacyCompiled(compiled.TemplateVersionID, compiled.ChannelIDs, actionID)
+	}
+	templateVersionID, channelIDs := actionCompatibilityFromTargets(targets)
+	if templateVersionID == "" {
+		templateVersionID = strings.TrimSpace(compiled.TemplateVersionID)
+		channelIDs = cleanStrings(compiled.ChannelIDs)
+	}
+	return Action{
+		ID:                firstNonEmpty(actionID, base.ID),
+		RuleID:            base.RuleID,
+		Targets:           targets,
+		TemplateVersionID: templateVersionID,
+		ChannelIDs:        channelIDs,
+		RecipientStrategy: defaultObjectJSON(compiled.RecipientStrategy),
+		SendDedupeConfig:  defaultObjectJSON(compiled.SendDedupeConfig),
+		FailurePolicy:     defaultObjectJSON(compiled.FailurePolicy),
+		CreatedAt:         base.CreatedAt,
+	}
+}
+
+func compiledRuleHasExecutionData(compiled compiledRule) bool {
+	return compiled.SortOrder > 0 ||
+		strings.TrimSpace(compiled.Name) != "" ||
+		jsonObjectPresent(compiled.ConditionTree) ||
+		!compiledActionEmpty(compiled.Action)
+}
+
+func compiledActionEmpty(compiled compiledAction) bool {
+	return len(compiled.Targets) == 0 &&
+		strings.TrimSpace(compiled.TemplateVersionID) == "" &&
+		len(cleanStrings(compiled.ChannelIDs)) == 0 &&
+		!jsonObjectPresent(compiled.RecipientStrategy) &&
+		!jsonObjectPresent(compiled.SendDedupeConfig) &&
+		!jsonObjectPresent(compiled.FailurePolicy)
+}
+
+func jsonObjectPresent(raw json.RawMessage) bool {
+	trimmed := strings.TrimSpace(string(raw))
+	return trimmed != "" && trimmed != "{}" && trimmed != "null"
+}
+
+func targetsFromCompiled(compiled []compiledActionTarget, base []ActionTarget, actionID string) []ActionTarget {
+	baseByPair := make(map[string]ActionTarget, len(base))
+	for _, target := range base {
+		key := strings.TrimSpace(target.ChannelID) + ":" + strings.TrimSpace(target.TemplateVersionID)
+		baseByPair[key] = target
+	}
+	targets := make([]ActionTarget, 0, len(compiled))
+	for index, item := range compiled {
+		channelID := strings.TrimSpace(item.ChannelID)
+		templateVersionID := strings.TrimSpace(item.TemplateVersionID)
+		if channelID == "" || templateVersionID == "" {
+			continue
+		}
+		key := channelID + ":" + templateVersionID
+		target := baseByPair[key]
+		target.ActionID = firstNonEmpty(actionID, target.ActionID)
+		target.ChannelID = channelID
+		target.TemplateVersionID = templateVersionID
+		target.Enabled = item.Enabled
+		target.SortOrder = item.SortOrder
+		if target.SortOrder <= 0 {
+			target.SortOrder = (index + 1) * 10
+		}
+		targets = append(targets, target)
+	}
+	sort.SliceStable(targets, func(i, j int) bool {
+		if targets[i].SortOrder == targets[j].SortOrder {
+			return targets[i].ChannelID < targets[j].ChannelID
+		}
+		return targets[i].SortOrder < targets[j].SortOrder
+	})
+	return targets
+}
+
+func targetsFromLegacyCompiled(templateVersionID string, channelIDs []string, actionID string) []ActionTarget {
+	channels := cleanStrings(channelIDs)
+	targets := make([]ActionTarget, 0, len(channels))
+	for index, channelID := range channels {
+		targets = append(targets, ActionTarget{
+			ActionID:          actionID,
+			ChannelID:         channelID,
+			TemplateVersionID: strings.TrimSpace(templateVersionID),
+			Enabled:           true,
+			SortOrder:         (index + 1) * 10,
+		})
+	}
+	return targets
+}
+
+func actionCompatibilityFromTargets(targets []ActionTarget) (string, []string) {
+	templateVersionID := ""
+	channelIDs := make([]string, 0, len(targets))
+	for _, target := range targets {
+		channelID := strings.TrimSpace(target.ChannelID)
+		targetTemplateVersionID := strings.TrimSpace(target.TemplateVersionID)
+		if channelID == "" || targetTemplateVersionID == "" {
+			continue
+		}
+		if templateVersionID == "" {
+			templateVersionID = targetTemplateVersionID
+		}
+		channelIDs = append(channelIDs, channelID)
+	}
+	return templateVersionID, channelIDs
 }
 
 func compiledActionTargets(items []ActionTarget) []compiledActionTarget {
@@ -782,7 +1031,7 @@ func parseConditionNode(raw json.RawMessage) (conditionNode, error) {
 			}
 		}
 		return node, nil
-	case "equals", "contains", "not_contains", "in", "exists", "in_match_group", "not_in_match_group", "match_group", "not_match_group":
+	case "equals", "not_equals", "contains", "not_contains", "regex", "in", "exists", "not_exists", "gt", "gte", "lt", "lte", "greater_than", "greater_than_or_equal", "less_than", "less_than_or_equal", "in_match_group", "not_in_match_group", "match_group", "not_match_group":
 		return node, node.validate()
 	default:
 		return conditionNode{}, ErrInvalidConfig
@@ -803,14 +1052,14 @@ func (n conditionNode) validate() error {
 			}
 		}
 		return nil
-	case "equals", "contains", "not_contains", "in", "exists":
+	case "equals", "not_equals", "contains", "not_contains", "regex", "in", "exists", "not_exists", "gt", "gte", "lt", "lte", "greater_than", "greater_than_or_equal", "less_than", "less_than_or_equal":
 		if strings.TrimSpace(n.Path) == "" {
 			return ErrInvalidConfig
 		}
 		if n.Operator == "in" && len(n.Values) == 0 && strings.TrimSpace(n.MatchGroupID) == "" {
 			return ErrInvalidConfig
 		}
-		if n.Operator != "exists" && n.Operator != "in" && len(n.Value) == 0 {
+		if n.Operator != "exists" && n.Operator != "not_exists" && n.Operator != "in" && len(n.Value) == 0 {
 			return ErrInvalidConfig
 		}
 		return nil
@@ -902,6 +1151,8 @@ func (n conditionNode) evaluate(scope map[string]any, matchGroups map[string][]s
 	switch n.Operator {
 	case "exists":
 		return exists, nil
+	case "not_exists":
+		return !exists, nil
 	case "equals":
 		if !exists {
 			return false, nil
@@ -910,7 +1161,16 @@ func (n conditionNode) evaluate(scope map[string]any, matchGroups map[string][]s
 		if err != nil {
 			return false, err
 		}
-		return reflect.DeepEqual(value, expected), nil
+		return valuesEqual(value, expected), nil
+	case "not_equals":
+		if !exists {
+			return true, nil
+		}
+		expected, err := decodeAny(n.Value)
+		if err != nil {
+			return false, err
+		}
+		return !valuesEqual(value, expected), nil
 	case "contains":
 		if !exists {
 			return false, nil
@@ -929,6 +1189,49 @@ func (n conditionNode) evaluate(scope map[string]any, matchGroups map[string][]s
 			return false, err
 		}
 		return !containsValue(value, needle), nil
+	case "regex":
+		if !exists {
+			return false, nil
+		}
+		pattern, err := decodeAny(n.Value)
+		if err != nil {
+			return false, err
+		}
+		expr, ok := pattern.(string)
+		if !ok || strings.TrimSpace(expr) == "" {
+			return false, ErrInvalidConfig
+		}
+		compiled, err := regexp.Compile(expr)
+		if err != nil {
+			return false, ErrInvalidConfig
+		}
+		return regexMatches(value, compiled), nil
+	case "gt", "gte", "lt", "lte", "greater_than", "greater_than_or_equal", "less_than", "less_than_or_equal":
+		if !exists {
+			return false, nil
+		}
+		expected, err := decodeAny(n.Value)
+		if err != nil {
+			return false, err
+		}
+		actualNumber, ok := numberValue(value)
+		if !ok {
+			return false, nil
+		}
+		expectedNumber, ok := numberValue(expected)
+		if !ok {
+			return false, ErrInvalidConfig
+		}
+		switch n.Operator {
+		case "gt", "greater_than":
+			return actualNumber > expectedNumber, nil
+		case "gte", "greater_than_or_equal":
+			return actualNumber >= expectedNumber, nil
+		case "lt", "less_than":
+			return actualNumber < expectedNumber, nil
+		default:
+			return actualNumber <= expectedNumber, nil
+		}
 	case "in":
 		if !exists {
 			return false, nil
@@ -962,7 +1265,7 @@ func (n conditionNode) evaluate(scope map[string]any, matchGroups map[string][]s
 }
 
 func lookupPath(scope map[string]any, path string) (any, bool) {
-	parts := strings.Split(strings.TrimSpace(path), ".")
+	parts := strings.Split(strings.TrimSpace(strings.TrimPrefix(path, "$.")), ".")
 	if len(parts) == 0 {
 		return nil, false
 	}
@@ -995,6 +1298,76 @@ func containsValue(value any, needle any) bool {
 	return false
 }
 
+func valuesEqual(left any, right any) bool {
+	if reflect.DeepEqual(left, right) {
+		return true
+	}
+	leftNumber, leftOK := numberValue(left)
+	rightNumber, rightOK := numberValue(right)
+	if leftOK && rightOK {
+		return leftNumber == rightNumber
+	}
+	return stringifyConditionValue(left) == stringifyConditionValue(right)
+}
+
+func regexMatches(value any, expr *regexp.Regexp) bool {
+	switch typed := value.(type) {
+	case []any:
+		for _, item := range typed {
+			if expr.MatchString(stringifyConditionValue(item)) {
+				return true
+			}
+		}
+		return false
+	case []string:
+		for _, item := range typed {
+			if expr.MatchString(item) {
+				return true
+			}
+		}
+		return false
+	default:
+		return expr.MatchString(stringifyConditionValue(value))
+	}
+}
+
+func numberValue(value any) (float64, bool) {
+	switch typed := value.(type) {
+	case int:
+		return float64(typed), true
+	case int8:
+		return float64(typed), true
+	case int16:
+		return float64(typed), true
+	case int32:
+		return float64(typed), true
+	case int64:
+		return float64(typed), true
+	case uint:
+		return float64(typed), true
+	case uint8:
+		return float64(typed), true
+	case uint16:
+		return float64(typed), true
+	case uint32:
+		return float64(typed), true
+	case uint64:
+		return float64(typed), true
+	case float32:
+		return float64(typed), true
+	case float64:
+		return typed, true
+	case json.Number:
+		parsed, err := typed.Float64()
+		return parsed, err == nil
+	case string:
+		parsed, err := strconv.ParseFloat(strings.TrimSpace(typed), 64)
+		return parsed, err == nil
+	default:
+		return 0, false
+	}
+}
+
 func valueInMatchGroup(value any, groupValues []string) bool {
 	if len(groupValues) == 0 {
 		return false
@@ -1006,21 +1379,39 @@ func valueInMatchGroup(value any, groupValues []string) bool {
 	switch typed := value.(type) {
 	case []any:
 		for _, item := range typed {
-			if valueSet[strings.TrimSpace(stringifyConditionValue(item))] {
+			if matchGroupValueMatches(item, valueSet, groupValues) {
 				return true
 			}
 		}
 		return false
 	case []string:
 		for _, item := range typed {
-			if valueSet[strings.TrimSpace(item)] {
+			if matchGroupValueMatches(item, valueSet, groupValues) {
 				return true
 			}
 		}
 		return false
 	default:
-		return valueSet[strings.TrimSpace(stringifyConditionValue(value))]
+		return matchGroupValueMatches(value, valueSet, groupValues)
 	}
+}
+
+func matchGroupValueMatches(value any, exactValues map[string]bool, groupValues []string) bool {
+	valueText := strings.TrimSpace(stringifyConditionValue(value))
+	if exactValues[valueText] {
+		return true
+	}
+	addr, err := netip.ParseAddr(valueText)
+	if err != nil {
+		return false
+	}
+	for _, groupValue := range groupValues {
+		prefix, err := netip.ParsePrefix(strings.TrimSpace(groupValue))
+		if err == nil && prefix.Contains(addr) {
+			return true
+		}
+	}
+	return false
 }
 
 func stringifyConditionValue(value any) string {
@@ -1082,6 +1473,26 @@ func sortedUniqueStrings(values []string) []string {
 	}
 	sort.Strings(result)
 	return result
+}
+
+func cleanStrings(values []string) []string {
+	cleaned := make([]string, 0, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value != "" {
+			cleaned = append(cleaned, value)
+		}
+	}
+	return cleaned
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return strings.TrimSpace(value)
+		}
+	}
+	return ""
 }
 
 func defaultObjectJSON(raw json.RawMessage) json.RawMessage {

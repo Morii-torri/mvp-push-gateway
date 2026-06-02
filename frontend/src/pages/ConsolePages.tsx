@@ -20,12 +20,14 @@ import type { TableProps } from 'antd/es/table';
 import Tabs from 'antd/es/tabs';
 import Tag from 'antd/es/tag';
 import Timeline from 'antd/es/timeline';
+import Tooltip from 'antd/es/tooltip';
 import Tree from 'antd/es/tree';
 import Typography from 'antd/es/typography';
 import {
   ArrowLeftOutlined,
   DeleteOutlined,
   DeploymentUnitOutlined,
+  CopyOutlined,
   EditOutlined,
   NodeIndexOutlined,
   PlayCircleOutlined,
@@ -47,7 +49,7 @@ import {
   type NodeProps,
   type OnSelectionChangeParams,
 } from '@xyflow/react';
-import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent, type KeyboardEvent, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent, type KeyboardEvent, type MouseEvent, type ReactNode } from 'react';
 
 import {
   ListContainer,
@@ -81,7 +83,6 @@ import {
   type JSONValue,
   type MatchGroupApiRecord,
   type MatchGroupItemApiRecord,
-  type MatchGroupItemInput,
   type MessageDetailApiRecord,
   type MessageLogApiRecord,
   type OrgUnitApiRecord,
@@ -165,13 +166,20 @@ import {
   type ProviderRow,
 } from './console/providerConfig';
 import {
+  RouteConditionGroupEditor,
+  RouteConditionEditor,
+  RouteRecipientEditor,
   RouteRuleForm,
+  RouteTargetsEditor,
   createRouteRuleDraft,
   mapRouteRule,
   routeRuleDraftFromRow,
   routeRuleDraftToRow,
   routeRuleToInput,
+  validateRouteConditionDraft,
+  validateRouteRecipientDraft,
   validateRouteRuleDraft,
+  validateRouteTargetsDraft,
   type RouteRuleDraft,
   type RouteRuleRow,
 } from './console/routeRuleForm';
@@ -213,11 +221,21 @@ export {
   switchProviderType,
 } from './console/providerConfig';
 export {
+  RouteConditionGroupEditor,
+  RouteConditionEditor,
+  RouteRecipientEditor,
   RouteRuleForm,
+  RouteTargetsEditor,
   createRouteRuleDraft,
   mapRouteRule,
+  routeRuleDraftFromRow,
   routeRuleDraftToRow,
+  routeTargetChannelOptions,
   routeTargetTemplateOptions,
+  validateRouteConditionDraft,
+  validateRouteRecipientDraft,
+  validateRouteRuleDraft,
+  validateRouteTargetsDraft,
 } from './console/routeRuleForm';
 export {
   TemplateEditorForm,
@@ -623,6 +641,211 @@ type SourceDraft = {
   quietHoursEnabled: boolean;
   quietHoursWindows: QuietHoursWindowDraft[];
 };
+
+const defaultSourceAccessGuideBody = {
+  title: '告警标题',
+  level: 'critical',
+  content: '告警内容',
+  biz_id: 'order-10001',
+  timestamp: '2026-06-02T10:00:00+08:00',
+};
+
+type SourceAccessGuideOptions = {
+  origin?: string;
+  timestamp?: string;
+  nonce?: string;
+};
+
+export async function buildSourceAccessGuide(source: SourceApiRecord, options: SourceAccessGuideOptions = {}): Promise<string> {
+  const origin = (options.origin ?? currentOrigin()).replace(/\/$/, '');
+  const encodedCode = encodeURIComponent(source.code);
+  const path = `/api/v1/ingest/${encodedCode}`;
+  const url = `${origin}${path}`;
+  const bodyText = JSON.stringify(defaultSourceAccessGuideBody, null, 2);
+  const timestamp = options.timestamp ?? `${Math.floor(Date.now() / 1000)}`;
+  const nonce = options.nonce ?? randomUUIDValue().replace(/-/g, '');
+  const needsToken = source.auth_mode === 'token' || source.auth_mode === 'token_and_hmac';
+  const needsHMAC = source.auth_mode === 'hmac' || source.auth_mode === 'token_and_hmac';
+  const hmacHeaders = needsHMAC
+    ? await signedIngestHeaders({
+        secret: source.hmac_secret,
+        method: 'POST',
+        path,
+        body: bodyText,
+        timestamp,
+        nonce,
+      })
+    : {};
+  const bodyHash = needsHMAC ? await sha256Hex(bodyText) : '';
+  const headerLines = [
+    'Content-Type: application/json',
+    ...(needsToken ? [`Authorization: Bearer ${source.auth_token}`] : []),
+    ...(needsHMAC
+      ? [
+          `X-MGP-Timestamp: ${hmacHeaders['X-MGP-Timestamp']}`,
+          `X-MGP-Nonce: ${hmacHeaders['X-MGP-Nonce']}`,
+          `X-MGP-Signature: ${hmacHeaders['X-MGP-Signature']}`,
+        ]
+      : []),
+  ];
+  const curlHeaders = headerLines.map((line) => `  -H ${shellSingleQuote(line)} \\`).join('\n');
+  const hmacSection = needsHMAC
+    ? `
+## HMAC 签名规则
+
+HMAC 密钥：${source.hmac_secret}
+
+如果来源使用 HMAC 鉴权，需要生成 3 个请求头：
+
+X-MGP-Timestamp
+X-MGP-Nonce
+X-MGP-Signature
+
+其中 \`X-MGP-Signature\` 的生成方式如下：
+
+1. 先计算请求 Body 的 SHA256 十六进制摘要，得到 \`bodyHash\`。
+2. 再按下面顺序拼接签名原文，每一项之间用换行符 \`\\n\` 连接：
+
+\`\`\`text
+POST
+${path}
+${timestamp}
+${nonce}
+${bodyHash}
+\`\`\`
+
+也就是：
+
+\`\`\`text
+METHOD + "\\n" +
+PATH + "\\n" +
+TIMESTAMP + "\\n" +
+NONCE + "\\n" +
+BODY_SHA256_HEX
+\`\`\`
+
+3. 使用来源 HMAC 密钥对这段签名原文做 HMAC-SHA256。
+4. 将结果转成十六进制字符串。
+5. 最终请求头写成：
+
+\`\`\`text
+X-MGP-Signature: ${hmacHeaders['X-MGP-Signature']}
+\`\`\`
+`
+    : '';
+
+  return `# MVP-PUSH 入站接入说明
+
+## 接口信息
+
+请求方式：POST
+
+入站 URI：${url}
+
+## Header
+
+\`\`\`text
+${headerLines.join('\n')}
+\`\`\`
+
+## Body
+
+请求体必须是合法 JSON。
+
+MVP-PUSH 支持任意 JSON 字段，下级系统可以按自己的业务场景传入字段。后续在模板和路由规则中，可以通过 \`payload.xxx\` 读取这些字段。
+
+示例：
+
+\`\`\`json
+${bodyText}
+\`\`\`
+${hmacSection}
+## curl 示例
+
+\`\`\`bash
+curl -X POST ${shellSingleQuote(url)} \\
+${curlHeaders}
+  -d ${shellSingleQuote(bodyText)}
+\`\`\`
+`;
+}
+
+function currentOrigin() {
+  if (typeof window !== 'undefined' && window.location?.origin) {
+    return window.location.origin;
+  }
+  return 'http://localhost:5173';
+}
+
+function shellSingleQuote(value: string) {
+  return `'${value.replace(/'/g, `'\\''`)}'`;
+}
+
+async function copyTextToClipboard(value: string) {
+  if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(value);
+    return;
+  }
+  const textArea = document.createElement('textarea');
+  textArea.value = value;
+  document.body.appendChild(textArea);
+  textArea.select();
+  document.execCommand('copy');
+  document.body.removeChild(textArea);
+}
+
+export function SourceCodeCell({
+  value,
+  source,
+  onCopyAccessGuide,
+}: {
+  value: string;
+  source?: SourceApiRecord;
+  onCopyAccessGuide?: (source: SourceApiRecord) => void;
+}) {
+  const handleCopyGuide = (event: MouseEvent) => {
+    event.stopPropagation();
+    if (source) {
+      onCopyAccessGuide?.(source);
+    }
+  };
+
+  return (
+    <span className="copyable-identifier-wrapper" style={{ maxWidth: 120 }}>
+      <Typography.Text ellipsis={{ tooltip: value }} style={{ display: 'inline-block', maxWidth: 96, verticalAlign: 'middle', margin: 0 }}>
+        {value}
+      </Typography.Text>
+      <span className="copy-action-trigger" onClick={handleCopyGuide} title="复制接入说明">
+        <CopyOutlined />
+      </span>
+    </span>
+  );
+}
+
+export function SourceAllowlistCell({ items }: { items: string[] }) {
+  if (!items.length) {
+    return <span>-</span>;
+  }
+  return <>{items.map((item) => <Tag key={item}>{item}</Tag>)}</>;
+}
+
+export function ProviderTypeCell({ value }: { value: ProviderRecord['providerType'] }) {
+  const meta = providerBrandMeta[value] || defaultBrandMeta;
+  return (
+    <span
+      className="provider-type-cell"
+      style={
+        {
+          '--brand-color': meta.color,
+          '--brand-color-rgb': meta.rgb,
+        } as React.CSSProperties
+      }
+    >
+      <span className="provider-type-cell__icon">{meta.icon}</span>
+      <span className="provider-type-cell__label">{getProviderTypeLabel(value)}</span>
+    </span>
+  );
+}
 
 type QuietHoursWindowDraft = {
   start: string;
@@ -1101,7 +1324,7 @@ export type MatchGroupListQuery = {
 export function filterMatchGroupsByQuery(rows: MatchGroupRow[], query: MatchGroupListQuery) {
   return rows.filter((row) => {
     const keywordMatched = matchesAnyQueryText(query.keyword, row.name);
-    const typeMatched = matchesExactOrAll(row.groupType, query.groupType);
+    const typeMatched = matchesExactOrAll(normalizeMatchGroupType(row.groupType), query.groupType);
     const statusMatched = matchesEnabledStatus(row.enabled, query.status);
     return keywordMatched && typeMatched && statusMatched;
   });
@@ -1874,7 +2097,7 @@ export function SourcesPage({ lastUpdated, onRefresh }: ConsolePageProps) {
   const confirmDeleteSource = (record: SourceRow) => {
     modal.confirm({
       title: `删除来源：${record.name}`,
-      content: '删除来源会同时影响绑定的路由大组、模板和历史引用，请确认后继续。',
+      content: '删除来源会同时影响绑定的路由组、模板和历史引用，请确认后继续。',
       okText: '删除',
       cancelText: '取消',
       okButtonProps: { danger: true },
@@ -1901,12 +2124,24 @@ export function SourcesPage({ lastUpdated, onRefresh }: ConsolePageProps) {
       },
     });
   };
+  const copySourceAccessGuide = async (source: SourceApiRecord) => {
+    try {
+      const guide = await buildSourceAccessGuide(source);
+      await copyTextToClipboard(guide);
+      message.success('入站接入说明已复制');
+    } catch (error) {
+      console.error('copy source access guide failed', error);
+      message.warning('复制失败，请稍后重试');
+    }
+  };
   const columns: TableProps<SourceRow>['columns'] = [
     {
       title: '来源编码',
       dataIndex: 'code',
       width: 120,
-      render: (value: string) => <CopyableIdentifier value={value} code maxWidth={120} />,
+      render: (value: string, record) => (
+        <SourceCodeCell value={value} source={record.raw} onCopyAccessGuide={(source) => void copySourceAccessGuide(source)} />
+      ),
     },
     { title: '来源名称', dataIndex: 'name', width: 160 },
     {
@@ -1920,7 +2155,7 @@ export function SourcesPage({ lastUpdated, onRefresh }: ConsolePageProps) {
       dataIndex: 'ipAllowlist',
       width: 140,
       className: 'allow-wrap',
-      render: (items: string[]) => items.map((item) => <Tag key={item}>{item}</Tag>),
+      render: (items: string[]) => <SourceAllowlistCell items={items} />,
     },
     {
       title: '入站去重',
@@ -2279,15 +2514,13 @@ export function ProvidersPage({ lastUpdated, onRefresh }: ConsolePageProps) {
     });
   };
   const columns: TableProps<ProviderRow>['columns'] = [
+    { title: '推送渠道名称', dataIndex: 'name', width: 180 },
     {
       title: '推送渠道类型',
       dataIndex: 'providerType',
       width: 140,
-      render: (value: ProviderRow['providerType']) => (
-        <StatusTag meta={{ label: getProviderTypeLabel(value), color: 'processing' }} />
-      ),
+      render: (value: ProviderRow['providerType']) => <ProviderTypeCell value={value} />,
     },
-    { title: '推送渠道名称', dataIndex: 'name', width: 180 },
     { title: '主动限流', dataIndex: 'rateLimit', width: 120 },
     { title: '超时时间', dataIndex: 'timeout', width: 110 },
     { title: '允许重试次数', width: 130, render: (_, record) => record.retryAttempts },
@@ -2528,7 +2761,7 @@ type RouteGroupDraft = {
   currentVersion: string;
 };
 
-function RouteGroupForm({
+export function RouteGroupForm({
   value,
   onChange,
   sourceRows,
@@ -2547,13 +2780,13 @@ function RouteGroupForm({
     }));
   return (
     <Form layout="vertical">
-      <Form.Item label="路由大组名称" required>
+      <Form.Item label="路由组名称" required>
         <Input
           value={value.name}
           onChange={(event) => onChange({ ...value, name: event.target.value })}
         />
       </Form.Item>
-      <Form.Item label="绑定来源" required extra="启用状态下每个来源只能绑定一个路由大组。">
+      <Form.Item label="绑定来源" required extra="启用状态下每个来源只能绑定一个路由组。">
         <Select
           value={value.sourceCode}
           onChange={(sourceCode) => onChange({ ...value, sourceCode })}
@@ -2563,7 +2796,7 @@ function RouteGroupForm({
           }))}
         />
       </Form.Item>
-      <Form.Item label="当前版本">
+      <Form.Item label="当前执行版本" extra="仅影响线上执行版本；草稿规则列表不会随该选择切换。">
         <Select
           value={value.currentVersion}
           disabled={routeVersionOptions.length === 0}
@@ -2573,14 +2806,6 @@ function RouteGroupForm({
               : [{ label: '未发布', value: value.currentVersion || '未发布' }]
           }
           onChange={(currentVersion) => onChange({ ...value, currentVersion })}
-        />
-      </Form.Item>
-      <Form.Item label="状态">
-        <Switch
-          checked={value.enabled}
-          checkedChildren="启用"
-          unCheckedChildren="停用"
-          onChange={(enabled) => onChange({ ...value, enabled })}
         />
       </Form.Item>
     </Form>
@@ -2593,6 +2818,12 @@ type SelectedFlowElement =
   | { type: 'edge'; id: string }
   | null;
 
+type CanvasNodeEditorState = {
+  nodeId: string;
+  kind: RouteNodeKind;
+  ruleId?: string;
+} | null;
+
 function RouteFlowNodeView({ data, selected }: NodeProps<RouteFlowNode>) {
   const nodeDefault = routeNodeDefaults[data.kind] ?? routeNodeDefaults.send_group;
   return (
@@ -2602,7 +2833,7 @@ function RouteFlowNodeView({ data, selected }: NodeProps<RouteFlowNode>) {
       <strong>{data.title}</strong>
       <span>{data.description}</span>
       {typeof data.hitCount === 'number' ? <em>命中 {formatHitCount(data.hitCount)}</em> : null}
-      <Handle type="source" position={Position.Right} />
+      {data.kind !== 'end' ? <Handle type="source" position={Position.Right} /> : null}
     </div>
   );
 }
@@ -2620,13 +2851,170 @@ function cloneRouteCanvasSnapshot(snapshot: RouteCanvasSnapshot): RouteCanvasSna
 
 function routeCanvasCoversRules(snapshot: RouteCanvasSnapshot, rules: RouteRuleRow[]): boolean {
   const nodeIds = new Set(snapshot.nodes.map((node) => node.id));
+  if (!nodeIds.has('source-start')) {
+    return false;
+  }
   return rules.every((rule) =>
-    [`${rule.id}-condition`, `${rule.id}-recipient`, `${rule.id}-send-group`].every((nodeId) => nodeIds.has(nodeId)),
+    [`${rule.id}-condition`, `${rule.id}-recipient`, `${rule.id}-send-group`, `${rule.id}-end`].every((nodeId) =>
+      nodeIds.has(nodeId),
+    ),
   );
 }
 
-function mapRouteGroup(flow: RouteFlowApiRecord, sourceRows: SourceRow[], rules: RouteRule[] = []): RouteGroup {
+function isRouteBusinessNodeKind(kind: RouteNodeKind) {
+  return kind === 'condition' || kind === 'recipient' || kind === 'send_group';
+}
+
+function canvasNodeEditorTitle(editor: CanvasNodeEditorState) {
+  if (!editor) {
+    return '编辑节点';
+  }
+  if (editor.kind === 'condition') {
+    return editor.ruleId ? '编辑条件组' : '新增条件组';
+  }
+  if (editor.kind === 'recipient') {
+    return editor.ruleId ? '编辑接收策略' : '新增接收策略';
+  }
+  if (editor.kind === 'send_group') {
+    return editor.ruleId ? '编辑发送动作组' : '新增发送动作组';
+  }
+  if (editor.kind === 'source') {
+    return '来源开始';
+  }
+  return `编辑${routeNodeDefaults[editor.kind]?.title ?? '节点'}节点`;
+}
+
+function routeDraftFromCanvasNodeData(
+  data: RouteNodeData,
+  templateRows: Array<TemplateRecord & { raw?: TemplateApiRecord }>,
+  channelRows: ProviderRow[],
+): RouteRuleDraft {
+  const fallback = createRouteRuleDraft(templateRows, channelRows);
+  const draft = data.routeDraft;
+  const title = typeof data.title === 'string' && data.title.trim() ? data.title.trim() : fallback.name;
+  if (!draft || typeof draft !== 'object' || Array.isArray(draft)) {
+    return { ...fallback, name: title };
+  }
+  const candidate = draft as Partial<RouteRuleDraft>;
+  return {
+    ...fallback,
+    ...candidate,
+    name: typeof candidate.name === 'string' && candidate.name.trim() ? candidate.name : title,
+    conditionGroupOperator: candidate.conditionGroupOperator === 'or' ? 'or' : 'and',
+    conditions: Array.isArray(candidate.conditions)
+      ? (candidate.conditions as RouteConditionDraft[])
+      : fallback.conditions,
+    targets: Array.isArray(candidate.targets)
+      ? (candidate.targets as RouteRuleDraft['targets'])
+      : fallback.targets,
+    recipientUserIds: Array.isArray(candidate.recipientUserIds) ? candidate.recipientUserIds : fallback.recipientUserIds,
+    recipientGroupIds: Array.isArray(candidate.recipientGroupIds)
+      ? candidate.recipientGroupIds
+      : fallback.recipientGroupIds,
+    payloadRecipientPath:
+      typeof candidate.payloadRecipientPath === 'string' ? candidate.payloadRecipientPath : fallback.payloadRecipientPath,
+    enabled: typeof candidate.enabled === 'boolean' ? candidate.enabled : fallback.enabled,
+  };
+}
+
+function routeRecipientDraftSummary(draft: RouteRuleDraft) {
+  if (draft.recipientMode === 'none') {
+    return '无接收人';
+  }
+  if (draft.recipientMode === 'payload') {
+    return `Payload 接收人：${draft.payloadRecipientPath || '-'}`;
+  }
+  const userCount = draft.recipientUserIds.length;
+  const groupCount = draft.recipientGroupIds.length;
+  return `系统接收人：${userCount} 人 / ${groupCount} 组`;
+}
+
+function routeTargetsDraftSummary(draft: RouteRuleDraft) {
+  const enabledCount = draft.targets.filter((target) => target.enabled).length;
+  return enabledCount > 0 ? `${enabledCount} 个发送目标` : '未配置发送目标';
+}
+
+function canvasNodeDataFromRouteDraft(kind: RouteNodeKind, draft: RouteRuleDraft, matchGroupRows: MatchGroup[]): RouteNodeData {
+  if (kind === 'condition') {
+    const matchGroupNames = Object.fromEntries(matchGroupRows.map((group) => [group.id, group.name]));
+    const conditionTree = buildRouteConditionTree(draft.conditions, draft.conditionGroupOperator);
+    return {
+      kind,
+      title: draft.name.trim() || '新条件组',
+      description: summarizeRouteConditionTree(conditionTree, { matchGroupNames }),
+      condition: summarizeRouteConditionTree(conditionTree, { matchGroupNames }),
+      routeDraft: draft,
+    };
+  }
+  if (kind === 'recipient') {
+    return {
+      kind,
+      title: draft.recipientMode === 'payload' ? 'Payload 接收人' : draft.recipientMode === 'none' ? '无接收人' : '系统接收人',
+      description: routeRecipientDraftSummary(draft),
+      routeDraft: draft,
+    };
+  }
+  if (kind === 'send_group') {
+    return {
+      kind,
+      title: '发送动作组',
+      description: routeTargetsDraftSummary(draft),
+      routeDraft: draft,
+    };
+  }
+  return {
+    kind,
+    title: draft.name,
+    description: '',
+    routeDraft: draft,
+  };
+}
+
+function validateCanvasNodeRuleDraft(
+  kind: RouteNodeKind,
+  draft: RouteRuleDraft,
+  templateRows: Array<TemplateRecord & { raw?: TemplateApiRecord }>,
+  channelRows: ProviderRow[],
+) {
+  if (kind === 'condition') {
+    if (!draft.name.trim()) {
+      return '请填写条件组名称';
+    }
+    return validateRouteConditionDraft(draft);
+  }
+  if (kind === 'recipient') {
+    return validateRouteRecipientDraft(draft);
+  }
+  if (kind === 'send_group') {
+    return validateRouteTargetsDraft(draft, templateRows, channelRows);
+  }
+  return '';
+}
+
+function routeFlowNumber(value: number | undefined): number {
+  return typeof value === 'number' && Number.isFinite(value) ? value : 0;
+}
+
+export function routeGroupRuleCount(group: RouteGroup, loadedRules: RouteRuleRow[] = []): number {
+  const loadedGroupRules = loadedRules.filter((rule) => rule.flowId === group.id);
+  if (loadedGroupRules.length > 0) {
+    return loadedGroupRules.length;
+  }
+  return typeof group.ruleCount === 'number' ? group.ruleCount : group.ruleIds.length;
+}
+
+export function routeGroupTotalHitCount(group: RouteGroup, loadedRules: RouteRuleRow[] = []): number {
+  const loadedGroupRules = loadedRules.filter((rule) => rule.flowId === group.id);
+  if (loadedGroupRules.length > 0) {
+    return loadedGroupRules.reduce((sum, rule) => sum + rule.hitCount, 0);
+  }
+  return group.totalHitCount;
+}
+
+export function mapRouteGroup(flow: RouteFlowApiRecord, sourceRows: SourceRow[], rules?: RouteRule[]): RouteGroup {
   const source = sourceRows.find((item) => item.id === flow.source_id);
+  const hasRules = Array.isArray(rules);
+  const ruleIds = hasRules ? rules.map((rule) => rule.id) : [];
   return {
     id: flow.id,
     name: flow.name,
@@ -2634,8 +3022,11 @@ function mapRouteGroup(flow: RouteFlowApiRecord, sourceRows: SourceRow[], rules:
     sourceCode: source?.code ?? flow.source_id,
     enabled: flow.enabled,
     currentVersion: flow.current_version_id || '未发布',
-    ruleIds: rules.map((rule) => rule.id),
-    totalHitCount: rules.reduce((sum, rule) => sum + rule.hitCount, 0),
+    ruleIds,
+    ruleCount: hasRules ? ruleIds.length : routeFlowNumber(flow.rule_count),
+    totalHitCount: hasRules
+      ? rules.reduce((sum, rule) => sum + rule.hitCount, 0)
+      : routeFlowNumber(flow.total_hit_count),
     updatedAt: formatApiTime(flow.updated_at),
   };
 }
@@ -2646,12 +3037,109 @@ function routeVersionOptionLabel(version: RouteVersionApiRecord): string {
   return versionInfo ? `v${version.version_no} / ${versionInfo}` : `v${version.version_no} / ${publishedAt}`;
 }
 
+type RouteSimulationTraceRow = {
+  key: string;
+  order: number | string;
+  name: string;
+  matched: boolean;
+  evaluated: boolean;
+  duration: number | string;
+  stopReason: string;
+};
+
+export function RouteSimulationResultView({ result }: { result: JSONValue }) {
+  const record = isRecord(result) ? result : {};
+  const matchedRule = isRecord(record.matched_rule) ? record.matched_rule : null;
+  const rows = routeSimulationTraceRows(record.rule_results);
+  const stopReason = stringField(record.stop_reason);
+  return (
+    <div className="route-simulation-result">
+      <Alert
+        type={matchedRule ? 'success' : 'warning'}
+        showIcon
+        message={matchedRule ? `命中规则：${stringField(matchedRule.name) || stringField(matchedRule.rule_key)}` : '未命中任何规则'}
+        description={`停止原因：${routeSimulationStopReasonLabel(stopReason)}`}
+      />
+      <Descriptions column={3} size="small" bordered>
+        <Descriptions.Item label="版本">{stringField(record.version_id) || '-'}</Descriptions.Item>
+        <Descriptions.Item label="命中规则">
+          {matchedRule ? stringField(matchedRule.rule_key) || '-' : '-'}
+        </Descriptions.Item>
+        <Descriptions.Item label="规则数">{rows.length}</Descriptions.Item>
+      </Descriptions>
+      <Table<RouteSimulationTraceRow>
+        rowKey="key"
+        size="small"
+        pagination={false}
+        columns={[
+          { title: '顺序', dataIndex: 'order', width: 72 },
+          { title: '规则', dataIndex: 'name' },
+          {
+            title: '结果',
+            width: 96,
+            render: (_, row) => (
+              <Tag color={row.matched ? 'success' : row.evaluated ? 'default' : 'warning'}>
+                {row.matched ? '命中' : row.evaluated ? '未命中' : '跳过'}
+              </Tag>
+            ),
+          },
+          { title: '耗时', dataIndex: 'duration', width: 92, render: (value) => `${value} ms` },
+          { title: '原因', dataIndex: 'stopReason', width: 160 },
+        ]}
+        dataSource={rows}
+      />
+      <Tabs
+        size="small"
+        items={[
+          {
+            key: 'raw',
+            label: '原始 JSON',
+            children: <pre className="code-block">{stringifyJSON(result, '{}')}</pre>,
+          },
+        ]}
+      />
+    </div>
+  );
+}
+
+function routeSimulationTraceRows(value: JSONValue | undefined): RouteSimulationTraceRow[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value.map((item, index) => {
+    const record = isRecord(item) ? item : {};
+    const ruleKey = stringField(record.rule_key);
+    const stopReason = stringField(record.stop_reason);
+    return {
+      key: ruleKey || `rule-${index}`,
+      order: typeof record.sort_order === 'number' ? record.sort_order : '-',
+      name: stringField(record.name) || ruleKey || '-',
+      matched: record.matched === true,
+      evaluated: record.evaluated === true,
+      duration: typeof record.duration_ms === 'number' ? record.duration_ms : 0,
+      stopReason: routeSimulationStopReasonLabel(stopReason),
+    };
+  });
+}
+
+function routeSimulationStopReasonLabel(value: string): string {
+  switch (value) {
+    case 'first_match_stop':
+      return '第一条命中后停止';
+    case 'disabled':
+      return '规则已停用';
+    case 'no_match':
+      return '未命中';
+    default:
+      return value || '-';
+  }
+}
 
 export function RoutesPage({ lastUpdated, onRefresh }: ConsolePageProps) {
   const { message, modal } = App.useApp();
-  const { drawer: groupDrawer, openDrawer: openGroupDrawer, closeDrawer: closeGroupDrawer } = useCreateDrawer('新增路由大组');
+  const { drawer: groupDrawer, openDrawer: openGroupDrawer, closeDrawer: closeGroupDrawer } = useCreateDrawer('新增路由组');
   const { drawer: ruleDrawer, openDrawer: openRuleDrawer, closeDrawer: closeRuleDrawer } = useCreateDrawer('新增路由规则');
-  const [mode, setMode] = useState<'canvas' | 'table'>('canvas');
+  const [mode, setMode] = useState<'canvas' | 'table'>('table');
   const [loadState, setLoadState] = useState<ApiLoadState>(emptyLoadState);
   const isFirstLoad = useRef(true);
   const [sourceRows, setSourceRows] = useState<SourceRow[]>([]);
@@ -2664,10 +3152,11 @@ export function RoutesPage({ lastUpdated, onRefresh }: ConsolePageProps) {
   const [routeVersionRows, setRouteVersionRows] = useState<RouteVersionApiRecord[]>([]);
   const [routeVersionLabelById, setRouteVersionLabelById] = useState<Record<string, string>>({});
   const [rawFlows, setRawFlows] = useState<RouteFlowApiRecord[]>([]);
+  const [pendingRouteGroupStatusIds, setPendingRouteGroupStatusIds] = useState<Set<string>>(() => new Set());
   const [selectedGroup, setSelectedGroup] = useState<RouteGroup | null>(null);
   const [editingGroupId, setEditingGroupId] = useState<string | null>(null);
   const [groupDraft, setGroupDraft] = useState<RouteGroupDraft>({
-    name: '新路由大组',
+    name: '新路由组',
     sourceCode: '',
     enabled: true,
     currentVersion: '未发布',
@@ -2678,6 +3167,14 @@ export function RoutesPage({ lastUpdated, onRefresh }: ConsolePageProps) {
   const [simulationOpen, setSimulationOpen] = useState(false);
   const [simulationPayloadText, setSimulationPayloadText] = useState('{}');
   const [simulationResult, setSimulationResult] = useState<JSONValue | null>(null);
+  const [canvasNodeEditor, setCanvasNodeEditor] = useState<CanvasNodeEditorState>(null);
+  const [canvasNodeRuleDraft, setCanvasNodeRuleDraft] = useState<RouteRuleDraft>(() => createRouteRuleDraft([], []));
+  const [canvasNodeDataDraft, setCanvasNodeDataDraft] = useState<RouteNodeData | null>(null);
+  const [routeVersionHistoryOpen, setRouteVersionHistoryOpen] = useState(false);
+  const [routeVersionHistoryLoading, setRouteVersionHistoryLoading] = useState(false);
+  const [routeVersionPreviewLoading, setRouteVersionPreviewLoading] = useState(false);
+  const [routeVersionPreviewVersionId, setRouteVersionPreviewVersionId] = useState('');
+  const [routeVersionPreviewRules, setRouteVersionPreviewRules] = useState<RouteRuleRow[]>([]);
   const routeGroupQuery = useAppliedFilters<RouteGroupListQuery>({
     keyword: '',
     sourceCode: 'all',
@@ -2749,7 +3246,14 @@ export function RoutesPage({ lastUpdated, onRefresh }: ConsolePageProps) {
           return current;
         }
         const updated = nextGroupRows.find((item) => item.id === current.id);
-        return updated ? { ...updated, ruleIds: current.ruleIds, totalHitCount: current.totalHitCount } : null;
+        return updated
+          ? {
+              ...updated,
+              ruleIds: current.ruleIds,
+              ruleCount: routeGroupRuleCount(current),
+              totalHitCount: current.totalHitCount,
+            }
+          : null;
       });
       setMatchGroupRows(nextMatchGroups);
       setRecipientGroupRows(nextRecipientGroups);
@@ -2793,60 +3297,165 @@ export function RoutesPage({ lastUpdated, onRefresh }: ConsolePageProps) {
     const initial = cloneRouteCanvasSnapshot(snapshot);
     setFlowNodes(initial.nodes);
     setFlowEdges(initial.edges);
-    setSelectedElement({ type: 'node', id: 'source-start' });
+    setSelectedElement(initial.nodes[0] ? { type: 'node', id: initial.nodes[0].id } : null);
+  };
+  const loadCanvasForGroupFromServer = async (group: RouteGroup, scopedRules: RouteRuleRow[] = ruleRows) => {
+    const canvas = await consoleApi.getRouteCanvas(group.id).catch(() => null);
+    if (canvas?.canvas_snapshot && typeof canvas.canvas_snapshot === 'object') {
+      const snapshot = canvas.canvas_snapshot as unknown as RouteCanvasSnapshot;
+      if (Array.isArray(snapshot.nodes) && Array.isArray(snapshot.edges) && routeCanvasCoversRules(snapshot, scopedRules)) {
+        setCanvasSnapshots((current) => ({ ...current, [group.id]: snapshot }));
+        const initial = cloneRouteCanvasSnapshot(snapshot);
+        setFlowNodes(initial.nodes);
+        setFlowEdges(initial.edges);
+        setSelectedElement(initial.nodes[0] ? { type: 'node', id: initial.nodes[0].id } : null);
+        return;
+      }
+    }
+    loadCanvasForGroup(group, scopedRules);
   };
   const reloadRulesForGroup = async (group: RouteGroup) => {
     const result = await consoleApi.getRouteRules(group.id);
-    const rows = result.rules.map((rule) => mapRouteRule(rule, group, channelRows, templateRows, matchGroupRows));
+    const rows = result.rules
+      .map((rule) => mapRouteRule(rule, group, channelRows, templateRows, matchGroupRows))
+      .sort((left, right) => left.sortOrder - right.sortOrder)
+      .map((rule, index) => ({ ...rule, sortOrder: index + 1 }));
     setRuleRows((current) => {
       const other = current.filter((item) => item.flowId !== group.id);
       return [...other, ...rows];
     });
-    const nextGroup = { ...group, ruleIds: rows.map((rule) => rule.id), totalHitCount: rows.reduce((sum, rule) => sum + rule.hitCount, 0) };
+    const nextGroup = {
+      ...group,
+      ruleIds: rows.map((rule) => rule.id),
+      ruleCount: rows.length,
+      totalHitCount: rows.reduce((sum, rule) => sum + rule.hitCount, 0),
+    };
     setGroupRows((current) => current.map((item) => (item.id === group.id ? nextGroup : item)));
     setSelectedGroup(nextGroup);
     return { group: nextGroup, rules: rows };
   };
-  const openGroup = async (group: RouteGroup) => {
-    setSelectedGroup(group);
-    setMode('canvas');
-    routeRuleQuery.resetFilters();
+  const previewRouteVersionRules = async (version: RouteVersionApiRecord, group: RouteGroup = selectedGroup as RouteGroup) => {
+    if (!group) {
+      return;
+    }
+    setRouteVersionPreviewLoading(true);
+    setRouteVersionPreviewVersionId(version.id);
     try {
-      const { group: nextGroup, rules: nextRules } = await reloadRulesForGroup(group);
-      const canvas = await consoleApi.getRouteCanvas(group.id).catch(() => null);
-      if (canvas?.canvas_snapshot && typeof canvas.canvas_snapshot === 'object') {
-        const snapshot = canvas.canvas_snapshot as unknown as RouteCanvasSnapshot;
-        if (Array.isArray(snapshot.nodes) && Array.isArray(snapshot.edges) && routeCanvasCoversRules(snapshot, nextRules)) {
-          setCanvasSnapshots((current) => ({ ...current, [group.id]: snapshot }));
-          const initial = cloneRouteCanvasSnapshot(snapshot);
-          setFlowNodes(initial.nodes);
-          setFlowEdges(initial.edges);
-          setSelectedElement({ type: 'node', id: 'source-start' });
-          return;
-        }
-      }
-      loadCanvasForGroup(nextGroup, nextRules);
+      const result = await consoleApi.getRouteVersionRules(group.id, version.id);
+      const rows = result.rules
+        .map((rule) => mapRouteRule(rule, group, channelRows, templateRows, matchGroupRows))
+        .sort((left, right) => left.sortOrder - right.sortOrder)
+        .map((rule, index) => ({ ...rule, sortOrder: index + 1 }));
+      setRouteVersionPreviewRules(rows);
     } catch (error) {
       showError(message, error);
-      loadCanvasForGroup(group);
+    } finally {
+      setRouteVersionPreviewLoading(false);
+    }
+  };
+  const openRouteVersionHistory = async () => {
+    if (!selectedGroup) {
+      return;
+    }
+    setRouteVersionHistoryOpen(true);
+    setRouteVersionHistoryLoading(true);
+    setRouteVersionPreviewRules([]);
+    setRouteVersionPreviewVersionId('');
+    try {
+      const response = await consoleApi.listRouteVersions(selectedGroup.id);
+      setRouteVersionRows(response.versions);
+      const previewVersion =
+        response.versions.find((version) => version.id === selectedGroup.currentVersion) ??
+        response.versions.find((version) => Boolean(version.published_at)) ??
+        response.versions[0];
+      if (previewVersion) {
+        await previewRouteVersionRules(previewVersion, selectedGroup);
+      }
+    } catch (error) {
+      showError(message, error);
+    } finally {
+      setRouteVersionHistoryLoading(false);
+    }
+  };
+  const activateRouteVersionFromHistory = async (version: RouteVersionApiRecord) => {
+    if (!selectedGroup || !version.published_at || version.id === selectedGroup.currentVersion) {
+      return;
+    }
+    try {
+      await consoleApi.activateRouteVersion(selectedGroup.id, version.id);
+      message.success(`已切换当前执行版本为 v${version.version_no}`);
+      await loadRouteData();
+      setSelectedGroup((current) => (current ? { ...current, currentVersion: version.id } : current));
+    } catch (error) {
+      showError(message, error);
+    }
+  };
+  const deleteRouteVersionFromHistory = (version: RouteVersionApiRecord) => {
+    if (!selectedGroup || !version.published_at || version.id === selectedGroup.currentVersion) {
+      return;
+    }
+    const group = selectedGroup;
+    modal.confirm({
+      title: `删除历史版本 v${version.version_no}`,
+      content: '删除后该版本的规则预览和画布快照会一并移除，当前执行版本不受影响。',
+      okText: '删除版本',
+      cancelText: '取消',
+      okButtonProps: { danger: true },
+      onOk: async () => {
+        try {
+          await consoleApi.deleteRouteVersion(group.id, version.id);
+          message.success(`已删除历史版本 v${version.version_no}`);
+          const response = await consoleApi.listRouteVersions(group.id);
+          setRouteVersionRows(response.versions);
+          setRouteVersionLabelById((current) => {
+            const { [version.id]: _removed, ...rest } = current;
+            return rest;
+          });
+          if (routeVersionPreviewVersionId === version.id) {
+            const nextPreview =
+              response.versions.find((item) => item.id === group.currentVersion) ??
+              response.versions.find((item) => Boolean(item.published_at)) ??
+              response.versions[0];
+            if (nextPreview) {
+              await previewRouteVersionRules(nextPreview, group);
+            } else {
+              setRouteVersionPreviewRules([]);
+              setRouteVersionPreviewVersionId('');
+            }
+          }
+        } catch (error) {
+          showError(message, error);
+          throw error;
+        }
+      },
+    });
+  };
+  const openGroup = async (group: RouteGroup) => {
+    setSelectedGroup(group);
+    setMode('table');
+    routeRuleQuery.resetFilters();
+    try {
+      await reloadRulesForGroup(group);
+    } catch (error) {
+      showError(message, error);
     }
   };
   const switchRouteMode = (nextMode: 'canvas' | 'table') => {
     setMode(nextMode);
     if (nextMode === 'canvas' && selectedGroup) {
-      loadCanvasForGroup(selectedGroup);
+      void loadCanvasForGroupFromServer(selectedGroup, groupRules);
     }
   };
   const openCreateGroup = () => {
     setEditingGroupId(null);
     setRouteVersionRows([]);
     setGroupDraft({
-      name: '新路由大组',
+      name: '新路由组',
       sourceCode: sourceRows[0]?.code ?? '',
       enabled: true,
       currentVersion: '',
     });
-    openGroupDrawer('新增路由大组');
+    openGroupDrawer('新增路由组');
   };
   const openEditGroup = (group: RouteGroup) => {
     setEditingGroupId(group.id);
@@ -2857,7 +3466,7 @@ export function RoutesPage({ lastUpdated, onRefresh }: ConsolePageProps) {
       enabled: group.enabled,
       currentVersion: group.currentVersion,
     });
-    openGroupDrawer(`编辑路由大组：${group.name}`);
+    openGroupDrawer(`编辑路由组：${group.name}`);
     void consoleApi
       .listRouteVersions(group.id)
       .then((response) => setRouteVersionRows(response.versions))
@@ -2881,6 +3490,79 @@ export function RoutesPage({ lastUpdated, onRefresh }: ConsolePageProps) {
     closeRuleDrawer();
     setEditingRuleId(null);
   };
+  const closeCanvasNodeEditor = () => {
+    setCanvasNodeEditor(null);
+    setCanvasNodeDataDraft(null);
+  };
+  const saveCanvasNodeEditor = async () => {
+    if (!canvasNodeEditor || !selectedGroup) {
+      return;
+    }
+    if (!canvasNodeEditor.ruleId && isRouteBusinessNodeKind(canvasNodeEditor.kind)) {
+      const draftError = validateCanvasNodeRuleDraft(canvasNodeEditor.kind, canvasNodeRuleDraft, templateRows, channelRows);
+      if (draftError) {
+        message.error(draftError);
+        return;
+      }
+      const nextNodeData = canvasNodeDataFromRouteDraft(canvasNodeEditor.kind, canvasNodeRuleDraft, matchGroupRows);
+      setFlowNodes((current) =>
+        current.map((node) =>
+          node.id === canvasNodeEditor.nodeId ? { ...node, data: { ...node.data, ...nextNodeData } } : node,
+        ),
+      );
+      closeCanvasNodeEditor();
+      message.success('节点配置已更新');
+      return;
+    }
+    if (!canvasNodeEditor.ruleId || canvasNodeEditor.kind === 'end' || canvasNodeEditor.kind === 'source') {
+      if (canvasNodeDataDraft) {
+        setFlowNodes((current) =>
+          current.map((node) =>
+            node.id === canvasNodeEditor.nodeId && canvasNodeEditor.kind !== 'source'
+              ? { ...node, data: { ...node.data, ...canvasNodeDataDraft } }
+              : node,
+          ),
+        );
+      }
+      closeCanvasNodeEditor();
+      if (canvasNodeEditor.kind !== 'source') {
+        message.success('节点信息已更新');
+      }
+      return;
+    }
+    const draftError = validateCanvasNodeRuleDraft(canvasNodeEditor.kind, canvasNodeRuleDraft, templateRows, channelRows);
+    if (draftError) {
+      message.error(draftError);
+      return;
+    }
+    const existingRule = groupRules.find((rule) => rule.id === canvasNodeEditor.ruleId);
+    if (!existingRule) {
+      message.error('未找到该节点关联的路由规则');
+      return;
+    }
+    try {
+      const nextRule = routeRuleDraftToRow(
+        canvasNodeRuleDraft,
+        selectedGroup,
+        existingRule,
+        existingRule.sortOrder,
+        matchGroupRows,
+        templateRows,
+        channelRows,
+      );
+      const nextRules = groupRules.map((rule) => (rule.id === existingRule.id ? nextRule : rule));
+      await consoleApi.saveRouteRules(selectedGroup.id, nextRules.map(routeRuleToInput));
+      clearGroupCanvasSnapshot(selectedGroup.id);
+      closeCanvasNodeEditor();
+      message.success('节点配置已保存');
+      const { group: nextGroup, rules: nextRulesFromServer } = await reloadRulesForGroup(selectedGroup);
+      if (mode === 'canvas') {
+        loadCanvasForGroup(nextGroup, nextRulesFromServer);
+      }
+    } catch (error) {
+      showError(message, error);
+    }
+  };
   const clearGroupCanvasSnapshot = (groupId: string) => {
     setCanvasSnapshots((current) => {
       const { [groupId]: _removed, ...rest } = current;
@@ -2891,11 +3573,11 @@ export function RoutesPage({ lastUpdated, onRefresh }: ConsolePageProps) {
     const source = sourceRows.find((item) => item.code === groupDraft.sourceCode);
     const name = groupDraft.name.trim();
     if (!name || !source) {
-      message.error('请填写路由大组名称并选择来源');
+      message.error('请填写路由组名称并选择来源');
       return;
     }
     if (groupDraft.enabled && !canEnableRouteGroupSource(groupRows, editingGroupId, groupDraft.sourceCode)) {
-      message.error('该来源已存在启用路由大组');
+      message.error('该来源已存在启用路由组');
       return;
     }
     const input: RouteFlowInput = {
@@ -2915,16 +3597,49 @@ export function RoutesPage({ lastUpdated, onRefresh }: ConsolePageProps) {
         await consoleApi.createRouteFlow(input);
       }
       closeGroupEditor();
-      message.success('路由大组已保存');
+      message.success('路由组已保存');
       await loadRouteData();
     } catch (error) {
       showError(message, error);
     }
   };
+  const toggleRouteGroupEnabled = async (group: RouteGroup, enabled: boolean) => {
+    if (enabled && !canEnableRouteGroupSource(groupRows, group.id, group.sourceCode)) {
+      message.error('该来源已存在启用路由组');
+      return;
+    }
+    const source = sourceRows.find((item) => item.code === group.sourceCode);
+    if (!source) {
+      message.error('未找到该路由组绑定的来源');
+      return;
+    }
+    const rawFlow = rawFlows.find((flow) => flow.id === group.id);
+    setPendingRouteGroupStatusIds((current) => new Set(current).add(group.id));
+    try {
+      await consoleApi.updateRouteFlow(group.id, {
+        source_id: source.id,
+        name: group.name,
+        enabled,
+        mode: rawFlow?.mode ?? 'table',
+      });
+      setGroupRows((current) => current.map((item) => (item.id === group.id ? { ...item, enabled } : item)));
+      setSelectedGroup((current) => (current?.id === group.id ? { ...current, enabled } : current));
+      message.success(`${group.name} 已${enabled ? '启用' : '停用'}`);
+      await loadRouteData();
+    } catch (error) {
+      showError(message, error);
+    } finally {
+      setPendingRouteGroupStatusIds((current) => {
+        const next = new Set(current);
+        next.delete(group.id);
+        return next;
+      });
+    }
+  };
   const confirmDeleteGroup = (group: RouteGroup) => {
     modal.confirm({
-      title: `删除路由大组：${group.name}`,
-      content: '删除路由大组会同时删除其草稿规则、画布快照和历史版本引用，请确认后继续。',
+      title: `删除路由组：${group.name}`,
+      content: '删除路由组会同时删除其草稿规则、画布快照和历史版本引用，请确认后继续。',
       okText: '删除',
       cancelText: '取消',
       okButtonProps: { danger: true },
@@ -2938,7 +3653,7 @@ export function RoutesPage({ lastUpdated, onRefresh }: ConsolePageProps) {
           if (editingGroupId === group.id) {
             closeGroupEditor();
           }
-          message.success('路由大组已删除');
+          message.success('路由组已删除');
           await loadRouteData();
         } catch (error) {
           showError(message, error);
@@ -2949,10 +3664,6 @@ export function RoutesPage({ lastUpdated, onRefresh }: ConsolePageProps) {
   };
   const addRouteNode = useCallback(
     (kind: RouteNodeKind, position?: { x: number; y: number }) => {
-      if (kind === 'source' && flowNodes.some((node) => node.data.kind === 'source')) {
-        message.warning('画布仅允许一个来源开始节点');
-        return;
-      }
       const preset = routeNodeDefaults[kind];
       const node: RouteFlowNode = {
         id: `${kind}-${Date.now()}`,
@@ -2962,7 +3673,7 @@ export function RoutesPage({ lastUpdated, onRefresh }: ConsolePageProps) {
         data: {
           kind,
           title: preset.title,
-          description: kind === 'source' && selectedGroup ? selectedGroup.sourceName : preset.description,
+          description: preset.description,
         },
       };
       setFlowNodes((current) => [...current, node]);
@@ -2994,17 +3705,19 @@ export function RoutesPage({ lastUpdated, onRefresh }: ConsolePageProps) {
     (node: RouteFlowNode) => {
       setSelectedElement({ type: 'node', id: node.id });
       const linkedRule = groupRules.find((rule) =>
-        [`${rule.id}-condition`, `${rule.id}-recipient`, `${rule.id}-send-group`].includes(node.id),
+        [`${rule.id}-condition`, `${rule.id}-recipient`, `${rule.id}-send-group`, `${rule.id}-end`].includes(node.id),
       );
       if (linkedRule) {
-        openEditRule(linkedRule);
+        setCanvasNodeRuleDraft(routeRuleDraftFromRow(linkedRule));
+        setCanvasNodeDataDraft({ ...node.data });
+        setCanvasNodeEditor({ nodeId: node.id, kind: node.data.kind, ruleId: linkedRule.id });
         return;
       }
-      if (node.id === 'source-start' && selectedGroup) {
-        openEditGroup(selectedGroup);
-      }
+      setCanvasNodeRuleDraft(routeDraftFromCanvasNodeData(node.data, templateRows, channelRows));
+      setCanvasNodeDataDraft({ ...node.data });
+      setCanvasNodeEditor({ nodeId: node.id, kind: node.data.kind });
     },
-    [groupRules, selectedGroup],
+    [channelRows, groupRules, templateRows],
   );
   const onDragStart = (event: DragEvent<HTMLButtonElement>, kind: RouteNodeKind) => {
     event.dataTransfer.setData('application/reactflow', kind);
@@ -3048,8 +3761,9 @@ export function RoutesPage({ lastUpdated, onRefresh }: ConsolePageProps) {
       return;
     }
     if (selectedElement.type === 'node') {
-      if (selectedElement.id === 'source-start') {
-        message.warning('来源开始节点固定保留');
+      const targetNode = flowNodes.find((node) => node.id === selectedElement.id);
+      if (targetNode?.deletable === false || targetNode?.data.kind === 'source') {
+        message.warning('开始节点由路由组来源自动生成，不能删除');
         return;
       }
       setFlowNodes((current) => current.filter((node) => node.id !== selectedElement.id));
@@ -3086,7 +3800,7 @@ export function RoutesPage({ lastUpdated, onRefresh }: ConsolePageProps) {
     setFlowNodes(initial.nodes);
     setFlowEdges(initial.edges);
     clearGroupCanvasSnapshot(selectedGroup.id);
-    setSelectedElement({ type: 'node', id: 'source-start' });
+    setSelectedElement(initial.nodes[0] ? { type: 'node', id: initial.nodes[0].id } : null);
     message.success('已从规则顺序重建画布布局');
   };
   const saveRule = async () => {
@@ -3127,7 +3841,7 @@ export function RoutesPage({ lastUpdated, onRefresh }: ConsolePageProps) {
     }
     modal.confirm({
       title: `删除路由规则：${rule.name}`,
-      content: '删除后会立即保存当前路由大组草稿规则集，请确认后继续。',
+      content: '删除后会立即保存当前路由组草稿规则集，请确认后继续。',
       okText: '删除',
       cancelText: '取消',
       okButtonProps: { danger: true },
@@ -3153,7 +3867,10 @@ export function RoutesPage({ lastUpdated, onRefresh }: ConsolePageProps) {
       },
     });
   };
-  const moveRule = (id: string, direction: -1 | 1) => {
+  const moveRule = async (id: string, direction: -1 | 1) => {
+    if (!selectedGroup) {
+      return;
+    }
     const index = groupRules.findIndex((item) => item.id === id);
     const target = index + direction;
     if (index < 0 || target < 0 || target >= groupRules.length) {
@@ -3171,19 +3888,13 @@ export function RoutesPage({ lastUpdated, onRefresh }: ConsolePageProps) {
     if (selectedGroup) {
       clearGroupCanvasSnapshot(selectedGroup.id);
     }
-    message.success('规则顺序已更新，旧画布快照已失效');
-  };
-  const saveRuleOrder = async () => {
-    if (!selectedGroup) {
-      return;
-    }
     try {
-      await consoleApi.reorderRouteRules(selectedGroup.id, groupRules.map((rule) => rule.id));
-      clearGroupCanvasSnapshot(selectedGroup.id);
-      message.success('排序已保存到后端，画布将在重置或重新进入时按最新顺序生成');
+      await consoleApi.reorderRouteRules(selectedGroup.id, nextScoped.map((rule) => rule.id));
+      message.success('规则顺序已更新并保存');
       await reloadRulesForGroup(selectedGroup);
     } catch (error) {
       showError(message, error);
+      await reloadRulesForGroup(selectedGroup).catch(() => undefined);
     }
   };
   const validateRoute = async () => {
@@ -3222,7 +3933,7 @@ export function RoutesPage({ lastUpdated, onRefresh }: ConsolePageProps) {
       title: '发布并激活路由版本',
       content: (
         <Form layout="vertical" className="route-publish-confirm-form">
-          <Form.Item label="当前版本信息" required>
+          <Form.Item label="版本说明" required>
             <Input.TextArea
               rows={3}
               maxLength={80}
@@ -3240,7 +3951,7 @@ export function RoutesPage({ lastUpdated, onRefresh }: ConsolePageProps) {
       onOk: async () => {
         const normalizedInfo = versionInfo.trim();
         if (!normalizedInfo) {
-          message.error('请填写当前版本信息');
+          message.error('请填写版本说明');
           return Promise.reject(new Error('version info required'));
         }
         try {
@@ -3260,36 +3971,44 @@ export function RoutesPage({ lastUpdated, onRefresh }: ConsolePageProps) {
     });
   };
   const groupColumns: TableProps<RouteGroup>['columns'] = [
-    { title: '路由大组名称', dataIndex: 'name', width: 220 },
+    { title: '路由组名称', dataIndex: 'name', width: 220 },
     {
       title: '绑定来源',
       width: 210,
       render: (_, record) => (
         <span>
-          {record.sourceName} <span style={{ color: '#d9d9d9', margin: '0 4px' }}>|</span> <Typography.Text code>{record.sourceCode}</Typography.Text>
+          {record.sourceName} <span style={{ color: '#d9d9d9', margin: '0 4px' }}>|</span> <span className="route-source-code-text">{record.sourceCode}</span>
         </span>
       ),
     },
     {
-      title: '状态',
-      dataIndex: 'enabled',
-      width: 100,
-      render: (enabled: boolean) => <StatusTag meta={getEnabledMeta(enabled)} />,
-    },
-    {
-      title: '当前版本',
+      title: '当前执行版本',
       dataIndex: 'currentVersion',
       width: 180,
       render: (value: string) => routeVersionLabelById[value] ?? value,
     },
-    { title: '规则数', width: 100, render: (_, record) => record.ruleIds.length },
+    { title: '规则数', width: 100, render: (_, record) => routeGroupRuleCount(record, ruleRows) },
     {
       title: '总命中次数',
       dataIndex: 'totalHitCount',
       width: 130,
-      render: (value: number) => formatHitCount(value),
+      render: (_value: number, record) => formatHitCount(routeGroupTotalHitCount(record, ruleRows)),
     },
     { title: '更新时间', dataIndex: 'updatedAt', width: 170 },
+    {
+      title: '状态',
+      dataIndex: 'enabled',
+      width: 100,
+      render: (enabled: boolean, record) => (
+        <Switch
+          checked={enabled}
+          loading={pendingRouteGroupStatusIds.has(record.id)}
+          checkedChildren="启用"
+          unCheckedChildren="停用"
+          onChange={(checked) => void toggleRouteGroupEnabled(record, checked)}
+        />
+      ),
+    },
     {
       title: '操作',
       fixed: 'right',
@@ -3391,8 +4110,8 @@ export function RoutesPage({ lastUpdated, onRefresh }: ConsolePageProps) {
       render: (_, record) => (
         <RouteRuleRowActions
           record={record}
-          onMoveUp={(item) => moveRule(item.id, -1)}
-          onMoveDown={(item) => moveRule(item.id, 1)}
+          onMoveUp={(item) => void moveRule(item.id, -1)}
+          onMoveDown={(item) => void moveRule(item.id, 1)}
           onEdit={openEditRule}
           onDelete={confirmDeleteRule}
         />
@@ -3404,33 +4123,27 @@ export function RoutesPage({ lastUpdated, onRefresh }: ConsolePageProps) {
     return (
       <PageFrame
         title="路由策略"
-        description="先选择路由大组并固定来源，再进入组内维护顺序规则和画布。"
+        description="路由组按来源隔离；同一来源只允许一个启用路由组，组内规则按顺序匹配，第一条命中即发送并停止。"
         lastUpdated={lastUpdated}
         onRefresh={onRefresh}
       >
-        <Alert
-          type="info"
-          showIcon
-          className="semantic-alert"
-          message="路由大组按来源隔离；同一来源只允许一个启用大组，组内规则按顺序匹配，第一条命中即发送并停止。"
-        />
         <QueryBar
           className="query-bar--compact route-group-query"
           onCreate={() => openCreateGroup()}
           onSearch={() => {
             routeGroupQuery.applyFilters();
             message.success(
-              `已筛选出 ${filterRouteGroupsByQuery(groupRows, routeGroupQuery.draft).length} 个路由大组`,
+                `已筛选出 ${filterRouteGroupsByQuery(groupRows, routeGroupQuery.draft).length} 个路由组`,
             );
           }}
           onReset={() => {
             routeGroupQuery.resetFilters();
-            message.info('路由大组查询条件已重置');
+            message.info('路由组查询条件已重置');
           }}
-          createText="新增路由大组"
+          createText="新增路由组"
         >
           <Input
-            placeholder="路由大组 / 来源"
+            placeholder="路由组 / 来源"
             value={routeGroupQuery.draft.keyword}
             onChange={(event) => routeGroupQuery.setFilter('keyword', event.target.value)}
           />
@@ -3454,7 +4167,7 @@ export function RoutesPage({ lastUpdated, onRefresh }: ConsolePageProps) {
           />
         </QueryBar>
         <ListContainer
-          title="路由大组列表"
+          title="路由组列表"
           total={filteredGroups.length}
           pageSize={routeGroupPage.pageSize}
           currentPage={routeGroupPage.currentPage}
@@ -3489,13 +4202,16 @@ export function RoutesPage({ lastUpdated, onRefresh }: ConsolePageProps) {
   return (
     <PageFrame
       title={selectedGroup.name}
-      description="路由大组详情页。当前来源固定，画布模式和传统表格共享同一套顺序执行模型。"
+      description="路由组详情页。当前来源固定，画布模式和传统表格共享同一套顺序执行模型。"
       lastUpdated={lastUpdated}
       onRefresh={onRefresh}
       extra={
         <Space>
           <Button icon={<ArrowLeftOutlined />} onClick={() => setSelectedGroup(null)}>
-            返回大组列表
+            返回
+          </Button>
+          <Button onClick={() => void openRouteVersionHistory()}>
+            版本历史
           </Button>
           <Segmented
             value={mode}
@@ -3510,26 +4226,39 @@ export function RoutesPage({ lastUpdated, onRefresh }: ConsolePageProps) {
     >
       <Space className="route-breadcrumb" split={<span>/</span>}>
         <Button type="link" onClick={() => setSelectedGroup(null)}>
-          路由大组列表
+          路由组列表
         </Button>
         <Typography.Text>{selectedGroup.name}</Typography.Text>
       </Space>
       <section className="route-group-summary">
-        <Descriptions column={4} size="small" bordered>
-          <Descriptions.Item label="绑定来源">{selectedGroup.sourceName}</Descriptions.Item>
-          <Descriptions.Item label="来源编码">
-            <Typography.Text code>{selectedGroup.sourceCode}</Typography.Text>
-          </Descriptions.Item>
-          <Descriptions.Item label="当前版本">
-            {routeVersionLabelById[selectedGroup.currentVersion] ?? selectedGroup.currentVersion}
-          </Descriptions.Item>
-          <Descriptions.Item label="规则数">{selectedGroup.ruleIds.length}</Descriptions.Item>
-          <Descriptions.Item label="总命中">{formatHitCount(selectedGroup.totalHitCount)}</Descriptions.Item>
-          <Descriptions.Item label="更新时间">{selectedGroup.updatedAt}</Descriptions.Item>
-          <Descriptions.Item label="状态">
-            <StatusTag meta={getEnabledMeta(selectedGroup.enabled)} />
-          </Descriptions.Item>
-        </Descriptions>
+        <div className="route-group-summary__item">
+          <span>绑定来源</span>
+          <strong>{selectedGroup.sourceName}</strong>
+        </div>
+        <div className="route-group-summary__item">
+          <span>来源编码</span>
+          <strong className="route-group-summary__code">{selectedGroup.sourceCode}</strong>
+        </div>
+        <div className="route-group-summary__item">
+          <span>当前执行版本</span>
+          <strong>{routeVersionLabelById[selectedGroup.currentVersion] ?? selectedGroup.currentVersion}</strong>
+        </div>
+        <div className="route-group-summary__item route-group-summary__item--numeric">
+          <span>规则数</span>
+          <strong>{routeGroupRuleCount(selectedGroup, ruleRows)}</strong>
+        </div>
+        <div className="route-group-summary__item route-group-summary__item--numeric">
+          <span>总命中</span>
+          <strong>{formatHitCount(routeGroupTotalHitCount(selectedGroup, ruleRows))}</strong>
+        </div>
+        <div className="route-group-summary__item">
+          <span>更新时间</span>
+          <strong>{selectedGroup.updatedAt}</strong>
+        </div>
+        <div className="route-group-summary__item route-group-summary__item--status">
+          <span>状态</span>
+          <StatusTag meta={getEnabledMeta(selectedGroup.enabled)} />
+        </div>
       </section>
 
       {mode === 'canvas' ? (
@@ -3639,7 +4368,7 @@ export function RoutesPage({ lastUpdated, onRefresh }: ConsolePageProps) {
             />
           </QueryBar>
           <ListContainer
-            title="路由规则列表"
+            title="草稿规则列表"
             total={filteredRules.length}
             pageSize={routeRulePage.pageSize}
             currentPage={routeRulePage.currentPage}
@@ -3648,7 +4377,6 @@ export function RoutesPage({ lastUpdated, onRefresh }: ConsolePageProps) {
             scrollY={560}
             extra={
               <Space>
-                <Button onClick={saveRuleOrder}>排序保存</Button>
                 <Button icon={<PlayCircleOutlined />} onClick={openRouteSimulation}>
                   模拟运行
                 </Button>
@@ -3684,6 +4412,104 @@ export function RoutesPage({ lastUpdated, onRefresh }: ConsolePageProps) {
         />
       </CreateDrawer>
 
+      <Drawer
+        title={`版本历史：${selectedGroup.name}`}
+        width={980}
+        open={routeVersionHistoryOpen}
+        onClose={() => setRouteVersionHistoryOpen(false)}
+        destroyOnHidden
+      >
+        <RouteVersionHistoryContent
+          versions={routeVersionRows}
+          currentVersionId={selectedGroup.currentVersion}
+          previewVersionId={routeVersionPreviewVersionId}
+          previewRules={routeVersionPreviewRules}
+          loading={routeVersionHistoryLoading}
+          previewLoading={routeVersionPreviewLoading}
+          onPreview={(version) => void previewRouteVersionRules(version)}
+          onActivate={(version) => void activateRouteVersionFromHistory(version)}
+          onDelete={deleteRouteVersionFromHistory}
+        />
+      </Drawer>
+
+      <Modal
+        centered
+        title={canvasNodeEditorTitle(canvasNodeEditor)}
+        open={Boolean(canvasNodeEditor)}
+        onCancel={closeCanvasNodeEditor}
+        onOk={() => void saveCanvasNodeEditor()}
+        okText={canvasNodeEditor?.kind === 'source' ? '关闭' : '保存节点'}
+        cancelText="取消"
+        width={780}
+      >
+        <div className="canvas-node-editor-modal">
+          {canvasNodeEditor?.kind === 'source' ? (
+            <>
+              <Descriptions column={1} size="small" bordered>
+                <Descriptions.Item label="绑定来源">{selectedGroup?.sourceName ?? '-'}</Descriptions.Item>
+                <Descriptions.Item label="来源编码">{selectedGroup?.sourceCode ?? '-'}</Descriptions.Item>
+              </Descriptions>
+              <Alert type="info" showIcon message="开始节点由路由组绑定来源自动生成。" />
+            </>
+          ) : null}
+          {canvasNodeEditor?.kind === 'condition' ? (
+            <RouteConditionGroupEditor
+              value={canvasNodeRuleDraft}
+              onChange={setCanvasNodeRuleDraft}
+              matchGroupRows={matchGroupRows}
+              payloadFieldOptions={routePayloadFieldOptions}
+            />
+          ) : null}
+          {canvasNodeEditor?.kind === 'recipient' ? (
+            <RouteRecipientEditor
+              value={canvasNodeRuleDraft}
+              onChange={setCanvasNodeRuleDraft}
+              recipientGroupRows={recipientGroupRows}
+              userRows={userRows}
+              payloadFieldOptions={routePayloadFieldOptions}
+            />
+          ) : null}
+          {canvasNodeEditor?.kind === 'send_group' ? (
+            <RouteTargetsEditor
+              value={canvasNodeRuleDraft}
+              onChange={setCanvasNodeRuleDraft}
+              templateRows={templateRows}
+              channelRows={channelRows}
+            />
+          ) : null}
+          {canvasNodeEditor && !isRouteBusinessNodeKind(canvasNodeEditor.kind) && canvasNodeEditor.kind !== 'source' ? (
+            <Form layout="vertical">
+              <Form.Item label="节点标题">
+                <Input
+                  value={String(canvasNodeDataDraft?.title ?? '')}
+                  onChange={(event) =>
+                    setCanvasNodeDataDraft((current) => ({
+                      ...(current ?? { kind: canvasNodeEditor?.kind ?? 'condition', title: '', description: '' }),
+                      title: event.target.value,
+                    }))
+                  }
+                />
+              </Form.Item>
+              <Form.Item label="节点说明">
+                <Input.TextArea
+                  rows={4}
+                  value={String(canvasNodeDataDraft?.description ?? '')}
+                  onChange={(event) =>
+                    setCanvasNodeDataDraft((current) => ({
+                      ...(current ?? { kind: canvasNodeEditor?.kind ?? 'condition', title: '', description: '' }),
+                      description: event.target.value,
+                    }))
+                  }
+                />
+              </Form.Item>
+              {canvasNodeEditor?.kind === 'end' ? (
+                <Alert type="info" showIcon message="结束节点只影响画布展示，用于表达该规则命中发送后停止继续匹配。" />
+              ) : null}
+            </Form>
+          ) : null}
+        </div>
+      </Modal>
+
       <Modal
         title="路由模拟运行"
         open={simulationOpen}
@@ -3709,10 +4535,7 @@ export function RoutesPage({ lastUpdated, onRefresh }: ConsolePageProps) {
             </Form.Item>
           </Form>
           {simulationResult ? (
-            <>
-              <Typography.Title level={5}>后端模拟结果</Typography.Title>
-              <pre className="code-block">{stringifyJSON(simulationResult, '{}')}</pre>
-            </>
+            <RouteSimulationResultView result={simulationResult} />
           ) : null}
         </Space>
       </Modal>
@@ -3858,6 +4681,125 @@ export function RouteRuleRowActions({
         删除
       </Button>
     </Space>
+  );
+}
+
+export function RouteVersionHistoryContent({
+  versions,
+  currentVersionId,
+  previewVersionId,
+  previewRules,
+  loading,
+  previewLoading,
+  onPreview,
+  onActivate,
+  onDelete,
+}: {
+  versions: RouteVersionApiRecord[];
+  currentVersionId: string;
+  previewVersionId: string;
+  previewRules: RouteRuleRow[];
+  loading: boolean;
+  previewLoading: boolean;
+  onPreview: (version: RouteVersionApiRecord) => void;
+  onActivate: (version: RouteVersionApiRecord) => void;
+  onDelete: (version: RouteVersionApiRecord) => void;
+}) {
+  const columns: TableProps<RouteVersionApiRecord>['columns'] = [
+    {
+      title: '版本',
+      dataIndex: 'version_no',
+      width: 96,
+      render: (value: number, version) => (
+        <Space>
+          <Typography.Text strong>v{value}</Typography.Text>
+          {version.id === currentVersionId ? <StatusTag meta={{ label: '当前执行版本', color: 'success' }} /> : null}
+          {!version.published_at ? <StatusTag meta={{ label: '草稿', color: 'default' }} /> : null}
+        </Space>
+      ),
+    },
+    {
+      title: '版本说明',
+      dataIndex: 'version_info',
+      render: (value: string | undefined) => value || '-',
+    },
+    {
+      title: '发布时间',
+      dataIndex: 'published_at',
+      width: 180,
+      render: (value: string | null | undefined) => (value ? formatApiTime(value) : '未发布'),
+    },
+    {
+      title: '操作',
+      width: 280,
+      render: (_, version) => (
+        <Space size={4}>
+          <Button type="link" onClick={() => onPreview(version)}>
+            查看规则
+          </Button>
+          {version.published_at && version.id !== currentVersionId ? (
+            <Button type="link" onClick={() => onActivate(version)}>
+              设为当前执行版本
+            </Button>
+          ) : null}
+          {version.published_at && version.id !== currentVersionId ? (
+            <Button type="link" danger onClick={() => onDelete(version)}>
+              删除版本
+            </Button>
+          ) : null}
+        </Space>
+      ),
+    },
+  ];
+  const previewColumns: TableProps<RouteRuleRow>['columns'] = [
+    { title: '顺序', dataIndex: 'sortOrder', width: 72 },
+    {
+      title: '规则名称',
+      dataIndex: 'name',
+      width: 180,
+      render: (value: string) => <Typography.Text ellipsis={{ tooltip: value }}>{value}</Typography.Text>,
+    },
+    {
+      title: '条件',
+      dataIndex: 'condition',
+      render: (value: string) => <Typography.Text ellipsis={{ tooltip: value }}>{value || '-'}</Typography.Text>,
+    },
+    {
+      title: '发送动作组',
+      dataIndex: 'sendGroupSummary',
+      width: 240,
+      render: (value: string) => <Typography.Text ellipsis={{ tooltip: value }}>{value || '-'}</Typography.Text>,
+    },
+    { title: '状态', dataIndex: 'enabled', width: 90, render: (enabled: boolean) => (enabled ? '启用' : '停用') },
+  ];
+
+  return (
+    <div className="route-version-history">
+      <Table
+        rowKey="id"
+        size="small"
+        pagination={false}
+        columns={columns}
+        dataSource={versions}
+        loading={loading}
+      />
+      <section className="route-version-preview">
+        <div className="route-version-preview__header">
+          <Typography.Title level={5}>版本规则预览</Typography.Title>
+          <Typography.Text type="secondary">共 {previewRules.length} 条</Typography.Text>
+        </div>
+        <Table
+          rowKey="id"
+          size="small"
+          pagination={false}
+          columns={previewColumns}
+          dataSource={previewRules}
+          loading={previewLoading}
+          locale={{ emptyText: previewVersionId ? '该版本没有规则' : '请选择一个版本查看规则' }}
+          scroll={{ x: 860 }}
+        />
+      </section>
+    </div>
   );
 }
 
@@ -4616,6 +5558,45 @@ export function identityFieldDisplayName(identityKind: string): string {
   return labels[normalizedKind] ?? (normalizedKind || '-');
 }
 
+export function UserIdentitySummaryCell({ identities }: { identities: Array<Pick<UserIdentityDraft, 'platform' | 'fieldName' | 'value'>> }) {
+  if (!identities.length) {
+    return <span>-</span>;
+  }
+  const visible = identities.slice(0, 2);
+  const hiddenCount = identities.length - visible.length;
+  const summary = `${visible.map((item) => item.platform).join('、')}${hiddenCount > 0 ? ` +${hiddenCount}` : ''}`;
+  const detailRows = identities.map((item) => ({
+    key: `${item.platform}-${item.fieldName}-${item.value}`,
+    platform: item.platform,
+    fieldName: identityFieldDisplayName(item.fieldName),
+    value: item.value || '-',
+  }));
+  const detailText = detailRows.map((item) => `${item.platform}（${item.fieldName}）：${item.value}`).join('\n');
+
+  return (
+    <Tooltip
+      color="#ffffff"
+      classNames={{ root: 'identity-summary-tooltip-overlay' }}
+      title={
+        <div className="identity-summary-tooltip-card">
+          {detailRows.map((item) => (
+            <div className="identity-summary-tooltip-row" key={item.key}>
+              <div className="identity-summary-tooltip-title">
+                {item.platform}（{item.fieldName}）
+              </div>
+              <div className="identity-summary-tooltip-value">{item.value}</div>
+            </div>
+          ))}
+        </div>
+      }
+    >
+      <Typography.Text className="identity-summary-cell" aria-label={detailText} ellipsis={{ tooltip: false }}>
+        {summary}
+      </Typography.Text>
+    </Tooltip>
+  );
+}
+
 type UserContactRow = Omit<UserContact, 'identities'> & {
   identities: UserIdentityDraft[];
   apiUser: UserApiRecord;
@@ -4660,14 +5641,7 @@ type MatchGroupDraft = {
   name: string;
   groupType: string;
   description: string;
-  enabled: boolean;
-};
-
-type MatchGroupItemDraft = {
-  apiId?: string;
-  value: string;
-  valueType: string;
-  metadataJson: string;
+  valuesText: string;
 };
 
 function currentTimestampText() {
@@ -4891,6 +5865,31 @@ function cleanStringList(values: string[]): string[] {
   return values.map((item) => item.trim()).filter(Boolean);
 }
 
+export function matchGroupValuesFromText(value: string): string[] {
+  const seen = new Set<string>();
+  const values: string[] = [];
+  for (const item of value.split(/\r?\n/).map((line) => line.trim()).filter(Boolean)) {
+    if (seen.has(item)) {
+      continue;
+    }
+    seen.add(item);
+    values.push(item);
+  }
+  return values;
+}
+
+function matchGroupValuesText(values: string[]): string {
+  return values.join('\n');
+}
+
+export function matchGroupDefaultValueType(groupType: string): string {
+  return normalizeMatchGroupType(groupType) === 'ip' ? 'ip' : 'text';
+}
+
+export function normalizeMatchGroupType(groupType: string): string {
+  return groupType === 'ip' ? 'ip' : 'text';
+}
+
 function isRecord(value: unknown): value is Record<string, JSONValue> {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
 }
@@ -5001,7 +6000,7 @@ function mapMatchGroup(group: MatchGroupApiRecord): MatchGroupRow {
     references: group.reference_count ?? 0,
     updatedAt: formatApiTime(group.updated_at),
     enabled: group.enabled,
-    groupType: group.group_type,
+    groupType: normalizeMatchGroupType(group.group_type),
     description: group.description,
     itemCount: group.item_count ?? items.length,
     items,
@@ -5012,9 +6011,9 @@ function mapMatchGroup(group: MatchGroupApiRecord): MatchGroupRow {
 function createMatchGroupDraft(): MatchGroupDraft {
   return {
     name: '',
-    groupType: 'business',
+    groupType: 'text',
     description: '',
-    enabled: true,
+    valuesText: '',
   };
 }
 
@@ -5023,65 +6022,60 @@ function matchGroupDraftFromRow(row: MatchGroupRow): MatchGroupDraft {
     name: row.name,
     groupType: row.groupType,
     description: row.description,
-    enabled: row.enabled,
+    valuesText: matchGroupValuesText(row.values),
   };
 }
 
 function matchGroupInputFromDraft(draft: MatchGroupDraft) {
   return {
     name: draft.name.trim(),
-    group_type: draft.groupType,
+    group_type: normalizeMatchGroupType(draft.groupType),
     description: draft.description,
-    enabled: draft.enabled,
+    enabled: true,
   };
 }
 
-function createMatchGroupItemDraft(): MatchGroupItemDraft {
-  return {
-    value: '',
-    valueType: 'text',
-    metadataJson: '{}',
-  };
-}
+async function syncMatchGroupValueItems(
+  groupId: string,
+  existingItems: MatchGroupItemApiRecord[],
+  draft: MatchGroupDraft,
+) {
+  const nextValues = matchGroupValuesFromText(draft.valuesText);
+  const nextValueSet = new Set(nextValues);
+  const existingByValue = new Map(existingItems.map((item) => [item.value, item]));
+  const defaultValueType = matchGroupDefaultValueType(draft.groupType);
 
-function matchGroupItemDraftFromRecord(record: MatchGroupItemApiRecord): MatchGroupItemDraft {
-  return {
-    apiId: record.id,
-    value: record.value,
-    valueType: record.value_type || 'text',
-    metadataJson: stringifyJSON(record.metadata, '{}'),
-  };
-}
+  for (const item of existingItems) {
+    if (!nextValueSet.has(item.value)) {
+      await consoleApi.deleteMatchGroupItem(groupId, item.id);
+    }
+  }
 
-function matchGroupItemInputFromDraft(draft: MatchGroupItemDraft): MatchGroupItemInput {
-  return {
-    value: draft.value.trim(),
-    value_type: draft.valueType.trim() || 'text',
-    metadata: parseJSONField(draft.metadataJson, '条目高级 JSON'),
-  };
+  for (const value of nextValues) {
+    const existing = existingByValue.get(value);
+    if (!existing) {
+      await consoleApi.createMatchGroupItem(groupId, {
+        value,
+        value_type: defaultValueType,
+        metadata: {},
+      });
+      continue;
+    }
+    if ((existing.value_type || 'text') !== defaultValueType) {
+      await consoleApi.updateMatchGroupItem(groupId, existing.id, {
+        value,
+        value_type: defaultValueType,
+        metadata: existing.metadata ?? {},
+      });
+    }
+  }
 }
 
 function getMatchGroupTypeLabel(value: string): string {
-  if (value === 'ip') {
+  if (normalizeMatchGroupType(value) === 'ip') {
     return 'IP 组';
   }
-  if (value === 'system') {
-    return '系统组';
-  }
-  return '业务值组';
-}
-
-function getValueTypeLabel(value: string): string {
-  if (value === 'number') {
-    return '数字';
-  }
-  if (value === 'ip') {
-    return 'IP / CIDR';
-  }
-  if (value === 'json') {
-    return 'JSON';
-  }
-  return '文本';
+  return '文本组';
 }
 
 function mapMessageLog(log: MessageLogApiRecord): MessageLog {
@@ -5444,13 +6438,7 @@ export function OrganizationPage({ lastUpdated, onRefresh, activeSubTab, onSubTa
       title: '平台身份字段',
       dataIndex: 'identities',
       width: 220,
-      className: 'allow-wrap',
-      render: (items: UserIdentityDraft[]) =>
-        items.map((item) => (
-          <span style={{ marginRight: 6, display: 'inline-block' }} key={`${item.platform}-${item.channelId || 'default'}-${item.fieldName}`}>
-            <StatusTag meta={{ label: item.platform, color: 'default' }} />
-          </span>
-        )),
+      render: (items: UserIdentityDraft[]) => <UserIdentitySummaryCell identities={items} />,
     },
     {
       title: '状态',
@@ -6065,10 +7053,6 @@ export function MatchGroupsPage({ lastUpdated, onRefresh }: ConsolePageProps) {
   const isFirstLoad = useRef(true);
   const [selected, setSelected] = useState<MatchGroupRow | null>(null);
   const [matchGroupDraft, setMatchGroupDraft] = useState<MatchGroupDraft>(() => createMatchGroupDraft());
-  const [itemRows, setItemRows] = useState<MatchGroupItemApiRecord[]>([]);
-  const [itemDraft, setItemDraft] = useState<MatchGroupItemDraft>(() => createMatchGroupItemDraft());
-  const [itemModalOpen, setItemModalOpen] = useState(false);
-  const [editingItem, setEditingItem] = useState<MatchGroupItemApiRecord | null>(null);
   const [itemsLoading, setItemsLoading] = useState(false);
   const matchGroupQuery = useAppliedFilters<MatchGroupListQuery>({
     keyword: '',
@@ -6096,10 +7080,9 @@ export function MatchGroupsPage({ lastUpdated, onRefresh }: ConsolePageProps) {
     setItemsLoading(true);
     try {
       const result = await consoleApi.listMatchGroupItems(group.id);
-      setItemRows(result.items);
       setSelected({ ...group, items: result.items, values: result.items.map((item) => item.value), itemCount: result.items.length });
+      setMatchGroupDraft((draft) => ({ ...draft, valuesText: matchGroupValuesText(result.items.map((item) => item.value)) }));
     } catch (error) {
-      setItemRows(group.items);
       showError(message, error);
     } finally {
       setItemsLoading(false);
@@ -6121,40 +7104,20 @@ export function MatchGroupsPage({ lastUpdated, onRefresh }: ConsolePageProps) {
         message.error('请填写匹配组名称');
         return;
       }
+      let groupId = selected?.id ?? '';
+      let existingItems: MatchGroupItemApiRecord[] = [];
       if (selected) {
         await consoleApi.updateMatchGroup(selected.id, input);
+        const itemResult = await consoleApi.listMatchGroupItems(selected.id);
+        existingItems = itemResult.items;
       } else {
-        await consoleApi.createMatchGroup(input);
+        const result = await consoleApi.createMatchGroup(input);
+        groupId = result.match_group.id;
       }
+      await syncMatchGroupValueItems(groupId, existingItems, matchGroupDraft);
       closeDrawer();
       setSelected(null);
       message.success('匹配组已保存到后端');
-      await loadMatchGroups();
-    } catch (error) {
-      showError(message, error);
-    }
-  };
-
-  const saveMatchGroupItem = async () => {
-    if (!selected) {
-      return;
-    }
-    try {
-      const input = matchGroupItemInputFromDraft(itemDraft);
-      if (!input.value) {
-        message.error('请填写匹配值');
-        return;
-      }
-      if (editingItem) {
-        await consoleApi.updateMatchGroupItem(selected.id, editingItem.id, input);
-      } else {
-        await consoleApi.createMatchGroupItem(selected.id, input);
-      }
-      setItemModalOpen(false);
-      setEditingItem(null);
-      setItemDraft(createMatchGroupItemDraft());
-      message.success('匹配值条目已保存到后端');
-      await loadMatchGroupItems(selected);
       await loadMatchGroups();
     } catch (error) {
       showError(message, error);
@@ -6172,29 +7135,6 @@ export function MatchGroupsPage({ lastUpdated, onRefresh }: ConsolePageProps) {
         try {
           await consoleApi.deleteMatchGroup(record.id);
           message.success('匹配组已删除');
-          await loadMatchGroups();
-        } catch (error) {
-          showError(message, error);
-        }
-      },
-    });
-  };
-
-  const confirmDeleteMatchGroupItem = (record: MatchGroupItemApiRecord) => {
-    if (!selected) {
-      return;
-    }
-    modal.confirm({
-      title: `删除匹配值：${record.value}`,
-      content: '删除后使用该匹配组的条件会立即按新值集合判断。',
-      okText: '删除',
-      cancelText: '取消',
-      okButtonProps: { danger: true },
-      onOk: async () => {
-        try {
-          await consoleApi.deleteMatchGroupItem(selected.id, record.id);
-          message.success('匹配值条目已删除');
-          await loadMatchGroupItems(selected);
           await loadMatchGroups();
         } catch (error) {
           showError(message, error);
@@ -6251,40 +7191,6 @@ export function MatchGroupsPage({ lastUpdated, onRefresh }: ConsolePageProps) {
     },
   ];
 
-  const valueColumns: TableProps<MatchGroupItemApiRecord>['columns'] = [
-    { title: '匹配值', dataIndex: 'value', width: 120, render: (value: string) => <Typography.Text code>{value}</Typography.Text> },
-    { title: '值类型', dataIndex: 'value_type', width: 100, render: (value: string) => getValueTypeLabel(value) },
-    {
-      title: '条目高级 JSON',
-      dataIndex: 'metadata',
-      width: 140,
-      render: (value: JSONValue) => <Typography.Text code>{stringifyJSON(value, '{}')}</Typography.Text>,
-    },
-    { title: '创建时间', dataIndex: 'created_at', width: 150, render: (value: string) => formatApiTime(value) },
-    {
-      title: '操作',
-      fixed: 'right',
-      width: 130,
-      render: (_, record) => (
-        <Space>
-          <Button
-            type="link"
-            onClick={() => {
-              setEditingItem(record);
-              setItemDraft(matchGroupItemDraftFromRecord(record));
-              setItemModalOpen(true);
-            }}
-          >
-            编辑
-          </Button>
-          <Button danger type="link" onClick={() => confirmDeleteMatchGroupItem(record)}>
-            删除
-          </Button>
-        </Space>
-      ),
-    },
-  ];
-
   return (
     <PageFrame
       title="匹配组"
@@ -6296,7 +7202,7 @@ export function MatchGroupsPage({ lastUpdated, onRefresh }: ConsolePageProps) {
         onCreate={() => {
           setSelected(null);
           setMatchGroupDraft(createMatchGroupDraft());
-          setItemRows([]);
+          setItemsLoading(false);
           openDrawer('新增匹配组');
         }}
         onSearch={() => {
@@ -6320,9 +7226,8 @@ export function MatchGroupsPage({ lastUpdated, onRefresh }: ConsolePageProps) {
           onChange={(value) => matchGroupQuery.setFilter('groupType', value)}
           options={[
             { label: '全部类型', value: 'all' },
-            { label: '业务值组', value: 'business' },
+            { label: '文本组', value: 'text' },
             { label: 'IP 组', value: 'ip' },
-            { label: '系统组', value: 'system' },
           ]}
         />
         <Select
@@ -6344,7 +7249,7 @@ export function MatchGroupsPage({ lastUpdated, onRefresh }: ConsolePageProps) {
         onPageChange={matchGroupPage.onPageChange}
         fill
         scrollY={560}
-        extra={<Alert type="info" showIcon message="匹配值条目支持 value、value_type 和条目高级 JSON。" />}
+        extra={<Alert type="info" showIcon message="匹配值可在编辑匹配组时按行批量维护。" />}
       >
         {loadState.error ? <Alert type="warning" showIcon message={loadState.error} /> : null}
         <Table
@@ -6371,11 +7276,19 @@ export function MatchGroupsPage({ lastUpdated, onRefresh }: ConsolePageProps) {
               <Select
                 value={matchGroupDraft.groupType}
                 options={[
-                  { label: '业务值组', value: 'business' },
+                  { label: '文本组', value: 'text' },
                   { label: 'IP 组', value: 'ip' },
-                  { label: '系统组', value: 'system' },
                 ]}
                 onChange={(groupType) => setMatchGroupDraft({ ...matchGroupDraft, groupType })}
+              />
+            </Form.Item>
+            <Form.Item label="匹配值" extra="每行一个匹配值，空行和重复值会在保存时自动忽略。">
+              <Input.TextArea
+                rows={8}
+                value={matchGroupDraft.valuesText}
+                disabled={itemsLoading}
+                placeholder={matchGroupDraft.groupType === 'ip' ? '10.20.0.0/16\n10.21.0.0/16' : '紧急\n重大\n红色预警'}
+                onChange={(event) => setMatchGroupDraft({ ...matchGroupDraft, valuesText: event.target.value })}
               />
             </Form.Item>
             <Form.Item label="描述">
@@ -6385,77 +7298,9 @@ export function MatchGroupsPage({ lastUpdated, onRefresh }: ConsolePageProps) {
                 onChange={(event) => setMatchGroupDraft({ ...matchGroupDraft, description: event.target.value })}
               />
             </Form.Item>
-            <Form.Item label="状态">
-              <Switch
-                checked={matchGroupDraft.enabled}
-                checkedChildren="启用"
-                unCheckedChildren="停用"
-                onChange={(enabled) => setMatchGroupDraft({ ...matchGroupDraft, enabled })}
-              />
-            </Form.Item>
           </Form>
-          <div className="panel-heading">
-            <Typography.Title level={5}>匹配值条目</Typography.Title>
-            <Button
-              size="small"
-              onClick={() => {
-                setEditingItem(null);
-                setItemDraft(createMatchGroupItemDraft());
-                setItemModalOpen(true);
-              }}
-              disabled={!selected}
-            >
-              新增条目
-            </Button>
-          </div>
-          <Table
-            rowKey="id"
-            size="small"
-            pagination={false}
-            columns={valueColumns}
-            dataSource={itemRows}
-            loading={itemsLoading}
-            scroll={{ x: 640 }}
-            sticky
-          />
         </Space>
       </CreateDrawer>
-      <Modal
-        title={editingItem ? `编辑匹配值：${editingItem.value}` : '新增匹配值条目'}
-        open={itemModalOpen}
-        onCancel={() => {
-          setItemModalOpen(false);
-          setEditingItem(null);
-        }}
-        onOk={saveMatchGroupItem}
-        okText="保存"
-        cancelText="取消"
-      >
-        <Form layout="vertical">
-          <Form.Item label="匹配值" required>
-            <Input value={itemDraft.value} onChange={(event) => setItemDraft({ ...itemDraft, value: event.target.value })} />
-          </Form.Item>
-          <Form.Item label="值类型">
-            <Select
-              value={itemDraft.valueType}
-              options={[
-                { label: '文本', value: 'text' },
-                { label: '数字', value: 'number' },
-                { label: 'IP / CIDR', value: 'ip' },
-                { label: 'JSON', value: 'json' },
-              ]}
-              onChange={(valueType) => setItemDraft({ ...itemDraft, valueType })}
-            />
-          </Form.Item>
-          <Form.Item label="条目高级 JSON" extra="metadata 必须是合法 JSON。">
-            <Input.TextArea
-              rows={5}
-              value={itemDraft.metadataJson}
-              onChange={(event) => setItemDraft({ ...itemDraft, metadataJson: event.target.value })}
-            />
-          </Form.Item>
-        </Form>
-      </Modal>
     </PageFrame>
   );
 }
@@ -7279,7 +8124,7 @@ export function RouteStrategyPage(props: ConsolePageProps) {
       items={[
         {
           key: 'route-groups',
-          label: '路由大组',
+          label: '路由组',
           children: <RoutesPage {...props} />,
         },
         {

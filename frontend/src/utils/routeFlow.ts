@@ -3,9 +3,16 @@ import type { RouteGroup, RouteRule } from '../data/demoData';
 
 export type RouteConditionOperator =
   | 'equals'
+  | 'not_equals'
   | 'contains'
   | 'not_contains'
   | 'exists'
+  | 'not_exists'
+  | 'regex'
+  | 'gt'
+  | 'gte'
+  | 'lt'
+  | 'lte'
   | 'in_match_group'
   | 'not_in_match_group';
 
@@ -31,7 +38,7 @@ type ConditionSummaryOptions = {
   matchGroupNames?: Record<string, string>;
 };
 
-export type RouteNodeKind = 'source' | 'condition' | 'recipient' | 'send_group' | 'template' | 'platform';
+export type RouteNodeKind = 'source' | 'condition' | 'recipient' | 'send_group' | 'end' | 'template' | 'platform';
 
 export type RouteNodeData = Record<string, unknown> & {
   kind: RouteNodeKind;
@@ -60,14 +67,15 @@ type RouteRuleFlowSummary = RouteRule & {
 };
 
 export const routeNodeCatalog: RouteNodeCatalogItem[] = [
-  { kind: 'source', title: '来源开始', description: '固定接收当前路由大组绑定来源' },
-  { kind: 'condition', title: '条件判断', description: '按 payload 字段、匹配组或系统值判断' },
+  { kind: 'condition', title: '条件组', description: '按 payload 字段、匹配组或系统值判断' },
   { kind: 'recipient', title: '接收人', description: '系统接收人组或 payload 接收人' },
   { kind: 'send_group', title: '发送动作组', description: '按目标列表分别渲染模板并投递到推送渠道实例' },
+  { kind: 'end', title: '结束', description: '命中发送后停止继续匹配' },
 ];
 
 export const routeNodeDefaults: Record<RouteNodeKind, RouteNodeCatalogItem> = {
   ...Object.fromEntries(routeNodeCatalog.map((item) => [item.kind, item])),
+  source: { kind: 'source', title: '来源开始', description: '路由组固定来源入口' },
   template: { kind: 'template', title: '模板渲染', description: '历史节点' },
   platform: { kind: 'platform', title: '发送平台', description: '历史节点' },
 } as Record<RouteNodeKind, RouteNodeCatalogItem>;
@@ -86,9 +94,16 @@ const defaultFieldLabels: Record<string, string> = {
 
 const operatorLabels: Record<string, string> = {
   equals: '=',
+  not_equals: '≠',
   contains: '包含',
   not_contains: '不包含',
-  exists: '存在',
+  exists: '字段存在',
+  not_exists: '字段不存在',
+  regex: '匹配正则',
+  gt: '>',
+  gte: '≥',
+  lt: '<',
+  lte: '≤',
   in: '属于',
   in_match_group: '属于匹配组',
   match_group: '属于匹配组',
@@ -117,32 +132,35 @@ export function buildInitialRouteFlow<T extends RouteRuleFlowSummary>(
   rules: T[],
 ): RouteCanvasSnapshot {
   const groupRules = routeRulesForGroup(group, rules);
-  const nodes: RouteFlowNode[] = [
-    {
-      id: 'source-start',
-      type: 'routeNode',
-      position: { x: 32, y: 180 },
-      deletable: false,
-      data: {
-        kind: 'source',
-        title: group.sourceName,
-        description: `来源编码 ${group.sourceCode}，当前组内固定不可切换`,
-      },
-    },
-  ];
+  const nodes: RouteFlowNode[] = [];
   const edges: RouteFlowEdge[] = [];
+  const rowStep = 118;
+  const startY = groupRules.length > 1 ? 36 + ((groupRules.length - 1) * rowStep) / 2 : 36;
+
+  nodes.push({
+    id: 'source-start',
+    type: 'routeNode',
+    position: { x: 32, y: startY },
+    deletable: false,
+    data: {
+      kind: 'source',
+      title: group.sourceName || group.sourceCode || '来源开始',
+      description: group.sourceCode ? `来源编码：${group.sourceCode}` : '路由组固定来源入口',
+    },
+  });
 
   groupRules.forEach((rule, index) => {
-    const y = 42 + index * 140;
+    const y = 36 + index * rowStep;
     const conditionId = `${rule.id}-condition`;
     const recipientId = `${rule.id}-recipient`;
     const sendGroupId = `${rule.id}-send-group`;
+    const endId = `${rule.id}-end`;
 
     nodes.push(
       {
         id: conditionId,
         type: 'routeNode',
-        position: { x: 300, y },
+        position: { x: 252, y },
         data: {
           kind: 'condition',
           title: `${rule.sortOrder}. ${rule.name}`,
@@ -154,25 +172,36 @@ export function buildInitialRouteFlow<T extends RouteRuleFlowSummary>(
       {
         id: recipientId,
         type: 'routeNode',
-        position: { x: 560, y },
+        position: { x: 472, y },
         data: { kind: 'recipient', title: rule.recipientStrategy, description: '解析接收人并映射身份字段' },
       },
       {
         id: sendGroupId,
         type: 'routeNode',
-        position: { x: 820, y },
+        position: { x: 692, y },
         data: {
           kind: 'send_group',
           title: rule.sendGroupSummary || rule.targetProviders.join('、') || rule.template || '-',
           description: '命中后按发送目标逐个渲染和投递',
         },
       },
+      {
+        id: endId,
+        type: 'routeNode',
+        position: { x: 912, y },
+        data: {
+          kind: 'end',
+          title: '结束',
+          description: '发送动作组执行后停止继续匹配',
+        },
+      },
     );
 
     [
-      ['source-start', conditionId, `顺序 ${rule.sortOrder}`],
+      ['source-start', conditionId, '来源'],
       [conditionId, recipientId, '命中'],
       [recipientId, sendGroupId, '发送'],
+      [sendGroupId, endId, '停止'],
     ].forEach(([source, target, label]) => {
       edges.push({
         id: `${source}-${target}`,
@@ -180,7 +209,7 @@ export function buildInitialRouteFlow<T extends RouteRuleFlowSummary>(
         target,
         label,
         type: 'smoothstep',
-        animated: source === 'source-start',
+        animated: source === conditionId,
       });
     });
   });
@@ -223,8 +252,8 @@ function conditionDraftToTree(draft: RouteConditionDraft): RouteConditionTree | 
     return null;
   }
 
-  if (draft.operator === 'exists') {
-    return { operator: 'exists', path };
+  if (draft.operator === 'exists' || draft.operator === 'not_exists') {
+    return { operator: draft.operator, path };
   }
 
   if (draft.operator === 'in_match_group' || draft.operator === 'not_in_match_group') {
@@ -275,7 +304,7 @@ function summarizeTreeNode(tree: RouteConditionTree, options: ConditionSummaryOp
 
   const field = labelForField(tree.path ?? '', options);
   const label = operatorLabels[operator] ?? operator;
-  if (operator === 'exists') {
+  if (operator === 'exists' || operator === 'not_exists') {
     return `${field} ${label}`;
   }
   if (

@@ -124,7 +124,7 @@ describe('dashboard data mapping', () => {
         {
           rule_id: 'rule-1',
           source: '省直单位上报',
-          route_group: '省直单位上报路由大组',
+          route_group: '省直单位上报路由组',
           rule: '省直单位紧急告警优先',
           hit_count: 62418,
           avg_duration_ms: 320,

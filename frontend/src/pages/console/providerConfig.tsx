@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react';
-import { useState, useEffect } from 'react';
+import { Fragment, useState, useEffect } from 'react';
 import App from 'antd/es/app';
 import Button from 'antd/es/button';
 import Descriptions from 'antd/es/descriptions';
@@ -2105,6 +2105,20 @@ const CheckIcon = () => (
   </svg>
 );
 
+function renderDescriptionWithSlashBreaks(text: string): ReactNode {
+  return text.split('/').map((part, index, parts) => (
+    <Fragment key={`${part}-${index}`}>
+      {part}
+      {index < parts.length - 1 && (
+        <>
+          /
+          <wbr />
+        </>
+      )}
+    </Fragment>
+  ));
+}
+
 interface ProviderTypeCardSelectorProps {
   value: ProviderKind;
   onChange: (value: ProviderKind) => void;
@@ -2210,14 +2224,7 @@ export function ProviderTypeCardSelector({ value, onChange }: ProviderTypeCardSe
                   {option.label}
                 </div>
                 <div className="card-description-text">
-                  {brandMeta.desc}
-                </div>
-                <div className="card-tag-group">
-                  {brandMeta.tags.map(tag => (
-                    <span key={tag} className="premium-mini-badge-tag">
-                      {tag}
-                    </span>
-                  ))}
+                  {renderDescriptionWithSlashBreaks(brandMeta.desc)}
                 </div>
               </div>
             </div>

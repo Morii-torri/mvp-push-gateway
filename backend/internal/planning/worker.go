@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
@@ -132,6 +133,7 @@ type Repository interface {
 	GetPlanningMessage(context.Context, string) (MessageRecord, error)
 	GetCurrentRouteVersionRef(context.Context, string) (RouteVersionRef, error)
 	LoadRoutePlan(context.Context, string, string) (RoutePlan, error)
+	LoadMatchGroupValues(context.Context, []route.Rule) (map[string][]string, error)
 	GetTemplateVersion(context.Context, string) (msgtemplate.TemplateVersion, error)
 	GetChannel(context.Context, string) (provider.Channel, error)
 	GetProviderCapability(context.Context, provider.ProviderType, string) (provider.Capability, error)
@@ -149,6 +151,16 @@ type Worker struct {
 
 	cacheMu    sync.RWMutex
 	routeCache map[string]RoutePlan
+
+	cacheHits       int64
+	cacheMisses     int64
+	cacheLoadTimeMS int64
+}
+
+type RouteCacheStats struct {
+	Hits       int64
+	Misses     int64
+	LoadTimeMS int64
 }
 
 type WorkerOption func(*Worker)
@@ -287,17 +299,40 @@ func (w *Worker) routePlan(ctx context.Context, sourceID string) (RoutePlan, err
 	cached, ok := w.routeCache[key]
 	w.cacheMu.RUnlock()
 	if ok {
-		return cached, nil
+		atomic.AddInt64(&w.cacheHits, 1)
+		return w.withFreshMatchGroups(ctx, cached)
 	}
 
+	loadStartedAt := time.Now()
 	loaded, err := w.repo.LoadRoutePlan(ctx, ref.SourceID, ref.VersionID)
 	if err != nil {
 		return RoutePlan{}, err
 	}
+	atomic.AddInt64(&w.cacheMisses, 1)
+	atomic.AddInt64(&w.cacheLoadTimeMS, int64(time.Since(loadStartedAt).Milliseconds()))
+	cachedPlan := loaded
+	cachedPlan.MatchGroups = nil
 	w.cacheMu.Lock()
-	w.routeCache[key] = loaded
+	w.routeCache[key] = cachedPlan
 	w.cacheMu.Unlock()
 	return loaded, nil
+}
+
+func (w *Worker) withFreshMatchGroups(ctx context.Context, plan RoutePlan) (RoutePlan, error) {
+	values, err := w.repo.LoadMatchGroupValues(ctx, plan.Rules)
+	if err != nil {
+		return RoutePlan{}, err
+	}
+	plan.MatchGroups = values
+	return plan, nil
+}
+
+func (w *Worker) CacheStats() RouteCacheStats {
+	return RouteCacheStats{
+		Hits:       atomic.LoadInt64(&w.cacheHits),
+		Misses:     atomic.LoadInt64(&w.cacheMisses),
+		LoadTimeMS: atomic.LoadInt64(&w.cacheLoadTimeMS),
+	}
 }
 
 func evaluateRules(plan RoutePlan, payload map[string]any) (*route.Rule, []RuleMetric, error) {
@@ -379,7 +414,7 @@ func (w *Worker) buildAttempts(ctx context.Context, message MessageRecord, rule 
 			return nil, fmt.Errorf("%w: recipient is required for %s/%s", errRecipientResolution, channel.ProviderType, templateVersion.MessageType)
 		}
 
-		dedupeKey, dedupeTTL := resolveDedupe(rule.Action.SendDedupeConfig, payload)
+		dedupeKey, dedupeTTL := resolveDedupe(rule.Action.SendDedupeConfig, message, payload)
 		attemptID := uuid.NewString()
 		jobPayload, err := json.Marshal(delivery.SendMessageJobPayload{
 			DeliveryAttemptID: attemptID,
@@ -468,6 +503,16 @@ func (w *Worker) resolveRecipient(ctx context.Context, raw json.RawMessage, payl
 		}
 		if !isEmptyValue(strategy.Recipients) {
 			return strategy.Recipients, nil
+		}
+		hasSelectors := len(strategy.UserIDs) > 0 ||
+			len(strategy.OrgIDs) > 0 ||
+			len(strategy.RecipientGroupIDs) > 0 ||
+			len(strategy.GroupIDs) > 0
+		if !hasSelectors {
+			if capability.RecipientRequired && !capability.AllowNoRecipient {
+				return nil, fmt.Errorf("%w: system recipient strategy has no selected recipients", errRecipientResolution)
+			}
+			return nil, nil
 		}
 		values, err := w.repo.ResolveSystemRecipients(ctx, ResolveSystemRecipientsParams{
 			ProviderType:      channel.ProviderType,
@@ -609,19 +654,27 @@ func (s recipientStrategy) mode() string {
 
 type sendDedupeConfig struct {
 	Enabled    bool   `json:"enabled"`
+	Strategy   string `json:"strategy"`
 	Key        string `json:"key"`
 	DedupeKey  string `json:"dedupe_key"`
 	KeyPath    string `json:"key_path"`
 	TTLSeconds int    `json:"ttl_seconds"`
 }
 
-func resolveDedupe(raw json.RawMessage, payload map[string]any) (string, int) {
+func resolveDedupe(raw json.RawMessage, message MessageRecord, payload map[string]any) (string, int) {
 	var config sendDedupeConfig
 	if len(bytes.TrimSpace(raw)) == 0 {
 		return "", 0
 	}
-	if err := json.Unmarshal(raw, &config); err != nil || !config.Enabled {
+	if err := json.Unmarshal(raw, &config); err != nil {
 		return "", 0
+	}
+	strategy := strings.ToLower(strings.TrimSpace(config.Strategy))
+	if !config.Enabled && strategy == "" && strings.TrimSpace(config.Key) == "" && strings.TrimSpace(config.DedupeKey) == "" && strings.TrimSpace(config.KeyPath) == "" {
+		return "", 0
+	}
+	if strategy == "trace_id" {
+		return strings.TrimSpace(message.TraceID), config.TTLSeconds
 	}
 	key := firstNonEmpty(config.Key, config.DedupeKey)
 	if config.KeyPath != "" {

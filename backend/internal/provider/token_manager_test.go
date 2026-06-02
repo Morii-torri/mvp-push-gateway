@@ -77,6 +77,28 @@ func TestTokenManagerCachesByResolvedWeComCredentials(t *testing.T) {
 	}
 }
 
+func TestTokenResolverCacheKeyTreatsNilAndEmptyHeadersTheSame(t *testing.T) {
+	withNilHeaders := &TokenResolverConfig{
+		Request: TokenRequestConfig{
+			Method: http.MethodPost,
+			URL:    "https://api.dingtalk.com/v1.0/oauth2/ding-corp/token",
+			Body:   json.RawMessage(`{"client_id":"ding-client","client_secret":"secret","grant_type":"client_credentials"}`),
+		},
+	}
+	withEmptyHeaders := &TokenResolverConfig{
+		Request: TokenRequestConfig{
+			Method:  http.MethodPost,
+			URL:     "https://api.dingtalk.com/v1.0/oauth2/ding-corp/token",
+			Headers: map[string]string{},
+			Body:    json.RawMessage(`{"client_id":"ding-client","client_secret":"secret","grant_type":"client_credentials"}`),
+		},
+	}
+
+	if TokenResolverCacheKey(withNilHeaders) != TokenResolverCacheKey(withEmptyHeaders) {
+		t.Fatalf("nil and empty resolver headers should share the same token cache key")
+	}
+}
+
 type memoryTokenCacheStore struct {
 	mu      sync.Mutex
 	entries map[string]TokenCacheEntry

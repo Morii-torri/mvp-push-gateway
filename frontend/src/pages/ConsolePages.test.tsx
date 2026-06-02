@@ -8,7 +8,10 @@ import {
   ProviderConfigForm,
   ProviderTestPanel,
   ProviderRowActions,
+  RouteConditionGroupEditor,
+  RouteVersionHistoryContent,
   RouteRuleForm,
+  RouteSimulationResultView,
   RouteGroupRowActions,
   RouteRuleRowActions,
   SourceRowActions,
@@ -40,8 +43,12 @@ import {
   signedIngestHeaders,
   mapRouteRule,
   mapTemplateRow,
+  routeRuleDraftFromRow,
+  routeTargetChannelOptions,
   routeTargetTemplateOptions,
   routeRuleDraftToRow,
+  validateRouteConditionDraft,
+  validateRouteRuleDraft,
   switchProviderType,
   switchTemplateContentMode,
   switchTemplateMessageType,
@@ -59,14 +66,22 @@ import {
   identityChannelDisplayRender,
   identityChannelExpandTrigger,
   identityFieldDisplayName,
+  matchGroupDefaultValueType,
+  normalizeMatchGroupType,
+  matchGroupValuesFromText,
   providerTestRequestPreview,
   providerTestSendPreview,
   providerTestPayload,
   providerShowsTokenCacheStatus,
+  ProviderTypeCell,
+  SourceAllowlistCell,
+  SourceCodeCell,
+  UserIdentitySummaryCell,
+  buildSourceAccessGuide,
 } from './ConsolePages';
 import type { ChannelApiRecord, OrgUnitApiRecord, ProviderCapabilityApiRecord, TemplateApiRecord, TemplateVersionApiRecord } from '../api/console';
 import { getProviderTypeLabel } from '../utils/labels';
-import { providerTypeOptions, recipientIdentityProviderOptions } from './console/shared';
+import { providerBrandMeta, providerTypeOptions, recipientIdentityProviderOptions } from './console/shared';
 import {
   ProviderTypeCardSelector,
   mapChannelRow,
@@ -188,12 +203,73 @@ describe('critical console pages', () => {
     expect(providersMarkup).not.toContain('自定义 Token 平台');
     expect(providersMarkup).not.toContain('发送模式');
     expect(providersMarkup).not.toContain('custom_token');
-    const deadLetterIndex = providersMarkup.indexOf('死信策略');
-    const enabledIndex = providersMarkup.indexOf('状态', deadLetterIndex);
-    const actionIndex = providersMarkup.indexOf('操作');
+    const providerListMarkup = providersMarkup.slice(providersMarkup.indexOf('推送渠道实例列表'));
+    const providerNameIndex = providerListMarkup.indexOf('推送渠道名称');
+    const providerTypeIndex = providerListMarkup.indexOf('推送渠道类型');
+    const deadLetterIndex = providerListMarkup.indexOf('死信策略');
+    const enabledIndex = providerListMarkup.indexOf('状态', deadLetterIndex);
+    const actionIndex = providerListMarkup.indexOf('操作');
+    expect(providerNameIndex).toBeGreaterThan(-1);
+    expect(providerTypeIndex).toBeGreaterThan(providerNameIndex);
     expect(deadLetterIndex).toBeGreaterThan(-1);
     expect(enabledIndex).toBeGreaterThan(deadLetterIndex);
     expect(actionIndex).toBeGreaterThan(enabledIndex);
+  });
+
+  it('renders source code as plain text without code box styling', () => {
+    const markup = renderPage(<SourceCodeCell value="newsource02" />);
+
+    expect(markup).toContain('newsource02');
+    expect(markup).not.toMatch(/<code>newsource02<\/code>/);
+    expect(markup).toContain('复制接入说明');
+  });
+
+  it('builds source access guide with real source code auth values and generic body', async () => {
+    const guide = await buildSourceAccessGuide(
+      {
+        id: 'source-1',
+        code: 'orders',
+        name: '订单来源',
+        enabled: true,
+        auth_mode: 'token_and_hmac',
+        auth_token: 'sourceToken123',
+        hmac_secret: 'hmacSecret123',
+      } as any,
+      {
+        origin: 'https://push.example.com',
+        timestamp: '1778138400',
+        nonce: 'nonce-1',
+      },
+    );
+
+    expect(guide).toContain('请求方式：POST');
+    expect(guide).toContain('入站 URI：https://push.example.com/api/v1/ingest/orders');
+    expect(guide).not.toContain('入站 URI：\n\nhttps://push.example.com');
+    expect(guide).not.toContain('完整请求：');
+    expect(guide).not.toContain('来源编码：');
+    expect(guide).not.toContain('source_code = orders');
+    expect(guide).toContain('Authorization: Bearer sourceToken123');
+    expect(guide).toContain('HMAC 密钥：hmacSecret123');
+    expect(guide).toContain('X-MGP-Timestamp: 1778138400');
+    expect(guide).toContain('X-MGP-Nonce: nonce-1');
+    expect(guide).toMatch(/X-MGP-Signature: sha256=[0-9a-f]{64}/);
+    expect(guide).toContain('支持任意 JSON 字段');
+    expect(guide).toContain('"biz_id": "order-10001"');
+    expect(guide).not.toContain('最近Payload');
+    expect(guide).not.toContain('latest_payload_sample');
+  });
+
+  it('renders provider type as brand identity instead of status pill', () => {
+    const markup = renderPage(<ProviderTypeCell value="dingtalk_work" />);
+
+    expect(markup).toContain('钉钉工作消息');
+    expect(markup).toContain('provider-type-cell__icon');
+    expect(markup).not.toContain('premium-status-tag');
+  });
+
+  it('renders empty source IP allowlist as dash', () => {
+    expect(renderPage(<SourceAllowlistCell items={[]} />)).toContain('-');
+    expect(renderPage(<SourceAllowlistCell items={['10.20.0.0/16']} />)).toContain('10.20.0.0/16');
   });
 
   it('renders simplified source form controls for token, dedupe, rate limit, and immutable code', () => {
@@ -1488,7 +1564,24 @@ describe('critical console pages', () => {
 
     expect(markup).toMatch(/ant-segmented-item-selected[\s\S]*基础通道/);
     expect(markup).toContain('通用 Webhook');
+    expect(markup).toContain('支持 JSON Body，按 Webhook URL 投递');
+    expect(markup).not.toContain('HTTP出站');
+    expect(markup).not.toContain('Headers自定义');
+    expect(markup).not.toContain('通用出站 Webhook，自由定义 JSON、支持在请求头附带凭证秘钥。');
     expect(markup).not.toContain('企业微信应用消息');
+  });
+
+  it('keeps provider type descriptions concise and free of notification wording', () => {
+    Object.values(providerBrandMeta).forEach((meta) => {
+      expect(meta.desc.length).toBeLessThanOrEqual(40);
+      expect(meta.desc).not.toContain('通知');
+    });
+  });
+
+  it('allows provider type descriptions to wrap at format slashes', () => {
+    const markup = renderPage(<ProviderTypeCardSelector value="dingtalk_work" onChange={() => undefined} />);
+
+    expect(markup).toContain('sampleText/<wbr/>Markdown');
   });
 
   it('changes provider fields when provider type switches', () => {
@@ -1648,12 +1741,192 @@ describe('critical console pages', () => {
 
   it('renders route page guardrails and hit counts without exposing raw english enums', () => {
     const markup = renderPage(<RoutesPage lastUpdated={lastUpdated} onRefresh={() => undefined} />);
+    const routeGroupListMarkup = markup.slice(markup.indexOf('路由组列表'));
+    const statusIndex = routeGroupListMarkup.indexOf('scope="col">状态</th>');
+    const actionIndex = routeGroupListMarkup.indexOf('scope="col">操作</th>');
 
     expect(markup).toContain('路由策略');
-    expect(markup).toContain('同一来源只允许一个启用大组');
+    expect(markup).toContain('同一来源只允许一个启用路由组');
     expect(markup).toContain('总命中次数');
     expect(markup).toContain('按顺序匹配，第一条命中即发送并停止');
+    expect(markup).toContain('新增路由组');
+    expect(markup).not.toContain('路由大组');
     expect(markup).not.toContain('first_match_stop');
+    expect(statusIndex).toBeGreaterThan(-1);
+    expect(actionIndex).toBeGreaterThan(statusIndex);
+  });
+
+  it('keeps route group enabled state out of create and edit form', () => {
+    const RouteGroupForm = (ConsolePages as typeof ConsolePages & {
+      RouteGroupForm?: (props: {
+        value: Record<string, unknown>;
+        onChange: (value: Record<string, unknown>) => void;
+        sourceRows: Array<{ name: string; code: string }>;
+        routeVersionRows: unknown[];
+      }) => ReactElement;
+    }).RouteGroupForm;
+
+    expect(RouteGroupForm).toBeTypeOf('function');
+    if (!RouteGroupForm) {
+      throw new Error('RouteGroupForm is not exported');
+    }
+
+    const markup = renderPage(
+      <RouteGroupForm
+        value={{
+          name: '路由组',
+          sourceCode: 'newsource',
+          enabled: true,
+          currentVersion: '',
+        }}
+        sourceRows={[{ name: '默认来源', code: 'newsource' }]}
+        routeVersionRows={[]}
+        onChange={() => undefined}
+      />,
+    );
+
+    expect(markup).not.toContain('title="状态"');
+    expect(markup).not.toContain('role="switch"');
+  });
+
+  it('maps backend route flow statistics into route group counts', () => {
+    const group = ConsolePages.mapRouteGroup(
+      {
+        id: 'flow-1',
+        source_id: 'source-1',
+        name: '民生诉求路由',
+        enabled: true,
+        mode: 'table',
+        current_version_id: 'version-1',
+        rule_count: 3,
+        total_hit_count: 15,
+        created_at: '2026-06-01T10:00:00Z',
+        updated_at: '2026-06-01T10:00:00Z',
+      },
+      [{ id: 'source-1', code: 'newsource', name: '来源-01' } as any],
+    );
+
+    expect(ConsolePages.routeGroupRuleCount(group)).toBe(3);
+    expect(group.totalHitCount).toBe(15);
+  });
+
+  it('prefers loaded route rules over stale route group statistics', () => {
+    const group = {
+      id: 'flow-1',
+      name: '民生诉求路由',
+      sourceName: '来源-01',
+      sourceCode: 'newsource',
+      enabled: true,
+      currentVersion: 'version-1',
+      ruleIds: [],
+      ruleCount: 0,
+      totalHitCount: 0,
+      updatedAt: '2026/06/01 10:00:00',
+    };
+    const loadedRules = [
+      { id: 'rule-1', flowId: 'flow-1', hitCount: 2 },
+      { id: 'rule-2', flowId: 'flow-1', hitCount: 3 },
+      { id: 'rule-3', flowId: 'flow-1', hitCount: 4 },
+    ] as any;
+
+    expect(ConsolePages.routeGroupRuleCount(group, loadedRules)).toBe(3);
+    expect(ConsolePages.routeGroupTotalHitCount(group, loadedRules)).toBe(9);
+  });
+
+  it('labels route versions as execution versions and draft rules separately', () => {
+    const markup = renderPage(
+      <RouteVersionHistoryContent
+        versions={[
+          {
+            id: 'version-1',
+            flow_id: 'flow-1',
+            version_no: 1,
+            canvas_snapshot: {},
+            compiled_rules: {},
+            validation_status: 'valid',
+            validation_errors: [],
+            version_info: '稳定版',
+            published_at: '2026-06-01T10:00:00Z',
+            created_at: '2026-06-01T10:00:00Z',
+            updated_at: '2026-06-01T10:00:00Z',
+          },
+        ] as any}
+        currentVersionId="version-1"
+        previewVersionId="version-1"
+        previewRules={[]}
+        loading={false}
+        previewLoading={false}
+        onPreview={() => undefined}
+        onActivate={() => undefined}
+        onDelete={() => undefined}
+      />,
+    );
+
+    expect(markup).toContain('当前执行版本');
+    expect(markup).toContain('版本规则预览');
+    expect(markup).not.toContain('历史版本只读');
+    expect(markup).not.toContain('草稿规则列表');
+    expect(markup).not.toContain('画布快照');
+    expect(markup).not.toContain('{}');
+    expect(markup).not.toContain('当前版本');
+  });
+
+  it('shows delete action only for non-current published route versions', () => {
+    const markup = renderPage(
+      <RouteVersionHistoryContent
+        versions={[
+          {
+            id: 'version-current',
+            flow_id: 'flow-1',
+            version_no: 3,
+            canvas_snapshot: {},
+            compiled_rules: {},
+            validation_status: 'valid',
+            validation_errors: [],
+            version_info: '当前',
+            published_at: '2026-06-01T12:00:00Z',
+            created_at: '2026-06-01T12:00:00Z',
+            updated_at: '2026-06-01T12:00:00Z',
+          },
+          {
+            id: 'version-old',
+            flow_id: 'flow-1',
+            version_no: 2,
+            canvas_snapshot: {},
+            compiled_rules: {},
+            validation_status: 'valid',
+            validation_errors: [],
+            version_info: '旧版',
+            published_at: '2026-06-01T10:00:00Z',
+            created_at: '2026-06-01T10:00:00Z',
+            updated_at: '2026-06-01T10:00:00Z',
+          },
+          {
+            id: 'version-draft',
+            flow_id: 'flow-1',
+            version_no: 4,
+            canvas_snapshot: {},
+            compiled_rules: {},
+            validation_status: 'draft',
+            validation_errors: [],
+            version_info: '',
+            published_at: null,
+            created_at: '2026-06-01T13:00:00Z',
+            updated_at: '2026-06-01T13:00:00Z',
+          },
+        ] as any}
+        currentVersionId="version-current"
+        previewVersionId="version-old"
+        previewRules={[]}
+        loading={false}
+        previewLoading={false}
+        onPreview={() => undefined}
+        onActivate={() => undefined}
+        onDelete={() => undefined}
+      />,
+    );
+
+    expect(markup.match(/删除版本/g)).toHaveLength(1);
   });
 
   it('renders route send action group rows and supports multiple targets', () => {
@@ -1741,6 +2014,39 @@ describe('critical console pages', () => {
     expect(markup.match(/删除/g)?.length).toBeGreaterThanOrEqual(2);
   });
 
+  it('renders condition group node editing with an editable name instead of basic node metadata only', () => {
+    const draft = {
+      ...createRouteRuleDraft([], []),
+      name: '紧急事件条件组',
+    };
+    const markup = renderPage(
+      <RouteConditionGroupEditor
+        value={draft}
+        onChange={() => undefined}
+        matchGroupRows={[]}
+        payloadFieldOptions={[{ label: '消息级别', value: 'payload.level', type: 'string' }]}
+      />,
+    );
+
+    expect(markup).toContain('条件组名称');
+    expect(markup).toContain('紧急事件条件组');
+    expect(markup).toContain('条件组');
+    expect(markup).toContain('新增条件');
+    expect(markup).not.toContain('节点标题');
+    expect(markup).not.toContain('节点说明');
+  });
+
+  it('validates condition node drafts without requiring send action targets', () => {
+    const draft = {
+      ...createRouteRuleDraft([], []),
+      name: '只编辑条件',
+      targets: [],
+    };
+
+    expect(validateRouteConditionDraft(draft)).toBe('');
+    expect(validateRouteRuleDraft(draft, [], [])).toBe('请至少配置一个发送目标');
+  });
+
   it('renders payload recipient path only for payload recipient strategy', () => {
     const draft = {
       ...createRouteRuleDraft([], []),
@@ -1790,6 +2096,7 @@ describe('critical console pages', () => {
       },
     ] as any;
 
+    const channelOptions = routeTargetChannelOptions(channelRows);
     const wecomOptions = routeTargetTemplateOptions(
       { id: 'target-1', channelId: 'channel-wecom', templateVersionId: '', enabled: true },
       channelRows,
@@ -1800,15 +2107,18 @@ describe('critical console pages', () => {
       channelRows,
       templateRows,
     );
+    const wecomMarkup = wecomOptions.map((option) => renderToStaticMarkup(<>{option.label}</>));
+    const emailMarkup = emailOptions.map((option) => renderToStaticMarkup(<>{option.label}</>));
 
-    expect(wecomOptions.map((option) => option.label)).toEqual([
-      '企微模板 / version-wecom',
-      '未声明平台模板 / version-unknown（未声明推送渠道类型）',
-    ]);
-    expect(emailOptions.map((option) => option.label)).toEqual([
-      '邮件模板 / version-email',
-      '未声明平台模板 / version-unknown（未声明推送渠道类型）',
-    ]);
+    expect(channelOptions.map((option) => option.title)).toEqual(['企业微信实例', '邮件实例']);
+    expect(wecomOptions.map((option) => option.title)).toEqual(['企微模板', '未声明平台模板']);
+    expect(emailOptions.map((option) => option.title)).toEqual(['邮件模板', '未声明平台模板']);
+    expect(wecomMarkup[0]).toContain('企微模板');
+    expect(emailMarkup[0]).toContain('邮件模板');
+    expect(wecomMarkup.join('')).not.toContain('version-wecom');
+    expect(emailMarkup.join('')).not.toContain('version-email');
+    expect(wecomOptions.map((option) => option.value)).toEqual(['version-wecom', 'version-unknown']);
+    expect(emailOptions.map((option) => option.value)).toEqual(['version-email', 'version-unknown']);
   });
 
   it('maps new route targets and legacy action fields into send action summaries', () => {
@@ -1933,6 +2243,151 @@ describe('critical console pages', () => {
       user_ids: ['user-1'],
       recipient_group_ids: ['group-1'],
     });
+  });
+
+  it('renders route simulation as a visual trace before raw JSON', () => {
+    const markup = renderPage(
+      <RouteSimulationResultView
+        result={{
+          version_id: 'version-1',
+          stop_reason: 'first_match_stop',
+          matched_rule: {
+            rule_key: 'rule-a',
+            name: '高优先级',
+            sort_order: 1,
+          },
+          rule_results: [
+            {
+              rule_key: 'rule-a',
+              name: '高优先级',
+              sort_order: 1,
+              matched: true,
+              evaluated: true,
+              duration_ms: 2,
+              stop_reason: 'first_match_stop',
+            },
+            {
+              rule_key: 'rule-b',
+              name: '兜底',
+              sort_order: 2,
+              matched: false,
+              evaluated: false,
+              duration_ms: 0,
+              stop_reason: 'first_match_stop',
+            },
+          ],
+        }}
+      />,
+    );
+
+    expect(markup).toContain('命中规则：高优先级');
+    expect(markup).toContain('第一条命中后停止');
+    expect(markup).toContain('高优先级');
+    expect(markup).toContain('兜底');
+    expect(markup).toContain('原始 JSON');
+  });
+
+  it('round trips documented route condition operators through route rule drafts', () => {
+    const draft = routeRuleDraftFromRow({
+      id: 'rule-1',
+      flowId: 'flow-1',
+      sortOrder: 1,
+      name: '扩展条件',
+      source: '来源 A',
+      condition: '',
+      template: '',
+      recipientStrategy: '系统接收人',
+      targetProviders: [],
+      dedupe: '是',
+      hitCount: 0,
+      enabled: true,
+      lastHitAt: '-',
+      conditionTree: {
+        operator: 'and',
+        conditions: [
+          { operator: 'not_equals', path: 'payload.status', value: 'closed' },
+          { operator: 'not_exists', path: 'payload.deletedAt' },
+          { operator: 'regex', path: 'payload.title', value: '^P[0-9]+' },
+          { operator: 'gte', path: 'payload.count', value: '10' },
+        ],
+      },
+      targets: [{ id: 'target-1', channelId: 'channel-1', templateVersionId: 'version-1', enabled: true }],
+      sendGroupSummary: '',
+      recipientStrategyConfig: { mode: 'system' },
+      sendDedupeConfig: { strategy: 'trace_id' },
+      failurePolicy: { policy: 'continue' },
+    } as any);
+
+    expect(draft.conditions.map((condition) => condition.operator)).toEqual([
+      'not_equals',
+      'not_exists',
+      'regex',
+      'gte',
+    ]);
+    expect(draft.conditions[1].value).toBe('');
+
+    const row = routeRuleDraftToRow(
+      draft,
+      {
+        id: 'flow-1',
+        name: '路由组',
+        sourceName: '来源 A',
+        sourceCode: 'source-a',
+        enabled: true,
+        currentVersion: 'v1',
+        ruleIds: [],
+        totalHitCount: 0,
+        updatedAt: '2026-05-12 09:00:00',
+      },
+      null,
+      1,
+      [],
+      [{ id: 'tpl-1', name: '模板', version: 'v1', raw: { current_version_id: 'version-1' } }] as any,
+      [{ id: 'channel-1', name: '渠道', providerType: 'webhook' }] as any,
+    );
+
+    expect(row.conditionTree).toEqual({
+      operator: 'and',
+      conditions: [
+        { operator: 'not_equals', path: 'payload.status', value: 'closed' },
+        { operator: 'not_exists', path: 'payload.deletedAt' },
+        { operator: 'regex', path: 'payload.title', value: '^P[0-9]+' },
+        { operator: 'gte', path: 'payload.count', value: '10' },
+      ],
+    });
+  });
+
+  it('validates route target template references before save', () => {
+    const baseDraft = {
+      ...createRouteRuleDraft([], []),
+      targets: [{ id: 'target-1', channelId: 'channel-1', templateVersionId: 'version-missing', enabled: true }],
+    };
+
+    expect(
+      validateRouteRuleDraft(
+        baseDraft,
+        [{ id: 'tpl-1', name: '模板', version: 'v1', raw: { current_version_id: 'version-1' } }] as any,
+        [{ id: 'channel-1', name: '渠道', providerType: 'webhook' }] as any,
+      ),
+    ).toBe('发送目标引用的模板不存在或未发布');
+
+    expect(
+      validateRouteRuleDraft(
+        { ...baseDraft, targets: [{ ...baseDraft.targets[0], templateVersionId: 'version-1' }] },
+        [
+          {
+            id: 'tpl-1',
+            name: '企微模板',
+            version: 'v1',
+            raw: {
+              current_version_id: 'version-1',
+              current_version: { target_provider_type: 'wecom_app' },
+            },
+          },
+        ] as any,
+        [{ id: 'channel-1', name: 'Webhook 渠道', providerType: 'webhook' }] as any,
+      ),
+    ).toBe('发送目标的模板与推送渠道类型不兼容');
   });
 
   it('renders template page list mappings with localized provider and validation labels', () => {
@@ -3072,7 +3527,7 @@ describe('critical console pages', () => {
       <RouteStrategyPage lastUpdated={lastUpdated} onRefresh={() => undefined} />,
     );
 
-    expect(markup).toContain('路由大组');
+    expect(markup).toContain('路由组');
     expect(markup).toContain('匹配组');
     expect(markup).not.toContain('接收人组');
   });
@@ -3092,6 +3547,25 @@ describe('critical console pages', () => {
     expect(userSection).toContain('scope="col">状态</th>');
     expect(userSection).not.toContain('scope="col">启停</th>');
     expect(userSection.indexOf('scope="col">状态</th>')).toBeLessThan(userSection.indexOf('scope="col">操作</th>'));
+  });
+
+  it('renders user identity summaries as compact text instead of status pills', () => {
+    const markup = renderPage(
+      <UserIdentitySummaryCell
+        identities={[
+          { platform: '钉钉工作消息', fieldName: 'dingtalk_userid', value: '093102391140051902' },
+          { platform: '飞书应用机器人', fieldName: 'feishu_open_id', value: 'ou_123' },
+          { platform: 'PushPlus', fieldName: 'pushplus_token', value: 'token-1' },
+          { platform: 'SMTP 邮件', fieldName: 'email', value: 'ops@example.com' },
+        ]}
+      />,
+    );
+
+    expect(markup).toContain('钉钉工作消息、飞书应用机器人 +2');
+    expect(markup).toContain('aria-label="钉钉工作消息（UserID）：093102391140051902');
+    expect(markup).toContain('飞书应用机器人（OpenID）：ou_123');
+    expect(markup).not.toContain('title="钉钉工作消息');
+    expect(markup).not.toContain('premium-status-tag');
   });
 
   it('renders user profile form without a status switch', () => {
@@ -3346,7 +3820,7 @@ describe('critical console pages', () => {
     expect(markup).toContain('SMTP 邮件 accepted=false');
   });
 
-  it('renders match group item CRUD controls and settings JSON editor copy', () => {
+  it('renders match group values as a bulk textarea instead of item CRUD controls', () => {
     const matchMarkup = renderPage(
       <MatchGroupsPage lastUpdated={lastUpdated} onRefresh={() => undefined} />,
     );
@@ -3356,8 +3830,10 @@ describe('critical console pages', () => {
 
     expect(matchMarkup).toContain('匹配组列表');
     expect(matchMarkup).toContain('新增匹配组');
-    expect(matchMarkup).toContain('匹配值条目');
-    expect(matchMarkup).toContain('条目高级 JSON');
+    expect(matchMarkup).toContain('匹配值');
+    expect(matchMarkup).toContain('按行批量维护');
+    expect(matchMarkup).not.toContain('新增条目');
+    expect(matchMarkup).not.toContain('条目高级 JSON');
     expect(matchMarkup).not.toContain('enabled');
     expect(settingsMarkup).toContain('系统参数列表');
     expect(settingsMarkup).toContain('参数值 JSON');
@@ -3365,6 +3841,17 @@ describe('critical console pages', () => {
     expect(settingsMarkup).toContain('性能测试');
     expect(settingsMarkup).toContain('运行性能测试');
     expect(settingsMarkup).toContain('当前系统实例并发上限');
+  });
+
+  it('normalizes match group textarea values for bulk saving', () => {
+    expect(matchGroupValuesFromText('紧急\n 重大 \n\n紧急\n红色预警')).toEqual(['紧急', '重大', '红色预警']);
+    expect(matchGroupValuesFromText('10.20.0.0/16\r\n10.21.0.0/16')).toEqual(['10.20.0.0/16', '10.21.0.0/16']);
+    expect(matchGroupDefaultValueType('ip')).toBe('ip');
+    expect(matchGroupDefaultValueType('text')).toBe('text');
+    expect(matchGroupDefaultValueType('business')).toBe('text');
+    expect(normalizeMatchGroupType('ip')).toBe('ip');
+    expect(normalizeMatchGroupType('text')).toBe('text');
+    expect(normalizeMatchGroupType('system')).toBe('text');
   });
 
   it('keeps organization users out of the system settings page', () => {

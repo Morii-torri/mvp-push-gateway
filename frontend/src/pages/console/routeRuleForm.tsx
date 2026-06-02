@@ -1,3 +1,4 @@
+import type { ReactNode } from 'react';
 import Alert from 'antd/es/alert';
 import Button from 'antd/es/button';
 import Form from 'antd/es/form';
@@ -16,7 +17,7 @@ import type {
   TemplateApiRecord,
   UserApiRecord,
 } from '../../api/console';
-import { getProviderTypeLabel } from '../../utils/labels';
+import { getProviderTypeLabel, type ProviderType } from '../../utils/labels';
 import {
   buildRouteConditionTree,
   summarizeRouteConditionTree,
@@ -48,11 +49,26 @@ export type RouteActionTargetDraft = {
 
 type RouteRecipientMode = 'none' | 'system' | 'payload';
 
+type RouteTargetSelectOption = {
+  label: ReactNode;
+  title: string;
+  value: string;
+  disabled?: boolean;
+  searchText: string;
+};
+
 const routeConditionOperatorOptions: Array<{ label: string; value: RouteConditionOperator }> = [
   { label: '等于', value: 'equals' },
+  { label: '不等于', value: 'not_equals' },
   { label: '包含', value: 'contains' },
   { label: '不包含', value: 'not_contains' },
-  { label: '存在', value: 'exists' },
+  { label: '字段存在', value: 'exists' },
+  { label: '字段不存在', value: 'not_exists' },
+  { label: '正则匹配', value: 'regex' },
+  { label: '大于', value: 'gt' },
+  { label: '大于等于', value: 'gte' },
+  { label: '小于', value: 'lt' },
+  { label: '小于等于', value: 'lte' },
   { label: '属于匹配组', value: 'in_match_group' },
   { label: '不属于匹配组', value: 'not_in_match_group' },
 ];
@@ -102,6 +118,79 @@ export function RouteRuleForm({
   channelRows: ProviderRow[];
   payloadFieldOptions?: Array<{ label: string; value: string; type: string }>;
 }) {
+  return (
+    <Form layout="vertical">
+      <Form.Item label="规则名称" required>
+        <Input
+          value={value.name}
+          onChange={(event) => onChange({ ...value, name: event.target.value })}
+        />
+      </Form.Item>
+      <RouteConditionEditor
+        value={value}
+        onChange={onChange}
+        matchGroupRows={matchGroupRows}
+        payloadFieldOptions={payloadFieldOptions}
+      />
+      <RouteTargetsEditor
+        value={value}
+        onChange={onChange}
+        templateRows={templateRows}
+        channelRows={channelRows}
+      />
+      <RouteRecipientEditor
+        value={value}
+        onChange={onChange}
+        recipientGroupRows={recipientGroupRows}
+        userRows={userRows}
+        payloadFieldOptions={payloadFieldOptions}
+      />
+    </Form>
+  );
+}
+
+export function RouteConditionGroupEditor({
+  value,
+  onChange,
+  matchGroupRows,
+  payloadFieldOptions,
+  nameLabel = '条件组名称',
+}: {
+  value: RouteRuleDraft;
+  onChange: (value: RouteRuleDraft) => void;
+  matchGroupRows: MatchGroup[];
+  payloadFieldOptions?: Array<{ label: string; value: string; type: string }>;
+  nameLabel?: string;
+}) {
+  return (
+    <Form layout="vertical">
+      <Form.Item label={nameLabel} required>
+        <Input
+          value={value.name}
+          onChange={(event) => onChange({ ...value, name: event.target.value })}
+        />
+      </Form.Item>
+      <RouteConditionEditor
+        value={value}
+        onChange={onChange}
+        matchGroupRows={matchGroupRows}
+        payloadFieldOptions={payloadFieldOptions}
+      />
+    </Form>
+  );
+}
+
+export function RouteConditionEditor({
+  value,
+  onChange,
+  matchGroupRows,
+  payloadFieldOptions,
+}: {
+  value: RouteRuleDraft;
+  onChange: (value: RouteRuleDraft) => void;
+  matchGroupRows: MatchGroup[];
+  payloadFieldOptions?: Array<{ label: string; value: string; type: string }>;
+}) {
   const updateCondition = (index: number, patch: Partial<RouteConditionDraft>) => {
     onChange({
       ...value,
@@ -115,76 +204,36 @@ export function RouteRuleForm({
     const nextConditions = value.conditions.filter((_item, itemIndex) => itemIndex !== index);
     onChange({ ...value, conditions: nextConditions.length ? nextConditions : [createDefaultConditionDraft()] });
   };
-  const fieldOptions = (payloadFieldOptions ?? []).map((field) => ({
-    label: field.label,
-    value: field.value,
-  }));
-  const matchGroupOptionsForField = (fieldPath: string) => {
-    const fieldLooksLikeIp = fieldPath.toLowerCase().includes('ip');
-    return matchGroupRows
-      .filter((group) => group.enabled)
-      .filter((group) => (fieldLooksLikeIp ? group.type.includes('IP') : !group.type.includes('IP')))
-      .map((group) => ({
-        label: `${group.name} (${group.values.length})`,
-        value: group.id,
-      }));
-  };
+  const fieldOptions = routePayloadFieldSelectOptions(payloadFieldOptions);
+  const matchGroupOptionsForField = (fieldPath: string) => routeMatchGroupOptionsForField(matchGroupRows, fieldPath);
   const matchGroupNames = Object.fromEntries(matchGroupRows.map((group) => [group.id, group.name]));
-  const conditionPreview = summarizeRouteConditionTree(buildRouteConditionTree(value.conditions), { matchGroupNames });
-  const channelOptions = channelRows.map((channel) => ({
-    label: `${channel.name} / ${getProviderTypeLabel(channel.providerType)}`,
-    value: channel.id,
-  }));
-  const recipientGroupOptions = recipientGroupRows
-    .filter((group) => group.enabled)
-    .map((group) => ({ label: group.name, value: group.id }));
-  const userOptions = (userRows ?? [])
-    .filter((user) => user.enabled)
-    .map((user) => ({ label: user.display_name || user.id, value: user.id }));
-  const updateTarget = (index: number, patch: Partial<RouteActionTargetDraft>) => {
-    onChange({
-      ...value,
-      targets: value.targets.map((target, targetIndex) =>
-        targetIndex === index ? { ...target, ...patch } : target,
-      ),
-    });
-  };
-  const addTarget = () => {
-    onChange({ ...value, targets: [...value.targets, createDefaultRouteTarget(channelRows, templateRows)] });
-  };
-  const removeTarget = (index: number) => {
-    onChange({ ...value, targets: value.targets.filter((_target, targetIndex) => targetIndex !== index) });
-  };
+  const conditionPreview = summarizeRouteConditionTree(
+    buildRouteConditionTree(value.conditions, value.conditionGroupOperator),
+    { matchGroupNames },
+  );
 
   return (
-    <Form layout="vertical">
-      <Form.Item label="规则名称" required>
-        <Input
-          value={value.name}
-          onChange={(event) => onChange({ ...value, name: event.target.value })}
-        />
-      </Form.Item>
-      <div className="condition-editor">
-        <Space className="full-width" align="center" style={{ justifyContent: 'space-between' }}>
-          <Typography.Title level={5}>条件组</Typography.Title>
-          <Space>
-            <Select
-              className="condition-logic-select"
-              value={value.conditionGroupOperator}
-              options={[
-                { label: 'AND', value: 'and' },
-                { label: 'OR', value: 'or' },
-              ]}
-              onChange={(conditionGroupOperator) => onChange({ ...value, conditionGroupOperator })}
-            />
-            <Button type="primary" className="route-inline-add-button" onClick={addCondition}>新增条件</Button>
-          </Space>
+    <div className="condition-editor">
+      <Space className="full-width" align="center" style={{ justifyContent: 'space-between' }}>
+        <Typography.Title level={5}>条件组</Typography.Title>
+        <Space>
+          <Select
+            className="condition-logic-select"
+            value={value.conditionGroupOperator}
+            options={[
+              { label: 'AND', value: 'and' },
+              { label: 'OR', value: 'or' },
+            ]}
+            onChange={(conditionGroupOperator) => onChange({ ...value, conditionGroupOperator })}
+          />
+          <Button type="primary" className="route-inline-add-button" onClick={addCondition}>新增条件</Button>
         </Space>
-        {value.conditions.map((condition, index) => {
-          const isMatchGroupOperator =
-            condition.operator === 'in_match_group' || condition.operator === 'not_in_match_group';
-          const isExistsOperator = condition.operator === 'exists';
-          return (
+      </Space>
+      {value.conditions.map((condition, index) => {
+        const isMatchGroupOperator =
+          condition.operator === 'in_match_group' || condition.operator === 'not_in_match_group';
+        const isExistenceOperator = condition.operator === 'exists' || condition.operator === 'not_exists';
+        return (
           <div className="condition-row" key={index}>
             <Select
               showSearch
@@ -213,8 +262,11 @@ export function RouteRuleForm({
                 placeholder="选择一个或多个匹配组"
                 onChange={(matchGroupIds) => updateCondition(index, { matchGroupIds })}
               />
-            ) : isExistsOperator ? (
-              <Input value="字段存在即可命中" disabled />
+            ) : isExistenceOperator ? (
+              <Input
+                value={condition.operator === 'exists' ? 'payload 中有这个字段即可命中' : 'payload 中没有这个字段才命中'}
+                disabled
+              />
             ) : (
               <Input
                 value={condition.value}
@@ -230,113 +282,192 @@ export function RouteRuleForm({
               删除
             </Button>
           </div>
-          );
-        })}
-        <Alert type="info" showIcon message={`预览：${conditionPreview}`} />
-      </div>
-      <div className="send-action-group drawer-form-gap">
-        <Space className="full-width" align="center" style={{ justifyContent: 'space-between' }}>
-          <Typography.Title level={5}>发送动作组</Typography.Title>
-          <Button type="primary" className="route-inline-add-button" onClick={addTarget}>新增发送目标</Button>
-        </Space>
-        {value.targets.map((target, index) => {
-          const selectedTemplate = templateRows.find((template) => templateVersionId(template) === target.templateVersionId);
-          const providerTypeUnknown = Boolean(selectedTemplate && !templateProviderType(selectedTemplate));
-          return (
-            <div className="send-action-row" key={target.id}>
-              <Select
-                value={target.channelId || undefined}
-                options={channelOptions}
-                placeholder="选择推送渠道实例"
-                onChange={(channelId) => {
-                  const nextChannel = channelRows.find((item) => item.id === channelId);
-                  updateTarget(index, {
-                    channelId,
-                    templateVersionId: nextChannel
-                      ? firstCompatibleTemplateVersionId(templateRows, nextChannel.providerType)
-                      : '',
-                  });
-                }}
-              />
-              <Select
-                value={target.templateVersionId || undefined}
-                options={routeTargetTemplateOptions(target, channelRows, templateRows)}
-                placeholder="选择兼容模板"
-                onChange={(templateVersionId) => updateTarget(index, { templateVersionId })}
-              />
-              <Switch
-                checked={target.enabled}
-                checkedChildren="启用"
-                unCheckedChildren="停用"
-                onChange={(enabled) => updateTarget(index, { enabled })}
-              />
-              <Button danger type="link" onClick={() => removeTarget(index)}>
-                删除
-              </Button>
-              {providerTypeUnknown ? (
-                <Typography.Text type="secondary" className="send-action-row__hint">
-                  模板未声明推送渠道类型，已按兼容处理
-                </Typography.Text>
-              ) : null}
-            </div>
-          );
-        })}
-        {value.targets.length === 0 ? (
-          <Alert type="warning" showIcon message="请新增至少一个发送目标。" />
-        ) : null}
-      </div>
-      <div className="route-recipient-group drawer-form-gap">
-        <Space className="full-width" align="center" style={{ justifyContent: 'space-between' }}>
-          <Typography.Title level={5}>接收策略</Typography.Title>
-        </Space>
-        <Form.Item label="接收策略">
+        );
+      })}
+      <Alert type="info" showIcon message={`预览：${conditionPreview}`} />
+    </div>
+  );
+}
+
+export function RouteTargetsEditor({
+  value,
+  onChange,
+  templateRows,
+  channelRows,
+}: {
+  value: RouteRuleDraft;
+  onChange: (value: RouteRuleDraft) => void;
+  templateRows: Array<TemplateRecord & { raw?: TemplateApiRecord }>;
+  channelRows: ProviderRow[];
+}) {
+  const channelOptions = routeTargetChannelOptions(channelRows);
+  const updateTarget = (index: number, patch: Partial<RouteActionTargetDraft>) => {
+    onChange({
+      ...value,
+      targets: value.targets.map((target, targetIndex) =>
+        targetIndex === index ? { ...target, ...patch } : target,
+      ),
+    });
+  };
+  const addTarget = () => {
+    onChange({ ...value, targets: [...value.targets, createDefaultRouteTarget(channelRows, templateRows)] });
+  };
+  const removeTarget = (index: number) => {
+    onChange({ ...value, targets: value.targets.filter((_target, targetIndex) => targetIndex !== index) });
+  };
+
+  return (
+    <div className="send-action-group drawer-form-gap">
+      <Space className="full-width" align="center" style={{ justifyContent: 'space-between' }}>
+        <Typography.Title level={5}>发送动作组</Typography.Title>
+        <Button type="primary" className="route-inline-add-button" onClick={addTarget}>新增发送目标</Button>
+      </Space>
+      {value.targets.map((target, index) => {
+        const selectedTemplate = templateRows.find((template) => templateVersionId(template) === target.templateVersionId);
+        const providerTypeUnknown = Boolean(selectedTemplate && !templateProviderType(selectedTemplate));
+        return (
+          <div className="send-action-row" key={target.id}>
+            <Select
+              value={target.channelId || undefined}
+              options={channelOptions}
+              optionLabelProp="title"
+              showSearch
+              filterOption={routeTargetOptionFilter}
+              placeholder="选择推送渠道实例"
+              onChange={(channelId) => {
+                const nextChannel = channelRows.find((item) => item.id === channelId);
+                updateTarget(index, {
+                  channelId,
+                  templateVersionId: nextChannel
+                    ? firstCompatibleTemplateVersionId(templateRows, nextChannel.providerType)
+                    : '',
+                });
+              }}
+            />
+            <Select
+              value={target.templateVersionId || undefined}
+              options={routeTargetTemplateOptions(target, channelRows, templateRows)}
+              optionLabelProp="title"
+              showSearch
+              filterOption={routeTargetOptionFilter}
+              placeholder="选择兼容模板"
+              onChange={(templateVersionId) => updateTarget(index, { templateVersionId })}
+            />
+            <Switch
+              checked={target.enabled}
+              checkedChildren="启用"
+              unCheckedChildren="停用"
+              onChange={(enabled) => updateTarget(index, { enabled })}
+            />
+            <Button danger type="link" onClick={() => removeTarget(index)}>
+              删除
+            </Button>
+            {providerTypeUnknown ? (
+              <Typography.Text type="secondary" className="send-action-row__hint">
+                模板未声明推送渠道类型，已按兼容处理
+              </Typography.Text>
+            ) : null}
+          </div>
+        );
+      })}
+      {value.targets.length === 0 ? (
+        <Alert type="warning" showIcon message="请新增至少一个发送目标。" />
+      ) : null}
+    </div>
+  );
+}
+
+export function RouteRecipientEditor({
+  value,
+  onChange,
+  recipientGroupRows,
+  userRows,
+  payloadFieldOptions,
+}: {
+  value: RouteRuleDraft;
+  onChange: (value: RouteRuleDraft) => void;
+  recipientGroupRows: RecipientGroupApiRecord[];
+  userRows?: UserApiRecord[];
+  payloadFieldOptions?: Array<{ label: string; value: string; type: string }>;
+}) {
+  const fieldOptions = routePayloadFieldSelectOptions(payloadFieldOptions);
+  const recipientGroupOptions = recipientGroupRows
+    .filter((group) => group.enabled)
+    .map((group) => ({ label: group.name, value: group.id }));
+  const userOptions = (userRows ?? [])
+    .filter((user) => user.enabled)
+    .map((user) => ({ label: user.display_name || user.id, value: user.id }));
+
+  return (
+    <div className="route-recipient-group drawer-form-gap">
+      <Space className="full-width" align="center" style={{ justifyContent: 'space-between' }}>
+        <Typography.Title level={5}>接收策略</Typography.Title>
+      </Space>
+      <Form.Item label="接收策略">
+        <Select
+          value={value.recipientMode}
+          options={[
+            { label: '无接收人', value: 'none' },
+            { label: '系统接收人', value: 'system' },
+            { label: 'Payload 接收人', value: 'payload' },
+          ]}
+          onChange={(recipientMode) => onChange({ ...value, recipientMode })}
+        />
+      </Form.Item>
+      {value.recipientMode === 'payload' ? (
+        <Form.Item label="Payload 接收人字段">
           <Select
-            value={value.recipientMode}
-            options={[
-              { label: '无接收人', value: 'none' },
-              { label: '系统接收人', value: 'system' },
-              { label: 'Payload 接收人', value: 'payload' },
-            ]}
-            onChange={(recipientMode) => onChange({ ...value, recipientMode })}
+            showSearch
+            optionFilterProp="label"
+            value={value.payloadRecipientPath || undefined}
+            options={fieldOptions}
+            placeholder="选择最近 Payload 中的接收人字段"
+            onChange={(payloadRecipientPath) => onChange({ ...value, payloadRecipientPath })}
           />
         </Form.Item>
-        {value.recipientMode === 'payload' ? (
-          <Form.Item label="Payload 接收人字段">
+      ) : null}
+      {value.recipientMode === 'system' ? (
+        <div className="two-column-form">
+          <Form.Item label="接收人">
             <Select
-              showSearch
-              optionFilterProp="label"
-              value={value.payloadRecipientPath || undefined}
-              options={fieldOptions}
-              placeholder="选择最近 Payload 中的接收人字段"
-              onChange={(payloadRecipientPath) => onChange({ ...value, payloadRecipientPath })}
+              mode="multiple"
+              value={value.recipientUserIds}
+              options={userOptions}
+              placeholder="选择人员"
+              onChange={(recipientUserIds) => onChange({ ...value, recipientUserIds })}
             />
           </Form.Item>
-        ) : null}
-        {value.recipientMode === 'system' ? (
-          <div className="two-column-form">
-            <Form.Item label="接收人">
-              <Select
-                mode="multiple"
-                value={value.recipientUserIds}
-                options={userOptions}
-                placeholder="选择人员"
-                onChange={(recipientUserIds) => onChange({ ...value, recipientUserIds })}
-              />
-            </Form.Item>
-            <Form.Item label="接收人组">
-              <Select
-                mode="multiple"
-                value={value.recipientGroupIds}
-                options={recipientGroupOptions}
-                placeholder="选择接收人组"
-                onChange={(recipientGroupIds) => onChange({ ...value, recipientGroupIds })}
-              />
-            </Form.Item>
-          </div>
-        ) : null}
-      </div>
-    </Form>
+          <Form.Item label="接收人组">
+            <Select
+              mode="multiple"
+              value={value.recipientGroupIds}
+              options={recipientGroupOptions}
+              placeholder="选择接收人组"
+              onChange={(recipientGroupIds) => onChange({ ...value, recipientGroupIds })}
+            />
+          </Form.Item>
+        </div>
+      ) : null}
+    </div>
   );
+}
+
+function routePayloadFieldSelectOptions(payloadFieldOptions?: Array<{ label: string; value: string; type: string }>) {
+  return (payloadFieldOptions ?? []).map((field) => ({
+    label: field.label,
+    value: field.value,
+  }));
+}
+
+function routeMatchGroupOptionsForField(matchGroupRows: MatchGroup[], fieldPath: string) {
+  const fieldLooksLikeIp = fieldPath.toLowerCase().includes('ip');
+  return matchGroupRows
+    .filter((group) => group.enabled)
+    .filter((group) => (fieldLooksLikeIp ? group.type.includes('IP') : !group.type.includes('IP')))
+    .map((group) => ({
+      label: `${group.name} (${group.values.length})`,
+      value: group.id,
+    }));
 }
 
 function templateVersionId(template: TemplateRecord & { raw?: TemplateApiRecord }) {
@@ -378,7 +509,7 @@ export function routeTargetTemplateOptions(
   target: RouteActionTargetDraft,
   channelRows: ProviderRow[],
   templateRows: Array<TemplateRecord & { raw?: TemplateApiRecord }>,
-) {
+): RouteTargetSelectOption[] {
   const channel = channelRows.find((item) => item.id === target.channelId);
   return templateRows
     .filter((template) => {
@@ -388,12 +519,67 @@ export function routeTargetTemplateOptions(
     .map((template) => {
       const versionId = templateVersionId(template);
       const providerType = templateProviderType(template);
+      const providerLabel = providerType ? routeTargetProviderLabel(providerType) : '未声明推送渠道类型';
+      const versionLabel = routeTargetTemplateVersionLabel(template, versionId);
+      const title = template.name || '未命名模板';
       return {
-        label: `${template.name} / ${versionId || '未发布'}${providerType ? '' : '（未声明推送渠道类型）'}`,
+        label: routeTargetOptionLabel(title, [providerLabel, versionLabel]),
+        title,
         value: versionId || `unpublished:${template.id}`,
         disabled: !versionId,
+        searchText: [title, providerLabel, versionLabel].join(' '),
       };
     });
+}
+
+export function routeTargetChannelOptions(channelRows: ProviderRow[]): RouteTargetSelectOption[] {
+  return channelRows.map((channel) => {
+    const providerLabel = routeTargetProviderLabel(channel.providerType);
+    const title = channel.name || '未命名渠道实例';
+    return {
+      label: routeTargetOptionLabel(title, [providerLabel]),
+      title,
+      value: channel.id,
+      searchText: [title, providerLabel].join(' '),
+    };
+  });
+}
+
+function routeTargetTemplateVersionLabel(
+  template: TemplateRecord & { raw?: TemplateApiRecord },
+  versionId: string,
+): string {
+  const versionNo = template.raw?.current_version?.version_no;
+  if (versionNo) {
+    return `v${versionNo}`;
+  }
+  if (template.version && template.version !== '草稿') {
+    return template.version;
+  }
+  return versionId ? '已发布' : '未发布';
+}
+
+function routeTargetProviderLabel(providerType: string): string {
+  return getProviderTypeLabel(providerType as ProviderType);
+}
+
+function routeTargetOptionLabel(title: string, metaItems: string[]): ReactNode {
+  const metaText = metaItems.filter(Boolean).join(' · ');
+  return (
+    <span className="route-target-option">
+      <span className="route-target-option__title">{title}</span>
+      {metaText ? <span className="route-target-option__meta">{metaText}</span> : null}
+    </span>
+  );
+}
+
+function routeTargetOptionFilter(
+  input: string,
+  option?: { searchText?: unknown; title?: unknown; value?: unknown },
+) {
+  const normalizedInput = input.trim().toLowerCase();
+  const searchText = String(option?.searchText ?? option?.title ?? option?.value ?? '').toLowerCase();
+  return searchText.includes(normalizedInput);
 }
 
 function isTemplateCompatibleWithChannel(
@@ -406,6 +592,24 @@ function isTemplateCompatibleWithChannel(
   const template = templateRows.find((item) => templateVersionId(item) === templateVersionIdValue);
   const providerType = template ? templateProviderType(template) : '';
   return Boolean(channel && template && (!providerType || providerType === channel.providerType));
+}
+
+function routeTargetReferenceError(
+  target: RouteActionTargetDraft,
+  templateRows: Array<TemplateRecord & { raw?: TemplateApiRecord }>,
+  channelRows: ProviderRow[],
+): string {
+  const channel = channelRows.find((item) => item.id === target.channelId);
+  if (!channel) {
+    return '发送目标引用的推送渠道实例不存在或已删除';
+  }
+  const template = templateRows.find((item) => templateVersionId(item) === target.templateVersionId);
+  if (!template) {
+    return '发送目标引用的模板不存在或未发布';
+  }
+  return isTemplateCompatibleWithChannel(target.templateVersionId, target.channelId, templateRows, channelRows)
+    ? ''
+    : '发送目标的模板与推送渠道类型不兼容';
 }
 
 function routeConditionDraftsFromTree(value: JSONValue): RouteConditionDraft[] {
@@ -454,12 +658,30 @@ function routeConditionDraftsFromTree(value: JSONValue): RouteConditionDraft[] {
       },
     ];
   }
-  if (operator === 'contains' || operator === 'not_contains' || operator === 'exists' || operator === 'equals') {
+  if (
+    operator === 'contains' ||
+    operator === 'not_contains' ||
+    operator === 'exists' ||
+    operator === 'not_exists' ||
+    operator === 'equals' ||
+    operator === 'not_equals' ||
+    operator === 'regex' ||
+    operator === 'gt' ||
+    operator === 'gte' ||
+    operator === 'lt' ||
+    operator === 'lte'
+  ) {
     return [
       {
         fieldPath: String(tree.path ?? 'payload.bizType'),
         operator: operator as RouteConditionOperator,
-        value: typeof tree.value === 'string' ? tree.value : tree.value == null ? '' : stringifyJSON(tree.value, String(tree.value)),
+        value: operator === 'exists' || operator === 'not_exists'
+          ? ''
+          : typeof tree.value === 'string'
+            ? tree.value
+            : tree.value == null
+              ? ''
+              : stringifyJSON(tree.value, String(tree.value)),
         matchGroupIds: [],
       },
     ];
@@ -567,6 +789,16 @@ export function validateRouteRuleDraft(
   if (!draft.name.trim()) {
     return '请填写规则名称';
   }
+  return validateRouteTargetsDraft(draft, templateRows, channelRows)
+    || validateRouteRecipientDraft(draft)
+    || validateRouteConditionDraft(draft);
+}
+
+export function validateRouteTargetsDraft(
+  draft: RouteRuleDraft,
+  templateRows: Array<TemplateRecord & { raw?: TemplateApiRecord }>,
+  channelRows: ProviderRow[],
+): string {
   const enabledTargets = draft.targets.filter((target) => target.enabled);
   if (enabledTargets.length === 0) {
     return '请至少配置一个发送目标';
@@ -577,22 +809,26 @@ export function validateRouteRuleDraft(
   if (enabledTargets.some((target) => !target.templateVersionId.trim())) {
     return '发送目标需要选择兼容模板';
   }
-  if (
-    enabledTargets.some(
-      (target) =>
-        !isTemplateCompatibleWithChannel(target.templateVersionId, target.channelId, templateRows, channelRows),
-    )
-  ) {
-    return '发送目标的模板与推送渠道类型不兼容';
+  const referenceError = enabledTargets.map((target) => routeTargetReferenceError(target, templateRows, channelRows)).find(Boolean);
+  if (referenceError) {
+    return referenceError;
   }
+  return '';
+}
+
+export function validateRouteRecipientDraft(draft: RouteRuleDraft): string {
   if (draft.recipientMode === 'payload' && !draft.payloadRecipientPath.trim()) {
     return 'Payload 接收人模式需要填写接收人路径';
   }
+  return '';
+}
+
+export function validateRouteConditionDraft(draft: RouteRuleDraft): string {
   const invalidCondition = draft.conditions.find((condition) => {
     if (!condition.fieldPath.trim()) {
       return true;
     }
-    if (condition.operator === 'exists') {
+    if (condition.operator === 'exists' || condition.operator === 'not_exists') {
       return false;
     }
     if (condition.operator === 'in_match_group' || condition.operator === 'not_in_match_group') {
