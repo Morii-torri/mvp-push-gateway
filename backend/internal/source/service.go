@@ -12,6 +12,7 @@ import (
 	"net"
 	"net/http"
 	"net/netip"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -23,6 +24,8 @@ const (
 	DefaultMaxPayloadBytes int64 = 5 << 20
 	defaultDedupeTTL             = 24 * time.Hour
 	maxQuietHoursWindows         = 5
+	hmacTimestampWindow          = 5 * time.Minute
+	hmacNonceTTL                 = 10 * time.Minute
 )
 
 type AuthMode string
@@ -150,6 +153,7 @@ type Store interface {
 	UpdateSource(ctx context.Context, id string, params UpdateSourceParams) (Source, error)
 	DeleteSource(ctx context.Context, id string) error
 	UpdateLatestPayloadSample(ctx context.Context, sourceID string, payload json.RawMessage) error
+	ReserveHMACNonce(ctx context.Context, sourceID string, nonce string, now time.Time, expiresAt time.Time) (bool, error)
 	EnqueueInbound(ctx context.Context, params EnqueueInboundParams) error
 }
 
@@ -270,7 +274,11 @@ func (s *Service) Ingest(ctx context.Context, input IngestInput) (IngestResult, 
 	if int64(len(input.Body)) > s.maxPayloadBytes(ctx) {
 		return IngestResult{}, ErrPayloadTooLarge
 	}
-	if !s.authorizeSource(configuredSource, input) {
+	authorized, err := s.authorizeSource(ctx, configuredSource, input)
+	if err != nil {
+		return IngestResult{}, err
+	}
+	if !authorized {
 		return IngestResult{}, ErrUnauthorized
 	}
 
@@ -545,20 +553,21 @@ func compactJSON(raw []byte) (json.RawMessage, error) {
 	return append(json.RawMessage(nil), buffer.Bytes()...), nil
 }
 
-func (s *Service) authorizeSource(configuredSource Source, input IngestInput) bool {
+func (s *Service) authorizeSource(ctx context.Context, configuredSource Source, input IngestInput) (bool, error) {
 	switch configuredSource.AuthMode {
 	case AuthModeNone:
-		return true
+		return true, nil
 	case AuthModeToken:
-		return sourceBearerToken(input.Headers) == configuredSource.AuthToken && configuredSource.AuthToken != ""
+		return sourceBearerToken(input.Headers) == configuredSource.AuthToken && configuredSource.AuthToken != "", nil
 	case AuthModeHMAC:
-		return validHMAC(configuredSource.HMACSecret, input.Method, input.Path, input.Headers, input.Body)
+		return s.validHMAC(ctx, configuredSource.ID, configuredSource.HMACSecret, input.Method, input.Path, input.Headers, input.Body)
 	case AuthModeTokenAndHMAC:
-		return sourceBearerToken(input.Headers) == configuredSource.AuthToken &&
-			configuredSource.AuthToken != "" &&
-			validHMAC(configuredSource.HMACSecret, input.Method, input.Path, input.Headers, input.Body)
+		if sourceBearerToken(input.Headers) != configuredSource.AuthToken || configuredSource.AuthToken == "" {
+			return false, nil
+		}
+		return s.validHMAC(ctx, configuredSource.ID, configuredSource.HMACSecret, input.Method, input.Path, input.Headers, input.Body)
 	default:
-		return false
+		return false, nil
 	}
 }
 
@@ -574,20 +583,37 @@ func sourceBearerToken(headers http.Header) string {
 	return strings.TrimSpace(strings.TrimPrefix(value, prefix))
 }
 
-func validHMAC(secret string, method string, path string, headers http.Header, body []byte) bool {
+func (s *Service) validHMAC(ctx context.Context, sourceID string, secret string, method string, path string, headers http.Header, body []byte) (bool, error) {
+	now := s.now()
+	nonce, ok := validHMACSignature(secret, method, path, headers, body, now)
+	if !ok {
+		return false, nil
+	}
+	return s.store.ReserveHMACNonce(ctx, sourceID, nonce, now, now.Add(hmacNonceTTL))
+}
+
+func validHMACSignature(secret string, method string, path string, headers http.Header, body []byte, now time.Time) (string, bool) {
 	secret = strings.TrimSpace(secret)
 	timestamp := strings.TrimSpace(headers.Get("X-MGP-Timestamp"))
 	nonce := strings.TrimSpace(headers.Get("X-MGP-Nonce"))
 	signature := strings.TrimSpace(headers.Get("X-MGP-Signature"))
 	if secret == "" || timestamp == "" || nonce == "" || signature == "" {
-		return false
+		return "", false
+	}
+	signedAt, err := parseHMACTimestamp(timestamp)
+	if err != nil {
+		return "", false
+	}
+	now = now.UTC()
+	if signedAt.Before(now.Add(-hmacTimestampWindow)) || signedAt.After(now.Add(hmacTimestampWindow)) {
+		return "", false
 	}
 	if !strings.HasPrefix(signature, "sha256=") {
-		return false
+		return "", false
 	}
 	provided, err := hex.DecodeString(strings.TrimPrefix(signature, "sha256="))
 	if err != nil {
-		return false
+		return "", false
 	}
 
 	bodyHash := sha256Hex(body)
@@ -595,7 +621,18 @@ func validHMAC(secret string, method string, path string, headers http.Header, b
 	mac := hmac.New(sha256.New, []byte(secret))
 	mac.Write([]byte(signingString))
 	expected := mac.Sum(nil)
-	return hmac.Equal(provided, expected)
+	return nonce, hmac.Equal(provided, expected)
+}
+
+func parseHMACTimestamp(value string) (time.Time, error) {
+	if unixSeconds, err := strconv.ParseInt(value, 10, 64); err == nil {
+		return time.Unix(unixSeconds, 0).UTC(), nil
+	}
+	parsed, err := time.Parse(time.RFC3339, value)
+	if err != nil {
+		return time.Time{}, err
+	}
+	return parsed.UTC(), nil
 }
 
 func sha256Hex(raw []byte) string {

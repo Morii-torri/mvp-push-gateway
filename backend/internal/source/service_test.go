@@ -176,7 +176,11 @@ func TestIngestAcceptsValidHMACSignature(t *testing.T) {
 		AuthMode:   AuthModeHMAC,
 		HMACSecret: "hmacSecret",
 	})
-	service := NewService(store, WithTraceIDGenerator(func() string { return "trace-hmac" }))
+	service := NewService(
+		store,
+		WithTraceIDGenerator(func() string { return "trace-hmac" }),
+		WithNow(func() time.Time { return time.Unix(1778138400, 0).UTC() }),
+	)
 
 	result, err := service.Ingest(context.Background(), IngestInput{
 		SourceCode: "orders",
@@ -194,6 +198,105 @@ func TestIngestAcceptsValidHMACSignature(t *testing.T) {
 	}
 }
 
+func TestIngestRejectsExpiredHMACTimestamp(t *testing.T) {
+	body := []byte(`{"title":"paid"}`)
+	headers := signedHeaders("hmacSecret", http.MethodPost, "/api/v1/ingest/orders", body)
+	store := newMemoryStore(Source{
+		ID:         "source-1",
+		Code:       "orders",
+		Name:       "Orders",
+		Enabled:    true,
+		AuthMode:   AuthModeHMAC,
+		HMACSecret: "hmacSecret",
+	})
+	service := NewService(store, WithNow(func() time.Time {
+		return time.Unix(1778138400, 0).UTC().Add(6 * time.Minute)
+	}))
+
+	_, err := service.Ingest(context.Background(), IngestInput{
+		SourceCode: "orders",
+		Method:     http.MethodPost,
+		Path:       "/api/v1/ingest/orders",
+		Headers:    headers,
+		RemoteAddr: "127.0.0.1:4321",
+		Body:       body,
+	})
+
+	if !errors.Is(err, ErrUnauthorized) {
+		t.Fatalf("expected expired hmac timestamp to be unauthorized, got %v", err)
+	}
+	if store.latestPayloadUpdates != 0 {
+		t.Fatalf("expected rejected signature not to update latest payload, got %d updates", store.latestPayloadUpdates)
+	}
+}
+
+func TestIngestRejectsReplayedHMACNonce(t *testing.T) {
+	body := []byte(`{"title":"paid"}`)
+	headers := signedHeaders("hmacSecret", http.MethodPost, "/api/v1/ingest/orders", body)
+	now := time.Unix(1778138400, 0).UTC()
+	store := newMemoryStore(Source{
+		ID:         "source-1",
+		Code:       "orders",
+		Name:       "Orders",
+		Enabled:    true,
+		AuthMode:   AuthModeHMAC,
+		HMACSecret: "hmacSecret",
+	})
+	service := NewService(store, WithNow(func() time.Time { return now }))
+	input := IngestInput{
+		SourceCode: "orders",
+		Method:     http.MethodPost,
+		Path:       "/api/v1/ingest/orders",
+		Headers:    headers,
+		RemoteAddr: "127.0.0.1:4321",
+		Body:       body,
+	}
+
+	if _, err := service.Ingest(context.Background(), input); err != nil {
+		t.Fatalf("first signed ingest should pass: %v", err)
+	}
+	if _, err := service.Ingest(context.Background(), input); !errors.Is(err, ErrUnauthorized) {
+		t.Fatalf("expected replayed hmac nonce to be unauthorized, got %v", err)
+	}
+	if store.latestPayloadUpdates != 1 {
+		t.Fatalf("expected replay to be rejected before latest payload update, got %d updates", store.latestPayloadUpdates)
+	}
+}
+
+func TestIngestRejectsReplayedHMACNonceAcrossServiceInstances(t *testing.T) {
+	body := []byte(`{"title":"paid"}`)
+	headers := signedHeaders("hmacSecret", http.MethodPost, "/api/v1/ingest/orders", body)
+	now := time.Unix(1778138400, 0).UTC()
+	store := newMemoryStore(Source{
+		ID:         "source-1",
+		Code:       "orders",
+		Name:       "Orders",
+		Enabled:    true,
+		AuthMode:   AuthModeHMAC,
+		HMACSecret: "hmacSecret",
+	})
+	firstService := NewService(store, WithNow(func() time.Time { return now }))
+	secondService := NewService(store, WithNow(func() time.Time { return now }))
+	input := IngestInput{
+		SourceCode: "orders",
+		Method:     http.MethodPost,
+		Path:       "/api/v1/ingest/orders",
+		Headers:    headers,
+		RemoteAddr: "127.0.0.1:4321",
+		Body:       body,
+	}
+
+	if _, err := firstService.Ingest(context.Background(), input); err != nil {
+		t.Fatalf("first service signed ingest should pass: %v", err)
+	}
+	if _, err := secondService.Ingest(context.Background(), input); !errors.Is(err, ErrUnauthorized) {
+		t.Fatalf("expected second service replayed hmac nonce to be unauthorized, got %v", err)
+	}
+	if store.latestPayloadUpdates != 1 {
+		t.Fatalf("expected cross-instance replay to be rejected before latest payload update, got %d updates", store.latestPayloadUpdates)
+	}
+}
+
 func TestIngestRequiresTokenAndHMACWhenConfigured(t *testing.T) {
 	body := []byte(`{"title":"paid"}`)
 	store := newMemoryStore(Source{
@@ -205,7 +308,11 @@ func TestIngestRequiresTokenAndHMACWhenConfigured(t *testing.T) {
 		AuthToken:  "sourceToken",
 		HMACSecret: "hmacSecret",
 	})
-	service := NewService(store, WithTraceIDGenerator(func() string { return "trace-both" }))
+	service := NewService(
+		store,
+		WithTraceIDGenerator(func() string { return "trace-both" }),
+		WithNow(func() time.Time { return time.Unix(1778138400, 0).UTC() }),
+	)
 
 	missingHMAC := http.Header{}
 	missingHMAC.Set("Authorization", "Bearer sourceToken")
@@ -790,10 +897,14 @@ type memoryStore struct {
 	latestPayloadUpdates int
 	enqueued             []EnqueueInboundParams
 	updateCalls          int
+	hmacNonces           map[string]time.Time
 }
 
 func newMemoryStore(sources ...Source) *memoryStore {
-	store := &memoryStore{sources: make(map[string]Source)}
+	store := &memoryStore{
+		sources:    make(map[string]Source),
+		hmacNonces: make(map[string]time.Time),
+	}
 	for _, source := range sources {
 		store.sources[source.Code] = source
 	}
@@ -864,6 +975,20 @@ func (m *memoryStore) UpdateLatestPayloadSample(_ context.Context, sourceID stri
 	m.latestPayloadUpdates++
 	m.latestPayload = append(json.RawMessage(nil), payload...)
 	return nil
+}
+
+func (m *memoryStore) ReserveHMACNonce(_ context.Context, sourceID string, nonce string, now time.Time, expiresAt time.Time) (bool, error) {
+	key := sourceID + "\x00" + nonce
+	for existingKey, existingExpiresAt := range m.hmacNonces {
+		if !existingExpiresAt.After(now) {
+			delete(m.hmacNonces, existingKey)
+		}
+	}
+	if existingExpiresAt, ok := m.hmacNonces[key]; ok && existingExpiresAt.After(now) {
+		return false, nil
+	}
+	m.hmacNonces[key] = expiresAt
+	return true, nil
 }
 
 func (m *memoryStore) EnqueueInbound(_ context.Context, params EnqueueInboundParams) error {

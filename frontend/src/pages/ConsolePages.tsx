@@ -557,23 +557,40 @@ function sanitizeAlphanumeric(value: string) {
   return value.replace(/[^A-Za-z0-9]/g, '');
 }
 
+function cryptoRandomBytes(length: number): Uint8Array {
+  const cryptoRef = globalThis.crypto;
+  if (!cryptoRef || typeof cryptoRef.getRandomValues !== 'function') {
+    throw new Error('Web Crypto 不可用，无法生成安全随机凭证');
+  }
+  return cryptoRef.getRandomValues(new Uint8Array(length));
+}
+
 function randomBase62(length: number) {
-  return Array.from({ length }, () => base62Chars[Math.floor(Math.random() * base62Chars.length)]).join('');
+  const output: string[] = [];
+  while (output.length < length) {
+    const bytes = cryptoRandomBytes(Math.max(length * 2, 32));
+    for (const byte of bytes) {
+      if (byte >= 248) {
+        continue;
+      }
+      output.push(base62Chars[byte % base62Chars.length]);
+      if (output.length === length) {
+        break;
+      }
+    }
+  }
+  return output.join('');
 }
 
 function randomSecret(prefix: string) {
-  return `${prefix}${randomBase62(18)}`;
+  return `${prefix}${randomBase62(32)}`;
 }
 
 function randomUUIDValue() {
   if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
     return crypto.randomUUID();
   }
-  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (char) => {
-    const value = Math.floor(Math.random() * 16);
-    const next = char === 'x' ? value : (value & 0x3) | 0x8;
-    return next.toString(16);
-  });
+  return randomBase62(32);
 }
 
 export type IngestSignatureInput = {
@@ -941,7 +958,8 @@ export function sourceInputFromDraft(draft: SourceDraft): SourceInput {
   };
 }
 
-function mapSourceRow(source: SourceApiRecord): SourceRow {
+export function mapSourceRow(source: SourceApiRecord): SourceRow {
+  const hasLatestPayload = source.latest_payload_sample !== undefined && source.latest_payload_sample !== null;
   return {
     id: source.id,
     code: source.code,
@@ -952,7 +970,7 @@ function mapSourceRow(source: SourceApiRecord): SourceRow {
     compatMode: '标准 JSON',
     inboundDedupeEnabled: source.inbound_dedupe_enabled,
     rateLimit: summarizeSourceRateLimit(source.rate_limit_config),
-    latestPayload: source.latest_payload_sample ? stringifyJSON(source.latest_payload_sample, '暂无') : '暂无',
+    latestPayload: hasLatestPayload ? stringifyJSON(source.latest_payload_sample, '暂无') : '暂无',
     lastInboundAt: formatApiTime(source.latest_payload_sample_updated_at),
     raw: source,
   };
@@ -1984,6 +2002,7 @@ export function SourcesPage({ lastUpdated, onRefresh }: ConsolePageProps) {
   const isFirstLoad = useRef(true);
   const [sourceDraft, setSourceDraft] = useState<SourceDraft>(() => createSourceDraft());
   const [payloadViewSource, setPayloadViewSource] = useState<SourceRow | null>(null);
+  const [payloadViewLoading, setPayloadViewLoading] = useState(false);
   const sourceQuery = useAppliedFilters<SourceListQuery>({
     keyword: '',
     code: '',
@@ -2070,6 +2089,18 @@ export function SourcesPage({ lastUpdated, onRefresh }: ConsolePageProps) {
     setInboundTestSource(record);
     setInboundPayloadText(stringifyJSON(defaultInboundTestPayload(record)));
     setInboundTestResult(null);
+  };
+  const openPayloadView = async (record: SourceRow) => {
+    setPayloadViewSource(record);
+    setPayloadViewLoading(true);
+    try {
+      const result = await consoleApi.getSource(record.id);
+      setPayloadViewSource(mapSourceRow(result.source));
+    } catch (error) {
+      showError(message, error);
+    } finally {
+      setPayloadViewLoading(false);
+    }
   };
   const sendInboundTestPayload = async () => {
     if (!inboundTestSource) {
@@ -2219,7 +2250,7 @@ export function SourcesPage({ lastUpdated, onRefresh }: ConsolePageProps) {
       render: (_, record) => (
         <SourceRowActions
           record={record}
-          onView={setPayloadViewSource}
+          onView={(item) => void openPayloadView(item)}
           onEdit={(item) => {
             setEditingSourceId(item.id);
             setSourceDraft(draftFromSource(item.raw));
@@ -2338,7 +2369,7 @@ export function SourcesPage({ lastUpdated, onRefresh }: ConsolePageProps) {
             <Descriptions.Item label="接收时间">{payloadViewSource?.lastInboundAt ?? '-'}</Descriptions.Item>
             <Descriptions.Item label="鉴权结果">{payloadViewSource ? '通过' : '-'}</Descriptions.Item>
           </Descriptions>
-          <pre className="code-block">{payloadViewSource?.latestPayload ?? 'null'}</pre>
+          <pre className="code-block">{payloadViewLoading ? '加载中...' : payloadViewSource?.latestPayload ?? 'null'}</pre>
         </Space>
       </Modal>
       <Modal

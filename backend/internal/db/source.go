@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -235,6 +236,31 @@ func (r Repository) UpdateLatestPayloadSample(ctx context.Context, sourceID stri
 		return source.ErrNotFound
 	}
 	return nil
+}
+
+func (r Repository) ReserveHMACNonce(ctx context.Context, sourceID string, nonce string, now time.Time, expiresAt time.Time) (bool, error) {
+	tag, err := r.pool.Exec(ctx, `
+		WITH cleanup AS (
+			DELETE FROM dedupe_keys
+			WHERE scope = 'hmac_nonce'
+				AND source_id = $2
+				AND dedupe_key = $3
+				AND expires_at <= $4
+		)
+		INSERT INTO dedupe_keys (
+			id,
+			scope,
+			source_id,
+			dedupe_key,
+			expires_at
+		)
+		VALUES ($1, 'hmac_nonce', $2, $3, $5)
+		ON CONFLICT DO NOTHING
+	`, uuid.NewString(), sourceID, nonce, now.UTC(), expiresAt.UTC())
+	if err != nil {
+		return false, fmt.Errorf("reserve hmac nonce: %w", err)
+	}
+	return tag.RowsAffected() == 1, nil
 }
 
 func (r Repository) EnqueueInbound(ctx context.Context, params source.EnqueueInboundParams) error {

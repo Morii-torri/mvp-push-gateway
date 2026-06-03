@@ -96,6 +96,42 @@ func TestRepositoryDuplicateInboundWritesDedupedMessageWithoutSecondJob(t *testi
 	}
 }
 
+func TestRepositoryReserveHMACNonceRejectsDuplicateAcrossCalls(t *testing.T) {
+	pool := openMigratedPool(t)
+	defer pool.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	sourceID := "00000000-0000-0000-0000-00000000a101"
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO inbound_sources (
+			id,
+			code,
+			name,
+			auth_mode,
+			hmac_secret
+		)
+		VALUES ($1, 'hmac-orders', 'HMAC Orders', 'hmac', 'hmacSecret')
+	`, sourceID); err != nil {
+		t.Fatalf("insert source: %v", err)
+	}
+
+	repository := NewRepository(pool)
+	now := time.Date(2026, 5, 8, 10, 0, 0, 0, time.UTC)
+	first, err := repository.ReserveHMACNonce(ctx, sourceID, "nonce-1", now, now.Add(10*time.Minute))
+	if err != nil {
+		t.Fatalf("reserve first hmac nonce: %v", err)
+	}
+	second, err := repository.ReserveHMACNonce(ctx, sourceID, "nonce-1", now, now.Add(10*time.Minute))
+	if err != nil {
+		t.Fatalf("reserve duplicate hmac nonce: %v", err)
+	}
+	if !first || second {
+		t.Fatalf("expected first reserve=true and second=false, got first=%v second=%v", first, second)
+	}
+}
+
 func TestRepositoryEnqueueSilencedInboundWritesMessageWithoutRoutePlanJob(t *testing.T) {
 	dsn := os.Getenv("MGP_TEST_DATABASE_URL")
 	if dsn == "" {

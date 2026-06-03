@@ -301,6 +301,10 @@ func clientIP(r *http.Request) string {
 	return ""
 }
 
+func (h *Handler) clientIP(r *http.Request) string {
+	return clientIPFromRequest(r, h.cfg.Server.TrustedProxies)
+}
+
 func toAdminResponse(adminUser auth.Admin) adminResponse {
 	return adminResponse{
 		ID:                 adminUser.ID,

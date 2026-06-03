@@ -35,3 +35,19 @@ func TestLoadUsesSafeDefaults(t *testing.T) {
 		t.Fatalf("expected empty default PostgreSQL DSN placeholder, got %q", cfg.Postgres.DSN)
 	}
 }
+
+func TestLoadParsesTrustedProxyEntries(t *testing.T) {
+	t.Setenv("MGP_TRUSTED_PROXIES", "10.0.0.0/8, 192.168.1.10\n127.0.0.1")
+
+	cfg := config.Load()
+
+	expected := []string{"10.0.0.0/8", "192.168.1.10", "127.0.0.1"}
+	if len(cfg.Server.TrustedProxies) != len(expected) {
+		t.Fatalf("expected trusted proxies %+v, got %+v", expected, cfg.Server.TrustedProxies)
+	}
+	for index := range expected {
+		if cfg.Server.TrustedProxies[index] != expected[index] {
+			t.Fatalf("expected trusted proxy %d to be %q, got %q", index, expected[index], cfg.Server.TrustedProxies[index])
+		}
+	}
+}

@@ -7,6 +7,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/netip"
 	"strings"
 	"time"
 
@@ -19,24 +20,24 @@ type sourceListResponse struct {
 }
 
 type sourceResponse struct {
-	ID                           string          `json:"id"`
-	Code                         string          `json:"code"`
-	Name                         string          `json:"name"`
-	Enabled                      bool            `json:"enabled"`
-	AuthMode                     source.AuthMode `json:"auth_mode"`
-	AuthToken                    string          `json:"auth_token"`
-	HMACSecret                   string          `json:"hmac_secret"`
-	IPAllowlist                  []string        `json:"ip_allowlist"`
-	CompatMode                   string          `json:"compat_mode"`
-	InboundDedupeEnabled         bool            `json:"inbound_dedupe_enabled"`
-	InboundDedupeStrategy        string          `json:"inbound_dedupe_strategy"`
-	InboundDedupeConfig          json.RawMessage `json:"inbound_dedupe_config"`
-	RateLimitConfig              json.RawMessage `json:"rate_limit_config"`
-	DoNotDisturbConfig           json.RawMessage `json:"do_not_disturb_config"`
-	LatestPayloadSample          json.RawMessage `json:"latest_payload_sample"`
-	LatestPayloadSampleUpdatedAt *string         `json:"latest_payload_sample_updated_at"`
-	CreatedAt                    string          `json:"created_at"`
-	UpdatedAt                    string          `json:"updated_at"`
+	ID                           string           `json:"id"`
+	Code                         string           `json:"code"`
+	Name                         string           `json:"name"`
+	Enabled                      bool             `json:"enabled"`
+	AuthMode                     source.AuthMode  `json:"auth_mode"`
+	AuthToken                    string           `json:"auth_token"`
+	HMACSecret                   string           `json:"hmac_secret"`
+	IPAllowlist                  []string         `json:"ip_allowlist"`
+	CompatMode                   string           `json:"compat_mode"`
+	InboundDedupeEnabled         bool             `json:"inbound_dedupe_enabled"`
+	InboundDedupeStrategy        string           `json:"inbound_dedupe_strategy"`
+	InboundDedupeConfig          json.RawMessage  `json:"inbound_dedupe_config"`
+	RateLimitConfig              json.RawMessage  `json:"rate_limit_config"`
+	DoNotDisturbConfig           json.RawMessage  `json:"do_not_disturb_config"`
+	LatestPayloadSample          *json.RawMessage `json:"latest_payload_sample,omitempty"`
+	LatestPayloadSampleUpdatedAt *string          `json:"latest_payload_sample_updated_at"`
+	CreatedAt                    string           `json:"created_at"`
+	UpdatedAt                    string           `json:"updated_at"`
 }
 
 type sourceRequest struct {
@@ -88,7 +89,7 @@ func (h *Handler) sourcesHandler(w http.ResponseWriter, r *http.Request) {
 		}
 		responses := make([]sourceResponse, 0, len(sources))
 		for _, configuredSource := range sources {
-			responses = append(responses, toSourceResponse(configuredSource))
+			responses = append(responses, toSourceListResponse(configuredSource))
 		}
 		writeJSON(w, http.StatusOK, sourceListResponse{Sources: responses})
 	case http.MethodPost:
@@ -194,6 +195,7 @@ func (h *Handler) ingestHandler(w http.ResponseWriter, r *http.Request) {
 	maxPayloadBytes := h.ingestMaxPayloadBytes(r.Context())
 	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxPayloadBytes+1))
 	if err != nil || int64(len(body)) > maxPayloadBytes {
+		h.recordSourceRejectAudit(r, sourceCode, source.ErrPayloadTooLarge, http.StatusRequestEntityTooLarge, "MGP-PAYLOAD-002")
 		writeAPIError(w, http.StatusRequestEntityTooLarge, "MGP-PAYLOAD-002", "Payload 超过大小限制")
 		return
 	}
@@ -202,11 +204,12 @@ func (h *Handler) ingestHandler(w http.ResponseWriter, r *http.Request) {
 		Method:     r.Method,
 		Path:       r.URL.Path,
 		Headers:    r.Header.Clone(),
-		RemoteAddr: clientIPForIngest(r),
+		RemoteAddr: h.clientIPForIngest(r),
 		Body:       body,
 	})
 	if err != nil {
 		status, code, message := sourceErrorStatus(err)
+		h.recordSourceRejectAudit(r, sourceCode, err, status, code)
 		writeAPIError(w, status, code, message)
 		return
 	}
@@ -255,7 +258,20 @@ func (r sourceRequest) toUpdateInput() (source.UpdateSourceInput, error) {
 }
 
 func toSourceResponse(configuredSource source.Source) sourceResponse {
+	return toSourceResponseWithPayload(configuredSource, true)
+}
+
+func toSourceListResponse(configuredSource source.Source) sourceResponse {
+	return toSourceResponseWithPayload(configuredSource, false)
+}
+
+func toSourceResponseWithPayload(configuredSource source.Source, includePayload bool) sourceResponse {
 	latestUpdatedAt := formatOptionalTime(configuredSource.LatestPayloadSampleUpdatedAt)
+	var latestPayloadSample *json.RawMessage
+	if includePayload {
+		payload := nullableRawJSON(configuredSource.LatestPayloadSample)
+		latestPayloadSample = &payload
+	}
 	return sourceResponse{
 		ID:                           configuredSource.ID,
 		Code:                         configuredSource.Code,
@@ -271,7 +287,7 @@ func toSourceResponse(configuredSource source.Source) sourceResponse {
 		InboundDedupeConfig:          defaultRawJSON(configuredSource.InboundDedupeConfig),
 		RateLimitConfig:              defaultRawJSON(configuredSource.RateLimitConfig),
 		DoNotDisturbConfig:           defaultRawJSON(configuredSource.QuietHoursConfig),
-		LatestPayloadSample:          nullableRawJSON(configuredSource.LatestPayloadSample),
+		LatestPayloadSample:          latestPayloadSample,
 		LatestPayloadSampleUpdatedAt: latestUpdatedAt,
 		CreatedAt:                    formatTime(configuredSource.CreatedAt),
 		UpdatedAt:                    formatTime(configuredSource.UpdatedAt),
@@ -307,12 +323,75 @@ func formatTime(value time.Time) string {
 	return value.UTC().Format(time.RFC3339)
 }
 
+func (h *Handler) clientIPForIngest(r *http.Request) string {
+	return clientIPFromRequest(r, h.cfg.Server.TrustedProxies)
+}
+
 func clientIPForIngest(r *http.Request) string {
+	return clientIPFromRequest(r, nil)
+}
+
+func clientIPFromRequest(r *http.Request, trustedProxies []string) string {
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err == nil {
+	if err != nil {
+		host = strings.TrimSpace(r.RemoteAddr)
+	}
+	if host == "" {
+		return ""
+	}
+	remoteIP, err := netip.ParseAddr(host)
+	if err != nil || !trustedProxyContains(trustedProxies, remoteIP) {
 		return host
 	}
-	return r.RemoteAddr
+	if forwarded := clientIPFromForwardedFor(r.Header.Get("X-Forwarded-For"), trustedProxies); forwarded != "" {
+		return forwarded
+	}
+	realIP := strings.TrimSpace(r.Header.Get("X-Real-IP"))
+	if parsed, err := netip.ParseAddr(realIP); err == nil {
+		return parsed.String()
+	}
+	return host
+}
+
+func clientIPFromForwardedFor(value string, trustedProxies []string) string {
+	parts := strings.Split(value, ",")
+	chain := make([]netip.Addr, 0, len(parts))
+	for _, part := range parts {
+		ip, err := netip.ParseAddr(strings.TrimSpace(part))
+		if err != nil {
+			continue
+		}
+		chain = append(chain, ip.Unmap())
+	}
+	if len(chain) == 0 {
+		return ""
+	}
+	for index := len(chain) - 1; index >= 0; index-- {
+		if !trustedProxyContains(trustedProxies, chain[index]) {
+			return chain[index].String()
+		}
+	}
+	return chain[0].String()
+}
+
+func trustedProxyContains(entries []string, ip netip.Addr) bool {
+	ip = ip.Unmap()
+	for _, entry := range entries {
+		entry = strings.TrimSpace(entry)
+		if entry == "" {
+			continue
+		}
+		if prefix, err := netip.ParsePrefix(entry); err == nil {
+			if prefix.Contains(ip) {
+				return true
+			}
+			continue
+		}
+		if exact, err := netip.ParseAddr(entry); err == nil && exact.Unmap() == ip {
+			return true
+		}
+	}
+	return false
 }
 
 func sourceErrorStatus(err error) (int, string, string) {

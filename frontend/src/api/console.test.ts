@@ -48,6 +48,7 @@ describe('console api wrappers', () => {
     });
 
     await consoleApi.listSources(fetchMock);
+    await consoleApi.getSource('source-1', fetchMock);
     await consoleApi.listChannels(fetchMock);
     await consoleApi.listTemplates(fetchMock);
     await consoleApi.listRouteFlows(fetchMock);
@@ -61,6 +62,7 @@ describe('console api wrappers', () => {
 
     expect(fetchMock.mock.calls.map(([input]) => String(input))).toEqual([
       '/api/v1/sources',
+      '/api/v1/sources/source-1',
       '/api/v1/channels',
       '/api/v1/templates',
       '/api/v1/route-flows',

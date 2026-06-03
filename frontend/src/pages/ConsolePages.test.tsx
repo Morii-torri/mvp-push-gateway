@@ -2,7 +2,7 @@ import { App } from 'antd';
 import { ReactFlowProvider } from '@xyflow/react';
 import type { ReactElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import * as ConsolePages from './ConsolePages';
 import {
@@ -105,6 +105,11 @@ const lastUpdated = new Date('2026-05-11T09:30:00+08:00');
 function renderPage(node: ReactElement) {
   return renderToStaticMarkup(<App>{node}</App>);
 }
+
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.unstubAllGlobals();
+});
 
 describe('critical console pages', () => {
   const supportedProviderLabels = [
@@ -411,6 +416,53 @@ describe('critical console pages', () => {
 
     expect(readOnlyCodeMarkup).toContain('来源编码创建后不可修改');
     expect(readOnlyCodeMarkup).toContain('disabled=""');
+  });
+
+  it('generates source credentials with Web Crypto entropy instead of Math.random', () => {
+    let nextByte = 1;
+    const cryptoMock = {
+      getRandomValues: (array: Uint8Array) => {
+        for (let index = 0; index < array.length; index += 1) {
+          array[index] = nextByte;
+          nextByte = (nextByte + 1) % 256;
+        }
+        return array;
+      },
+    };
+    vi.stubGlobal('crypto', cryptoMock);
+    vi.spyOn(Math, 'random').mockReturnValue(0);
+
+    const first = createSourceDraft();
+    const second = createSourceDraft();
+
+    expect(first.authToken).not.toBe('src000000000000000000');
+    expect(first.hmacSecret).not.toBe('hmac000000000000000000');
+    expect(first.authToken).not.toBe(second.authToken);
+  });
+
+  it('keeps JSON scalar latest payload samples visible', () => {
+    const row = ConsolePages.mapSourceRow({
+      id: 'source-1',
+      code: 'orders',
+      name: '订单来源',
+      enabled: true,
+      auth_mode: 'token',
+      auth_token: 'sourceToken',
+      hmac_secret: '',
+      ip_allowlist: [],
+      compat_mode: 'standard',
+      inbound_dedupe_enabled: false,
+      inbound_dedupe_strategy: 'payload_hash',
+      inbound_dedupe_config: {},
+      rate_limit_config: { enabled: false },
+      do_not_disturb_config: { enabled: false, windows: [] },
+      latest_payload_sample: false,
+      latest_payload_sample_updated_at: '2026-05-08T10:30:00Z',
+      created_at: '2026-05-08T10:00:00Z',
+      updated_at: '2026-05-08T10:00:00Z',
+    });
+
+    expect(row.latestPayload).toBe('false');
   });
 
   it('builds source input with current defaults and no legacy compatibility reads', () => {

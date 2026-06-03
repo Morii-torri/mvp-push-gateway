@@ -25,9 +25,10 @@ type AppConfig struct {
 }
 
 type ServerConfig struct {
-	Host      string
-	Port      string
-	APIPrefix string
+	Host           string
+	Port           string
+	APIPrefix      string
+	TrustedProxies []string
 }
 
 type PostgresConfig struct {
@@ -50,9 +51,10 @@ func Load() Config {
 			Environment: envOrDefault("MGP_ENVIRONMENT", defaultEnvironment),
 		},
 		Server: ServerConfig{
-			Host:      envOrDefault("MGP_HOST", defaultHost),
-			Port:      envOrDefault("MGP_PORT", defaultPort),
-			APIPrefix: normalizePrefix(envOrDefault("MGP_API_PREFIX", defaultAPIPrefix)),
+			Host:           envOrDefault("MGP_HOST", defaultHost),
+			Port:           envOrDefault("MGP_PORT", defaultPort),
+			APIPrefix:      normalizePrefix(envOrDefault("MGP_API_PREFIX", defaultAPIPrefix)),
+			TrustedProxies: parseCSV(os.Getenv("MGP_TRUSTED_PROXIES")),
 		},
 		Postgres: PostgresConfig{
 			DSN: os.Getenv("MGP_POSTGRES_DSN"),
@@ -63,6 +65,20 @@ func Load() Config {
 			MaintenancePool: PoolConfig{MaxConns: 3, MinConns: 1},
 		},
 	}
+}
+
+func parseCSV(value string) []string {
+	parts := strings.FieldsFunc(value, func(char rune) bool {
+		return char == ',' || char == '\n' || char == '\r' || char == '\t' || char == ' '
+	})
+	cleaned := make([]string, 0, len(parts))
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part != "" {
+			cleaned = append(cleaned, part)
+		}
+	}
+	return cleaned
 }
 
 func envOrDefault(key string, fallback string) string {

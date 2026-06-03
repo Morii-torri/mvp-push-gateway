@@ -7,12 +7,21 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"mvp-push-gateway/backend/internal/auth"
 	httpapi "mvp-push-gateway/backend/internal/http"
 	"mvp-push-gateway/backend/internal/settings"
 	"mvp-push-gateway/backend/internal/source"
 )
+
+func ptrTime(value string) *time.Time {
+	parsed, err := time.Parse(time.RFC3339, value)
+	if err != nil {
+		panic(err)
+	}
+	return &parsed
+}
 
 func TestSourceCRUDRequiresAdminBearerAuthentication(t *testing.T) {
 	sourceService := &fakeSourceService{
@@ -49,6 +58,49 @@ func TestSourceCRUDRequiresAdminBearerAuthentication(t *testing.T) {
 	}
 	if sourceService.listCalls != 1 {
 		t.Fatalf("expected one source list call, got %d", sourceService.listCalls)
+	}
+}
+
+func TestSourceListOmitsLargeLatestPayloadSample(t *testing.T) {
+	sourceService := &fakeSourceService{
+		listResult: []source.Source{{
+			ID:                           "source-1",
+			Code:                         "orders",
+			Name:                         "Orders",
+			Enabled:                      true,
+			AuthMode:                     source.AuthModeToken,
+			LatestPayloadSample:          json.RawMessage(`{"title":"large-sample"}`),
+			LatestPayloadSampleUpdatedAt: ptrTime("2026-05-08T10:30:00Z"),
+		}},
+	}
+	handler := httpapi.NewHandler(
+		testConfig(),
+		httpapi.WithAuthService(fakeAuthService{authenticatedToken: "admin-session"}),
+		httpapi.WithSourceService(sourceService),
+	)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/sources", nil)
+	req.Header.Set("Authorization", "Bearer admin-session")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected source list status 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	var body struct {
+		Sources []map[string]json.RawMessage `json:"sources"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
+		t.Fatalf("decode source list: %v", err)
+	}
+	if len(body.Sources) != 1 {
+		t.Fatalf("expected one source, got %+v", body.Sources)
+	}
+	if _, ok := body.Sources[0]["latest_payload_sample"]; ok || strings.Contains(rec.Body.String(), "large-sample") {
+		t.Fatalf("expected source list to omit latest payload body, got %s", rec.Body.String())
+	}
+	if _, ok := body.Sources[0]["latest_payload_sample_updated_at"]; !ok {
+		t.Fatalf("expected source list to keep latest payload timestamp, got %+v", body.Sources[0])
 	}
 }
 
@@ -172,6 +224,115 @@ func TestIngestHandlerReturnsAcceptedResponse(t *testing.T) {
 	}
 	if sourceService.ingestInput.SourceCode != "orders" || sourceService.ingestInput.Path != "/api/v1/ingest/orders" {
 		t.Fatalf("unexpected ingest input: %+v", sourceService.ingestInput)
+	}
+}
+
+func TestIngestHandlerUsesForwardedClientIPOnlyFromTrustedProxy(t *testing.T) {
+	sourceService := &fakeSourceService{
+		ingestResult: source.IngestResult{
+			TraceID: "trace-http",
+			Status:  "accepted",
+			Message: "accepted",
+		},
+	}
+	cfg := testConfig()
+	cfg.Server.TrustedProxies = []string{"10.0.0.0/8"}
+	handler := httpapi.NewHandler(cfg, httpapi.WithSourceService(sourceService))
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/ingest/orders", strings.NewReader(`{"title":"paid"}`))
+	req.RemoteAddr = "10.0.0.5:1234"
+	req.Header.Set("X-Forwarded-For", "203.0.113.7, 10.0.0.5")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("expected 202 accepted, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	if sourceService.ingestInput.RemoteAddr != "203.0.113.7" {
+		t.Fatalf("expected trusted proxy client ip 203.0.113.7, got %q", sourceService.ingestInput.RemoteAddr)
+	}
+}
+
+func TestIngestHandlerIgnoresForwardedClientIPFromUntrustedPeer(t *testing.T) {
+	sourceService := &fakeSourceService{
+		ingestResult: source.IngestResult{
+			TraceID: "trace-http",
+			Status:  "accepted",
+			Message: "accepted",
+		},
+	}
+	cfg := testConfig()
+	cfg.Server.TrustedProxies = []string{"10.0.0.0/8"}
+	handler := httpapi.NewHandler(cfg, httpapi.WithSourceService(sourceService))
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/ingest/orders", strings.NewReader(`{"title":"paid"}`))
+	req.RemoteAddr = "198.51.100.10:1234"
+	req.Header.Set("X-Forwarded-For", "203.0.113.7")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("expected 202 accepted, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	if sourceService.ingestInput.RemoteAddr != "198.51.100.10" {
+		t.Fatalf("expected untrusted proxy to fall back to remote addr, got %q", sourceService.ingestInput.RemoteAddr)
+	}
+}
+
+func TestIngestHandlerRecordsSecurityAuditForRejectedSourceRequests(t *testing.T) {
+	sourceService := &fakeSourceService{ingestErr: source.ErrUnauthorized}
+	auditService := &fakeAuditService{}
+	handler := httpapi.NewHandler(
+		testConfig(),
+		httpapi.WithSourceService(sourceService),
+		httpapi.WithAuditService(auditService),
+	)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/ingest/orders", strings.NewReader(`{"title":"paid"}`))
+	req.RemoteAddr = "203.0.113.9:1234"
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401 unauthorized, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	if auditService.recordCalls != 1 {
+		t.Fatalf("expected one security audit record, got %d", auditService.recordCalls)
+	}
+	if auditService.recordInput.Action != "reject_unauthorized" || auditService.recordInput.ResourceType != "source_ingest" || auditService.recordInput.ResourceID != "orders" {
+		t.Fatalf("unexpected security audit input: %+v", auditService.recordInput)
+	}
+	if auditService.recordInput.IPAddress != "203.0.113.9" {
+		t.Fatalf("expected audit ip to use request client ip, got %q", auditService.recordInput.IPAddress)
+	}
+}
+
+func TestIngestHandlerRecordsSecurityAuditForOversizedPayload(t *testing.T) {
+	auditService := &fakeAuditService{}
+	settingsService := &fakeSettingsService{
+		intValues: map[string]int{
+			settings.KeyIngestMaxPayloadBytes: 16,
+		},
+	}
+	handler := httpapi.NewHandler(
+		testConfig(),
+		httpapi.WithSourceService(&fakeSourceService{}),
+		httpapi.WithSettingsService(settingsService),
+		httpapi.WithAuditService(auditService),
+	)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/ingest/orders", strings.NewReader(`{"title":"payload too large"}`))
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("expected 413 payload too large, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	if auditService.recordCalls != 1 {
+		t.Fatalf("expected one security audit record, got %d", auditService.recordCalls)
+	}
+	if auditService.recordInput.Action != "reject_payload_too_large" || auditService.recordInput.ResourceType != "source_ingest" || auditService.recordInput.ResourceID != "orders" {
+		t.Fatalf("unexpected oversized payload audit input: %+v", auditService.recordInput)
 	}
 }
 
@@ -421,6 +582,10 @@ func (s *httpSourceStore) DeleteSource(context.Context, string) error {
 func (s *httpSourceStore) UpdateLatestPayloadSample(context.Context, string, json.RawMessage) error {
 	s.latestPayloadUpdates++
 	return nil
+}
+
+func (s *httpSourceStore) ReserveHMACNonce(context.Context, string, string, time.Time, time.Time) (bool, error) {
+	return true, nil
 }
 
 func (s *httpSourceStore) EnqueueInbound(context.Context, source.EnqueueInboundParams) error {

@@ -376,16 +376,17 @@ Delivery adapter 边界约定：adapter 输入 channel config、rendered message
 | 字段 | 类型 | 说明 |
 |---|---|---|
 | `id` | uuid pk | ID |
-| `scope` | text | `inbound` / `send` |
+| `scope` | text | `inbound` / `send` / `hmac_nonce` |
 | `source_id` | uuid null | 来源 |
 | `channel_id` | uuid null | 渠道实例 |
 | `dedupe_key` | text | 去重 key |
 | `expires_at` | timestamptz | 过期时间 |
 | `message_id` | uuid null | 关联消息 |
 | `unique(scope, source_id, dedupe_key)` | partial index | 入站去重，`scope='inbound'` |
+| `unique(scope, source_id, dedupe_key)` | partial index | HMAC nonce 防重放，`scope='hmac_nonce'` |
 | `unique(scope, channel_id, dedupe_key)` | partial index | 发送前去重，`scope='send'` |
 
-入站去重必须按来源隔离；发送前去重必须按渠道实例隔离。不要只使用 `unique(scope, dedupe_key)`，否则不同来源或不同渠道的同名业务 key 会互相误伤。
+入站去重和 HMAC nonce 防重放必须按来源隔离；发送前去重必须按渠道实例隔离。不要只使用 `unique(scope, dedupe_key)`，否则不同来源或不同渠道的同名业务 key 会互相误伤。
 
 ### `jobs`
 
@@ -504,6 +505,7 @@ worker、队列和平台实例运行指标。
 - `dead_letter_jobs(dead_lettered_at desc)`
 - `dead_letter_jobs(channel_id, dead_lettered_at desc)`
 - `dedupe_keys(scope, source_id, dedupe_key)` where `scope='inbound'`
+- `dedupe_keys(scope, source_id, dedupe_key)` where `scope='hmac_nonce'`
 - `dedupe_keys(scope, channel_id, dedupe_key)` where `scope='send'`
 - `user_identities(provider_type, identity_kind, identity_value)` where `channel_id is null`
 - `user_identities(channel_id, identity_kind, identity_value)` where `channel_id is not null`
