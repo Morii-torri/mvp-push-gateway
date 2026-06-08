@@ -16,6 +16,7 @@ import (
 	"sync"
 	"time"
 
+	"mvp-push-gateway/backend/internal/perftiming"
 	"mvp-push-gateway/backend/internal/provider"
 	"mvp-push-gateway/backend/internal/queue"
 )
@@ -130,6 +131,7 @@ func WithTimingRecorder(ctx context.Context, recorder TimingRecorder) context.Co
 func recordTiming(ctx context.Context, traceID string, stage TimingStage, duration time.Duration) {
 	recorder, ok := ctx.Value(timingRecorderContextKey{}).(TimingRecorder)
 	if !ok || recorder == nil {
+		perftiming.RecordStageTiming(traceID, string(stage), duration)
 		return
 	}
 	recorder.RecordDeliveryTiming(traceID, stage, duration)

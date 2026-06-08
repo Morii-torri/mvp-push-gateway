@@ -552,7 +552,11 @@ func (r Repository) getOverviewSummary(ctx context.Context, windowStart, now tim
 			SELECT
 				count(*) FILTER (WHERE status IN ('sent', 'failed'))::integer AS total_sent,
 				count(*) FILTER (WHERE status = 'sent')::integer AS successful,
-				count(*) FILTER (WHERE status = 'failed')::integer AS failed
+				count(*) FILTER (WHERE status = 'failed')::integer AS failed,
+				COALESCE(
+					round(avg(duration_ms) FILTER (WHERE status IN ('sent', 'failed') AND duration_ms IS NOT NULL))::integer,
+					0
+				)::integer AS average_duration_ms
 			FROM delivery_attempts
 			WHERE COALESCE(finished_at, queued_at) >= $1
 				AND COALESCE(finished_at, queued_at) <= $2
@@ -568,6 +572,7 @@ func (r Repository) getOverviewSummary(ctx context.Context, windowStart, now tim
 			delivery_summary.successful,
 			delivery_summary.failed,
 			COALESCE(round((delivery_summary.successful::numeric * 100.0) / NULLIF(delivery_summary.total_sent::numeric, 0), 2), 0)::float8 AS success_rate,
+			delivery_summary.average_duration_ms,
 			COALESCE(round(delivery_summary.total_sent::numeric / $3::numeric, 2), 0)::float8 AS average_qps,
 			received_summary.total_received
 		FROM delivery_summary, received_summary
@@ -576,6 +581,7 @@ func (r Repository) getOverviewSummary(ctx context.Context, windowStart, now tim
 		&summary.Successful,
 		&summary.Failed,
 		&summary.SuccessRate,
+		&summary.AverageDurationMS,
 		&summary.AverageQPS,
 		&summary.TotalReceived,
 	)

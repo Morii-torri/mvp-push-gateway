@@ -731,12 +731,11 @@ function ConsoleChrome() {
         />
 
         <Space size={12} className="header-actions">
-          <Tag color="success">SSE 实时</Tag>
           <Typography.Text type="secondary" className="refresh-time">
             {formatRefreshTime(notificationUpdatedAt)}
           </Typography.Text>
           <Button icon={<ReloadOutlined />} onClick={refresh}>
-            手动刷新
+            刷新
           </Button>
           <Popover
             trigger="click"

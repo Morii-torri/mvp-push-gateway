@@ -11,12 +11,13 @@ type QueryParams struct {
 }
 
 type Summary struct {
-	TotalSent     int     `json:"total_sent"`
-	Successful    int     `json:"successful"`
-	Failed        int     `json:"failed"`
-	SuccessRate   float64 `json:"success_rate"`
-	AverageQPS    float64 `json:"average_qps"`
-	TotalReceived int     `json:"total_received"`
+	TotalSent         int     `json:"total_sent"`
+	Successful        int     `json:"successful"`
+	Failed            int     `json:"failed"`
+	SuccessRate       float64 `json:"success_rate"`
+	AverageDurationMS int     `json:"average_duration_ms"`
+	AverageQPS        float64 `json:"average_qps"`
+	TotalReceived     int     `json:"total_received"`
 }
 
 type TrendPoint struct {

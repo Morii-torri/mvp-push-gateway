@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"mvp-push-gateway/backend/internal/delivery"
+	"mvp-push-gateway/backend/internal/perftiming"
 	"mvp-push-gateway/backend/internal/provider"
 	"mvp-push-gateway/backend/internal/queue"
 	"mvp-push-gateway/backend/internal/route"
@@ -378,6 +379,64 @@ func TestProcessRoutePlanMessageUsesEventPayloadWithoutLoadingMessageRecord(t *t
 	}
 }
 
+func TestProcessRoutePlanMessageRecordsRuntimeTimingWithoutContextRecorder(t *testing.T) {
+	repo := newRoutePlanMessageRepoForSendPublisherTest()
+	publisher := &recordingSendPublisher{}
+	worker := NewWorker(repo, WithSendPublisher(publisher))
+	recorder := &runtimeTimingRecorder{}
+	unregister := perftiming.Register(recorder)
+	defer unregister()
+
+	err := worker.ProcessRoutePlanMessage(context.Background(), queue.RoutePlanMessage{
+		Event: queue.RoutePlanEvent{
+			MessageID:  "message-direct",
+			SourceID:   "source-1",
+			TraceID:    "trace-runtime",
+			Payload:    json.RawMessage(`{"title":"runtime"}`),
+			Headers:    json.RawMessage(`{}`),
+			ReceivedAt: time.Date(2026, 6, 8, 10, 30, 0, 0, time.UTC),
+		},
+	})
+	if err != nil {
+		t.Fatalf("process direct route plan event: %v", err)
+	}
+	if recorder.count("trace-runtime", string(TimingRouteCondition)) == 0 {
+		t.Fatalf("expected global runtime timing recorder to capture route condition timing, got %+v", recorder.timings)
+	}
+	if recorder.count("trace-runtime", string(TimingTemplateRender)) == 0 {
+		t.Fatalf("expected global runtime timing recorder to capture template render timing, got %+v", recorder.timings)
+	}
+}
+
+func TestRoutePlanCacheHydratesTargetResourcesOnce(t *testing.T) {
+	repo := newRoutePlanMessageRepoForSendPublisherTest()
+	publisher := &recordingSendPublisher{}
+	worker := NewWorker(repo, WithSendPublisher(publisher))
+
+	for _, traceID := range []string{"trace-cache-1", "trace-cache-2"} {
+		err := worker.ProcessRoutePlanMessage(context.Background(), queue.RoutePlanMessage{
+			Event: queue.RoutePlanEvent{
+				MessageID:  "message-" + traceID,
+				SourceID:   "source-1",
+				TraceID:    traceID,
+				Payload:    json.RawMessage(`{"title":"cached"}`),
+				Headers:    json.RawMessage(`{}`),
+				ReceivedAt: time.Date(2026, 6, 8, 10, 30, 0, 0, time.UTC),
+			},
+		})
+		if err != nil {
+			t.Fatalf("process direct route plan event %s: %v", traceID, err)
+		}
+	}
+
+	if repo.getChannelCalls != 1 || repo.getTemplateVersionCalls != 1 || repo.getProviderCapabilityCalls != 1 {
+		t.Fatalf("expected target resources to be loaded once with the cached route plan, got channel=%d template=%d capability=%d", repo.getChannelCalls, repo.getTemplateVersionCalls, repo.getProviderCapabilityCalls)
+	}
+	if len(publisher.events) != 2 {
+		t.Fatalf("expected both messages to publish send events, got %d", len(publisher.events))
+	}
+}
+
 func TestEvaluateRulesCoarseSkipsMissingPayloadFields(t *testing.T) {
 	plan := RoutePlan{
 		Flow:    route.Flow{ID: "flow-1", SourceID: "source-1"},
@@ -479,17 +538,20 @@ func (r *routePlanCacheRepo) FinishPlanning(context.Context, FinishPlanningParam
 }
 
 type routePlanMessageRepo struct {
-	message                  MessageRecord
-	plan                     RoutePlan
-	channel                  provider.Channel
-	capability               provider.Capability
-	templateVersion          msgtemplate.TemplateVersion
-	completePlanningCalls    int
-	getPlanningMessageCalls  int
-	failOnGetPlanningMessage bool
-	completePlanningErr      error
-	completePlanningCh       chan struct{}
-	completed                CompletePlanningParams
+	message                    MessageRecord
+	plan                       RoutePlan
+	channel                    provider.Channel
+	capability                 provider.Capability
+	templateVersion            msgtemplate.TemplateVersion
+	completePlanningCalls      int
+	getPlanningMessageCalls    int
+	getChannelCalls            int
+	getTemplateVersionCalls    int
+	getProviderCapabilityCalls int
+	failOnGetPlanningMessage   bool
+	completePlanningErr        error
+	completePlanningCh         chan struct{}
+	completed                  CompletePlanningParams
 }
 
 func (r *routePlanMessageRepo) ClaimJobs(context.Context, queue.ClaimParams) ([]queue.Job, error) {
@@ -524,14 +586,17 @@ func (r *routePlanMessageRepo) LoadMatchGroupValues(context.Context, []route.Rul
 }
 
 func (r *routePlanMessageRepo) GetTemplateVersion(context.Context, string) (msgtemplate.TemplateVersion, error) {
+	r.getTemplateVersionCalls++
 	return r.templateVersion, nil
 }
 
 func (r *routePlanMessageRepo) GetChannel(context.Context, string) (provider.Channel, error) {
+	r.getChannelCalls++
 	return r.channel, nil
 }
 
 func (r *routePlanMessageRepo) GetProviderCapability(context.Context, provider.ProviderType, string) (provider.Capability, error) {
+	r.getProviderCapabilityCalls++
 	return r.capability, nil
 }
 
@@ -609,4 +674,27 @@ type recordingSendPublisher struct {
 func (p *recordingSendPublisher) PublishSend(_ context.Context, event queue.SendMessageEvent) (queue.PublishResult, error) {
 	p.events = append(p.events, event)
 	return queue.PublishResult{Stream: "MGP_SEND", Sequence: uint64(len(p.events))}, p.err
+}
+
+type runtimeTimingRecorder struct {
+	timings map[string]map[string]int
+}
+
+func (r *runtimeTimingRecorder) RecordStageTiming(traceID string, stage string, _ time.Duration) {
+	if r.timings == nil {
+		r.timings = map[string]map[string]int{}
+	}
+	if r.timings[traceID] == nil {
+		r.timings[traceID] = map[string]int{}
+	}
+	r.timings[traceID][stage]++
+}
+
+func (r *runtimeTimingRecorder) RecordDBStageTiming(string, string, time.Duration) {}
+
+func (r *runtimeTimingRecorder) count(traceID string, stage string) int {
+	if r == nil || r.timings == nil {
+		return 0
+	}
+	return r.timings[traceID][stage]
 }

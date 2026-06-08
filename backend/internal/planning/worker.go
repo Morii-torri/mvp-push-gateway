@@ -15,6 +15,7 @@ import (
 	"github.com/google/uuid"
 
 	"mvp-push-gateway/backend/internal/delivery"
+	"mvp-push-gateway/backend/internal/perftiming"
 	"mvp-push-gateway/backend/internal/provider"
 	"mvp-push-gateway/backend/internal/queue"
 	"mvp-push-gateway/backend/internal/route"
@@ -61,10 +62,13 @@ type RouteVersionRef struct {
 }
 
 type RoutePlan struct {
-	Flow        route.Flow
-	Version     route.Version
-	Rules       []route.Rule
-	MatchGroups map[string][]string
+	Flow             route.Flow
+	Version          route.Version
+	Rules            []route.Rule
+	MatchGroups      map[string][]string
+	Channels         map[string]provider.Channel
+	TemplateVersions map[string]msgtemplate.TemplateVersion
+	Capabilities     map[string]provider.Capability
 }
 
 type RuleMetric struct {
@@ -103,6 +107,7 @@ func WithTimingRecorder(ctx context.Context, recorder TimingRecorder) context.Co
 func recordTiming(ctx context.Context, traceID string, stage TimingStage, duration time.Duration) {
 	recorder, ok := ctx.Value(timingRecorderContextKey{}).(TimingRecorder)
 	if !ok || recorder == nil {
+		perftiming.RecordStageTiming(traceID, string(stage), duration)
 		return
 	}
 	recorder.RecordPlanningTiming(traceID, stage, duration)
@@ -396,7 +401,7 @@ func (w *Worker) processMessage(ctx context.Context, job queue.Job, message Mess
 		return w.finishBusinessFailure(ctx, job, message, plan.Flow.ID, nil, ErrorCodeNoRoute, ErrNoRoute, startedAt, metrics)
 	}
 
-	attempts, err := w.buildAttempts(ctx, message, *matchedRule, payloadMap)
+	attempts, err := w.buildAttempts(ctx, message, plan, *matchedRule, payloadMap)
 	if err != nil {
 		return w.finishBusinessFailure(ctx, job, message, plan.Flow.ID, []string{matchedRule.RuleKey}, planningErrorCode(err), err, startedAt, metrics)
 	}
@@ -514,9 +519,58 @@ func (w *Worker) loadCurrentRoutePlan(ctx context.Context, sourceID string) (Rou
 	if err != nil {
 		return RoutePlan{}, err
 	}
+	w.hydrateRoutePlanTargetResources(ctx, &loaded)
 	atomic.AddInt64(&w.cacheMisses, 1)
 	atomic.AddInt64(&w.cacheLoadTimeMS, int64(time.Since(loadStartedAt).Milliseconds()))
 	return loaded, nil
+}
+
+func (w *Worker) hydrateRoutePlanTargetResources(ctx context.Context, plan *RoutePlan) {
+	if w == nil || w.repo == nil || plan == nil {
+		return
+	}
+	if plan.Channels == nil {
+		plan.Channels = make(map[string]provider.Channel)
+	}
+	if plan.TemplateVersions == nil {
+		plan.TemplateVersions = make(map[string]msgtemplate.TemplateVersion)
+	}
+	if plan.Capabilities == nil {
+		plan.Capabilities = make(map[string]provider.Capability)
+	}
+	for _, rule := range plan.Rules {
+		for _, target := range enabledActionTargets(rule.Action) {
+			channel, ok := plan.Channels[target.ChannelID]
+			if !ok {
+				loaded, err := w.repo.GetChannel(ctx, target.ChannelID)
+				if err != nil {
+					continue
+				}
+				channel = loaded
+				plan.Channels[target.ChannelID] = channel
+			}
+
+			templateVersion, ok := plan.TemplateVersions[target.TemplateVersionID]
+			if !ok {
+				loaded, err := w.repo.GetTemplateVersion(ctx, target.TemplateVersionID)
+				if err != nil {
+					continue
+				}
+				templateVersion = loaded
+				plan.TemplateVersions[target.TemplateVersionID] = templateVersion
+			}
+
+			key := capabilityCacheKey(channel.ProviderType, templateVersion.MessageType)
+			if _, ok := plan.Capabilities[key]; ok {
+				continue
+			}
+			capability, err := w.repo.GetProviderCapability(ctx, channel.ProviderType, templateVersion.MessageType)
+			if err != nil {
+				continue
+			}
+			plan.Capabilities[key] = capability
+		}
+	}
 }
 
 func (w *Worker) storeRoutePlan(plan RoutePlan) {
@@ -591,7 +645,7 @@ func evaluateRules(plan RoutePlan, payload map[string]any) (*route.Rule, []RuleM
 	return nil, metrics, nil
 }
 
-func (w *Worker) buildAttempts(ctx context.Context, message MessageRecord, rule route.Rule, payload map[string]any) ([]DeliveryAttemptPlan, error) {
+func (w *Worker) buildAttempts(ctx context.Context, message MessageRecord, plan RoutePlan, rule route.Rule, payload map[string]any) ([]DeliveryAttemptPlan, error) {
 	targets := enabledActionTargets(rule.Action)
 	if len(targets) == 0 {
 		return nil, fmt.Errorf("route rule %s has no delivery targets", rule.RuleKey)
@@ -599,7 +653,7 @@ func (w *Worker) buildAttempts(ctx context.Context, message MessageRecord, rule 
 
 	attempts := make([]DeliveryAttemptPlan, 0, len(targets))
 	for _, target := range targets {
-		channel, err := w.repo.GetChannel(ctx, target.ChannelID)
+		channel, err := w.channelForPlan(ctx, plan, target.ChannelID)
 		if err != nil {
 			return nil, err
 		}
@@ -607,7 +661,7 @@ func (w *Worker) buildAttempts(ctx context.Context, message MessageRecord, rule 
 			return nil, fmt.Errorf("delivery channel %s is disabled", target.ChannelID)
 		}
 
-		templateVersion, err := w.repo.GetTemplateVersion(ctx, target.TemplateVersionID)
+		templateVersion, err := w.templateVersionForPlan(ctx, plan, target.TemplateVersionID)
 		if err != nil {
 			return nil, fmt.Errorf("%w: load template version %s: %w", errTemplatePlanning, target.TemplateVersionID, err)
 		}
@@ -622,7 +676,7 @@ func (w *Worker) buildAttempts(ctx context.Context, message MessageRecord, rule 
 			return nil, fmt.Errorf("%w: render template version %s: %w", errTemplatePlanning, templateVersion.ID, err)
 		}
 
-		capability, err := w.repo.GetProviderCapability(ctx, channel.ProviderType, templateVersion.MessageType)
+		capability, err := w.capabilityForPlan(ctx, plan, channel.ProviderType, templateVersion.MessageType)
 		if err != nil {
 			return nil, err
 		}
@@ -680,6 +734,46 @@ func (w *Worker) buildAttempts(ctx context.Context, message MessageRecord, rule 
 		})
 	}
 	return attempts, nil
+}
+
+func (w *Worker) channelForPlan(ctx context.Context, plan RoutePlan, channelID string) (provider.Channel, error) {
+	channelID = strings.TrimSpace(channelID)
+	if channelID == "" {
+		return provider.Channel{}, ErrInvalidInput
+	}
+	if plan.Channels != nil {
+		if channel, ok := plan.Channels[channelID]; ok {
+			return channel, nil
+		}
+	}
+	return w.repo.GetChannel(ctx, channelID)
+}
+
+func (w *Worker) templateVersionForPlan(ctx context.Context, plan RoutePlan, templateVersionID string) (msgtemplate.TemplateVersion, error) {
+	templateVersionID = strings.TrimSpace(templateVersionID)
+	if templateVersionID == "" {
+		return msgtemplate.TemplateVersion{}, ErrInvalidInput
+	}
+	if plan.TemplateVersions != nil {
+		if templateVersion, ok := plan.TemplateVersions[templateVersionID]; ok {
+			return templateVersion, nil
+		}
+	}
+	return w.repo.GetTemplateVersion(ctx, templateVersionID)
+}
+
+func (w *Worker) capabilityForPlan(ctx context.Context, plan RoutePlan, providerType provider.ProviderType, messageType string) (provider.Capability, error) {
+	key := capabilityCacheKey(providerType, messageType)
+	if plan.Capabilities != nil {
+		if capability, ok := plan.Capabilities[key]; ok {
+			return capability, nil
+		}
+	}
+	return w.repo.GetProviderCapability(ctx, providerType, messageType)
+}
+
+func capabilityCacheKey(providerType provider.ProviderType, messageType string) string {
+	return string(providerType) + "\x00" + strings.TrimSpace(messageType)
 }
 
 func (w *Worker) publishSendEvents(ctx context.Context, traceID string, attempts []DeliveryAttemptPlan) error {

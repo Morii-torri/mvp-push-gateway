@@ -337,7 +337,7 @@ func TestRunPerformanceTestIncludesInboundStageBreakdown(t *testing.T) {
 	}{
 		{key: "source_lookup", label: "来源配置查询", p99: 3},
 		{key: "latest_payload", label: "最近 Payload 更新", p99: 4},
-		{key: "enqueue_inbound", label: "入站接收写入", p99: 17},
+		{key: "enqueue_inbound", label: "入站队列发布", p99: 17},
 		{key: "insert_message_record", label: "写入消息主记录", p99: 5},
 		{key: "insert_route_plan_job", label: "写入路由规划任务", p99: 6},
 		{key: "commit_inbound", label: "提交入站事务", p99: 7},

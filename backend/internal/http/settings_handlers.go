@@ -20,6 +20,7 @@ import (
 	dbrepo "mvp-push-gateway/backend/internal/db"
 	deliverypkg "mvp-push-gateway/backend/internal/delivery"
 	"mvp-push-gateway/backend/internal/monitoring"
+	"mvp-push-gateway/backend/internal/perftiming"
 	planningpkg "mvp-push-gateway/backend/internal/planning"
 	"mvp-push-gateway/backend/internal/provider"
 	"mvp-push-gateway/backend/internal/route"
@@ -831,6 +832,14 @@ func (r *performanceWorkerTimingRecorder) RecordSQLTiming(traceID string, stage 
 	r.recordDB(traceID, string(stage), duration)
 }
 
+func (r *performanceWorkerTimingRecorder) RecordStageTiming(traceID string, stage string, duration time.Duration) {
+	r.record(traceID, stage, duration)
+}
+
+func (r *performanceWorkerTimingRecorder) RecordDBStageTiming(traceID string, stage string, duration time.Duration) {
+	r.recordDB(traceID, stage, duration)
+}
+
 func (r *performanceWorkerTimingRecorder) record(traceID string, stage string, duration time.Duration) {
 	traceID = strings.TrimSpace(traceID)
 	stage = strings.TrimSpace(stage)
@@ -1065,6 +1074,8 @@ func (h *Handler) runPerformanceTestConcurrency(ctx context.Context, resources p
 	defer cancelWorkerDrains()
 	startedAt := time.Now()
 	timingRecorder := newPerformanceWorkerTimingRecorder(startedAt)
+	unregisterTimingRecorder := perftiming.Register(timingRecorder)
+	defer unregisterTimingRecorder()
 	workerCtx = dbrepo.WithSQLTimingRecorder(workerCtx, timingRecorder)
 	workerCtx = planningpkg.WithTimingRecorder(workerCtx, timingRecorder)
 	workerCtx = deliverypkg.WithTimingRecorder(workerCtx, timingRecorder)

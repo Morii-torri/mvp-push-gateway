@@ -291,7 +291,7 @@ export function MetricCard({
       <CloseCircleOutlined />
     ) : label.includes("成功率") ? (
       <DashboardOutlined />
-    ) : label === "平均 OPS" ? (
+    ) : label === "平均 QPS" ? (
       <ThunderboltOutlined />
     ) : label === "路由规划积压" ? (
       <NodeIndexOutlined />
@@ -343,7 +343,7 @@ export function MetricCard({
       dPath = "M0,26 L20,22 L45,8 L70,10 L85,2 L100,0";
     } else if (label === "失败发送量" || label === "死信数量") {
       dPath = "M0,28 L30,28 L50,28 L70,6 L85,24 L100,28";
-    } else if (label === "平均 OPS") {
+    } else if (label === "平均 QPS") {
       dPath =
         "M0,15 L10,10 L20,20 L30,5 L40,25 L50,8 L60,22 L70,12 L80,18 L90,6 L100,15";
     } else if (label === "最老任务等待") {
@@ -549,7 +549,7 @@ export function LineChart({
               <circle
                 cx={x}
                 cy={y}
-                r="3.2"
+                r="2.6"
                 className="chart-point"
                 style={{ fill: primarySeries.color }}
               />

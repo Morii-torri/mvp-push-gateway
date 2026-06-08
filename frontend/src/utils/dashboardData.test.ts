@@ -17,6 +17,7 @@ describe('dashboard data mapping', () => {
         successful: 210,
         failed: 30,
         success_rate: 87.5,
+        average_duration_ms: 180,
         average_qps: 0.28,
         total_received: 300,
       },
@@ -64,13 +65,15 @@ describe('dashboard data mapping', () => {
     expect(viewModel.metrics[1]?.value).toBe('240 条');
     expect(buildOverviewViewModel(overview, '1h').metrics[1]?.delta).toBe('最近 1 小时窗口');
     expect(buildOverviewViewModel(overview, '7d').metrics[5]?.delta).toBe('按最近 7 天平均计算');
-    expect(viewModel.metrics[4]?.value).toBe('87.50%');
+    expect(viewModel.metrics[2]?.label).toBe('失败发送量');
+    expect(viewModel.metrics[3]?.value).toBe('87.50%');
+    expect(viewModel.metrics[4]?.label).toBe('平均耗时');
+    expect(viewModel.metrics[4]?.value).toBe('180 ms');
+    expect(viewModel.metrics[5]?.label).toBe('平均 QPS');
     expect(viewModel.trendPoints).toEqual([12]);
     expect(viewModel.trendSeries).toEqual([
       { key: 'sent', label: '发送量', points: [12], color: '#1677ff' },
-      { key: 'successful', label: '成功量', points: [10], color: '#22c55e' },
       { key: 'failed', label: '失败量', points: [2], color: '#ef4444' },
-      { key: 'qps', label: 'QPS', points: [0.2], color: '#7c3aed' },
     ]);
     expect(buildOverviewViewModel(overview, '1h').trendLabels).toEqual(['18:00']);
     expect(viewModel.platformRanking[0]?.id).toBe('channel-1');
@@ -191,6 +194,8 @@ describe('dashboard data mapping', () => {
 
     expect(overview.metrics).toHaveLength(6);
     expect(overview.metrics.map((item) => item.label)).toContain('总发送量');
+    expect(overview.metrics.map((item) => item.label)).not.toContain('成功发送量');
+    expect(overview.metrics.map((item) => item.label)).toContain('平均耗时');
     expect(queue.metrics.map((item) => item.label)).toContain('路由规划积压');
     expect(queue.cleanupRows.map((item) => item.status)).toEqual(['默认策略', '单批上限 200', '待下一次执行', '当前批次后无剩余']);
     expect(queue.trendSeries.map((item) => item.label)).toEqual(['路由规划处理量', '出站发送处理量', '死信数量']);
@@ -203,6 +208,7 @@ describe('dashboard data mapping', () => {
         successful: null as any,
         failed: undefined as any,
         success_rate: NaN,
+        average_duration_ms: NaN,
         average_qps: null as any,
         total_received: undefined as any,
       },
@@ -247,9 +253,9 @@ describe('dashboard data mapping', () => {
     // Metrics fallback to 0 / 0.00% / 0 条 instead of NaN
     expect(viewModel.metrics[0]?.value).toBe('0 条'); // total_received
     expect(viewModel.metrics[1]?.value).toBe('0 条'); // total_sent
-    expect(viewModel.metrics[2]?.value).toBe('0 条'); // successful
-    expect(viewModel.metrics[3]?.value).toBe('0 条'); // failed
-    expect(viewModel.metrics[4]?.value).toBe('0.00%'); // success_rate
+    expect(viewModel.metrics[2]?.value).toBe('0 条'); // failed
+    expect(viewModel.metrics[3]?.value).toBe('0.00%'); // success_rate
+    expect(viewModel.metrics[4]?.value).toBe('0 ms'); // average_duration_ms
     expect(viewModel.metrics[5]?.value).toBe('0'); // average_qps
 
     // Rankings and other lists fallback safely too

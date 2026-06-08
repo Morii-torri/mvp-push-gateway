@@ -881,7 +881,7 @@ func estimatedStageResults(stats performanceObservationStats, pressure float64, 
 	return []PerformanceTestStageResult{
 		{
 			Key:        "ingest",
-			Label:      "入站写库",
+			Label:      "入站处理",
 			Count:      messageCount,
 			AvgMS:      roundFloat(stats.InboundAvgMS*pressure, 2),
 			P99MS:      roundFloat(stats.InboundP99MS*pressure, 2),
@@ -932,7 +932,7 @@ func buildStageResults(observations []PerformanceTestObservation, globalDBTiming
 		stageResult("template", "请求前模板预览", collectDurations(observations, func(item PerformanceTestObservation) int {
 			return item.TemplateRenderDurationMS
 		})),
-		stageResult("ingest", "入站写库", collectDurations(observations, func(item PerformanceTestObservation) int {
+		stageResult("ingest", "入站处理", collectDurations(observations, func(item PerformanceTestObservation) int {
 			return item.InboundDurationMS
 		})),
 		stageResult("dispatch", "出站链路", collectDurations(observations, func(item PerformanceTestObservation) int {
@@ -948,7 +948,7 @@ func buildStageResults(observations []PerformanceTestObservation, globalDBTiming
 	results = appendOptionalStageResult(results, "latest_payload", "最近 Payload 更新", observations, func(item PerformanceTestObservation) int {
 		return item.LatestPayloadUpdateDurationMS
 	})
-	results = appendOptionalStageResult(results, "enqueue_inbound", "入站接收写入", observations, func(item PerformanceTestObservation) int {
+	results = appendOptionalStageResult(results, "enqueue_inbound", "入站队列发布", observations, func(item PerformanceTestObservation) int {
 		return item.EnqueueInboundDurationMS
 	})
 	results = appendOptionalStageResult(results, "insert_message_record", "写入消息主记录", observations, func(item PerformanceTestObservation) int {

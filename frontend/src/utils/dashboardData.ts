@@ -8,6 +8,7 @@ export type OverviewApiResponse = {
     successful: number;
     failed: number;
     success_rate: number;
+    average_duration_ms: number;
     average_qps: number;
     total_received: number;
   };
@@ -170,10 +171,10 @@ export function defaultOverviewViewModel(): OverviewViewModel {
     metrics: [
       metricCard('received', '总接收量', '0 条', `${windowCopy(defaultWindow)}入站总量`, 'flat', 'blue'),
       metricCard('sent', '总发送量', '0 条', `${windowCopy(defaultWindow)}窗口`, 'flat', 'blue'),
-      metricCard('successful', '成功发送量', '0 条', `${windowCopy(defaultWindow)}成功总量`, 'flat', 'green'),
       metricCard('failed', '失败发送量', '0 条', `${windowCopy(defaultWindow)}失败总量`, 'flat', 'red'),
       metricCard('success', '成功率', '0.00%', `${windowCopy(defaultWindow)}成功 0 条`, 'flat', 'green'),
-      metricCard('ops', '平均 OPS', '0', `按${windowCopy(defaultWindow)}平均计算`, 'flat', 'purple'),
+      metricCard('duration', '平均耗时', '0 ms', '单条出站平均用时', 'flat', 'orange'),
+      metricCard('qps', '平均 QPS', '0', `按${windowCopy(defaultWindow)}平均计算`, 'flat', 'purple'),
     ],
     trendPoints: zeroTrendPoints(),
     trendLabels: zeroTrendLabels(),
@@ -234,7 +235,6 @@ export function buildOverviewViewModel(data: OverviewApiResponse, window: Dashbo
     metrics: [
       metricCard('received', '总接收量', `${formatInteger(data.summary.total_received)} 条`, `${windowCopy(window)}入站总量`, 'flat', 'blue'),
       metricCard('sent', '总发送量', `${formatInteger(data.summary.total_sent)} 条`, `${windowCopy(window)}窗口`, 'flat', 'blue'),
-      metricCard('successful', '成功发送量', `${formatInteger(data.summary.successful)} 条`, `${windowCopy(window)}成功总量`, 'flat', 'green'),
       metricCard('failed', '失败发送量', `${formatInteger(data.summary.failed)} 条`, `${windowCopy(window)}失败总量`, 'up', 'red'),
       metricCard(
         'success',
@@ -244,7 +244,8 @@ export function buildOverviewViewModel(data: OverviewApiResponse, window: Dashbo
         'up',
         'green',
       ),
-      metricCard('ops', '平均 OPS', `${formatDecimal(data.summary.average_qps)}`, `按${windowCopy(window)}平均计算`, 'flat', 'purple'),
+      metricCard('duration', '平均耗时', formatMilliseconds(data.summary.average_duration_ms), '单条出站平均用时', 'flat', 'orange'),
+      metricCard('qps', '平均 QPS', `${formatDecimal(data.summary.average_qps)}`, `按${windowCopy(window)}平均计算`, 'flat', 'purple'),
     ],
     trendPoints: trendSeries[0]?.points ?? [],
     trendLabels: trendBucketLabels(data.trend, window),
@@ -485,18 +486,11 @@ function defaultOverviewTrendSeries(): TrendSeries[] {
       points: zeroTrendPoints(),
     },
     {
-      key: 'successful',
-      label: '成功量',
-      color: '#22c55e',
-      points: zeroTrendPoints(),
-    },
-    {
       key: 'failed',
       label: '失败量',
       color: '#ef4444',
       points: zeroTrendPoints(),
     },
-    { key: 'qps', label: 'QPS', color: '#7c3aed', points: zeroTrendPoints() },
   ];
 }
 
@@ -512,22 +506,10 @@ function overviewTrendSeries(data: OverviewApiResponse): TrendSeries[] {
       points: data.trend.map((item) => normalizeTrendPoint(item.sent)),
     },
     {
-      key: 'successful',
-      label: '成功量',
-      color: '#22c55e',
-      points: data.trend.map((item) => normalizeTrendPoint(item.successful)),
-    },
-    {
       key: 'failed',
       label: '失败量',
       color: '#ef4444',
       points: data.trend.map((item) => normalizeTrendPoint(item.failed)),
-    },
-    {
-      key: 'qps',
-      label: 'QPS',
-      color: '#7c3aed',
-      points: data.trend.map((item) => normalizeTrendPoint(item.qps)),
     },
   ];
 }

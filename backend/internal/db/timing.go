@@ -3,6 +3,8 @@ package db
 import (
 	"context"
 	"time"
+
+	"mvp-push-gateway/backend/internal/perftiming"
 )
 
 type SQLTimingStage string
@@ -42,6 +44,7 @@ func WithSQLTimingRecorder(ctx context.Context, recorder SQLTimingRecorder) cont
 func recordSQLTiming(ctx context.Context, traceID string, stage SQLTimingStage, duration time.Duration) {
 	recorder, ok := ctx.Value(sqlTimingRecorderContextKey{}).(SQLTimingRecorder)
 	if !ok || recorder == nil {
+		perftiming.RecordDBStageTiming(traceID, string(stage), duration)
 		return
 	}
 	recorder.RecordSQLTiming(traceID, stage, duration)

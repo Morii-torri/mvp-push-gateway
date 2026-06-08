@@ -964,14 +964,14 @@ body {
   stroke: #1677ff;
   stroke-linecap: round;
   stroke-linejoin: round;
-  stroke-width: 1.8;
-  filter: drop-shadow(0 1px 2px rgba(22, 119, 255, 0.12));
+  stroke-width: 1.25;
+  filter: drop-shadow(0 1px 1px rgba(22, 119, 255, 0.08));
 }
 
 .chart-point {
   fill: #ffffff;
   stroke: #1677ff;
-  stroke-width: 1.5;
+  stroke-width: 1.2;
 }
 
 .chart-point-label {
@@ -3852,8 +3852,16 @@ body {
 .message-log-attempt-grid > section,
 .message-log-snapshot-grid > section {
   display: grid;
-  gap: 8px;
+  align-content: start;
+  gap: 6px;
   min-width: 0;
+}
+
+.message-log-attempt-grid > section > .ant-typography,
+.message-log-snapshot-grid > section > .ant-typography {
+  display: block;
+  min-height: 20px;
+  line-height: 20px;
 }
 
 .preview-grid {

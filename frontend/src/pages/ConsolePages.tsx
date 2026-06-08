@@ -2631,7 +2631,7 @@ function performanceBottleneckSummary(
     Math.max(result.route_p99_ms, result.template_render_p99_ms) * 1.5
   ) {
     evidence.push(
-      `入站写库 P99 ${formatPerformanceNumber(result.p99_inbound_ms, " ms")}`,
+      `入站处理 P99 ${formatPerformanceNumber(result.p99_inbound_ms, " ms")}`,
     );
   }
   if (diagnostics.goroutine_growth_warning) {
@@ -3086,8 +3086,7 @@ function PerformanceTestResultView({
                 <strong>{formatPerformanceNumber(stage.p99_ms, " ms")}</strong>
                 <Typography.Text type="secondary">
                   {formatPerformanceNumber(stage.count)} 次 / 平均{" "}
-                  {formatPerformanceNumber(stage.avg_ms, " ms")} / 总{" "}
-                  {formatPerformanceNumber(stage.duration_ms, " ms")}
+                  {formatPerformanceNumber(stage.avg_ms, " ms")}
                 </Typography.Text>
               </div>
             ))}
