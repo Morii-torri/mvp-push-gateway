@@ -9,6 +9,7 @@ import (
 
 func TestNATSPublisherImplementsStreamSubscriber(t *testing.T) {
 	var _ StreamSubscriber = (*NATSPublisher)(nil)
+	var _ StreamBatchPublisher = (*NATSPublisher)(nil)
 }
 
 func TestNormalizeNATSOptionsUsesDurableQueueDefaults(t *testing.T) {

@@ -499,18 +499,18 @@ func fakePerformanceTestResult(input settings.PerformanceTestInput) settings.Per
 		AcceptedCount:                len(input.Observations),
 		SuccessRate:                  100,
 		AvgInboundMS:                 1,
-		P95InboundMS:                 1,
+		P99InboundMS:                 1,
 		AvgRouteMS:                   1,
-		RouteP95MS:                   1,
+		RouteP99MS:                   1,
 		AvgEndToEndMS:                3,
-		EndToEndP95MS:                3,
+		EndToEndP99MS:                3,
 		RecommendedGlobalConcurrency: 10,
 		EstimatedSendQPS:             100,
 		DurationMS:                   3,
 		RecommendationReason:         "测试推荐",
 		UpdatedSettingKey:            settings.KeyRuntimeDeliveryConcurrency,
 		StageResults: []settings.PerformanceTestStageResult{
-			{Key: "ingest", Label: "模拟入站", Count: len(input.Observations), AvgMS: 1, P95MS: 1, DurationMS: 1},
+			{Key: "ingest", Label: "模拟入站", Count: len(input.Observations), AvgMS: 1, P99MS: 1, DurationMS: 1},
 		},
 	}
 }

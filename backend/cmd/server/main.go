@@ -6,6 +6,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"net/http/pprof"
 	"os"
 	"os/signal"
 	"syscall"
@@ -200,6 +201,14 @@ func main() {
 		Handler:           httpapi.NewHandler(cfg, handlerOptions...),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
+	var pprofServer *http.Server
+	if cfg.Server.PprofPort != "" {
+		pprofServer = &http.Server{
+			Addr:              net.JoinHostPort("127.0.0.1", cfg.Server.PprofPort),
+			Handler:           newPprofMux(),
+			ReadHeaderTimeout: 5 * time.Second,
+		}
+	}
 
 	runtimeCtx, stopRuntime := context.WithCancel(context.Background())
 	if startJetStreamConsumers != nil {
@@ -215,6 +224,14 @@ func main() {
 			log.Fatalf("server failed: %v", err)
 		}
 	}()
+	if pprofServer != nil {
+		go func() {
+			log.Printf("pprof listening on %s", pprofServer.Addr)
+			if err := pprofServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+				log.Fatalf("pprof server failed: %v", err)
+			}
+		}()
+	}
 
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
@@ -225,12 +242,33 @@ func main() {
 	if err := server.Shutdown(shutdownCtx); err != nil {
 		log.Fatalf("server shutdown failed: %v", err)
 	}
+	if pprofServer != nil {
+		if err := pprofServer.Shutdown(shutdownCtx); err != nil {
+			log.Fatalf("pprof server shutdown failed: %v", err)
+		}
+	}
 	stopRuntime()
 	if workerHarness != nil {
 		if err := workerHarness.Shutdown(shutdownCtx); err != nil {
 			log.Fatalf("worker shutdown failed: %v", err)
 		}
 	}
+}
+
+func newPprofMux() *http.ServeMux {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/debug/pprof/", pprof.Index)
+	mux.HandleFunc("/debug/pprof/cmdline", pprof.Cmdline)
+	mux.HandleFunc("/debug/pprof/profile", pprof.Profile)
+	mux.HandleFunc("/debug/pprof/symbol", pprof.Symbol)
+	mux.HandleFunc("/debug/pprof/trace", pprof.Trace)
+	mux.Handle("/debug/pprof/allocs", pprof.Handler("allocs"))
+	mux.Handle("/debug/pprof/block", pprof.Handler("block"))
+	mux.Handle("/debug/pprof/goroutine", pprof.Handler("goroutine"))
+	mux.Handle("/debug/pprof/heap", pprof.Handler("heap"))
+	mux.Handle("/debug/pprof/mutex", pprof.Handler("mutex"))
+	mux.Handle("/debug/pprof/threadcreate", pprof.Handler("threadcreate"))
+	return mux
 }
 
 func startConsumerGroup(ctx context.Context, name string, count int, run func(context.Context) error) {

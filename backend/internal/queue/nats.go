@@ -255,6 +255,60 @@ func (p *NATSPublisher) Publish(ctx context.Context, subject string, messageID s
 	}, nil
 }
 
+func (p *NATSPublisher) PublishBatch(ctx context.Context, messages []StreamPublishMessage) ([]PublishResult, error) {
+	if p == nil || p.js == nil {
+		return nil, ErrInvalidInput
+	}
+	if len(messages) == 0 {
+		return nil, nil
+	}
+	natsMessages := make([]*nats.Msg, 0, len(messages))
+	for _, message := range messages {
+		subject := strings.TrimSpace(message.Subject)
+		messageID := strings.TrimSpace(message.MessageID)
+		if subject == "" || messageID == "" {
+			return nil, ErrInvalidInput
+		}
+		msg := &nats.Msg{
+			Subject: subject,
+			Header:  nats.Header{},
+			Data:    append([]byte(nil), message.Payload...),
+		}
+		msg.Header.Set(nats.MsgIdHdr, messageID)
+		natsMessages = append(natsMessages, msg)
+	}
+	futures := make([]nats.PubAckFuture, 0, len(natsMessages))
+	for _, msg := range natsMessages {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		future, err := p.js.PublishMsgAsync(msg)
+		if err != nil {
+			return nil, err
+		}
+		futures = append(futures, future)
+	}
+	results := make([]PublishResult, len(futures))
+	for index, future := range futures {
+		select {
+		case ack := <-future.Ok():
+			if ack == nil || ack.Stream == "" {
+				return results[:index], nats.ErrInvalidJSAck
+			}
+			results[index] = PublishResult{
+				Stream:    ack.Stream,
+				Sequence:  ack.Sequence,
+				Duplicate: ack.Duplicate,
+			}
+		case err := <-future.Err():
+			return results[:index], err
+		case <-ctx.Done():
+			return results[:index], ctx.Err()
+		}
+	}
+	return results, nil
+}
+
 func (p *NATSPublisher) Subscribe(ctx context.Context, subject string, durable string, handler StreamMessageHandler) error {
 	subject = strings.TrimSpace(subject)
 	durable = strings.TrimSpace(durable)

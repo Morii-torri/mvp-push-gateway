@@ -26,9 +26,9 @@ type QueueSummary struct {
 	SendMessagePending    int     `json:"send_message_pending"`
 	OldestJobWaitSeconds  int64   `json:"oldest_job_wait_seconds"`
 	PlanningAvgDurationMS int     `json:"planning_avg_duration_ms"`
-	PlanningP95DurationMS int     `json:"planning_p95_duration_ms"`
+	PlanningP99DurationMS int     `json:"planning_p99_duration_ms"`
 	SendingAvgDurationMS  int     `json:"sending_avg_duration_ms"`
-	SendingP95DurationMS  int     `json:"sending_p95_duration_ms"`
+	SendingP99DurationMS  int     `json:"sending_p99_duration_ms"`
 	PlatformFailureRate   float64 `json:"platform_failure_rate"`
 	RateLimitedCount      int     `json:"rate_limited_count"`
 	DeadLetterCount       int     `json:"dead_letter_count"`
@@ -54,7 +54,7 @@ type SlowRule struct {
 	Rule          string `json:"rule"`
 	HitCount      int    `json:"hit_count"`
 	AvgDurationMS int    `json:"avg_duration_ms"`
-	P95DurationMS int    `json:"p95_duration_ms"`
+	P99DurationMS int    `json:"p99_duration_ms"`
 }
 
 type QueueTrendPoint struct {
@@ -62,7 +62,7 @@ type QueueTrendPoint struct {
 	RoutePlanProcessed   int       `json:"route_plan_processed"`
 	SendMessageProcessed int       `json:"send_message_processed"`
 	DeadLetters          int       `json:"dead_letters"`
-	P95DurationMS        int       `json:"p95_duration_ms"`
+	P99DurationMS        int       `json:"p99_duration_ms"`
 }
 
 type CleanupStatus struct {

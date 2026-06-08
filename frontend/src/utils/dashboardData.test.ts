@@ -40,7 +40,7 @@ describe('dashboard data mapping', () => {
           failures: 12,
           rate_limited: 3,
           avg_duration_ms: 220,
-          p95_duration_ms: 580,
+          p99_duration_ms: 580,
           last_error: '目标平台超时',
         },
       ],
@@ -87,9 +87,9 @@ describe('dashboard data mapping', () => {
         send_message_pending: 8,
         oldest_job_wait_seconds: 300,
         planning_avg_duration_ms: 120,
-        planning_p95_duration_ms: 260,
+        planning_p99_duration_ms: 260,
         sending_avg_duration_ms: 220,
-        sending_p95_duration_ms: 480,
+        sending_p99_duration_ms: 480,
         platform_failure_rate: 5.5,
         rate_limited_count: 7,
         dead_letter_count: 2,
@@ -126,7 +126,7 @@ describe('dashboard data mapping', () => {
           route_plan_processed: 4,
           send_message_processed: 9,
           dead_letters: 1,
-          p95_duration_ms: 480,
+          p99_duration_ms: 480,
         },
       ],
       slow_rules: [
@@ -137,7 +137,7 @@ describe('dashboard data mapping', () => {
           rule: '省直单位紧急告警优先',
           hit_count: 62418,
           avg_duration_ms: 320,
-          p95_duration_ms: 780,
+          p99_duration_ms: 780,
         },
       ],
       cleanup_status: {
@@ -226,7 +226,7 @@ describe('dashboard data mapping', () => {
           failures: NaN,
           rate_limited: NaN,
           avg_duration_ms: NaN,
-          p95_duration_ms: null as any,
+          p99_duration_ms: null as any,
           last_error: '',
         },
       ],
@@ -258,7 +258,7 @@ describe('dashboard data mapping', () => {
     expect(viewModel.platformRanking[0]?.qps).toBe('0');
     expect(viewModel.platformRanking[0]?.failures).toBe('0');
     expect(viewModel.platformRanking[0]?.latency).toBe('0 ms');
-    expect(viewModel.platformRanking[0]?.p95).toBe('0 ms');
+    expect(viewModel.platformRanking[0]?.p99).toBe('0 ms');
 
     expect(viewModel.failureReasons[0]?.count).toBe('0');
     expect(viewModel.recentAnomalies[0]?.count).toBe('0');

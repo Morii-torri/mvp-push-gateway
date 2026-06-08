@@ -188,7 +188,7 @@ func (r Repository) getQueueSummary(ctx context.Context, now time.Time, windowSt
 					round(sum(COALESCE(avg_duration_ms, 0) * GREATEST(processed, 1))::numeric / NULLIF(sum(GREATEST(processed, 1)), 0)),
 					0
 				)::integer AS avg_duration_ms,
-				COALESCE(max(p95_duration_ms), 0)::integer AS p95_duration_ms
+				COALESCE(max(p95_duration_ms), 0)::integer AS p99_duration_ms
 			FROM worker_metrics
 			WHERE worker_type = 'planning'
 				AND job_type = 'route_plan'
@@ -200,7 +200,7 @@ func (r Repository) getQueueSummary(ctx context.Context, now time.Time, windowSt
 					round(sum(COALESCE(avg_duration_ms, 0) * GREATEST(processed, 1))::numeric / NULLIF(sum(GREATEST(processed, 1)), 0)),
 					0
 				)::integer AS avg_duration_ms,
-				COALESCE(max(p95_duration_ms), 0)::integer AS p95_duration_ms,
+				COALESCE(max(p95_duration_ms), 0)::integer AS p99_duration_ms,
 				COALESCE(sum(failed), 0)::integer AS failed_count,
 				COALESCE(sum(success), 0)::integer AS success_count,
 				COALESCE(sum(rate_limited), 0)::integer AS rate_limited_count
@@ -219,9 +219,9 @@ func (r Repository) getQueueSummary(ctx context.Context, now time.Time, windowSt
 			queued_jobs.send_message_pending,
 			queued_jobs.oldest_job_wait_seconds,
 			planning_metrics.avg_duration_ms,
-			planning_metrics.p95_duration_ms,
+			planning_metrics.p99_duration_ms,
 			sending_metrics.avg_duration_ms,
-			sending_metrics.p95_duration_ms,
+			sending_metrics.p99_duration_ms,
 			COALESCE(
 				round(
 					(sending_metrics.failed_count::numeric * 100.0)
@@ -238,9 +238,9 @@ func (r Repository) getQueueSummary(ctx context.Context, now time.Time, windowSt
 		&summary.SendMessagePending,
 		&summary.OldestJobWaitSeconds,
 		&summary.PlanningAvgDurationMS,
-		&summary.PlanningP95DurationMS,
+		&summary.PlanningP99DurationMS,
 		&summary.SendingAvgDurationMS,
-		&summary.SendingP95DurationMS,
+		&summary.SendingP99DurationMS,
 		&summary.PlatformFailureRate,
 		&summary.RateLimitedCount,
 		&summary.DeadLetterCount,
@@ -378,7 +378,7 @@ func (r Repository) getQueueTrend(ctx context.Context, windowStart, now time.Tim
 				COALESCE(sum(processed) FILTER (WHERE job_type = 'route_plan'), 0)::integer AS route_plan_processed,
 				COALESCE(sum(processed) FILTER (WHERE job_type = 'send_message'), 0)::integer AS send_message_processed,
 				COALESCE(sum(dead_lettered), 0)::integer AS dead_letters,
-				COALESCE(max(p95_duration_ms), 0)::integer AS p95_duration_ms
+				COALESCE(max(p95_duration_ms), 0)::integer AS p99_duration_ms
 			FROM worker_metrics
 			WHERE bucket_start >= $1
 				AND bucket_start <= $2
@@ -389,7 +389,7 @@ func (r Repository) getQueueTrend(ctx context.Context, windowStart, now time.Tim
 			COALESCE(metrics.route_plan_processed, 0)::integer,
 			COALESCE(metrics.send_message_processed, 0)::integer,
 			COALESCE(metrics.dead_letters, 0)::integer,
-			COALESCE(metrics.p95_duration_ms, 0)::integer
+			COALESCE(metrics.p99_duration_ms, 0)::integer
 		FROM buckets
 		LEFT JOIN metrics ON metrics.bucket_start = buckets.bucket_start
 		ORDER BY buckets.bucket_start ASC
@@ -407,7 +407,7 @@ func (r Repository) getQueueTrend(ctx context.Context, windowStart, now time.Tim
 			&item.RoutePlanProcessed,
 			&item.SendMessageProcessed,
 			&item.DeadLetters,
-			&item.P95DurationMS,
+			&item.P99DurationMS,
 		); err != nil {
 			return nil, fmt.Errorf("scan queue trend: %w", err)
 		}
@@ -431,14 +431,14 @@ func (r Repository) getSlowRules(ctx context.Context, windowStart time.Time) ([]
 				round(sum(COALESCE(metrics.avg_duration_ms, 0) * GREATEST(metrics.evaluated, 1))::numeric / NULLIF(sum(GREATEST(metrics.evaluated, 1)), 0)),
 				0
 			)::integer AS avg_duration_ms,
-			COALESCE(max(metrics.p95_duration_ms), 0)::integer AS p95_duration_ms
+			COALESCE(max(metrics.p95_duration_ms), 0)::integer AS p99_duration_ms
 		FROM route_rule_metrics AS metrics
 		JOIN route_rules AS rule ON rule.id = metrics.rule_id
 		JOIN route_flows AS flow ON flow.id = metrics.flow_id
 		JOIN inbound_sources AS source ON source.id = metrics.source_id
 		WHERE metrics.bucket_start >= $1
 		GROUP BY rule.id, source.name, flow.name, rule.name
-		ORDER BY p95_duration_ms DESC, hit_count DESC, rule.name ASC
+		ORDER BY p99_duration_ms DESC, hit_count DESC, rule.name ASC
 		LIMIT 10
 	`, windowStart)
 	if err != nil {
@@ -456,7 +456,7 @@ func (r Repository) getSlowRules(ctx context.Context, windowStart time.Time) ([]
 			&item.Rule,
 			&item.HitCount,
 			&item.AvgDurationMS,
-			&item.P95DurationMS,
+			&item.P99DurationMS,
 		); err != nil {
 			return nil, fmt.Errorf("scan slow rule: %w", err)
 		}
@@ -651,9 +651,9 @@ func (r Repository) getPlatformRankings(ctx context.Context, windowStart, now ti
 					0
 				)::integer AS avg_duration_ms,
 				COALESCE(
-					round((percentile_cont(0.95) WITHIN GROUP (ORDER BY duration_ms) FILTER (WHERE duration_ms IS NOT NULL))::numeric),
+					round((percentile_cont(0.99) WITHIN GROUP (ORDER BY duration_ms) FILTER (WHERE duration_ms IS NOT NULL))::numeric),
 					0
-				)::integer AS p95_duration_ms
+				)::integer AS p99_duration_ms
 			FROM delivery_attempts
 			WHERE channel_id IS NOT NULL
 				AND status IN ('sent', 'failed')
@@ -692,7 +692,7 @@ func (r Repository) getPlatformRankings(ctx context.Context, windowStart, now ti
 			attempt_stats.failed,
 			COALESCE(rate_limits.rate_limited, 0)::integer,
 			attempt_stats.avg_duration_ms,
-			attempt_stats.p95_duration_ms,
+			attempt_stats.p99_duration_ms,
 			COALESCE(last_errors.last_error, '-') AS last_error
 		FROM attempt_stats
 		JOIN delivery_channels AS channel ON channel.id = attempt_stats.channel_id
@@ -719,7 +719,7 @@ func (r Repository) getPlatformRankings(ctx context.Context, windowStart, now ti
 			&item.Failures,
 			&item.RateLimited,
 			&item.AvgDurationMS,
-			&item.P95DurationMS,
+			&item.P99DurationMS,
 			&item.LastError,
 		); err != nil {
 			return nil, fmt.Errorf("scan platform ranking: %w", err)

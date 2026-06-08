@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"net"
 	"net/http"
 	"net/http/httptrace"
 	"net/url"
@@ -35,7 +36,31 @@ const (
 	defaultRetryDelay = time.Second
 )
 
+const maxUpstreamResponseBodyBytes = 64 * 1024
+
 var ErrRetryScheduled = errors.New("delivery retry scheduled")
+
+var defaultDeliveryHTTPTransport = &http.Transport{
+	Proxy:                 http.ProxyFromEnvironment,
+	DialContext:           (&net.Dialer{Timeout: 2 * time.Second, KeepAlive: 30 * time.Second}).DialContext,
+	ForceAttemptHTTP2:     true,
+	MaxIdleConns:          512,
+	MaxIdleConnsPerHost:   128,
+	IdleConnTimeout:       90 * time.Second,
+	TLSHandshakeTimeout:   2 * time.Second,
+	ResponseHeaderTimeout: 5 * time.Second,
+	ExpectContinueTimeout: time.Second,
+}
+
+func defaultDeliveryHTTPClientFactory(timeout time.Duration) *http.Client {
+	if timeout <= 0 {
+		timeout = 5 * time.Second
+	}
+	return &http.Client{
+		Timeout:   timeout,
+		Transport: defaultDeliveryHTTPTransport,
+	}
+}
 
 type Attempt struct {
 	ID                string
@@ -303,12 +328,10 @@ func NewWorker(repo Repository, opts ...WorkerOption) *Worker {
 		now: func() time.Time {
 			return time.Now().UTC()
 		},
-		httpClientFactory: func(timeout time.Duration) *http.Client {
-			return &http.Client{Timeout: timeout}
-		},
-		buildRequest: provider.BuildDeliveryRequest,
-		semaphores:   map[string]chan struct{}{},
-		limiters:     map[string]*channelLimiter{},
+		httpClientFactory: defaultDeliveryHTTPClientFactory,
+		buildRequest:      provider.BuildDeliveryRequest,
+		semaphores:        map[string]chan struct{}{},
+		limiters:          map[string]*channelLimiter{},
 	}
 	for _, opt := range opts {
 		opt(worker)
@@ -605,7 +628,7 @@ func (w *Worker) ProcessOne(ctx context.Context, job queue.Job) error {
 	requestSnapshot["send"] = redactedBuiltRequestSnapshot(builtRequest, payload.Recipient)
 
 	sendStartedAt := time.Now()
-	statusCode, responseHeaders, responseBody, sendErr := w.send(ctx, channel, builtRequest, payload.TraceID, sendStartedAt)
+	statusCode, responseHeaders, responseBody, responseBodyTruncated, sendErr := w.send(ctx, channel, builtRequest, payload.TraceID, sendStartedAt)
 	recordTiming(ctx, payload.TraceID, TimingSendHTTP, time.Since(sendStartedAt))
 	if sendErr == nil && tokenBehavior.Resolver != nil && shouldRefreshToken(responseBody, capability, capabilitySource, tokenBehavior.Resolver.RefreshCodes) {
 		_ = w.tokenManager.Invalidate(ctx, resolvedTokenCacheKey, "upstream token refresh code")
@@ -639,7 +662,7 @@ func (w *Worker) ProcessOne(ctx context.Context, job queue.Job) error {
 		requestSnapshot["final_request"] = redactedBuiltRequestSnapshot(builtRequest, nil)
 		requestSnapshot["send"] = redactedBuiltRequestSnapshot(builtRequest, payload.Recipient)
 		sendStartedAt = time.Now()
-		statusCode, responseHeaders, responseBody, sendErr = w.send(ctx, channel, builtRequest, payload.TraceID, sendStartedAt)
+		statusCode, responseHeaders, responseBody, responseBodyTruncated, sendErr = w.send(ctx, channel, builtRequest, payload.TraceID, sendStartedAt)
 		recordTiming(ctx, payload.TraceID, TimingSendHTTP, time.Since(sendStartedAt))
 		responseSnapshot["token_refreshed"] = true
 	}
@@ -648,8 +671,12 @@ func (w *Worker) ProcessOne(ctx context.Context, job queue.Job) error {
 		"headers":     responseHeaders,
 		"body":        snapshotValue(responseBody),
 	}
+	if responseBodyTruncated {
+		upstreamResponse["body_truncated"] = true
+		upstreamResponse["body_limit_bytes"] = maxUpstreamResponseBodyBytes
+	}
 	responseSnapshot["upstream_response"] = upstreamResponse
-	responseSnapshot["send"] = upstreamResponse
+	responseSnapshot["send"] = legacyResponseSnapshot(upstreamResponse)
 	if sendErr != nil {
 		upstreamResponse["error"] = sendErr.Error()
 		errorCode := "MGP-SEND-003"
@@ -872,14 +899,14 @@ func retryableFailure() failureClassification {
 	return failureClassification{Retryable: true}
 }
 
-func (w *Worker) send(ctx context.Context, channel provider.Channel, built provider.BuiltRequest, traceID string, sendStartedAt time.Time) (int, map[string][]string, []byte, error) {
+func (w *Worker) send(ctx context.Context, channel provider.Channel, built provider.BuiltRequest, traceID string, sendStartedAt time.Time) (int, map[string][]string, []byte, bool, error) {
 	body := built.Body
 	if len(bytes.TrimSpace(body)) == 0 {
 		body = json.RawMessage(`{}`)
 	}
 	req, err := http.NewRequestWithContext(ctx, built.Method, built.URL, bytes.NewReader(body))
 	if err != nil {
-		return 0, nil, nil, err
+		return 0, nil, nil, false, err
 	}
 	for key, value := range built.Headers {
 		req.Header.Set(key, value)
@@ -890,7 +917,7 @@ func (w *Worker) send(ctx context.Context, channel provider.Channel, built provi
 	return w.doRequest(channel.TimeoutMS, req, traceID, sendStartedAt)
 }
 
-func (w *Worker) doRequest(timeoutMS int, req *http.Request, traceID string, sendStartedAt time.Time) (int, map[string][]string, []byte, error) {
+func (w *Worker) doRequest(timeoutMS int, req *http.Request, traceID string, sendStartedAt time.Time) (int, map[string][]string, []byte, bool, error) {
 	timeout := time.Duration(timeoutMS) * time.Millisecond
 	if timeout <= 0 {
 		timeout = 5 * time.Second
@@ -913,16 +940,45 @@ func (w *Worker) doRequest(timeoutMS int, req *http.Request, traceID string, sen
 	client := w.httpClientFactory(timeout)
 	resp, err := client.Do(req)
 	if err != nil {
-		return 0, nil, nil, err
+		return 0, nil, nil, false, err
 	}
 	dispatchOnce.Do(recordDispatch)
 	defer resp.Body.Close()
 
-	body, readErr := io.ReadAll(resp.Body)
+	body, truncated, readErr := readBoundedUpstreamBody(resp.Body)
 	if readErr != nil {
-		return resp.StatusCode, resp.Header, body, readErr
+		return resp.StatusCode, resp.Header, body, truncated, readErr
 	}
-	return resp.StatusCode, resp.Header, body, nil
+	return resp.StatusCode, resp.Header, body, truncated, nil
+}
+
+func readBoundedUpstreamBody(reader io.Reader) ([]byte, bool, error) {
+	if reader == nil {
+		return nil, false, nil
+	}
+	body, err := io.ReadAll(io.LimitReader(reader, int64(maxUpstreamResponseBodyBytes)+1))
+	if err != nil {
+		return body, false, err
+	}
+	if len(body) <= maxUpstreamResponseBodyBytes {
+		return body, false, nil
+	}
+	return body[:maxUpstreamResponseBodyBytes], true, nil
+}
+
+func legacyResponseSnapshot(upstream map[string]any) map[string]any {
+	snapshot := map[string]any{}
+	for _, key := range []string{"status_code", "headers", "error", "body_truncated", "body_limit_bytes"} {
+		if value, ok := upstream[key]; ok {
+			snapshot[key] = value
+		}
+	}
+	if _, truncated := upstream["body_truncated"]; !truncated {
+		if body, ok := upstream["body"]; ok {
+			snapshot["body"] = body
+		}
+	}
+	return snapshot
 }
 
 func (w *Worker) acquireSemaphore(ctx context.Context, channelID string, limit int) (func(), error) {

@@ -37,7 +37,7 @@ type PlatformRanking struct {
 	Failures      int     `json:"failures"`
 	RateLimited   int     `json:"rate_limited"`
 	AvgDurationMS int     `json:"avg_duration_ms"`
-	P95DurationMS int     `json:"p95_duration_ms"`
+	P99DurationMS int     `json:"p99_duration_ms"`
 	LastError     string  `json:"last_error"`
 }
 

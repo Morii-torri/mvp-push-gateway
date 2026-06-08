@@ -421,7 +421,7 @@ describe("critical console pages", () => {
         failures: "1",
         rateLimited: 0,
         latency: "100 ms",
-        p95: "100 ms",
+        p99: "100 ms",
         lastError: "-",
       }),
     ).toBe("channel-1");
@@ -6029,11 +6029,11 @@ describe("critical console pages", () => {
     );
     expect(settingsMarkup).toContain("推荐并发");
     expect(settingsMarkup).toContain("推荐出站 QPS");
-    expect(settingsMarkup).toContain("推荐出站 P95");
+    expect(settingsMarkup).toContain("推荐出站 P99");
     expect(settingsMarkup).toContain("出站 QPS");
     expect(settingsMarkup).toContain("接收 QPS");
     expect(settingsMarkup).toContain("完成 QPS");
-    expect(settingsMarkup).toContain("完整 P95");
+    expect(settingsMarkup).toContain("完整 P99");
     expect(settingsMarkup).toContain("瓶颈诊断");
     expect(settingsMarkup).toContain("性能测试进度");
     expect(settingsMarkup).toContain("选中并发详情");
@@ -6064,7 +6064,7 @@ describe("critical console pages", () => {
           label: "全局出站链路",
           count: 10,
           avg_ms: 100,
-          p95_ms: 200,
+          p99_ms: 200,
           duration_ms: 1000,
         },
       ],
@@ -6076,7 +6076,7 @@ describe("critical console pages", () => {
           label: "当前档位出站链路",
           count: 2,
           avg_ms: 12,
-          p95_ms: 33,
+          p99_ms: 33,
           duration_ms: 24,
         },
       ],
@@ -6088,7 +6088,7 @@ describe("critical console pages", () => {
         label: "当前档位出站链路",
         count: 2,
         avg_ms: 12,
-        p95_ms: 33,
+        p99_ms: 33,
         duration_ms: 24,
       },
     ]);
@@ -6185,12 +6185,12 @@ describe("critical console pages", () => {
       dispatch_qps: 1000,
       completion_qps: 800,
       send_qps: 1000,
-      dispatch_p95_ms: 160,
-      completion_p95_ms: 220,
-      route_p95_ms: 8,
-      template_render_p95_ms: 3,
-      inbound_write_p95_ms: 120,
-      end_to_end_p95_ms: 160,
+      dispatch_p99_ms: 160,
+      completion_p99_ms: 220,
+      route_p99_ms: 8,
+      template_render_p99_ms: 3,
+      inbound_write_p99_ms: 120,
+      end_to_end_p99_ms: 160,
       wall_clock_ms: 1000,
       recommended: false,
       diagnostics: {

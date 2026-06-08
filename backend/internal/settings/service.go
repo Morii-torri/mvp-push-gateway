@@ -107,7 +107,7 @@ type PerformanceTestStageResult struct {
 	Label      string  `json:"label"`
 	Count      int     `json:"count"`
 	AvgMS      float64 `json:"avg_ms"`
-	P95MS      float64 `json:"p95_ms"`
+	P99MS      float64 `json:"p99_ms"`
 	DurationMS int     `json:"duration_ms"`
 }
 
@@ -120,12 +120,12 @@ type PerformanceTestConcurrencyResult struct {
 	DispatchQPS         float64                       `json:"dispatch_qps"`
 	CompletionQPS       float64                       `json:"completion_qps"`
 	SendQPS             float64                       `json:"send_qps"`
-	DispatchP95MS       float64                       `json:"dispatch_p95_ms"`
-	CompletionP95MS     float64                       `json:"completion_p95_ms"`
-	RouteP95MS          float64                       `json:"route_p95_ms"`
-	TemplateRenderP95MS float64                       `json:"template_render_p95_ms"`
-	InboundWriteP95MS   float64                       `json:"inbound_write_p95_ms"`
-	EndToEndP95MS       float64                       `json:"end_to_end_p95_ms"`
+	DispatchP99MS       float64                       `json:"dispatch_p99_ms"`
+	CompletionP99MS     float64                       `json:"completion_p99_ms"`
+	RouteP99MS          float64                       `json:"route_p99_ms"`
+	TemplateRenderP99MS float64                       `json:"template_render_p99_ms"`
+	InboundWriteP99MS   float64                       `json:"inbound_write_p99_ms"`
+	EndToEndP99MS       float64                       `json:"end_to_end_p99_ms"`
 	WallClockMS         int                           `json:"wall_clock_ms"`
 	Recommended         bool                          `json:"recommended"`
 	Diagnostics         PerformanceRuntimeDiagnostics `json:"diagnostics"`
@@ -190,13 +190,13 @@ type PerformanceTestResult struct {
 	FailedCount                  int                                `json:"failed_count"`
 	SuccessRate                  float64                            `json:"success_rate"`
 	AvgInboundMS                 float64                            `json:"avg_inbound_ms"`
-	P95InboundMS                 float64                            `json:"p95_inbound_ms"`
+	P99InboundMS                 float64                            `json:"p99_inbound_ms"`
 	AvgRouteMS                   float64                            `json:"avg_route_ms"`
-	RouteP95MS                   float64                            `json:"route_p95_ms"`
+	RouteP99MS                   float64                            `json:"route_p99_ms"`
 	AvgTemplateRenderMS          float64                            `json:"avg_template_render_ms"`
-	TemplateRenderP95MS          float64                            `json:"template_render_p95_ms"`
+	TemplateRenderP99MS          float64                            `json:"template_render_p99_ms"`
 	AvgEndToEndMS                float64                            `json:"avg_end_to_end_ms"`
-	EndToEndP95MS                float64                            `json:"end_to_end_p95_ms"`
+	EndToEndP99MS                float64                            `json:"end_to_end_p99_ms"`
 	SlowRuleCount                int                                `json:"slow_rule_count"`
 	RecommendedGlobalConcurrency int                                `json:"recommended_global_concurrency"`
 	EstimatedAcceptedQPS         float64                            `json:"estimated_accepted_qps"`
@@ -204,7 +204,7 @@ type PerformanceTestResult struct {
 	EstimatedCompletionQPS       float64                            `json:"estimated_completion_qps"`
 	EstimatedSendQPS             float64                            `json:"estimated_send_qps"`
 	CompletionEndToEndAvgMS      float64                            `json:"completion_end_to_end_avg_ms"`
-	CompletionEndToEndP95MS      float64                            `json:"completion_end_to_end_p95_ms"`
+	CompletionEndToEndP99MS      float64                            `json:"completion_end_to_end_p99_ms"`
 	DurationMS                   int                                `json:"duration_ms"`
 	RecommendationReason         string                             `json:"recommendation_reason"`
 	UpdatedSettingKey            string                             `json:"updated_setting_key"`
@@ -313,13 +313,13 @@ func (s *Service) BuildPerformanceTestResult(input PerformanceTestInput) (Perfor
 		FailedCount:                  stats.FailedCount,
 		SuccessRate:                  stats.SuccessRate,
 		AvgInboundMS:                 stats.InboundAvgMS,
-		P95InboundMS:                 stats.InboundP95MS,
+		P99InboundMS:                 stats.InboundP99MS,
 		AvgRouteMS:                   stats.RouteAvgMS,
-		RouteP95MS:                   stats.RouteP95MS,
+		RouteP99MS:                   stats.RouteP99MS,
 		AvgTemplateRenderMS:          stats.TemplateRenderAvgMS,
-		TemplateRenderP95MS:          stats.TemplateRenderP95MS,
+		TemplateRenderP99MS:          stats.TemplateRenderP99MS,
 		AvgEndToEndMS:                stats.EndToEndAvgMS,
-		EndToEndP95MS:                stats.EndToEndP95MS,
+		EndToEndP99MS:                stats.EndToEndP99MS,
 		SlowRuleCount:                stats.SlowRuleCount,
 		RecommendedGlobalConcurrency: recommended,
 		EstimatedAcceptedQPS:         acceptedQPS,
@@ -327,7 +327,7 @@ func (s *Service) BuildPerformanceTestResult(input PerformanceTestInput) (Perfor
 		EstimatedCompletionQPS:       completionQPS,
 		EstimatedSendQPS:             dispatchQPS,
 		CompletionEndToEndAvgMS:      stats.CompletionEndToEndAvgMS,
-		CompletionEndToEndP95MS:      stats.CompletionEndToEndP95MS,
+		CompletionEndToEndP99MS:      stats.CompletionEndToEndP99MS,
 		DurationMS:                   durationMS,
 		RecommendationReason:         recommendationReason(recommended, stats),
 		UpdatedSettingKey:            KeyRuntimeDeliveryConcurrency,
@@ -447,15 +447,15 @@ type performanceObservationStats struct {
 	FailedCount             int
 	SuccessRate             float64
 	InboundAvgMS            float64
-	InboundP95MS            float64
+	InboundP99MS            float64
 	RouteAvgMS              float64
-	RouteP95MS              float64
+	RouteP99MS              float64
 	TemplateRenderAvgMS     float64
-	TemplateRenderP95MS     float64
+	TemplateRenderP99MS     float64
 	EndToEndAvgMS           float64
-	EndToEndP95MS           float64
+	EndToEndP99MS           float64
 	CompletionEndToEndAvgMS float64
-	CompletionEndToEndP95MS float64
+	CompletionEndToEndP99MS float64
 	SlowRuleCount           int
 }
 
@@ -621,15 +621,15 @@ func summarizePerformanceObservations(observations []PerformanceTestObservation)
 		stats.SuccessRate = roundFloat(float64(stats.AcceptedCount)/float64(total)*100, 2)
 	}
 	stats.InboundAvgMS = averageInt(inbound)
-	stats.InboundP95MS = percentileInt(inbound, 0.95)
+	stats.InboundP99MS = percentileInt(inbound, 0.99)
 	stats.RouteAvgMS = averageInt(routeDurations)
-	stats.RouteP95MS = percentileInt(routeDurations, 0.95)
+	stats.RouteP99MS = percentileInt(routeDurations, 0.99)
 	stats.TemplateRenderAvgMS = averageInt(templateDurations)
-	stats.TemplateRenderP95MS = percentileInt(templateDurations, 0.95)
+	stats.TemplateRenderP99MS = percentileInt(templateDurations, 0.99)
 	stats.EndToEndAvgMS = averageInt(endToEnd)
-	stats.EndToEndP95MS = percentileInt(endToEnd, 0.95)
+	stats.EndToEndP99MS = percentileInt(endToEnd, 0.99)
 	stats.CompletionEndToEndAvgMS = averageInt(completionEndToEnd)
-	stats.CompletionEndToEndP95MS = percentileInt(completionEndToEnd, 0.95)
+	stats.CompletionEndToEndP99MS = percentileInt(completionEndToEnd, 0.99)
 	return stats
 }
 
@@ -733,18 +733,18 @@ func intRange(start int, end int) []int {
 	return values
 }
 
-func recommendConcurrencyFromMetrics(p95MS float64, successRate float64, candidates []int) int {
+func recommendConcurrencyFromMetrics(p99MS float64, successRate float64, candidates []int) int {
 	target := 16
 	switch {
 	case successRate < 95:
 		target = 4
-	case p95MS <= 25:
+	case p99MS <= 25:
 		target = 64
-	case p95MS <= 50:
+	case p99MS <= 50:
 		target = 32
-	case p95MS <= 120:
+	case p99MS <= 120:
 		target = 16
-	case p95MS <= 250:
+	case p99MS <= 250:
 		target = 8
 	default:
 		target = 4
@@ -774,7 +774,7 @@ func buildConcurrencyResults(candidates []int, observations []PerformanceTestObs
 		}
 	}
 	if !hasBucketedObservations {
-		recommended := recommendConcurrencyFromMetrics(stats.EndToEndP95MS, stats.SuccessRate, candidates)
+		recommended := recommendConcurrencyFromMetrics(stats.EndToEndP99MS, stats.SuccessRate, candidates)
 		results := buildEstimatedConcurrencyResults(candidates, recommended, len(observations), stats)
 		for index := range results {
 			results[index].Diagnostics = diagnosticsByConcurrency[results[index].Concurrency]
@@ -809,9 +809,9 @@ func buildEstimatedConcurrencyResults(candidates []int, recommended int, message
 			pressure += float64(candidate-recommended) / float64(recommended) * 0.45
 		}
 		dispatchQPS := roundFloat(float64(candidate)*1000/baseAvg, 1)
-		completionP95 := stats.CompletionEndToEndP95MS
-		if completionP95 <= 0 {
-			completionP95 = stats.EndToEndP95MS
+		completionP99 := stats.CompletionEndToEndP99MS
+		if completionP99 <= 0 {
+			completionP99 = stats.EndToEndP99MS
 		}
 		results = append(results, PerformanceTestConcurrencyResult{
 			Concurrency:         candidate,
@@ -822,12 +822,12 @@ func buildEstimatedConcurrencyResults(candidates []int, recommended int, message
 			DispatchQPS:         dispatchQPS,
 			CompletionQPS:       dispatchQPS,
 			SendQPS:             dispatchQPS,
-			DispatchP95MS:       roundFloat(stats.EndToEndP95MS*pressure, 2),
-			CompletionP95MS:     roundFloat(completionP95*pressure, 2),
-			RouteP95MS:          roundFloat(stats.RouteP95MS*pressure, 2),
-			TemplateRenderP95MS: roundFloat(stats.TemplateRenderP95MS*pressure, 2),
-			InboundWriteP95MS:   roundFloat(stats.InboundP95MS*pressure, 2),
-			EndToEndP95MS:       roundFloat(stats.EndToEndP95MS*pressure, 2),
+			DispatchP99MS:       roundFloat(stats.EndToEndP99MS*pressure, 2),
+			CompletionP99MS:     roundFloat(completionP99*pressure, 2),
+			RouteP99MS:          roundFloat(stats.RouteP99MS*pressure, 2),
+			TemplateRenderP99MS: roundFloat(stats.TemplateRenderP99MS*pressure, 2),
+			InboundWriteP99MS:   roundFloat(stats.InboundP99MS*pressure, 2),
+			EndToEndP99MS:       roundFloat(stats.EndToEndP99MS*pressure, 2),
 			WallClockMS:         performanceWallClockDurationFromCount(messageCount, candidate, stats.EndToEndAvgMS),
 			Recommended:         candidate == recommended,
 			StageResults:        estimatedStageResults(stats, pressure, messageCount),
@@ -863,12 +863,12 @@ func concurrencyResultFromBucket(concurrency int, observations []PerformanceTest
 		DispatchQPS:         dispatchQPS,
 		CompletionQPS:       completionQPS,
 		SendQPS:             dispatchQPS,
-		DispatchP95MS:       stats.EndToEndP95MS,
-		CompletionP95MS:     stats.CompletionEndToEndP95MS,
-		RouteP95MS:          stats.RouteP95MS,
-		TemplateRenderP95MS: stats.TemplateRenderP95MS,
-		InboundWriteP95MS:   stats.InboundP95MS,
-		EndToEndP95MS:       stats.EndToEndP95MS,
+		DispatchP99MS:       stats.EndToEndP99MS,
+		CompletionP99MS:     stats.CompletionEndToEndP99MS,
+		RouteP99MS:          stats.RouteP99MS,
+		TemplateRenderP99MS: stats.TemplateRenderP99MS,
+		InboundWriteP99MS:   stats.InboundP99MS,
+		EndToEndP99MS:       stats.EndToEndP99MS,
 		WallClockMS:         dispatchDurationMS,
 		StageResults:        buildStageResults(observations, nil),
 	}
@@ -884,7 +884,7 @@ func estimatedStageResults(stats performanceObservationStats, pressure float64, 
 			Label:      "入站写库",
 			Count:      messageCount,
 			AvgMS:      roundFloat(stats.InboundAvgMS*pressure, 2),
-			P95MS:      roundFloat(stats.InboundP95MS*pressure, 2),
+			P99MS:      roundFloat(stats.InboundP99MS*pressure, 2),
 			DurationMS: int(math.Round(stats.InboundAvgMS * pressure * float64(messageCount))),
 		},
 		{
@@ -892,7 +892,7 @@ func estimatedStageResults(stats performanceObservationStats, pressure float64, 
 			Label:      "出站链路",
 			Count:      messageCount,
 			AvgMS:      roundFloat(stats.EndToEndAvgMS*pressure, 2),
-			P95MS:      roundFloat(stats.EndToEndP95MS*pressure, 2),
+			P99MS:      roundFloat(stats.EndToEndP99MS*pressure, 2),
 			DurationMS: int(math.Round(stats.EndToEndAvgMS * pressure * float64(messageCount))),
 		},
 		{
@@ -900,7 +900,7 @@ func estimatedStageResults(stats performanceObservationStats, pressure float64, 
 			Label:      "完整链路",
 			Count:      messageCount,
 			AvgMS:      roundFloat(stats.CompletionEndToEndAvgMS*pressure, 2),
-			P95MS:      roundFloat(stats.CompletionEndToEndP95MS*pressure, 2),
+			P99MS:      roundFloat(stats.CompletionEndToEndP99MS*pressure, 2),
 			DurationMS: int(math.Round(stats.CompletionEndToEndAvgMS * pressure * float64(messageCount))),
 		},
 	}
@@ -912,15 +912,15 @@ func recommendConcurrencyFromResults(results []PerformanceTestConcurrencyResult,
 	}
 	recommended := candidates[0]
 	bestQPS := -1.0
-	bestP95 := math.MaxFloat64
+	bestP99 := math.MaxFloat64
 	for _, item := range results {
 		if item.MessageCount == 0 || item.SuccessRate < 95 {
 			continue
 		}
-		if item.SendQPS > bestQPS || (item.SendQPS == bestQPS && item.EndToEndP95MS < bestP95) {
+		if item.SendQPS > bestQPS || (item.SendQPS == bestQPS && item.EndToEndP99MS < bestP99) {
 			recommended = item.Concurrency
 			bestQPS = item.SendQPS
-			bestP95 = item.EndToEndP95MS
+			bestP99 = item.EndToEndP99MS
 		}
 	}
 	return recommended
@@ -1050,7 +1050,7 @@ func stageResult(key string, label string, durations []int) PerformanceTestStage
 		Label:      label,
 		Count:      len(durations),
 		AvgMS:      averageInt(durations),
-		P95MS:      percentileInt(durations, 0.95),
+		P99MS:      percentileInt(durations, 0.99),
 		DurationMS: int(sumInts(durations)),
 	}
 }
@@ -1059,7 +1059,7 @@ func recommendationReason(recommended int, stats performanceObservationStats) st
 	if stats.SuccessRate < 95 {
 		return "成功率偏低，建议先使用较小并发观察失败原因"
 	}
-	return "基于端到端 P95、路由选择耗时和成功率给出推荐并发"
+	return "基于端到端 P99、路由选择耗时和成功率给出推荐并发"
 }
 
 func collectDurations(observations []PerformanceTestObservation, pick func(PerformanceTestObservation) int) []int {

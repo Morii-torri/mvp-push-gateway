@@ -798,6 +798,62 @@ func TestWorkerProcessOneBuildsRequestResolvesTokenAndStoresSnapshots(t *testing
 	}
 }
 
+func TestWorkerLimitsUpstreamResponseSnapshotBody(t *testing.T) {
+	largeBody := strings.Repeat("x", maxUpstreamResponseBodyBytes+1024)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/plain")
+		_, _ = w.Write([]byte(largeBody))
+	}))
+	defer server.Close()
+
+	store := newMemoryRepository()
+	store.channels["channel-large-response"] = provider.Channel{
+		ID:               "channel-large-response",
+		ProviderType:     provider.ProviderWebhook,
+		Name:             "Large Response",
+		Enabled:          true,
+		ConcurrencyLimit: 1,
+		TimeoutMS:        1000,
+		SendConfig:       json.RawMessage(`{"method":"POST","url":"` + server.URL + `/send"}`),
+	}
+	store.addAttempt(Attempt{
+		ID:        "attempt-large-response",
+		MessageID: "message-large-response",
+		ChannelID: "channel-large-response",
+		Status:    StatusQueued,
+	})
+	job := newSendJob("job-large-response", "channel-large-response", 1, time.Now(), SendMessageJobPayload{
+		DeliveryAttemptID: "attempt-large-response",
+		MessageType:       "json",
+		TraceID:           "trace-large-response",
+		Body:              json.RawMessage(`{"body":{"title":"large"}}`),
+	})
+	store.addJob(job)
+
+	worker := NewWorker(store,
+		WithHTTPClientFactory(func(timeout time.Duration) *http.Client {
+			client := server.Client()
+			client.Timeout = timeout
+			return client
+		}),
+	)
+
+	if err := worker.ProcessOne(context.Background(), store.jobs[job.ID]); err != nil {
+		t.Fatalf("process one with large response body: %v", err)
+	}
+
+	attempt := store.attempts["attempt-large-response"]
+	if attempt.Status != StatusSent {
+		t.Fatalf("expected attempt sent, got %s", attempt.Status)
+	}
+	if len(attempt.ResponseSnapshot) > maxUpstreamResponseBodyBytes+4096 {
+		t.Fatalf("expected response snapshot to be bounded, got %d bytes", len(attempt.ResponseSnapshot))
+	}
+	if !jsonContains(t, attempt.ResponseSnapshot, `"body_truncated":true`) {
+		t.Fatalf("expected truncated response marker, got %s", attempt.ResponseSnapshot)
+	}
+}
+
 func TestWorkerUsesCapabilityTokenPlacementWhenChannelHasNoExplicitPlacement(t *testing.T) {
 	var tokenQuery string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

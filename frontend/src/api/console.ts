@@ -598,7 +598,7 @@ export type PerformanceTestStageResult = {
   label: string;
   count: number;
   avg_ms: number;
-  p95_ms: number;
+  p99_ms: number;
   duration_ms: number;
 };
 
@@ -611,12 +611,12 @@ export type PerformanceTestConcurrencyResult = {
   dispatch_qps: number;
   completion_qps: number;
   send_qps: number;
-  dispatch_p95_ms: number;
-  completion_p95_ms: number;
-  route_p95_ms: number;
-  template_render_p95_ms: number;
-  inbound_write_p95_ms: number;
-  end_to_end_p95_ms: number;
+  dispatch_p99_ms: number;
+  completion_p99_ms: number;
+  route_p99_ms: number;
+  template_render_p99_ms: number;
+  inbound_write_p99_ms: number;
+  end_to_end_p99_ms: number;
   wall_clock_ms: number;
   recommended: boolean;
   diagnostics: PerformanceRuntimeDiagnostics;
@@ -676,13 +676,13 @@ export type PerformanceTestResult = {
   failed_count: number;
   success_rate: number;
   avg_inbound_ms: number;
-  p95_inbound_ms: number;
+  p99_inbound_ms: number;
   avg_route_ms: number;
-  route_p95_ms: number;
+  route_p99_ms: number;
   avg_template_render_ms: number;
-  template_render_p95_ms: number;
+  template_render_p99_ms: number;
   avg_end_to_end_ms: number;
-  end_to_end_p95_ms: number;
+  end_to_end_p99_ms: number;
   slow_rule_count: number;
   recommended_global_concurrency: number;
   estimated_accepted_qps: number;
@@ -690,7 +690,7 @@ export type PerformanceTestResult = {
   estimated_completion_qps: number;
   estimated_send_qps: number;
   completion_end_to_end_avg_ms: number;
-  completion_end_to_end_p95_ms: number;
+  completion_end_to_end_p99_ms: number;
   duration_ms: number;
   recommendation_reason: string;
   updated_setting_key: string;

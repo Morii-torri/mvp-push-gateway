@@ -2493,12 +2493,12 @@ function performanceComparisonRows(result: PerformanceTestResult | null) {
         dispatch_qps: 0,
         completion_qps: 0,
         send_qps: 0,
-        dispatch_p95_ms: 0,
-        completion_p95_ms: 0,
-        route_p95_ms: 0,
-        template_render_p95_ms: 0,
-        inbound_write_p95_ms: 0,
-        end_to_end_p95_ms: 0,
+        dispatch_p99_ms: 0,
+        completion_p99_ms: 0,
+        route_p99_ms: 0,
+        template_render_p99_ms: 0,
+        inbound_write_p99_ms: 0,
+        end_to_end_p99_ms: 0,
         wall_clock_ms: 0,
         recommended: false,
         diagnostics: defaultPerformanceDiagnostics(),
@@ -2547,12 +2547,12 @@ function performanceCompletionQPS(row?: PerformanceComparisonRow | null) {
   return row?.completion_qps ?? row?.send_qps ?? 0;
 }
 
-function performanceDispatchP95(row?: PerformanceComparisonRow | null) {
-  return row?.dispatch_p95_ms ?? row?.end_to_end_p95_ms ?? 0;
+function performanceDispatchP99(row?: PerformanceComparisonRow | null) {
+  return row?.dispatch_p99_ms ?? row?.end_to_end_p99_ms ?? 0;
 }
 
-function performanceCompletionP95(row?: PerformanceComparisonRow | null) {
-  return row?.completion_p95_ms ?? row?.end_to_end_p95_ms ?? 0;
+function performanceCompletionP99(row?: PerformanceComparisonRow | null) {
+  return row?.completion_p99_ms ?? row?.end_to_end_p99_ms ?? 0;
 }
 
 export function performanceStageRowsForSelection(
@@ -2627,11 +2627,11 @@ function performanceBottleneckSummary(
     );
   }
   if (
-    result.p95_inbound_ms >=
-    Math.max(result.route_p95_ms, result.template_render_p95_ms) * 1.5
+    result.p99_inbound_ms >=
+    Math.max(result.route_p99_ms, result.template_render_p99_ms) * 1.5
   ) {
     evidence.push(
-      `入站写库 P95 ${formatPerformanceNumber(result.p95_inbound_ms, " ms")}`,
+      `入站写库 P99 ${formatPerformanceNumber(result.p99_inbound_ms, " ms")}`,
     );
   }
   if (diagnostics.goroutine_growth_warning) {
@@ -2640,7 +2640,7 @@ function performanceBottleneckSummary(
   if (!evidence.length) {
     evidence.push("未发现明显资源瓶颈");
   }
-  if (waitAvg >= 100 || result.p95_inbound_ms >= 1000) {
+  if (waitAvg >= 100 || result.p99_inbound_ms >= 1000) {
     return {
       tone: "warning",
       title: "主要瓶颈：PostgreSQL 连接池等待",
@@ -2713,7 +2713,7 @@ export function performanceDiagnosticGaugeRows(
   const dbPercent = performanceGaugePercent(
     Math.max(
       percentOfThreshold(waitAvg, 100),
-      percentOfThreshold(row?.inbound_write_p95_ms ?? 0, 1000),
+      percentOfThreshold(row?.inbound_write_p99_ms ?? 0, 1000),
     ),
   );
   const queuePercent = performanceGaugePercent(
@@ -2837,18 +2837,18 @@ function performanceConcurrencyDetailRows(
       note: "当前并发档位",
     },
     {
-      label: "出站 P95",
-      value: formatPerformanceNumber(performanceDispatchP95(row), " ms"),
+      label: "出站 P99",
+      value: formatPerformanceNumber(performanceDispatchP99(row), " ms"),
       note: "入站到请求发出",
     },
     {
-      label: "完成端到端 P95",
-      value: formatPerformanceNumber(performanceCompletionP95(row), " ms"),
+      label: "完成端到端 P99",
+      value: formatPerformanceNumber(performanceCompletionP99(row), " ms"),
       note: "入站到结果落库",
     },
     {
-      label: "入站接收 P95",
-      value: formatPerformanceNumber(row?.inbound_write_p95_ms, " ms"),
+      label: "入站接收 P99",
+      value: formatPerformanceNumber(row?.inbound_write_p99_ms, " ms"),
       note: "接收、主记录写入与入队",
     },
   ];
@@ -2976,9 +2976,9 @@ function PerformanceTestResultView({
       footnote: "请求发出即计入",
     },
     {
-      label: "推荐出站 P95",
-      value: formatPerformanceNumber(performanceDispatchP95(recommendedRow), " ms"),
-      delta: `完整 P95 ${formatPerformanceNumber(performanceCompletionP95(recommendedRow), " ms")}`,
+      label: "推荐出站 P99",
+      value: formatPerformanceNumber(performanceDispatchP99(recommendedRow), " ms"),
+      delta: `完整 P99 ${formatPerformanceNumber(performanceCompletionP99(recommendedRow), " ms")}`,
       trend: "flat" as const,
       accent: "orange" as const,
       footnote: "入站到请求发出",
@@ -3075,7 +3075,7 @@ function PerformanceTestResultView({
             <Typography.Title level={5}>阶段耗时</Typography.Title>
             <Typography.Text type="secondary">
               {selectedRow
-                ? `并发 ${selectedRow.concurrency}，只展示当前档位 P95 与平均值`
+                ? `并发 ${selectedRow.concurrency}，只展示当前档位 P99 与平均值`
                 : "等待运行"}
             </Typography.Text>
           </div>
@@ -3083,7 +3083,7 @@ function PerformanceTestResultView({
             {stageRows.map((stage) => (
               <div key={stage.key} className="performance-test-stage-item">
                 <span>{stage.label}</span>
-                <strong>{formatPerformanceNumber(stage.p95_ms, " ms")}</strong>
+                <strong>{formatPerformanceNumber(stage.p99_ms, " ms")}</strong>
                 <Typography.Text type="secondary">
                   {formatPerformanceNumber(stage.count)} 次 / 平均{" "}
                   {formatPerformanceNumber(stage.avg_ms, " ms")} / 总{" "}
@@ -3150,18 +3150,18 @@ function PerformanceTestResultView({
               series={[
                 {
                   key: "dispatch",
-                  label: "出站 P95",
+                  label: "出站 P99",
                   color: "#f79009",
                   points: comparisonRows.map((row) =>
-                    performanceDispatchP95(row),
+                    performanceDispatchP99(row),
                   ),
                 },
                 {
                   key: "completion",
-                  label: "完整 P95",
+                  label: "完整 P99",
                   color: "#f04438",
                   points: comparisonRows.map((row) =>
-                    performanceCompletionP95(row),
+                    performanceCompletionP99(row),
                   ),
                 },
               ]}
@@ -3793,7 +3793,7 @@ export function OverviewPage({ lastUpdated, onRefresh }: ConsolePageProps) {
       { title: "失败数", dataIndex: "failures", align: "right", width: 90 },
       { title: "QPS", dataIndex: "qps", align: "right", width: 90 },
       { title: "平均耗时", dataIndex: "latency", align: "right", width: 110 },
-      { title: "P95", dataIndex: "p95", align: "right", width: 90 },
+      { title: "P99", dataIndex: "p99", align: "right", width: 90 },
       {
         title: "限流次数",
         dataIndex: "rateLimited",
@@ -3811,7 +3811,7 @@ export function OverviewPage({ lastUpdated, onRefresh }: ConsolePageProps) {
       "failures",
       "qps",
       "latency",
-      "p95",
+      "p99",
       "rateLimited",
       "lastError",
     ],
@@ -13173,10 +13173,10 @@ export function QueueMonitorPage({ lastUpdated, onRefresh }: ConsolePageProps) {
         render: (value: number) => formatHitCount(value),
       },
       { title: "平均耗时", dataIndex: "avgDuration", align: "right" },
-      { title: "P95 耗时", dataIndex: "p95", align: "right" },
+      { title: "P99 耗时", dataIndex: "p99", align: "right" },
     ],
     slowRuleSort.state,
-    ["source", "routeGroup", "rule", "hitCount", "avgDuration", "p95"],
+    ["source", "routeGroup", "rule", "hitCount", "avgDuration", "p99"],
   );
   const platformHealthRows = sortRowsByTableState(
     viewModel.platformHealth,

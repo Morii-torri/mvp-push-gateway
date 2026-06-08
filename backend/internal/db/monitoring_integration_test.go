@@ -56,7 +56,7 @@ func TestRepositoryGetQueueMonitoringSnapshotAggregatesOperationalMetrics(t *tes
 		Processed:     12,
 		Success:       12,
 		AvgDurationMS: 140,
-		P95DurationMS: 260,
+		P99DurationMS: 260,
 	})
 	insertWorkerMetric(t, ctx, pool, workerMetricRow{
 		ID:            testUUID(12004),
@@ -70,7 +70,7 @@ func TestRepositoryGetQueueMonitoringSnapshotAggregatesOperationalMetrics(t *tes
 		RateLimited:   4,
 		DeadLettered:  1,
 		AvgDurationMS: 320,
-		P95DurationMS: 900,
+		P99DurationMS: 900,
 	})
 	insertDeadLetterJob(t, ctx, pool, deadLetterRow{
 		ID:             testUUID(12005),
@@ -110,10 +110,10 @@ func TestRepositoryGetQueueMonitoringSnapshotAggregatesOperationalMetrics(t *tes
 	if snapshot.Summary.OldestJobWaitSeconds != int64((18 * time.Minute).Seconds()) {
 		t.Fatalf("expected oldest wait 18 minutes, got %d seconds", snapshot.Summary.OldestJobWaitSeconds)
 	}
-	if snapshot.Summary.PlanningAvgDurationMS != 140 || snapshot.Summary.PlanningP95DurationMS != 260 {
+	if snapshot.Summary.PlanningAvgDurationMS != 140 || snapshot.Summary.PlanningP99DurationMS != 260 {
 		t.Fatalf("unexpected planning durations: %+v", snapshot.Summary)
 	}
-	if snapshot.Summary.SendingAvgDurationMS != 320 || snapshot.Summary.SendingP95DurationMS != 900 {
+	if snapshot.Summary.SendingAvgDurationMS != 320 || snapshot.Summary.SendingP99DurationMS != 900 {
 		t.Fatalf("unexpected sending durations: %+v", snapshot.Summary)
 	}
 	if snapshot.Summary.RateLimitedCount != 4 {
@@ -173,7 +173,7 @@ func TestRepositoryGetOverviewStatisticsBuildsStable24hDashboard(t *testing.T) {
 		Failed:        1,
 		RateLimited:   3,
 		AvgDurationMS: 240,
-		P95DurationMS: 600,
+		P99DurationMS: 600,
 	})
 	insertWorkerMetric(t, ctx, pool, workerMetricRow{
 		ID:            testUUID(12102),
@@ -186,7 +186,7 @@ func TestRepositoryGetOverviewStatisticsBuildsStable24hDashboard(t *testing.T) {
 		Failed:        0,
 		RateLimited:   0,
 		AvgDurationMS: 180,
-		P95DurationMS: 300,
+		P99DurationMS: 300,
 	})
 	insertDeliveryAttemptForStats(t, ctx, pool, deliveryAttemptRow{
 		SourceID:   testUUID(12103),
@@ -358,7 +358,7 @@ func TestRepositoryRunRetentionCleanupDeletesSmallBatchesAndPersistsLatestStatus
 			Processed:     1,
 			Success:       1,
 			AvgDurationMS: 100,
-			P95DurationMS: 150,
+			P99DurationMS: 150,
 		})
 		insertRouteRuleMetric(t, ctx, pool, routeRuleMetricRow{
 			ID:            testUUID(12225 + i),
@@ -370,7 +370,7 @@ func TestRepositoryRunRetentionCleanupDeletesSmallBatchesAndPersistsLatestStatus
 			Evaluated:     5,
 			Matched:       2,
 			AvgDurationMS: 210,
-			P95DurationMS: 420,
+			P99DurationMS: 420,
 		})
 		insertDeliveryAttemptForStats(t, ctx, pool, deliveryAttemptRow{
 			SourceID:     testUUID(12270 + i),
@@ -517,7 +517,7 @@ type workerMetricRow struct {
 	RateLimited   int
 	DeadLettered  int
 	AvgDurationMS int
-	P95DurationMS int
+	P99DurationMS int
 }
 
 func insertWorkerMetric(t *testing.T, ctx context.Context, pool *pgxpool.Pool, row workerMetricRow) {
@@ -529,7 +529,7 @@ func insertWorkerMetric(t *testing.T, ctx context.Context, pool *pgxpool.Pool, r
 			avg_duration_ms, p95_duration_ms
 		)
 		VALUES ($1, $2, $3, $4, NULLIF($5, '')::uuid, $6, $7, $8, $9, $10, $11, $12)
-	`, row.ID, row.BucketStart, row.WorkerType, row.JobType, row.ChannelID, row.Processed, row.Success, row.Failed, row.RateLimited, row.DeadLettered, row.AvgDurationMS, row.P95DurationMS); err != nil {
+	`, row.ID, row.BucketStart, row.WorkerType, row.JobType, row.ChannelID, row.Processed, row.Success, row.Failed, row.RateLimited, row.DeadLettered, row.AvgDurationMS, row.P99DurationMS); err != nil {
 		t.Fatalf("insert worker metric: %v", err)
 	}
 }
@@ -631,7 +631,7 @@ type routeRuleMetricRow struct {
 	Evaluated     int
 	Matched       int
 	AvgDurationMS int
-	P95DurationMS int
+	P99DurationMS int
 }
 
 func insertRouteRuleMetric(t *testing.T, ctx context.Context, pool *pgxpool.Pool, row routeRuleMetricRow) {
@@ -667,7 +667,7 @@ func insertRouteRuleMetric(t *testing.T, ctx context.Context, pool *pgxpool.Pool
 			evaluated, matched, avg_duration_ms, p95_duration_ms
 		)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-	`, row.ID, row.BucketStart, row.SourceID, row.FlowID, row.VersionID, row.RuleID, row.Evaluated, row.Matched, row.AvgDurationMS, row.P95DurationMS); err != nil {
+	`, row.ID, row.BucketStart, row.SourceID, row.FlowID, row.VersionID, row.RuleID, row.Evaluated, row.Matched, row.AvgDurationMS, row.P99DurationMS); err != nil {
 		t.Fatalf("insert route rule metric: %v", err)
 	}
 }

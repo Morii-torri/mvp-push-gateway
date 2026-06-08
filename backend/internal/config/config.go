@@ -30,6 +30,7 @@ type AppConfig struct {
 type ServerConfig struct {
 	Host           string
 	Port           string
+	PprofPort      string
 	APIPrefix      string
 	TrustedProxies []string
 }
@@ -79,6 +80,7 @@ func Load() Config {
 		Server: ServerConfig{
 			Host:           envOrDefault("MGP_HOST", defaultHost),
 			Port:           envOrDefault("MGP_PORT", defaultPort),
+			PprofPort:      strings.TrimSpace(os.Getenv("MGP_PPROF_PORT")),
 			APIPrefix:      normalizePrefix(envOrDefault("MGP_API_PREFIX", defaultAPIPrefix)),
 			TrustedProxies: parseCSV(os.Getenv("MGP_TRUSTED_PROXIES")),
 		},

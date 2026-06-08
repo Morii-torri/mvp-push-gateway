@@ -258,6 +258,46 @@ func TestProcessRoutePlanMessageAcksAfterSuccessfulPlanningWithoutPostgresJob(t 
 	}
 }
 
+func TestProcessRoutePlanMessagePublishesSendWhenPlanningPersistenceFails(t *testing.T) {
+	repo := newRoutePlanMessageRepoForSendPublisherTest()
+	repo.completePlanningErr = errors.New("planning persistence is slow")
+	repo.completePlanningCh = make(chan struct{}, 1)
+	publisher := &recordingSendPublisher{}
+	worker := NewWorker(repo, WithSendPublisher(publisher))
+	acked := false
+	nacked := false
+
+	err := worker.ProcessRoutePlanMessage(context.Background(), queue.RoutePlanMessage{
+		Event: queue.RoutePlanEvent{
+			MessageID: "message-jetstream",
+			SourceID:  "source-1",
+			TraceID:   "trace-jetstream",
+		},
+		Ack: func() error {
+			acked = true
+			return nil
+		},
+		Nak: func(time.Duration) error {
+			nacked = true
+			return nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("process route plan message with failing planning persistence: %v", err)
+	}
+	if !acked || nacked {
+		t.Fatalf("expected route plan message to ack after send publish, acked=%v nacked=%v", acked, nacked)
+	}
+	if len(publisher.events) != 1 {
+		t.Fatalf("expected send event to be published before planning persistence, got %d events", len(publisher.events))
+	}
+	select {
+	case <-repo.completePlanningCh:
+	case <-time.After(time.Second):
+		t.Fatalf("expected best-effort planning persistence to be attempted")
+	}
+}
+
 func TestWorkerPublishesSendEventsWhenSendPublisherConfigured(t *testing.T) {
 	repo := newRoutePlanMessageRepoForSendPublisherTest()
 	publisher := &recordingSendPublisher{}
@@ -447,6 +487,8 @@ type routePlanMessageRepo struct {
 	completePlanningCalls    int
 	getPlanningMessageCalls  int
 	failOnGetPlanningMessage bool
+	completePlanningErr      error
+	completePlanningCh       chan struct{}
 	completed                CompletePlanningParams
 }
 
@@ -500,7 +542,13 @@ func (r *routePlanMessageRepo) ResolveSystemRecipients(context.Context, ResolveS
 func (r *routePlanMessageRepo) CompletePlanning(_ context.Context, params CompletePlanningParams) error {
 	r.completePlanningCalls++
 	r.completed = params
-	return nil
+	if r.completePlanningCh != nil {
+		select {
+		case r.completePlanningCh <- struct{}{}:
+		default:
+		}
+	}
+	return r.completePlanningErr
 }
 
 func (r *routePlanMessageRepo) FinishPlanning(context.Context, FinishPlanningParams) error {

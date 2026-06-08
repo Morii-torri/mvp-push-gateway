@@ -68,8 +68,8 @@ func TestRunPerformanceTestUsesObservedBenchmarkMetrics(t *testing.T) {
 	if result.SuccessRate != 75 {
 		t.Fatalf("expected success rate 75, got %.2f", result.SuccessRate)
 	}
-	if result.RouteP95MS != 12 || result.EndToEndP95MS != 55 {
-		t.Fatalf("expected p95 metrics from observations, got route=%.2f e2e=%.2f", result.RouteP95MS, result.EndToEndP95MS)
+	if result.RouteP99MS != 12 || result.EndToEndP99MS != 55 {
+		t.Fatalf("expected p99 metrics from observations, got route=%.2f e2e=%.2f", result.RouteP99MS, result.EndToEndP99MS)
 	}
 	if result.SlowRuleCount != 1 {
 		t.Fatalf("expected slow rule count from observations, got %+v", result)
@@ -85,6 +85,44 @@ func TestRunPerformanceTestUsesObservedBenchmarkMetrics(t *testing.T) {
 	}
 	if string(store.values["runtime.delivery_global_concurrency"]) != jsonNumber(result.RecommendedGlobalConcurrency) {
 		t.Fatalf("expected runtime setting to be updated, got %s result=%+v", store.values["runtime.delivery_global_concurrency"], result)
+	}
+}
+
+func TestRunPerformanceTestUsesP99TailMetrics(t *testing.T) {
+	store := newMemorySettingsStore()
+	service := NewService(store)
+	observations := make([]PerformanceTestObservation, 0, 100)
+	for index := 1; index <= 100; index++ {
+		observations = append(observations, PerformanceTestObservation{
+			Concurrency:                  10,
+			InboundDurationMS:            index,
+			RouteDurationMS:              index,
+			TemplateRenderDurationMS:     index,
+			EndToEndDurationMS:           index,
+			CompletionEndToEndDurationMS: index + 100,
+			ConcurrencyRunDurationMS:     100,
+			Success:                      true,
+		})
+	}
+
+	result, err := service.RunPerformanceTest(context.Background(), PerformanceTestInput{
+		MessageCount:          100,
+		ConcurrencyCandidates: []int{10},
+		Observations:          observations,
+	})
+	if err != nil {
+		t.Fatalf("run observed performance test: %v", err)
+	}
+
+	if result.RouteP99MS != 99 || result.EndToEndP99MS != 99 || result.CompletionEndToEndP99MS != 199 {
+		t.Fatalf("expected tail metrics to use p99, got route=%.2f dispatch=%.2f completion=%.2f", result.RouteP99MS, result.EndToEndP99MS, result.CompletionEndToEndP99MS)
+	}
+	stages := map[string]PerformanceTestStageResult{}
+	for _, item := range result.StageResults {
+		stages[item.Key] = item
+	}
+	if stages["dispatch"].P99MS != 99 || stages["completion"].P99MS != 199 {
+		t.Fatalf("expected stage tail metrics to use p99, got dispatch=%+v completion=%+v", stages["dispatch"], stages["completion"])
 	}
 }
 
@@ -137,8 +175,8 @@ func TestRunPerformanceTestSplitsAcceptedDispatchAndCompletionMetrics(t *testing
 	if result.EstimatedCompletionQPS != 20 {
 		t.Fatalf("expected completion qps from full run duration, got %+v", result)
 	}
-	if result.EndToEndP95MS != 36 || result.CompletionEndToEndP95MS != 80 {
-		t.Fatalf("expected dispatch and completion p95 split, got dispatch=%.2f completion=%.2f", result.EndToEndP95MS, result.CompletionEndToEndP95MS)
+	if result.EndToEndP99MS != 36 || result.CompletionEndToEndP99MS != 80 {
+		t.Fatalf("expected dispatch and completion p99 split, got dispatch=%.2f completion=%.2f", result.EndToEndP99MS, result.CompletionEndToEndP99MS)
 	}
 	if len(result.ConcurrencyResults) != 1 {
 		t.Fatalf("expected one concurrency result, got %+v", result.ConcurrencyResults)
@@ -147,25 +185,25 @@ func TestRunPerformanceTestSplitsAcceptedDispatchAndCompletionMetrics(t *testing
 	if row.AcceptedQPS != 100 || row.DispatchQPS != 40 || row.SendQPS != 40 || row.CompletionQPS != 20 {
 		t.Fatalf("expected split qps on concurrency row, got %+v", row)
 	}
-	if row.DispatchP95MS != 36 || row.CompletionP95MS != 80 {
-		t.Fatalf("expected split p95 on concurrency row, got %+v", row)
+	if row.DispatchP99MS != 36 || row.CompletionP99MS != 80 {
+		t.Fatalf("expected split p99 on concurrency row, got %+v", row)
 	}
 	rowStages := map[string]PerformanceTestStageResult{}
 	for _, item := range row.StageResults {
 		rowStages[item.Key] = item
 	}
-	if rowStages["dispatch"].P95MS != 36 || rowStages["completion"].P95MS != 80 {
+	if rowStages["dispatch"].P99MS != 36 || rowStages["completion"].P99MS != 80 {
 		t.Fatalf("expected concurrency row stage metrics to follow its bucket, got %+v", row.StageResults)
 	}
 	stages := map[string]PerformanceTestStageResult{}
 	for _, item := range result.StageResults {
 		stages[item.Key] = item
 	}
-	if stages["dispatch"].Label != "出站链路" || stages["dispatch"].P95MS != 36 {
-		t.Fatalf("expected dispatch stage to use outbound end-to-end p95, got %+v", stages["dispatch"])
+	if stages["dispatch"].Label != "出站链路" || stages["dispatch"].P99MS != 36 {
+		t.Fatalf("expected dispatch stage to use outbound end-to-end p99, got %+v", stages["dispatch"])
 	}
-	if stages["completion"].Label != "完整链路" || stages["completion"].P95MS != 80 {
-		t.Fatalf("expected completion stage to keep full p95, got %+v", stages["completion"])
+	if stages["completion"].Label != "完整链路" || stages["completion"].P99MS != 80 {
+		t.Fatalf("expected completion stage to keep full p99, got %+v", stages["completion"])
 	}
 	if _, ok := stages["route"]; ok {
 		t.Fatalf("expected duplicate route wait stage to be removed, got %+v", result.StageResults)
@@ -295,20 +333,20 @@ func TestRunPerformanceTestIncludesInboundStageBreakdown(t *testing.T) {
 	for _, expected := range []struct {
 		key   string
 		label string
-		p95   float64
+		p99   float64
 	}{
-		{key: "source_lookup", label: "来源配置查询", p95: 3},
-		{key: "latest_payload", label: "最近 Payload 更新", p95: 4},
-		{key: "enqueue_inbound", label: "入站接收写入", p95: 17},
-		{key: "insert_message_record", label: "写入消息主记录", p95: 5},
-		{key: "insert_route_plan_job", label: "写入路由规划任务", p95: 6},
-		{key: "commit_inbound", label: "提交入站事务", p95: 7},
+		{key: "source_lookup", label: "来源配置查询", p99: 3},
+		{key: "latest_payload", label: "最近 Payload 更新", p99: 4},
+		{key: "enqueue_inbound", label: "入站接收写入", p99: 17},
+		{key: "insert_message_record", label: "写入消息主记录", p99: 5},
+		{key: "insert_route_plan_job", label: "写入路由规划任务", p99: 6},
+		{key: "commit_inbound", label: "提交入站事务", p99: 7},
 	} {
 		stage, ok := stages[expected.key]
 		if !ok {
 			t.Fatalf("expected stage %q in %+v", expected.key, result.StageResults)
 		}
-		if stage.Label != expected.label || stage.P95MS != expected.p95 {
+		if stage.Label != expected.label || stage.P99MS != expected.p99 {
 			t.Fatalf("unexpected stage %q: %+v", expected.key, stage)
 		}
 	}
@@ -355,22 +393,22 @@ func TestRunPerformanceTestIncludesWorkerStageBreakdown(t *testing.T) {
 	for _, expected := range []struct {
 		key   string
 		label string
-		p95   float64
+		p99   float64
 	}{
-		{key: "planning_claim", label: "路由任务领取", p95: 2},
-		{key: "route_plan_lookup", label: "路由缓存/加载", p95: 3},
-		{key: "route_condition", label: "条件判断", p95: 4},
-		{key: "planning_template_render", label: "规划模板渲染", p95: 5},
-		{key: "planning_complete", label: "写入投递任务", p95: 6},
-		{key: "delivery_claim", label: "发送任务领取", p95: 7},
-		{key: "delivery_send", label: "上级请求往返", p95: 9},
-		{key: "delivery_complete", label: "发送结果落库", p95: 10},
+		{key: "planning_claim", label: "路由任务领取", p99: 2},
+		{key: "route_plan_lookup", label: "路由缓存/加载", p99: 3},
+		{key: "route_condition", label: "条件判断", p99: 4},
+		{key: "planning_template_render", label: "规划模板渲染", p99: 5},
+		{key: "planning_complete", label: "写入投递任务", p99: 6},
+		{key: "delivery_claim", label: "发送任务领取", p99: 7},
+		{key: "delivery_send", label: "上级请求往返", p99: 9},
+		{key: "delivery_complete", label: "发送结果落库", p99: 10},
 	} {
 		stage, ok := stages[expected.key]
 		if !ok {
 			t.Fatalf("expected stage %q in %+v", expected.key, result.StageResults)
 		}
-		if stage.Label != expected.label || stage.P95MS != expected.p95 {
+		if stage.Label != expected.label || stage.P99MS != expected.p99 {
 			t.Fatalf("unexpected stage %q: %+v", expected.key, stage)
 		}
 	}
@@ -414,18 +452,18 @@ func TestRunPerformanceTestIncludesDBStageBreakdown(t *testing.T) {
 	for _, expected := range []struct {
 		key   string
 		label string
-		p95   float64
+		p99   float64
 	}{
-		{key: "db.acquire.claim_send_jobs", label: "DB 等待：发送任务领取", p95: 12},
-		{key: "db.query.claim_send_jobs", label: "SQL 执行：发送任务领取", p95: 8},
-		{key: "db.acquire.complete_delivery", label: "DB 等待：发送结果落库", p95: 7},
-		{key: "db.query.complete_delivery_batch", label: "SQL 执行：批量发送结果落库", p95: 5},
+		{key: "db.acquire.claim_send_jobs", label: "DB 等待：发送任务领取", p99: 12},
+		{key: "db.query.claim_send_jobs", label: "SQL 执行：发送任务领取", p99: 8},
+		{key: "db.acquire.complete_delivery", label: "DB 等待：发送结果落库", p99: 7},
+		{key: "db.query.complete_delivery_batch", label: "SQL 执行：批量发送结果落库", p99: 5},
 	} {
 		stage, ok := stages[expected.key]
 		if !ok {
 			t.Fatalf("expected db stage %q in %+v", expected.key, result.StageResults)
 		}
-		if stage.Label != expected.label || stage.P95MS != expected.p95 {
+		if stage.Label != expected.label || stage.P99MS != expected.p99 {
 			t.Fatalf("unexpected db stage %q: %+v", expected.key, stage)
 		}
 	}

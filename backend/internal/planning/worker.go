@@ -186,6 +186,10 @@ type SendPublisher interface {
 	PublishSend(context.Context, queue.SendMessageEvent) (queue.PublishResult, error)
 }
 
+type SendBatchPublisher interface {
+	PublishSendBatch(context.Context, []queue.SendMessageEvent) ([]queue.PublishResult, error)
+}
+
 type Worker struct {
 	repo          Repository
 	workerID      string
@@ -413,18 +417,41 @@ func (w *Worker) processMessage(ctx context.Context, job queue.Job, message Mess
 		RuleMetrics:       metrics,
 		ExternalSendQueue: w.sendPublisher != nil,
 	}
-	if direct && w.sendPublisher != nil {
-		return w.publishSendEvents(ctx, message.TraceID, attempts)
+	if w.sendPublisher != nil {
+		if err := w.publishSendEvents(ctx, message.TraceID, attempts); err != nil {
+			return err
+		}
+		if direct {
+			return nil
+		}
+		if strings.TrimSpace(job.ID) == "" {
+			w.completePlanningBestEffort(message.TraceID, completeParams)
+			return nil
+		}
 	}
 	err = w.repo.CompletePlanning(ctx, completeParams)
 	recordTiming(ctx, message.TraceID, TimingComplete, time.Since(completeStartedAt))
 	if err != nil {
 		return err
 	}
-	if w.sendPublisher != nil {
-		return w.publishSendEvents(ctx, message.TraceID, attempts)
+	if w.sendPublisher == nil {
+		return nil
 	}
 	return nil
+}
+
+func (w *Worker) completePlanningBestEffort(traceID string, params CompletePlanningParams) {
+	if w == nil || w.repo == nil {
+		return
+	}
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		startedAt := time.Now()
+		if err := w.repo.CompletePlanning(ctx, params); err == nil {
+			recordTiming(ctx, traceID, TimingComplete, time.Since(startedAt))
+		}
+	}()
 }
 
 func (w *Worker) routePlan(ctx context.Context, sourceID string) (RoutePlan, error) {
@@ -656,9 +683,9 @@ func (w *Worker) buildAttempts(ctx context.Context, message MessageRecord, rule 
 }
 
 func (w *Worker) publishSendEvents(ctx context.Context, traceID string, attempts []DeliveryAttemptPlan) error {
-	var err error
+	events := make([]queue.SendMessageEvent, 0, len(attempts))
 	for _, attempt := range attempts {
-		if _, itemErr := w.sendPublisher.PublishSend(ctx, queue.SendMessageEvent{
+		events = append(events, queue.SendMessageEvent{
 			DeliveryAttemptID: strings.TrimSpace(attempt.ID),
 			MessageID:         strings.TrimSpace(attempt.MessageID),
 			SourceID:          strings.TrimSpace(attempt.SourceID),
@@ -667,7 +694,15 @@ func (w *Worker) publishSendEvents(ctx context.Context, traceID string, attempts
 			TraceID:           strings.TrimSpace(traceID),
 			MaxAttempts:       attempt.MaxAttempts,
 			Payload:           append(json.RawMessage(nil), attempt.JobPayload...),
-		}); itemErr != nil {
+		})
+	}
+	if batchPublisher, ok := w.sendPublisher.(SendBatchPublisher); ok {
+		_, err := batchPublisher.PublishSendBatch(ctx, events)
+		return err
+	}
+	var err error
+	for _, event := range events {
+		if _, itemErr := w.sendPublisher.PublishSend(ctx, event); itemErr != nil {
 			err = errors.Join(err, itemErr)
 		}
 	}

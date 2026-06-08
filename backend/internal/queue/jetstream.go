@@ -11,6 +11,16 @@ type StreamPublisher interface {
 	Publish(ctx context.Context, subject string, messageID string, payload []byte) (PublishResult, error)
 }
 
+type StreamPublishMessage struct {
+	Subject   string
+	MessageID string
+	Payload   []byte
+}
+
+type StreamBatchPublisher interface {
+	PublishBatch(ctx context.Context, messages []StreamPublishMessage) ([]PublishResult, error)
+}
+
 type StreamMessage struct {
 	Data          []byte
 	DeliveryCount int
@@ -53,6 +63,38 @@ func (b *JetStreamBroker) PublishSend(ctx context.Context, event SendMessageEven
 		return PublishResult{}, err
 	}
 	return b.publish(ctx, event.Subject(), event.MessageIDForDedup(), event)
+}
+
+func (b *JetStreamBroker) PublishSendBatch(ctx context.Context, events []SendMessageEvent) ([]PublishResult, error) {
+	if len(events) == 0 {
+		return nil, nil
+	}
+	messages := make([]StreamPublishMessage, 0, len(events))
+	for _, event := range events {
+		if err := event.Validate(); err != nil {
+			return nil, err
+		}
+		message, err := streamPublishMessage(event.Subject(), event.MessageIDForDedup(), event)
+		if err != nil {
+			return nil, err
+		}
+		messages = append(messages, message)
+	}
+	if b == nil || b.publisher == nil {
+		return nil, ErrInvalidInput
+	}
+	if batchPublisher, ok := b.publisher.(StreamBatchPublisher); ok {
+		return batchPublisher.PublishBatch(ctx, messages)
+	}
+	results := make([]PublishResult, 0, len(messages))
+	for _, message := range messages {
+		result, err := b.publisher.Publish(ctx, message.Subject, message.MessageID, message.Payload)
+		if err != nil {
+			return results, err
+		}
+		results = append(results, result)
+	}
+	return results, nil
 }
 
 func (b *JetStreamBroker) PublishResult(ctx context.Context, event DeliveryResultEvent) (PublishResult, error) {
@@ -109,11 +151,23 @@ func (b *JetStreamBroker) publish(ctx context.Context, subject string, messageID
 	if b == nil || b.publisher == nil {
 		return PublishResult{}, ErrInvalidInput
 	}
-	payload, err := json.Marshal(event)
+	message, err := streamPublishMessage(subject, messageID, event)
 	if err != nil {
 		return PublishResult{}, err
 	}
-	return b.publisher.Publish(ctx, subject, messageID, payload)
+	return b.publisher.Publish(ctx, message.Subject, message.MessageID, message.Payload)
+}
+
+func streamPublishMessage(subject string, messageID string, event any) (StreamPublishMessage, error) {
+	payload, err := json.Marshal(event)
+	if err != nil {
+		return StreamPublishMessage{}, err
+	}
+	return StreamPublishMessage{
+		Subject:   subject,
+		MessageID: messageID,
+		Payload:   payload,
+	}, nil
 }
 
 func (b *JetStreamBroker) subscribe(ctx context.Context, subject string, durable string, handler StreamMessageHandler) error {

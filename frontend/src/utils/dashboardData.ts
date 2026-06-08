@@ -28,7 +28,7 @@ export type OverviewApiResponse = {
     failures: number;
     rate_limited: number;
     avg_duration_ms: number;
-    p95_duration_ms: number;
+    p99_duration_ms: number;
     last_error: string;
   }>;
   failure_rankings: Array<{
@@ -51,9 +51,9 @@ export type QueueMonitoringApiResponse = {
     send_message_pending: number;
     oldest_job_wait_seconds: number;
     planning_avg_duration_ms: number;
-    planning_p95_duration_ms: number;
+    planning_p99_duration_ms: number;
     sending_avg_duration_ms: number;
-    sending_p95_duration_ms: number;
+    sending_p99_duration_ms: number;
     platform_failure_rate: number;
     rate_limited_count: number;
     dead_letter_count: number;
@@ -75,7 +75,7 @@ export type QueueMonitoringApiResponse = {
     route_plan_processed: number;
     send_message_processed: number;
     dead_letters: number;
-    p95_duration_ms: number;
+    p99_duration_ms: number;
   }>;
   slow_rules: Array<{
     rule_id: string;
@@ -84,7 +84,7 @@ export type QueueMonitoringApiResponse = {
     rule: string;
     hit_count: number;
     avg_duration_ms: number;
-    p95_duration_ms: number;
+    p99_duration_ms: number;
   }>;
   cleanup_status: {
     last_run_at: string | null;
@@ -119,7 +119,7 @@ export type PlatformRankingRow = {
   failures: string;
   rateLimited: number;
   latency: string;
-  p95: string;
+  p99: string;
   lastError: string;
 };
 
@@ -190,7 +190,7 @@ export function defaultQueueMonitoringViewModel(): QueueMonitoringViewModel {
       metricCard('plan', '路由规划积压', '0', '待规划任务数', 'flat', 'blue', 'route_plan'),
       metricCard('send', '出站发送积压', '0', '待发送任务数', 'flat', 'green', 'send_message'),
       metricCard('oldest', '最老任务等待', '0 秒', '跨队列最老等待时间', 'flat', 'orange'),
-      metricCard('planning', '路由规划平均耗时', '0 ms', 'P95 0 ms', 'flat', 'purple'),
+      metricCard('planning', '路由规划平均耗时', '0 ms', 'P99 0 ms', 'flat', 'purple'),
       metricCard('success', '平台成功率', '100.00%', '失败率 0.00%', 'flat', 'green'),
       metricCard('dead', '死信数量', '0', '限流 0 次', 'flat', 'red'),
     ],
@@ -260,7 +260,7 @@ export function buildOverviewViewModel(data: OverviewApiResponse, window: Dashbo
       failures: formatInteger(item.failures),
       rateLimited: item.rate_limited,
       latency: formatMilliseconds(item.avg_duration_ms),
-      p95: formatMilliseconds(item.p95_duration_ms),
+      p99: formatMilliseconds(item.p99_duration_ms),
       lastError: item.last_error || '-',
     })),
     failureReasons: data.failure_rankings.map((item) => ({
@@ -312,7 +312,7 @@ export function buildQueueMonitoringViewModel(data: QueueMonitoringApiResponse, 
         'planning',
         '路由规划平均耗时',
         formatMilliseconds(data.summary.planning_avg_duration_ms),
-        `P95 ${formatMilliseconds(data.summary.planning_p95_duration_ms)}`,
+        `P99 ${formatMilliseconds(data.summary.planning_p99_duration_ms)}`,
         'flat',
         'purple',
       ),
@@ -354,7 +354,7 @@ export function buildQueueMonitoringViewModel(data: QueueMonitoringApiResponse, 
       rule: item.rule,
       hitCount: item.hit_count,
       avgDuration: formatMilliseconds(item.avg_duration_ms),
-      p95: formatMilliseconds(item.p95_duration_ms),
+      p99: formatMilliseconds(item.p99_duration_ms),
     })),
     cleanupRows: [
       {

@@ -85,7 +85,7 @@ export const platformRanking = [
     failures: '3,992',
     rateLimited: 12,
     latency: '268 ms',
-    p95: '612 ms',
+    p99: '612 ms',
     lastError: '-',
   },
   {
@@ -97,7 +97,7 @@ export const platformRanking = [
     failures: '3,653',
     rateLimited: 18,
     latency: '305 ms',
-    p95: '733 ms',
+    p99: '733 ms',
     lastError: '-',
   },
   {
@@ -109,7 +109,7 @@ export const platformRanking = [
     failures: '3,312',
     rateLimited: 28,
     latency: '341 ms',
-    p95: '981 ms',
+    p99: '981 ms',
     lastError: '目标平台超时',
   },
   {
@@ -121,7 +121,7 @@ export const platformRanking = [
     failures: '2,444',
     rateLimited: 9,
     latency: '289 ms',
-    p95: '654 ms',
+    p99: '654 ms',
     lastError: '-',
   },
   {
@@ -133,7 +133,7 @@ export const platformRanking = [
     failures: '2,120',
     rateLimited: 16,
     latency: '327 ms',
-    p95: '802 ms',
+    p99: '802 ms',
     lastError: '频率限制',
   },
 ];
@@ -829,7 +829,7 @@ export type SlowRule = {
   rule: string;
   hitCount: number;
   avgDuration: string;
-  p95: string;
+  p99: string;
 };
 
 export const slowRules: SlowRule[] = [
@@ -840,7 +840,7 @@ export const slowRules: SlowRule[] = [
     rule: '跨部门数据同步_全量',
     hitCount: 12586,
     avgDuration: '1,856 ms',
-    p95: '4,325 ms',
+    p99: '4,325 ms',
   },
   {
     id: 'slow-2',
@@ -849,7 +849,7 @@ export const slowRules: SlowRule[] = [
     rule: '批量文件推送_大附件',
     hitCount: 8475,
     avgDuration: '1,243 ms',
-    p95: '2,891 ms',
+    p99: '2,891 ms',
   },
   {
     id: 'slow-3',
@@ -858,7 +858,7 @@ export const slowRules: SlowRule[] = [
     rule: '短信通知_政务',
     hitCount: 21348,
     avgDuration: '876 ms',
-    p95: '2,102 ms',
+    p99: '2,102 ms',
   },
 ];
 

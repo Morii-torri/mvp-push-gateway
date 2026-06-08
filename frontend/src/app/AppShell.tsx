@@ -204,7 +204,7 @@ export function buildHeaderNotificationState(
   addCounted({
     key: "send-message-pending",
     title: "出站发送积压",
-    description: `还有 ${summary?.send_message_pending ?? 0} 条消息等待发送，发送 P95 ${summary?.sending_p95_duration_ms ?? 0} ms`,
+    description: `还有 ${summary?.send_message_pending ?? 0} 条消息等待发送，发送 P99 ${summary?.sending_p99_duration_ms ?? 0} ms`,
     count: summary?.send_message_pending ?? 0,
     tone: "processing",
   });

@@ -9,6 +9,7 @@ import (
 func TestLoadUsesSafeDefaults(t *testing.T) {
 	t.Setenv("MGP_HOST", "")
 	t.Setenv("MGP_PORT", "")
+	t.Setenv("MGP_PPROF_PORT", "")
 	t.Setenv("MGP_API_PREFIX", "")
 	t.Setenv("MGP_APP_NAME", "")
 	t.Setenv("MGP_ENVIRONMENT", "")
@@ -21,6 +22,9 @@ func TestLoadUsesSafeDefaults(t *testing.T) {
 	}
 	if cfg.Server.Port != "8080" {
 		t.Fatalf("expected default port 8080, got %q", cfg.Server.Port)
+	}
+	if cfg.Server.PprofPort != "" {
+		t.Fatalf("expected pprof port to be disabled by default, got %q", cfg.Server.PprofPort)
 	}
 	if cfg.Server.APIPrefix != "/api/v1" {
 		t.Fatalf("expected default API prefix /api/v1, got %q", cfg.Server.APIPrefix)
@@ -45,6 +49,16 @@ func TestLoadUsesSafeDefaults(t *testing.T) {
 	}
 	if cfg.Postgres.MaintenancePool.MaxConns != 6 {
 		t.Fatalf("expected default maintenance pool max connections 6, got %d", cfg.Postgres.MaintenancePool.MaxConns)
+	}
+}
+
+func TestLoadAllowsPprofPortOverride(t *testing.T) {
+	t.Setenv("MGP_PPROF_PORT", "6060")
+
+	cfg := config.Load()
+
+	if cfg.Server.PprofPort != "6060" {
+		t.Fatalf("expected pprof port override 6060, got %q", cfg.Server.PprofPort)
 	}
 }
 

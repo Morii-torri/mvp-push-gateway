@@ -40,6 +40,38 @@ func TestJetStreamBrokerPublishesSendEventWithSubjectAndMessageID(t *testing.T) 
 	}
 }
 
+func TestJetStreamBrokerPublishesSendBatchThroughBatchPublisher(t *testing.T) {
+	publisher := &recordingBatchPublisher{}
+	broker := NewJetStreamBroker(publisher)
+
+	results, err := broker.PublishSendBatch(context.Background(), []SendMessageEvent{
+		{
+			DeliveryAttemptID: "attempt-1",
+			ChannelID:         "channel-1",
+			ProviderType:      "webhook",
+			TraceID:           "trace-1",
+		},
+		{
+			DeliveryAttemptID: "attempt-2",
+			ChannelID:         "channel-2",
+			ProviderType:      "email",
+			TraceID:           "trace-2",
+		},
+	})
+	if err != nil {
+		t.Fatalf("publish send batch: %v", err)
+	}
+	if len(results) != 2 || len(publisher.messages) != 2 {
+		t.Fatalf("expected two batch publish results/messages, got results=%d messages=%d", len(results), len(publisher.messages))
+	}
+	if publisher.messages[0].Subject != "mgp.send.webhook.channel-1" || publisher.messages[1].Subject != "mgp.send.email.channel-2" {
+		t.Fatalf("unexpected batch subjects: %+v", publisher.messages)
+	}
+	if publisher.messages[0].MessageID != "attempt-1" || publisher.messages[1].MessageID != "attempt-2" {
+		t.Fatalf("unexpected batch message ids: %+v", publisher.messages)
+	}
+}
+
 func TestJetStreamBrokerRejectsInvalidResultEventBeforePublish(t *testing.T) {
 	publisher := &recordingPublisher{}
 	broker := NewJetStreamBroker(publisher)
@@ -176,6 +208,28 @@ func (p *recordingPublisher) Publish(ctx context.Context, subject string, messag
 	p.messageID = messageID
 	p.payload = append([]byte(nil), payload...)
 	return PublishResult{Stream: "MGP_SEND", Sequence: 42}, ctx.Err()
+}
+
+type recordingBatchPublisher struct {
+	messages []StreamPublishMessage
+}
+
+func (p *recordingBatchPublisher) Publish(ctx context.Context, subject string, messageID string, payload []byte) (PublishResult, error) {
+	p.messages = append(p.messages, StreamPublishMessage{
+		Subject:   subject,
+		MessageID: messageID,
+		Payload:   append([]byte(nil), payload...),
+	})
+	return PublishResult{Stream: "MGP_SEND", Sequence: uint64(len(p.messages))}, ctx.Err()
+}
+
+func (p *recordingBatchPublisher) PublishBatch(ctx context.Context, messages []StreamPublishMessage) ([]PublishResult, error) {
+	p.messages = append(p.messages, messages...)
+	results := make([]PublishResult, 0, len(messages))
+	for index := range messages {
+		results = append(results, PublishResult{Stream: "MGP_SEND", Sequence: uint64(index + 1)})
+	}
+	return results, ctx.Err()
 }
 
 type recordingSubscriber struct {
