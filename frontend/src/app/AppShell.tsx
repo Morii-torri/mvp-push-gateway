@@ -730,7 +730,7 @@ function ConsoleChrome() {
           className="workspace-tabs"
         />
 
-        <Space size={12} className="header-actions">
+        <Space align="center" size={12} className="header-actions">
           <Typography.Text type="secondary" className="refresh-time">
             {formatRefreshTime(notificationUpdatedAt)}
           </Typography.Text>

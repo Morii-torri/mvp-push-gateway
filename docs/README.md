@@ -17,13 +17,14 @@
 11. `operations/end-to-end-smoke.md`：本地和 Docker Compose 端到端验收 Runbook。
 12. `operations/2026-05-12-route-send-action-group-ui-smoke.md`：route send action group 真实本地 UI smoke 记录。
 13. `operations/2026-05-21-console-ui-token-refresh-record.md`：管理台 UI、Keep-Alive、推送渠道品牌化和 AccessToken 强刷改造记录。
-14. `operations/operator-guide.md`：按新产品模型编写的操作员指南。
-15. `plans/2026-05-07-mvp-push-gateway-implementation-plan.md`：实施计划。
-16. `plans/2026-05-07-ai-execution-roadmap.md`：下一步交给 AI 分阶段执行的路线图。
-17. `plans/2026-05-11-product-simplification-and-template-adapter-plan.md`：产品收敛、模板内容模型和平台适配器重构计划。
-18. `plans/2026-05-12-route-send-action-group-plan.md`：路由发送动作组改造计划。
-19. `plans/2026-05-12-console-menu-convergence-design.md`：管理台菜单/页面合并设计。
-20. `plans/2026-05-12-legacy-route-action-fields-cleanup-assessment.md`：legacy route action 字段清理评估。
+14. `operations/2026-06-08-console-and-performance-session-summary.md`：本轮管理台、性能链路、通知 SSE 和安全边界改造记录。
+15. `operations/operator-guide.md`：按新产品模型编写的操作员指南。
+16. `plans/2026-05-07-mvp-push-gateway-implementation-plan.md`：实施计划。
+17. `plans/2026-05-07-ai-execution-roadmap.md`：下一步交给 AI 分阶段执行的路线图。
+18. `plans/2026-05-11-product-simplification-and-template-adapter-plan.md`：产品收敛、模板内容模型和平台适配器重构计划。
+19. `plans/2026-05-12-route-send-action-group-plan.md`：路由发送动作组改造计划。
+20. `plans/2026-05-12-console-menu-convergence-design.md`：管理台菜单/页面合并设计。
+21. `plans/2026-05-12-legacy-route-action-fields-cleanup-assessment.md`：legacy route action 字段清理评估。
 
 ## 已确认决策
 
@@ -60,7 +61,7 @@
 - 管理台 UI 基线包含总览安全格式化、推送渠道品牌化类型卡片、Bento Grid 类型选择器、受控子 Tab、Workspace Keep-Alive、长文本 Tooltip 截断、磨砂玻璃 sticky 表头和人员平台身份低噪声标签。
 - worker 崩溃后的 processing job 由 maintenance worker 根据心跳和超时阈值回收。
 - 入站同步返回只覆盖接收阶段；路由、模板、接收人和发送错误属于异步日志结果。
-- 去除 SSE，仅保留 5 秒轮询和手动刷新。
+- 右上角实时通知使用 `/monitor/notifications/stream` SSE；推送间隔读取 `console.polling_interval_seconds`，默认 5 秒。页面数据不做全局轮询，依赖首次进入、手动刷新和局部操作后的显式刷新。
 - 日志保留 30 天。
 - 30 天日志保留采用批量小步清理，不把 PostgreSQL 分区作为一期硬依赖。
 - 首次启动不写死账号密码，通过初始化流程创建管理员。

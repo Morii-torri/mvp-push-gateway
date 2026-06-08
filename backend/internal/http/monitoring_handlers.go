@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -8,6 +9,7 @@ import (
 	"time"
 
 	"mvp-push-gateway/backend/internal/monitoring"
+	"mvp-push-gateway/backend/internal/settings"
 	"mvp-push-gateway/backend/internal/statistics"
 )
 
@@ -21,6 +23,12 @@ type notificationStreamPayload struct {
 	Overview statistics.Overview      `json:"overview"`
 	SentAt   time.Time                `json:"sent_at"`
 }
+
+type notificationIntervalReader interface {
+	IntSetting(context.Context, string, int) int
+}
+
+const defaultNotificationStreamInterval = 5 * time.Second
 
 func (h *Handler) queueMonitoringHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
@@ -117,18 +125,33 @@ func (h *Handler) notificationStreamHandler(w http.ResponseWriter, r *http.Reque
 	if !write() {
 		return
 	}
-	ticker := time.NewTicker(5 * time.Second)
-	defer ticker.Stop()
 	for {
+		timer := time.NewTimer(notificationStreamInterval(r.Context(), h.settings))
 		select {
 		case <-r.Context().Done():
+			timer.Stop()
 			return
-		case <-ticker.C:
+		case <-timer.C:
 			if !write() {
 				return
 			}
 		}
 	}
+}
+
+func notificationStreamInterval(ctx context.Context, reader notificationIntervalReader) time.Duration {
+	if reader == nil {
+		return defaultNotificationStreamInterval
+	}
+	seconds := reader.IntSetting(
+		ctx,
+		settings.KeyConsolePollingIntervalSeconds,
+		int(defaultNotificationStreamInterval/time.Second),
+	)
+	if seconds <= 0 {
+		return defaultNotificationStreamInterval
+	}
+	return time.Duration(seconds) * time.Second
 }
 
 func writeSSEEvent(w http.ResponseWriter, event string, payload any) {

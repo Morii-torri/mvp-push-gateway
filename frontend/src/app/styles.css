@@ -191,20 +191,36 @@ body {
 }
 
 .header-actions {
+  align-items: center;
   justify-content: flex-end;
+  height: 42px;
+  line-height: 1;
+}
+
+.header-actions .ant-space-item {
+  display: inline-flex;
+  align-items: center;
 }
 
 .account-trigger {
-  display: inline-flex;
+  display: inline-flex !important;
   gap: 8px;
-  align-items: center;
+  align-items: center !important;
+  justify-content: center;
+  align-self: center;
   height: 42px;
-  padding: 4px 8px;
+  padding: 0 8px;
   color: #12213f;
+  line-height: 1;
+  transform: translateY(0);
 }
 
 .account-trigger:hover {
   background: #f3f8ff;
+}
+
+.account-trigger .ant-avatar {
+  flex: 0 0 auto;
 }
 
 .header-popover-panel {

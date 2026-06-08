@@ -345,13 +345,13 @@ SHA256_HEX(raw_body)
 | `POST` | `/deliveries/{id}/retry` | 重试出站 |
 | `GET` | `/audit-logs` | 审计分页 |
 
-日志列表不使用 SSE。前端默认 5 秒轮询，右上角支持手动刷新。
+日志列表自身不使用 SSE。前端首次进入、手动刷新、导航切换和局部操作后显式拉取列表数据；右上角实时通知使用 `/monitor/notifications/stream` SSE 提供队列和总览异常提示。
 
 消息详情和投递详情应展示新 adapter 快照字段：`target_context`、`rendered_message`、`resolved_recipients`、`final_request`、`upstream_response`；旧 `send` snapshot 保留兼容展示。不要把模板内容误解释为最终 HTTP body。
 
 ## 队列监控
 
-队列监控是第一版独立功能模块，前端同样使用 5 秒轮询和手动刷新。
+队列监控是独立功能模块。页面数据由首次进入、手动刷新和局部操作触发拉取；全局通知由 `/monitor/notifications/stream` SSE 更新，间隔读取 `console.polling_interval_seconds`，默认 5 秒。
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
