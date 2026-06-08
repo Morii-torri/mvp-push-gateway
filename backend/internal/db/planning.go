@@ -2,6 +2,7 @@ package db
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -440,6 +441,16 @@ func (r Repository) CompletePlanning(ctx context.Context, params planning.Comple
 	defer tx.Rollback(ctx)
 
 	startedAt := time.Now()
+	if err := ensurePlanningMessageRecordTx(ctx, tx, planningMessageRecordParams{
+		MessageID:  params.MessageID,
+		TraceID:    params.TraceID,
+		SourceID:   params.SourceID,
+		Headers:    params.InboundHeaders,
+		Payload:    params.InboundPayload,
+		ReceivedAt: params.InboundReceivedAt,
+	}); err != nil {
+		return err
+	}
 	if _, err := tx.Exec(ctx, `
 		UPDATE message_records
 		SET status = 'planned',
@@ -543,6 +554,16 @@ func (r Repository) FinishPlanning(ctx context.Context, params planning.FinishPl
 	}
 	defer tx.Rollback(ctx)
 
+	if err := ensurePlanningMessageRecordTx(ctx, tx, planningMessageRecordParams{
+		MessageID:  params.MessageID,
+		TraceID:    params.TraceID,
+		SourceID:   params.SourceID,
+		Headers:    params.Headers,
+		Payload:    params.Payload,
+		ReceivedAt: params.ReceivedAt,
+	}); err != nil {
+		return err
+	}
 	if _, err := tx.Exec(ctx, `
 		UPDATE message_records
 		SET status = $2,
@@ -573,6 +594,48 @@ func (r Repository) FinishPlanning(ctx context.Context, params planning.FinishPl
 		return fmt.Errorf("commit finish planning transaction: %w", err)
 	}
 	r.enqueuePlanningRuntimeLogs(params.FlowID, "", params.FinishedAt, params.DurationMS, params.Status != "failed", params.RuleMetrics)
+	return nil
+}
+
+type planningMessageRecordParams struct {
+	MessageID  string
+	TraceID    string
+	SourceID   string
+	Headers    json.RawMessage
+	Payload    json.RawMessage
+	ReceivedAt time.Time
+}
+
+func ensurePlanningMessageRecordTx(ctx context.Context, tx pgx.Tx, params planningMessageRecordParams) error {
+	messageID := strings.TrimSpace(params.MessageID)
+	sourceID := strings.TrimSpace(params.SourceID)
+	if messageID == "" || sourceID == "" {
+		return nil
+	}
+	receivedAt := params.ReceivedAt
+	if receivedAt.IsZero() {
+		receivedAt = time.Now().UTC()
+	}
+	payload := defaultJSON(params.Payload)
+	headers := defaultJSON(params.Headers)
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO message_records (
+			id,
+			trace_id,
+			source_id,
+			received_at,
+			headers,
+			payload,
+			payload_hash,
+			status,
+			created_at,
+			updated_at
+		)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, 'accepted', $4, $4)
+		ON CONFLICT (id) DO NOTHING
+	`, messageID, strings.TrimSpace(params.TraceID), sourceID, receivedAt, headers, payload, payloadHash(payload)); err != nil {
+		return fmt.Errorf("insert planning message record: %w", err)
+	}
 	return nil
 }
 

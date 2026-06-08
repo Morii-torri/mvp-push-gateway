@@ -134,7 +134,11 @@ type CompletePlanningParams struct {
 	JobID             string
 	WorkerID          string
 	MessageID         string
+	SourceID          string
 	TraceID           string
+	InboundHeaders    json.RawMessage
+	InboundPayload    json.RawMessage
+	InboundReceivedAt time.Time
 	FlowID            string
 	MatchedRuleIDs    []string
 	HitRuleKey        string
@@ -149,6 +153,11 @@ type FinishPlanningParams struct {
 	JobID          string
 	WorkerID       string
 	MessageID      string
+	SourceID       string
+	TraceID        string
+	Headers        json.RawMessage
+	Payload        json.RawMessage
+	ReceivedAt     time.Time
 	Status         string
 	FlowID         string
 	MatchedRuleIDs []string
@@ -412,7 +421,11 @@ func (w *Worker) processMessage(ctx context.Context, job queue.Job, message Mess
 		JobID:             job.ID,
 		WorkerID:          w.workerID,
 		MessageID:         message.ID,
+		SourceID:          message.SourceID,
 		TraceID:           message.TraceID,
+		InboundHeaders:    append(json.RawMessage(nil), message.Headers...),
+		InboundPayload:    append(json.RawMessage(nil), message.Payload...),
+		InboundReceivedAt: message.ReceivedAt,
 		FlowID:            plan.Flow.ID,
 		MatchedRuleIDs:    []string{matchedRule.RuleKey},
 		HitRuleKey:        matchedRule.RuleKey,
@@ -427,6 +440,7 @@ func (w *Worker) processMessage(ctx context.Context, job queue.Job, message Mess
 			return err
 		}
 		if direct {
+			w.completePlanningBestEffort(message.TraceID, completeParams)
 			return nil
 		}
 		if strings.TrimSpace(job.ID) == "" {
@@ -899,6 +913,11 @@ func (w *Worker) finishBusinessFailure(ctx context.Context, job queue.Job, messa
 		JobID:          job.ID,
 		WorkerID:       w.workerID,
 		MessageID:      message.ID,
+		SourceID:       message.SourceID,
+		TraceID:        message.TraceID,
+		Headers:        append(json.RawMessage(nil), message.Headers...),
+		Payload:        append(json.RawMessage(nil), message.Payload...),
+		ReceivedAt:     message.ReceivedAt,
 		Status:         status,
 		FlowID:         flowID,
 		MatchedRuleIDs: matchedRuleIDs,

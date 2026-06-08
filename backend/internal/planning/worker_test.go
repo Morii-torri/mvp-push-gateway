@@ -337,6 +337,7 @@ func TestWorkerPublishesSendEventsWhenSendPublisherConfigured(t *testing.T) {
 func TestProcessRoutePlanMessageUsesEventPayloadWithoutLoadingMessageRecord(t *testing.T) {
 	repo := newRoutePlanMessageRepoForSendPublisherTest()
 	repo.failOnGetPlanningMessage = true
+	repo.completePlanningCh = make(chan struct{}, 1)
 	publisher := &recordingSendPublisher{}
 	worker := NewWorker(repo, WithSendPublisher(publisher))
 	receivedAt := time.Date(2026, 6, 8, 10, 30, 0, 0, time.UTC)
@@ -357,8 +358,15 @@ func TestProcessRoutePlanMessageUsesEventPayloadWithoutLoadingMessageRecord(t *t
 	if repo.getPlanningMessageCalls != 0 {
 		t.Fatalf("expected direct route plan event not to load message record, got %d calls", repo.getPlanningMessageCalls)
 	}
-	if repo.completePlanningCalls != 0 {
-		t.Fatalf("expected direct route plan event not to complete planning through PostgreSQL, got %d calls", repo.completePlanningCalls)
+	select {
+	case <-repo.completePlanningCh:
+	case <-time.After(time.Second):
+		t.Fatalf("expected direct route plan event to persist planning output asynchronously")
+	}
+	if repo.completed.SourceID != "source-1" ||
+		string(repo.completed.InboundPayload) != `{"title":"direct"}` ||
+		repo.completed.InboundReceivedAt.IsZero() {
+		t.Fatalf("expected direct planning completion to carry inbound snapshot, got %+v", repo.completed)
 	}
 	if len(publisher.events) != 1 {
 		t.Fatalf("expected one direct send event, got %d", len(publisher.events))

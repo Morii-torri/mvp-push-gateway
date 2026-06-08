@@ -146,3 +146,120 @@ func TestRepositoryCompletePlanningSkipsSendJobsForExternalSendQueue(t *testing.
 		t.Fatalf("expected external send queue to persist attempt only, got attempts=%d send_jobs=%d", attemptCount, sendJobCount)
 	}
 }
+
+func TestRepositoryCompletePlanningInsertsMissingDirectMessageRecord(t *testing.T) {
+	pool := openMigratedPool(t)
+	defer pool.Close()
+
+	ctx := context.Background()
+	repository := NewRepository(pool)
+	sourceID := testUUID(17300)
+	messageID := testUUID(17301)
+	channelID := testUUID(17302)
+	attemptID := testUUID(17303)
+	receivedAt := time.Date(2026, 6, 8, 9, 0, 0, 0, time.UTC)
+	finishedAt := receivedAt.Add(20 * time.Millisecond)
+
+	if _, err := pool.Exec(ctx, `INSERT INTO inbound_sources (id, code, name, auth_mode) VALUES ($1, 'direct-route', 'Direct Route', 'token')`, sourceID); err != nil {
+		t.Fatalf("insert source: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `INSERT INTO delivery_channels (id, provider_type, name, enabled, send_config) VALUES ($1, 'webhook', 'Direct Channel', true, '{"url":"https://example.test","method":"POST"}')`, channelID); err != nil {
+		t.Fatalf("insert channel: %v", err)
+	}
+	jobPayload, err := json.Marshal(delivery.SendMessageJobPayload{
+		DeliveryAttemptID: attemptID,
+		MessageType:       "json",
+		TraceID:           "trace-direct-route",
+		Body:              json.RawMessage(`{"body":{"title":"direct"}}`),
+	})
+	if err != nil {
+		t.Fatalf("marshal send payload: %v", err)
+	}
+
+	err = repository.CompletePlanning(ctx, planning.CompletePlanningParams{
+		MessageID:         messageID,
+		SourceID:          sourceID,
+		TraceID:           "trace-direct-route",
+		InboundHeaders:    json.RawMessage(`{"Content-Type":["application/json"]}`),
+		InboundPayload:    json.RawMessage(`{"title":"direct"}`),
+		InboundReceivedAt: receivedAt,
+		FinishedAt:        finishedAt,
+		DurationMS:        20,
+		ExternalSendQueue: true,
+		Attempts: []planning.DeliveryAttemptPlan{{
+			ID:                attemptID,
+			MessageID:         messageID,
+			ChannelID:         channelID,
+			RecipientSnapshot: json.RawMessage(`{}`),
+			JobPayload:        jobPayload,
+			MaxAttempts:       3,
+		}},
+	})
+	if err != nil {
+		t.Fatalf("complete direct planning: %v", err)
+	}
+
+	var status string
+	var payload string
+	var attemptCount int
+	if err := pool.QueryRow(ctx, `
+		SELECT
+			(SELECT status FROM message_records WHERE id = $1),
+			(SELECT payload::text FROM message_records WHERE id = $1),
+			(SELECT count(*)::integer FROM delivery_attempts WHERE id = $2)
+	`, messageID, attemptID).Scan(&status, &payload, &attemptCount); err != nil {
+		t.Fatalf("query direct planning rows: %v", err)
+	}
+	if status != "planned" || payload != `{"title": "direct"}` || attemptCount != 1 {
+		t.Fatalf("expected direct planning to persist message and attempt, status=%s payload=%s attempts=%d", status, payload, attemptCount)
+	}
+}
+
+func TestRepositoryFinishPlanningInsertsMissingDirectMessageRecord(t *testing.T) {
+	pool := openMigratedPool(t)
+	defer pool.Close()
+
+	ctx := context.Background()
+	repository := NewRepository(pool)
+	sourceID := testUUID(17400)
+	messageID := testUUID(17401)
+	receivedAt := time.Date(2026, 6, 8, 9, 5, 0, 0, time.UTC)
+	finishedAt := receivedAt.Add(15 * time.Millisecond)
+
+	if _, err := pool.Exec(ctx, `INSERT INTO inbound_sources (id, code, name, auth_mode) VALUES ($1, 'direct-no-route', 'Direct No Route', 'token')`, sourceID); err != nil {
+		t.Fatalf("insert source: %v", err)
+	}
+
+	err := repository.FinishPlanning(ctx, planning.FinishPlanningParams{
+		MessageID:      messageID,
+		SourceID:       sourceID,
+		TraceID:        "trace-direct-no-route",
+		Headers:        json.RawMessage(`{"Content-Type":["application/json"]}`),
+		Payload:        json.RawMessage(`{"title":"no-route"}`),
+		ReceivedAt:     receivedAt,
+		Status:         "no_route",
+		ErrorCode:      planning.ErrorCodeNoRoute,
+		ErrorMessage:   "no published route for source",
+		FinishedAt:     finishedAt,
+		DurationMS:     15,
+		RuleMetrics:    nil,
+		MatchedRuleIDs: nil,
+	})
+	if err != nil {
+		t.Fatalf("finish direct planning: %v", err)
+	}
+
+	var status string
+	var code string
+	var payload string
+	if err := pool.QueryRow(ctx, `
+		SELECT status, COALESCE(error_code, ''), payload::text
+		FROM message_records
+		WHERE id = $1
+	`, messageID).Scan(&status, &code, &payload); err != nil {
+		t.Fatalf("query direct no-route row: %v", err)
+	}
+	if status != "no_route" || code != planning.ErrorCodeNoRoute || payload != `{"title": "no-route"}` {
+		t.Fatalf("expected direct no-route message row, status=%s code=%s payload=%s", status, code, payload)
+	}
+}
