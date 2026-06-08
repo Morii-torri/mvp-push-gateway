@@ -84,8 +84,8 @@ func TestGetMessageBuildsLifecycleTimeline(t *testing.T) {
 	if detail.Status != "sent" || detail.InboundStatus != "planned" || detail.OutboundStatus != "sent" {
 		t.Fatalf("expected derived lifecycle status, got %+v", detail.MessageSummary)
 	}
-	if detail.FirstOutboundAt == nil || !detail.FirstOutboundAt.Equal(queuedAt) {
-		t.Fatalf("expected first outbound time %s, got %+v", queuedAt, detail.FirstOutboundAt)
+	if detail.FirstOutboundAt == nil || !detail.FirstOutboundAt.Equal(finishedAt) {
+		t.Fatalf("expected first outbound time %s, got %+v", finishedAt, detail.FirstOutboundAt)
 	}
 	if detail.LastOutboundAt == nil || !detail.LastOutboundAt.Equal(finishedAt) {
 		t.Fatalf("expected last outbound time %s, got %+v", finishedAt, detail.LastOutboundAt)

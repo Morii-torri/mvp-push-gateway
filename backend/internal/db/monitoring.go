@@ -606,7 +606,11 @@ func (r Repository) getOverviewTrend(ctx context.Context, windowStart, now time.
 				date_bin($3::interval, COALESCE(finished_at, queued_at), $4::timestamptz) AS bucket_start,
 				count(*) FILTER (WHERE status IN ('sent', 'failed'))::integer AS sent,
 				count(*) FILTER (WHERE status = 'sent')::integer AS successful,
-				count(*) FILTER (WHERE status = 'failed')::integer AS failed
+				count(*) FILTER (WHERE status = 'failed')::integer AS failed,
+				COALESCE(
+					round(sum(COALESCE(duration_ms, 0))::numeric / NULLIF(count(*) FILTER (WHERE duration_ms IS NOT NULL), 0), 0),
+					0
+				)::integer AS avg_duration_ms
 			FROM delivery_attempts
 			WHERE COALESCE(finished_at, queued_at) >= $1
 				AND COALESCE(finished_at, queued_at) <= $2
@@ -617,7 +621,8 @@ func (r Repository) getOverviewTrend(ctx context.Context, windowStart, now time.
 			COALESCE(attempts.sent, 0)::integer,
 			COALESCE(attempts.successful, 0)::integer,
 			COALESCE(attempts.failed, 0)::integer,
-			COALESCE(round(COALESCE(attempts.sent, 0)::numeric / $5::numeric, 2), 0)::float8 AS qps
+			COALESCE(round(COALESCE(attempts.sent, 0)::numeric / $5::numeric, 2), 0)::float8 AS qps,
+			COALESCE(attempts.avg_duration_ms, 0)::integer
 		FROM buckets
 		LEFT JOIN attempts ON attempts.bucket_start = buckets.bucket_start
 		ORDER BY buckets.bucket_start ASC
@@ -630,7 +635,7 @@ func (r Repository) getOverviewTrend(ctx context.Context, windowStart, now time.
 	trend := make([]statistics.TrendPoint, 0)
 	for rows.Next() {
 		var item statistics.TrendPoint
-		if err := rows.Scan(&item.BucketStart, &item.Sent, &item.Successful, &item.Failed, &item.QPS); err != nil {
+		if err := rows.Scan(&item.BucketStart, &item.Sent, &item.Successful, &item.Failed, &item.QPS, &item.AverageDurationMS); err != nil {
 			return nil, fmt.Errorf("scan overview trend: %w", err)
 		}
 		trend = append(trend, item)

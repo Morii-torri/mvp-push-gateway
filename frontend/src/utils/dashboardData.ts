@@ -1,6 +1,11 @@
-import type { Metric, PlatformHealth, QueueMetric, SlowRule } from '../data/demoData';
-import { apiRequest } from '../api/client';
-import { getProviderTypeLabel, type ProviderType } from './labels';
+import type {
+  Metric,
+  PlatformHealth,
+  QueueMetric,
+  SlowRule,
+} from "../data/demoData";
+import { apiRequest } from "../api/client";
+import { getProviderTypeLabel, type ProviderType } from "./labels";
 
 export type OverviewApiResponse = {
   summary: {
@@ -18,6 +23,7 @@ export type OverviewApiResponse = {
     successful: number;
     failed: number;
     qps: number;
+    avg_duration_ms: number;
   }>;
   platform_rankings: Array<{
     channel_id: string;
@@ -100,7 +106,7 @@ export type QueueMonitoringApiResponse = {
   };
 };
 
-export type DashboardWindow = '15m' | '1h' | '6h' | '24h' | '7d';
+export type DashboardWindow = "15m" | "1h" | "6h" | "24h" | "7d";
 
 export type CleanupRow = {
   key: string;
@@ -114,6 +120,7 @@ export type PlatformRankingRow = {
   channelId: string;
   name: string;
   providerType: string;
+  providerTypeKey: ProviderType;
   sent: string;
   success: string;
   qps: string;
@@ -129,6 +136,11 @@ export type TrendSeries = {
   label: string;
   color: string;
   points: number[];
+};
+
+export type MixedTrendData = {
+  bars: TrendSeries;
+  line: TrendSeries;
 };
 
 export type FailureReasonRow = {
@@ -150,6 +162,7 @@ export type OverviewViewModel = {
   trendPoints: number[];
   trendLabels: string[];
   trendSeries: TrendSeries[];
+  qpsLatencyTrend: MixedTrendData;
   platformRanking: PlatformRankingRow[];
   failureReasons: FailureReasonRow[];
   recentAnomalies: RecentAnomalyRow[];
@@ -166,19 +179,62 @@ export type QueueMonitoringViewModel = {
 };
 
 export function defaultOverviewViewModel(): OverviewViewModel {
-  const defaultWindow = '24h';
+  const defaultWindow = "24h";
   return {
     metrics: [
-      metricCard('received', '总接收量', '0 条', `${windowCopy(defaultWindow)}入站总量`, 'flat', 'blue'),
-      metricCard('sent', '总发送量', '0 条', `${windowCopy(defaultWindow)}窗口`, 'flat', 'blue'),
-      metricCard('failed', '失败发送量', '0 条', `${windowCopy(defaultWindow)}失败总量`, 'flat', 'red'),
-      metricCard('success', '成功率', '0.00%', `${windowCopy(defaultWindow)}成功 0 条`, 'flat', 'green'),
-      metricCard('duration', '平均耗时', '0 ms', '单条出站平均用时', 'flat', 'orange'),
-      metricCard('qps', '平均 QPS', '0', `按${windowCopy(defaultWindow)}平均计算`, 'flat', 'purple'),
+      metricCard(
+        "received",
+        "总接收量",
+        "0 条",
+        `${windowCopy(defaultWindow)}入站总量`,
+        "flat",
+        "blue",
+      ),
+      metricCard(
+        "sent",
+        "总发送量",
+        "0 条",
+        `${windowCopy(defaultWindow)}窗口`,
+        "flat",
+        "blue",
+      ),
+      metricCard(
+        "failed",
+        "失败发送量",
+        "0 条",
+        `${windowCopy(defaultWindow)}失败总量`,
+        "flat",
+        "red",
+      ),
+      metricCard(
+        "success",
+        "成功率",
+        "0.00%",
+        `${windowCopy(defaultWindow)}成功 0 条`,
+        "flat",
+        "green",
+      ),
+      metricCard(
+        "duration",
+        "平均耗时",
+        "0 ms",
+        "单条出站平均用时",
+        "flat",
+        "orange",
+      ),
+      metricCard(
+        "qps",
+        "平均 QPS",
+        "0",
+        `按${windowCopy(defaultWindow)}平均计算`,
+        "flat",
+        "purple",
+      ),
     ],
     trendPoints: zeroTrendPoints(),
     trendLabels: zeroTrendLabels(),
     trendSeries: defaultOverviewTrendSeries(),
+    qpsLatencyTrend: defaultOverviewQPSLatencyTrend(),
     platformRanking: [],
     failureReasons: [],
     recentAnomalies: [],
@@ -188,12 +244,49 @@ export function defaultOverviewViewModel(): OverviewViewModel {
 export function defaultQueueMonitoringViewModel(): QueueMonitoringViewModel {
   return {
     metrics: [
-      metricCard('plan', '路由规划积压', '0', '待规划任务数', 'flat', 'blue', 'route_plan'),
-      metricCard('send', '出站发送积压', '0', '待发送任务数', 'flat', 'green', 'send_message'),
-      metricCard('oldest', '最老任务等待', '0 秒', '跨队列最老等待时间', 'flat', 'orange'),
-      metricCard('planning', '路由规划平均耗时', '0 ms', 'P99 0 ms', 'flat', 'purple'),
-      metricCard('success', '平台成功率', '100.00%', '失败率 0.00%', 'flat', 'green'),
-      metricCard('dead', '死信数量', '0', '限流 0 次', 'flat', 'red'),
+      metricCard(
+        "plan",
+        "路由规划积压",
+        "0",
+        "待规划任务数",
+        "flat",
+        "blue",
+        "route_plan",
+      ),
+      metricCard(
+        "send",
+        "出站发送积压",
+        "0",
+        "待发送任务数",
+        "flat",
+        "green",
+        "send_message",
+      ),
+      metricCard(
+        "oldest",
+        "最老任务等待",
+        "0 秒",
+        "跨队列最老等待时间",
+        "flat",
+        "orange",
+      ),
+      metricCard(
+        "planning",
+        "路由规划平均耗时",
+        "0 ms",
+        "P99 0 ms",
+        "flat",
+        "purple",
+      ),
+      metricCard(
+        "success",
+        "平台成功率",
+        "100.00%",
+        "失败率 0.00%",
+        "flat",
+        "green",
+      ),
+      metricCard("dead", "死信数量", "0", "限流 0 次", "flat", "red"),
     ],
     trendPoints: zeroTrendPoints(),
     trendLabels: zeroTrendLabels(),
@@ -202,59 +295,99 @@ export function defaultQueueMonitoringViewModel(): QueueMonitoringViewModel {
     slowRules: [],
     cleanupRows: [
       {
-        key: 'retention',
-        name: '日志保留期',
-        value: '30 天',
-        status: '默认策略',
+        key: "retention",
+        name: "日志保留期",
+        value: "30 天",
+        status: "默认策略",
       },
       {
-        key: 'batch',
-        name: '最近批次删除',
-        value: '0',
-        status: '单批上限 200',
+        key: "batch",
+        name: "最近批次删除",
+        value: "0",
+        status: "单批上限 200",
       },
       {
-        key: 'state',
-        name: '清理状态',
-        value: '未执行',
-        status: '待下一次执行',
+        key: "state",
+        name: "清理状态",
+        value: "未执行",
+        status: "待下一次执行",
       },
       {
-        key: 'deleted',
-        name: '累计删除总数',
-        value: '0',
-        status: '当前批次后无剩余',
+        key: "deleted",
+        name: "累计删除总数",
+        value: "0",
+        status: "当前批次后无剩余",
       },
     ],
   };
 }
 
-export function buildOverviewViewModel(data: OverviewApiResponse, window: DashboardWindow = '24h'): OverviewViewModel {
+export function buildOverviewViewModel(
+  data: OverviewApiResponse,
+  window: DashboardWindow = "24h",
+): OverviewViewModel {
   const trendSeries = overviewTrendSeries(data);
   return {
     metrics: [
-      metricCard('received', '总接收量', `${formatInteger(data.summary.total_received)} 条`, `${windowCopy(window)}入站总量`, 'flat', 'blue'),
-      metricCard('sent', '总发送量', `${formatInteger(data.summary.total_sent)} 条`, `${windowCopy(window)}窗口`, 'flat', 'blue'),
-      metricCard('failed', '失败发送量', `${formatInteger(data.summary.failed)} 条`, `${windowCopy(window)}失败总量`, 'up', 'red'),
       metricCard(
-        'success',
-        '成功率',
+        "received",
+        "总接收量",
+        `${formatInteger(data.summary.total_received)} 条`,
+        `${windowCopy(window)}入站总量`,
+        "flat",
+        "blue",
+      ),
+      metricCard(
+        "sent",
+        "总发送量",
+        `${formatInteger(data.summary.total_sent)} 条`,
+        `${windowCopy(window)}窗口`,
+        "flat",
+        "blue",
+      ),
+      metricCard(
+        "failed",
+        "失败发送量",
+        `${formatInteger(data.summary.failed)} 条`,
+        `${windowCopy(window)}失败总量`,
+        "up",
+        "red",
+      ),
+      metricCard(
+        "success",
+        "成功率",
         `${formatPercent(data.summary.success_rate)}`,
         `${windowCopy(window)}成功 ${formatInteger(data.summary.successful)} 条`,
-        'up',
-        'green',
+        "up",
+        "green",
       ),
-      metricCard('duration', '平均耗时', formatMilliseconds(data.summary.average_duration_ms), '单条出站平均用时', 'flat', 'orange'),
-      metricCard('qps', '平均 QPS', `${formatDecimal(data.summary.average_qps)}`, `按${windowCopy(window)}平均计算`, 'flat', 'purple'),
+      metricCard(
+        "duration",
+        "平均耗时",
+        formatMilliseconds(data.summary.average_duration_ms),
+        "单条出站平均用时",
+        "flat",
+        "orange",
+      ),
+      metricCard(
+        "qps",
+        "平均 QPS",
+        `${formatDecimal(data.summary.average_qps)}`,
+        `按${windowCopy(window)}平均计算`,
+        "flat",
+        "purple",
+      ),
     ],
     trendPoints: trendSeries[0]?.points ?? [],
     trendLabels: trendBucketLabels(data.trend, window),
     trendSeries,
+    qpsLatencyTrend: overviewQPSLatencyTrend(data),
     platformRanking: data.platform_rankings.map((item) => ({
       id: item.channel_id,
       channelId: item.channel_id,
       name: item.name,
       providerType: getProviderTypeLabel(item.provider_type),
+      providerTypeKey: item.provider_type,
       sent: formatInteger(item.sent),
       success: formatPercent(item.success_rate),
       qps: formatDecimal(item.qps),
@@ -262,7 +395,7 @@ export function buildOverviewViewModel(data: OverviewApiResponse, window: Dashbo
       rateLimited: item.rate_limited,
       latency: formatMilliseconds(item.avg_duration_ms),
       p99: formatMilliseconds(item.p99_duration_ms),
-      lastError: item.last_error || '-',
+      lastError: item.last_error || "-",
     })),
     failureReasons: data.failure_rankings.map((item) => ({
       reason: item.reason,
@@ -279,59 +412,62 @@ export function buildOverviewViewModel(data: OverviewApiResponse, window: Dashbo
   };
 }
 
-export function buildQueueMonitoringViewModel(data: QueueMonitoringApiResponse, window: DashboardWindow = '24h'): QueueMonitoringViewModel {
+export function buildQueueMonitoringViewModel(
+  data: QueueMonitoringApiResponse,
+  window: DashboardWindow = "24h",
+): QueueMonitoringViewModel {
   const trendSeries = queueTrendSeries(data);
   return {
     metrics: [
       metricCard(
-        'plan',
-        '路由规划积压',
+        "plan",
+        "路由规划积压",
         formatInteger(data.summary.route_plan_pending),
-        '待规划任务数',
-        data.summary.route_plan_pending > 0 ? 'up' : 'flat',
-        'blue',
-        'route_plan',
+        "待规划任务数",
+        data.summary.route_plan_pending > 0 ? "up" : "flat",
+        "blue",
+        "route_plan",
       ),
       metricCard(
-        'send',
-        '出站发送积压',
+        "send",
+        "出站发送积压",
         formatInteger(data.summary.send_message_pending),
-        '待发送任务数',
-        data.summary.send_message_pending > 0 ? 'up' : 'flat',
-        'green',
-        'send_message',
+        "待发送任务数",
+        data.summary.send_message_pending > 0 ? "up" : "flat",
+        "green",
+        "send_message",
       ),
       metricCard(
-        'oldest',
-        '最老任务等待',
+        "oldest",
+        "最老任务等待",
         formatDurationSeconds(data.summary.oldest_job_wait_seconds),
-        '跨队列最老等待时间',
-        data.summary.oldest_job_wait_seconds > 0 ? 'up' : 'flat',
-        'orange',
+        "跨队列最老等待时间",
+        data.summary.oldest_job_wait_seconds > 0 ? "up" : "flat",
+        "orange",
       ),
       metricCard(
-        'planning',
-        '路由规划平均耗时',
+        "planning",
+        "路由规划平均耗时",
         formatMilliseconds(data.summary.planning_avg_duration_ms),
         `P99 ${formatMilliseconds(data.summary.planning_p99_duration_ms)}`,
-        'flat',
-        'purple',
+        "flat",
+        "purple",
       ),
       metricCard(
-        'success',
-        '平台成功率',
+        "success",
+        "平台成功率",
         formatPercent(100 - data.summary.platform_failure_rate),
         `失败率 ${formatPercent(data.summary.platform_failure_rate)}`,
-        data.summary.platform_failure_rate > 0 ? 'down' : 'flat',
-        'green',
+        data.summary.platform_failure_rate > 0 ? "down" : "flat",
+        "green",
       ),
       metricCard(
-        'dead',
-        '死信数量',
+        "dead",
+        "死信数量",
         formatInteger(data.summary.dead_letter_count),
         `限流 ${formatInteger(data.summary.rate_limited_count)} 次`,
-        data.summary.dead_letter_count > 0 ? 'up' : 'flat',
-        'red',
+        data.summary.dead_letter_count > 0 ? "up" : "flat",
+        "red",
       ),
     ],
     trendPoints: queueTrendPoints(data),
@@ -346,7 +482,7 @@ export function buildQueueMonitoringViewModel(data: QueueMonitoringApiResponse, 
       rateLimited: item.rate_limited,
       retries: item.retries,
       deadLetters: item.dead_letters,
-      lastError: item.last_error || '-',
+      lastError: item.last_error || "-",
     })),
     slowRules: data.slow_rules.map((item) => ({
       id: item.rule_id,
@@ -359,39 +495,55 @@ export function buildQueueMonitoringViewModel(data: QueueMonitoringApiResponse, 
     })),
     cleanupRows: [
       {
-        key: 'retention',
-        name: '日志保留期',
+        key: "retention",
+        name: "日志保留期",
         value: `${formatInteger(data.cleanup_status.retention_days)} 天`,
-        status: '已启用',
+        status: "已启用",
       },
       {
-        key: 'batch',
-        name: '最近批次删除',
+        key: "batch",
+        name: "最近批次删除",
         value: formatInteger(data.cleanup_status.last_batch_deleted),
         status: `单批上限 ${formatInteger(data.cleanup_status.batch_size)}，去重键 ${formatInteger(data.cleanup_status.deleted_dedupe_keys)}，审计 ${formatInteger(data.cleanup_status.deleted_audit_logs ?? 0)}`,
       },
       {
-        key: 'state',
-        name: '清理状态',
-        value: data.cleanup_status.last_run_at ? formatTime(data.cleanup_status.last_run_at) : '未执行',
-        status: data.cleanup_status.completed ? '已完成' : data.cleanup_status.has_more ? '未完成，仍有剩余' : '待下一次执行',
+        key: "state",
+        name: "清理状态",
+        value: data.cleanup_status.last_run_at
+          ? formatTime(data.cleanup_status.last_run_at)
+          : "未执行",
+        status: data.cleanup_status.completed
+          ? "已完成"
+          : data.cleanup_status.has_more
+            ? "未完成，仍有剩余"
+            : "待下一次执行",
       },
       {
-        key: 'deleted',
-        name: '累计删除总数',
+        key: "deleted",
+        name: "累计删除总数",
         value: formatInteger(data.cleanup_status.total_deleted),
-        status: data.cleanup_status.has_more ? '仍有历史数据待清理' : '当前批次后无剩余',
+        status: data.cleanup_status.has_more
+          ? "仍有历史数据待清理"
+          : "当前批次后无剩余",
       },
     ],
   };
 }
 
-export async function fetchOverviewData(window: DashboardWindow = '24h'): Promise<OverviewApiResponse> {
-  return apiRequest<OverviewApiResponse>(`/stats/overview?window=${encodeURIComponent(window)}`);
+export async function fetchOverviewData(
+  window: DashboardWindow = "24h",
+): Promise<OverviewApiResponse> {
+  return apiRequest<OverviewApiResponse>(
+    `/stats/overview?window=${encodeURIComponent(window)}`,
+  );
 }
 
-export async function fetchQueueMonitoringData(window: DashboardWindow = '24h'): Promise<QueueMonitoringApiResponse> {
-  return apiRequest<QueueMonitoringApiResponse>(`/monitor/queues?window=${encodeURIComponent(window)}`);
+export async function fetchQueueMonitoringData(
+  window: DashboardWindow = "24h",
+): Promise<QueueMonitoringApiResponse> {
+  return apiRequest<QueueMonitoringApiResponse>(
+    `/monitor/queues?window=${encodeURIComponent(window)}`,
+  );
 }
 
 function metricCard(
@@ -399,9 +551,9 @@ function metricCard(
   label: string,
   value: string,
   delta: string,
-  trend: Metric['trend'],
-  accent: Metric['accent'],
-  jobType?: 'route_plan' | 'send_message',
+  trend: Metric["trend"],
+  accent: Metric["accent"],
+  jobType?: "route_plan" | "send_message",
 ): QueueMetric {
   return {
     key,
@@ -419,32 +571,41 @@ function zeroTrendPoints(): number[] {
 }
 
 function zeroTrendLabels(): string[] {
-  return ['00:00', '06:00', '12:00', '18:00', '24:00'];
+  return ["00:00", "06:00", "12:00", "18:00", "24:00"];
 }
 
 function queueTrendPoints(data: QueueMonitoringApiResponse): number[] {
   const trend = data.trend ?? [];
-  return trend.map((item) => Math.max(0, Math.round(item.route_plan_processed + item.send_message_processed + item.dead_letters)));
+  return trend.map((item) =>
+    Math.max(
+      0,
+      Math.round(
+        item.route_plan_processed +
+          item.send_message_processed +
+          item.dead_letters,
+      ),
+    ),
+  );
 }
 
 function defaultQueueTrendSeries(): TrendSeries[] {
   return [
     {
-      key: 'route_plan',
-      label: '路由规划处理量',
-      color: '#1677ff',
+      key: "route_plan",
+      label: "路由规划处理量",
+      color: "#1677ff",
       points: zeroTrendPoints(),
     },
     {
-      key: 'send_message',
-      label: '出站发送处理量',
-      color: '#22c55e',
+      key: "send_message",
+      label: "出站发送处理量",
+      color: "#22c55e",
       points: zeroTrendPoints(),
     },
     {
-      key: 'dead_letters',
-      label: '死信数量',
-      color: '#ef4444',
+      key: "dead_letters",
+      label: "死信数量",
+      color: "#ef4444",
       points: zeroTrendPoints(),
     },
   ];
@@ -457,21 +618,25 @@ function queueTrendSeries(data: QueueMonitoringApiResponse): TrendSeries[] {
   }
   return [
     {
-      key: 'route_plan',
-      label: '路由规划处理量',
-      color: '#1677ff',
-      points: trend.map((item) => normalizeTrendPoint(item.route_plan_processed)),
+      key: "route_plan",
+      label: "路由规划处理量",
+      color: "#1677ff",
+      points: trend.map((item) =>
+        normalizeTrendPoint(item.route_plan_processed),
+      ),
     },
     {
-      key: 'send_message',
-      label: '出站发送处理量',
-      color: '#22c55e',
-      points: trend.map((item) => normalizeTrendPoint(item.send_message_processed)),
+      key: "send_message",
+      label: "出站发送处理量",
+      color: "#22c55e",
+      points: trend.map((item) =>
+        normalizeTrendPoint(item.send_message_processed),
+      ),
     },
     {
-      key: 'dead_letters',
-      label: '死信数量',
-      color: '#ef4444',
+      key: "dead_letters",
+      label: "死信数量",
+      color: "#ef4444",
       points: trend.map((item) => normalizeTrendPoint(item.dead_letters)),
     },
   ];
@@ -480,18 +645,35 @@ function queueTrendSeries(data: QueueMonitoringApiResponse): TrendSeries[] {
 function defaultOverviewTrendSeries(): TrendSeries[] {
   return [
     {
-      key: 'sent',
-      label: '发送量',
-      color: '#1677ff',
+      key: "sent",
+      label: "发送量",
+      color: "#1677ff",
       points: zeroTrendPoints(),
     },
     {
-      key: 'failed',
-      label: '失败量',
-      color: '#ef4444',
+      key: "failed",
+      label: "失败量",
+      color: "#ef4444",
       points: zeroTrendPoints(),
     },
   ];
+}
+
+function defaultOverviewQPSLatencyTrend(): MixedTrendData {
+  return {
+    bars: {
+      key: "latency",
+      label: "平均耗时",
+      color: "#f97316",
+      points: zeroTrendPoints(),
+    },
+    line: {
+      key: "qps",
+      label: "QPS",
+      color: "#7c3aed",
+      points: zeroTrendPoints(),
+    },
+  };
 }
 
 function overviewTrendSeries(data: OverviewApiResponse): TrendSeries[] {
@@ -500,107 +682,165 @@ function overviewTrendSeries(data: OverviewApiResponse): TrendSeries[] {
   }
   return [
     {
-      key: 'sent',
-      label: '发送量',
-      color: '#1677ff',
+      key: "sent",
+      label: "发送量",
+      color: "#1677ff",
       points: data.trend.map((item) => normalizeTrendPoint(item.sent)),
     },
     {
-      key: 'failed',
-      label: '失败量',
-      color: '#ef4444',
+      key: "failed",
+      label: "失败量",
+      color: "#ef4444",
       points: data.trend.map((item) => normalizeTrendPoint(item.failed)),
     },
   ];
 }
 
-function trendBucketLabels(items: Array<{ bucket_start: string }>, window: DashboardWindow): string[] {
+function overviewQPSLatencyTrend(data: OverviewApiResponse): MixedTrendData {
+  if (data.trend.length === 0) {
+    return defaultOverviewQPSLatencyTrend();
+  }
+  return {
+    bars: {
+      key: "latency",
+      label: "平均耗时",
+      color: "#f97316",
+      points: data.trend.map((item) =>
+        normalizeTrendPoint(item.avg_duration_ms),
+      ),
+    },
+    line: {
+      key: "qps",
+      label: "QPS",
+      color: "#7c3aed",
+      points: data.trend.map((item) => normalizeTrendPoint(item.qps)),
+    },
+  };
+}
+
+function trendBucketLabels(
+  items: Array<{ bucket_start: string }>,
+  window: DashboardWindow,
+): string[] {
   if (items.length === 0) {
     return zeroTrendLabels();
   }
   return items.map((item) => formatTrendBucketLabel(item.bucket_start, window));
 }
 
-function formatTrendBucketLabel(value: string, window: DashboardWindow): string {
+function formatTrendBucketLabel(
+  value: string,
+  window: DashboardWindow,
+): string {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) {
-    return '-';
+    return "-";
   }
-  if (window === '7d') {
-    return new Intl.DateTimeFormat('zh-CN', {
-      timeZone: 'Asia/Shanghai',
-      month: '2-digit',
-      day: '2-digit',
+  if (window === "7d") {
+    return new Intl.DateTimeFormat("zh-CN", {
+      timeZone: "Asia/Shanghai",
+      month: "2-digit",
+      day: "2-digit",
     }).format(date);
   }
-  return new Intl.DateTimeFormat('zh-CN', {
-    timeZone: 'Asia/Shanghai',
-    hour: '2-digit',
-    minute: '2-digit',
+  return new Intl.DateTimeFormat("zh-CN", {
+    timeZone: "Asia/Shanghai",
+    hour: "2-digit",
+    minute: "2-digit",
     hour12: false,
   }).format(date);
 }
 
 function windowCopy(window: DashboardWindow): string {
   switch (window) {
-    case '15m':
-      return '最近 15 分钟';
-    case '1h':
-      return '最近 1 小时';
-    case '6h':
-      return '最近 6 小时';
-    case '7d':
-      return '最近 7 天';
-    case '24h':
+    case "15m":
+      return "最近 15 分钟";
+    case "1h":
+      return "最近 1 小时";
+    case "6h":
+      return "最近 6 小时";
+    case "7d":
+      return "最近 7 天";
+    case "24h":
     default:
-      return '最近 24 小时';
+      return "最近 24 小时";
   }
 }
 
 function normalizeTrendPoint(value: number): number {
-  if (value === undefined || value === null || Number.isNaN(value) || typeof value !== 'number') {
+  if (
+    value === undefined ||
+    value === null ||
+    Number.isNaN(value) ||
+    typeof value !== "number"
+  ) {
     return 0;
   }
   return Math.max(0, value);
 }
 
 function formatInteger(value: number): string {
-  if (value === undefined || value === null || Number.isNaN(value) || typeof value !== 'number') {
-    return '0';
+  if (
+    value === undefined ||
+    value === null ||
+    Number.isNaN(value) ||
+    typeof value !== "number"
+  ) {
+    return "0";
   }
-  return Math.max(0, Math.round(value)).toLocaleString('zh-CN');
+  return Math.max(0, Math.round(value)).toLocaleString("zh-CN");
 }
 
 function formatDecimal(value: number): string {
-  if (value === undefined || value === null || Number.isNaN(value) || typeof value !== 'number') {
-    return '0';
+  if (
+    value === undefined ||
+    value === null ||
+    Number.isNaN(value) ||
+    typeof value !== "number"
+  ) {
+    return "0";
   }
-  return value.toLocaleString('zh-CN', {
+  return value.toLocaleString("zh-CN", {
     minimumFractionDigits: 0,
     maximumFractionDigits: 2,
   });
 }
 
 function formatPercent(value: number): string {
-  if (value === undefined || value === null || Number.isNaN(value) || typeof value !== 'number') {
-    return '0.00%';
+  if (
+    value === undefined ||
+    value === null ||
+    Number.isNaN(value) ||
+    typeof value !== "number"
+  ) {
+    return "0.00%";
   }
-  return `${value.toLocaleString('zh-CN', {
+  return `${value.toLocaleString("zh-CN", {
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,
   })}%`;
 }
 
 function formatMilliseconds(value: number): string {
-  if (value === undefined || value === null || Number.isNaN(value) || typeof value !== 'number') {
-    return '0 ms';
+  if (
+    value === undefined ||
+    value === null ||
+    Number.isNaN(value) ||
+    typeof value !== "number"
+  ) {
+    return "0 ms";
   }
   return `${formatInteger(value)} ms`;
 }
 
 function formatDurationSeconds(totalSeconds: number): string {
-  if (totalSeconds === undefined || totalSeconds === null || Number.isNaN(totalSeconds) || typeof totalSeconds !== 'number') {
-    return '0 秒';
+  if (
+    totalSeconds === undefined ||
+    totalSeconds === null ||
+    Number.isNaN(totalSeconds) ||
+    typeof totalSeconds !== "number"
+  ) {
+    return "0 秒";
   }
   const seconds = Math.max(0, Math.round(totalSeconds));
   if (seconds >= 3600) {
@@ -616,30 +856,30 @@ function formatDurationSeconds(totalSeconds: number): string {
 
 function formatTime(value: string): string {
   if (!value) {
-    return '-';
+    return "-";
   }
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) {
-    return '-';
+    return "-";
   }
-  return new Intl.DateTimeFormat('zh-CN', {
-    timeZone: 'Asia/Shanghai',
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit',
+  return new Intl.DateTimeFormat("zh-CN", {
+    timeZone: "Asia/Shanghai",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
     hour12: false,
   }).format(date);
 }
 
-function mapHealthLabel(value: string): PlatformHealth['health'] {
+function mapHealthLabel(value: string): PlatformHealth["health"] {
   switch (value) {
-    case 'healthy':
-      return '健康';
-    case 'critical':
-      return '异常';
+    case "healthy":
+      return "健康";
+    case "critical":
+      return "异常";
     default:
-      return '警告';
+      return "警告";
   }
 }

@@ -89,10 +89,13 @@ describe("console list layout rhythm", () => {
       "grid-template-columns: repeat(6, minmax(112px, 1fr));",
     );
     expect(styles).toContain(".performance-test-grid");
-    expect(styles).toContain(".performance-test-diagnosis");
+    expect(styles).not.toContain(".performance-test-diagnosis");
     expect(styles).toContain(".performance-test-chart-grid");
     expect(styles).toContain(".performance-test-detail-grid");
     expect(styles).toContain(".performance-test-diagnostic-meter");
+    expect(styles).toContain(".table-primary-text");
+    expect(styles).toContain(".plain-endpoint-text");
+    expect(styles).toContain(".copyable-identifier-text");
     expect(styles).toContain(".performance-test-comparison");
     expect(styles).toContain("grid-template-columns: 420px minmax(0, 1fr);");
     expect(styles).toContain(".split-layout--provider");

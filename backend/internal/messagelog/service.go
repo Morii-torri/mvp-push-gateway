@@ -307,18 +307,17 @@ func outboundTimes(attempts []DeliveryAttempt) (*time.Time, *time.Time) {
 	var first *time.Time
 	var last *time.Time
 	for _, attempt := range attempts {
-		for _, candidate := range []*time.Time{attempt.QueuedAt, attempt.StartedAt, attempt.FinishedAt} {
-			if candidate == nil {
-				continue
-			}
-			if first == nil || candidate.Before(*first) {
-				value := candidate.UTC()
-				first = &value
-			}
-			if last == nil || candidate.After(*last) {
-				value := candidate.UTC()
-				last = &value
-			}
+		if attempt.FinishedAt == nil {
+			continue
+		}
+		candidate := attempt.FinishedAt
+		if first == nil || candidate.Before(*first) {
+			value := candidate.UTC()
+			first = &value
+		}
+		if last == nil || candidate.After(*last) {
+			value := candidate.UTC()
+			last = &value
 		}
 	}
 	return first, last

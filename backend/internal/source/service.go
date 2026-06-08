@@ -110,12 +110,13 @@ type CreateSourceParams = CreateSourceInput
 type UpdateSourceParams = UpdateSourceInput
 
 type IngestInput struct {
-	SourceCode string
-	Method     string
-	Path       string
-	Headers    http.Header
-	RemoteAddr string
-	Body       []byte
+	SourceCode        string
+	Method            string
+	Path              string
+	Headers           http.Header
+	RemoteAddr        string
+	Body              []byte
+	PersistBeforePlan bool
 }
 
 type IngestResult struct {
@@ -664,7 +665,7 @@ func (s *Service) Ingest(ctx context.Context, input IngestInput) (IngestResult, 
 	}
 
 	startedAt = time.Now()
-	if s.routePlanPublisher != nil && (!configuredSource.InboundDedupeEnabled || dedupeReservedByRuntimeStore) {
+	if s.routePlanPublisher != nil && !input.PersistBeforePlan && (!configuredSource.InboundDedupeEnabled || dedupeReservedByRuntimeStore) {
 		if _, err := s.routePlanPublisher.PublishRoutePlan(ctx, queue.RoutePlanEvent{
 			MessageID:  messageID,
 			SourceID:   configuredSource.ID,

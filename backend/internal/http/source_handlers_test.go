@@ -261,6 +261,29 @@ func TestIngestHandlerReturnsAcceptedResponse(t *testing.T) {
 	}
 }
 
+func TestIngestHandlerMarksConsoleTestForPersistentLog(t *testing.T) {
+	sourceService := &fakeSourceService{
+		ingestResult: source.IngestResult{
+			TraceID: "trace-http",
+			Status:  "accepted",
+			Message: "accepted",
+		},
+	}
+	handler := httpapi.NewHandler(testConfig(), httpapi.WithSourceService(sourceService))
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/ingest/orders", strings.NewReader(`{"title":"paid"}`))
+	req.Header.Set("X-MGP-Console-Ingest-Test", "true")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("expected 202 accepted, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	if !sourceService.ingestInput.PersistBeforePlan {
+		t.Fatalf("expected console ingest test to request persistent inbound log")
+	}
+}
+
 func TestIngestHandlerUsesForwardedClientIPOnlyFromTrustedProxy(t *testing.T) {
 	sourceService := &fakeSourceService{
 		ingestResult: source.IngestResult{

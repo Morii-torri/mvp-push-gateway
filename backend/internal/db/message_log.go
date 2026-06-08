@@ -54,8 +54,8 @@ func (r Repository) ListMessages(ctx context.Context, filter messagelog.ListFilt
 				WHEN bool_or(attempt.status = 'sent') THEN 'partial_sent'
 				ELSE max(attempt.status)
 			END AS outbound_status,
-			min(COALESCE(attempt.queued_at, attempt.started_at, attempt.finished_at)) AS first_outbound_at,
-			max(COALESCE(attempt.finished_at, attempt.started_at, attempt.queued_at)) AS last_outbound_at,
+			min(attempt.finished_at) FILTER (WHERE attempt.finished_at IS NOT NULL) AS first_outbound_at,
+			max(attempt.finished_at) FILTER (WHERE attempt.finished_at IS NOT NULL) AS last_outbound_at,
 			count(attempt.id)::integer AS attempt_count,
 			COALESCE(array_remove(array_agg(DISTINCT COALESCE(channel.id::text, '')), ''), ARRAY[]::text[]),
 			COALESCE(array_remove(array_agg(DISTINCT COALESCE(channel.name, '')), ''), ARRAY[]::text[]),

@@ -227,12 +227,13 @@ func (h *Handler) ingestHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	result, err := h.sources.Ingest(r.Context(), source.IngestInput{
-		SourceCode: sourceCode,
-		Method:     r.Method,
-		Path:       r.URL.Path,
-		Headers:    r.Header.Clone(),
-		RemoteAddr: h.clientIPForIngest(r),
-		Body:       body,
+		SourceCode:        sourceCode,
+		Method:            r.Method,
+		Path:              r.URL.Path,
+		Headers:           r.Header.Clone(),
+		RemoteAddr:        h.clientIPForIngest(r),
+		Body:              body,
+		PersistBeforePlan: isConsoleIngestTest(r),
 	})
 	if err != nil {
 		status, code, message := sourceErrorStatus(err)
@@ -245,6 +246,10 @@ func (h *Handler) ingestHandler(w http.ResponseWriter, r *http.Request) {
 		Status:  result.Status,
 		Message: result.Message,
 	})
+}
+
+func isConsoleIngestTest(r *http.Request) bool {
+	return strings.EqualFold(strings.TrimSpace(r.Header.Get("X-MGP-Console-Ingest-Test")), "true")
 }
 
 func (h *Handler) ingestMaxPayloadBytes(ctx context.Context) int64 {

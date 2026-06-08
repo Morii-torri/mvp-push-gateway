@@ -136,6 +136,32 @@ describe("console api wrappers", () => {
     });
   });
 
+  it("marks console inbound tests so backend keeps them in message logs", async () => {
+    const fetchMock = vi.fn(
+      async (_input: RequestInfo | URL, _init?: RequestInit) =>
+        json({ trace_id: "trace-1", status: "accepted", message: "accepted" }),
+    );
+
+    await consoleApi.ingestSourcePayload(
+      "orders",
+      "source-token",
+      { title: "paid" },
+      {},
+      fetchMock,
+    );
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/v1/ingest/orders",
+      expect.objectContaining({
+        method: "POST",
+        headers: expect.objectContaining({
+          "X-MGP-Console-Ingest-Test": "true",
+          Authorization: "Bearer source-token",
+        }),
+      }),
+    );
+  });
+
   it("patches only channel enabled state for provider toggles", async () => {
     tokenStore.set("admin-token");
     const fetchMock = vi.fn(

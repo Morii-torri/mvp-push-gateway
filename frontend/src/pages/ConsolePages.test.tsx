@@ -284,12 +284,13 @@ describe("critical console pages", () => {
 
     expect(overviewMarkup).toContain("总览");
     expect(overviewMarkup).toContain("消息发送趋势");
+    expect(overviewMarkup).toContain("QPS 耗时趋势");
     expect(overviewMarkup).toContain("总发送量");
     expect(overviewMarkup).toContain("推送数据");
     expect(overviewMarkup).not.toContain("平台发送量与成功率");
-    expect(overviewMarkup).toContain("最近失败");
+    expect(overviewMarkup).not.toContain("最近失败");
     expect(overviewMarkup).not.toContain("失败排行");
-    expect(overviewMarkup).toContain("暂无失败推送");
+    expect(overviewMarkup).not.toContain("暂无失败推送");
     expect(overviewMarkup).not.toContain("最近异常");
     expect(queueMarkup).toContain("队列监控");
     expect(queueMarkup).toContain("queue-monitor-overview-grid");
@@ -401,7 +402,10 @@ describe("critical console pages", () => {
     expect(markup).toContain("2026-05-20 12:36:21.552225 - 入站请求已接收");
     expect(markup).not.toContain("inbound_received");
     expect(markup).toContain("出站投递详情");
-    expect(markup).toContain('data-message-detail-section="payload-collapsed"');
+    expect(markup).toContain('data-message-detail-section="payload-expanded"');
+    expect(markup).toContain(
+      'data-message-detail-section="attempts-collapsed"',
+    );
     expect(markup).toContain("message-log-detail-section");
     expect(markup).not.toContain("ant-collapse");
     expect(markup).not.toContain("首次出站时间");
@@ -415,6 +419,7 @@ describe("critical console pages", () => {
         channelId: "channel-1",
         name: "Webhook A",
         providerType: "通用 Webhook",
+        providerTypeKey: "webhook",
         sent: "2",
         success: "50.00%",
         qps: "0.01",
@@ -618,7 +623,7 @@ describe("critical console pages", () => {
     expect(payloadHelpMarkup).not.toContain("ant-alert-info");
     expect(inboundNoteMarkup).toContain("测试范围");
     expect(inboundNoteMarkup).toContain(
-      "该操作只调用本平台入站接口；提交成功仅表示已接收入队，不代表推送渠道已发送成功。",
+      "该操作只调用本平台入站接口，会生成消息日志；提交成功仅表示已接收入队，不代表推送渠道已发送成功。",
     );
     expect(inboundNoteMarkup).toContain("source-inbound-test-note");
     expect(inboundNoteMarkup).toContain("quiet-note");
@@ -757,7 +762,7 @@ describe("critical console pages", () => {
     );
     expect(enabledMarkup).toContain("source-access-option-grid");
     expect(enabledMarkup).toContain("source-access-value-grid");
-    expect(enabledMarkup).toContain("去重保留时间");
+    expect(enabledMarkup).toContain("去重窗口时间");
     expect(enabledMarkup).toContain("每秒最多接收");
     expect(enabledMarkup).toContain("消息免打扰");
     expect(enabledMarkup).toContain("启用消息免打扰");
@@ -798,7 +803,7 @@ describe("critical console pages", () => {
       />,
     );
 
-    expect(disabledMarkup).not.toContain("去重保留时间");
+    expect(disabledMarkup).not.toContain("去重窗口时间");
     expect(disabledMarkup).not.toContain("每秒最多接收");
     expect(disabledMarkup).not.toContain("时间段设置 (1/5)");
 
@@ -6028,13 +6033,14 @@ describe("critical console pages", () => {
       "一期保留管理员单账户和基础运行参数，不做 RBAC 与素材上传。",
     );
     expect(settingsMarkup).toContain("推荐并发");
-    expect(settingsMarkup).toContain("推荐出站 QPS");
-    expect(settingsMarkup).toContain("推荐出站 P99");
     expect(settingsMarkup).toContain("出站 QPS");
+    expect(settingsMarkup).toContain("出站 P99");
+    expect(settingsMarkup).not.toContain("推荐出站 QPS");
+    expect(settingsMarkup).not.toContain("推荐出站 P99");
     expect(settingsMarkup).toContain("接收 QPS");
     expect(settingsMarkup).toContain("完成 QPS");
     expect(settingsMarkup).toContain("完整 P99");
-    expect(settingsMarkup).toContain("瓶颈诊断");
+    expect(settingsMarkup).not.toContain("未发现明显瓶颈");
     expect(settingsMarkup).toContain("性能测试进度");
     expect(settingsMarkup).toContain("选中并发详情");
     expect(settingsMarkup).toContain("实际 worker");
@@ -6047,6 +6053,12 @@ describe("critical console pages", () => {
     expect(settingsMarkup).toContain("max_connections");
     expect(settingsMarkup).toContain("CPU");
     expect(settingsMarkup).toContain("运行时");
+    expect(settingsMarkup).toContain("入站队列发布");
+    expect(settingsMarkup).toContain("RoutePlan 等待");
+    expect(settingsMarkup).toContain("Send 等待");
+    expect(settingsMarkup).toContain("Result 写入");
+    expect(settingsMarkup).toContain("内存增长");
+    expect(settingsMarkup).toContain("GC 暂停");
     expect(settingsMarkup).toContain("吞吐能力");
     expect(settingsMarkup).toContain("延迟表现");
     expect(settingsMarkup).not.toContain("最低");
@@ -6056,7 +6068,7 @@ describe("critical console pages", () => {
     expect(settingsMarkup).toContain("goroutine");
   });
 
-  it("uses selected concurrency stage metrics instead of global performance stage metrics", () => {
+  it("uses selected concurrency stage metrics and hides duplicate or low-value rows", () => {
     const result = {
       stage_results: [
         {
@@ -6078,6 +6090,22 @@ describe("critical console pages", () => {
           avg_ms: 12,
           p99_ms: 33,
           duration_ms: 24,
+        },
+        {
+          key: "completion",
+          label: "当前档位完整链路",
+          count: 2,
+          avg_ms: 12,
+          p99_ms: 34,
+          duration_ms: 24,
+        },
+        {
+          key: "delivery_send",
+          label: "上级请求往返",
+          count: 2,
+          avg_ms: 1,
+          p99_ms: 1,
+          duration_ms: 2,
         },
       ],
     } as any;
@@ -6238,7 +6266,7 @@ describe("critical console pages", () => {
 
     expect(rows.find((row) => row.label === "DB 压力")?.tone).toBe("ok");
     expect(rows.find((row) => row.label === "队列压力")?.tone).toBe("ok");
-    expect(rows.find((row) => row.label === "GC / 内存")?.tone).toBe("ok");
+    expect(rows.find((row) => row.label === "GC 暂停")?.tone).toBe("ok");
 
     const frequentShortWaitRows = performanceDiagnosticGaugeRows({
       ...rowsFixtureBase,
@@ -6286,9 +6314,7 @@ describe("critical console pages", () => {
     expect(hotRows.find((row) => row.label === "队列压力")?.tone).toBe(
       "danger",
     );
-    expect(hotRows.find((row) => row.label === "GC / 内存")?.tone).toBe(
-      "danger",
-    );
+    expect(hotRows.find((row) => row.label === "GC 暂停")?.tone).toBe("danger");
   });
 
   it("renders match group reference status and readonly reference list", () => {

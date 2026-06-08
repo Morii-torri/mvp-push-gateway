@@ -65,6 +65,7 @@ import {
   GroupedBarChart,
   ListContainer,
   LineChart,
+  MixedLineBarChart,
   MetricCard,
   PageFrame,
   QueryBar,
@@ -138,6 +139,7 @@ import {
   getProviderTypeLabel,
   getValidationStatusMeta,
   templateVariable,
+  type ProviderType,
 } from "../utils/labels";
 import {
   buildInitialRouteFlow,
@@ -1171,7 +1173,7 @@ export function SourceInboundTestNote() {
     <div className="quiet-note source-inbound-test-note">
       <Typography.Text strong>测试范围</Typography.Text>
       <Typography.Text type="secondary">
-        该操作只调用本平台入站接口；提交成功仅表示已接收入队，不代表推送渠道已发送成功。
+        该操作只调用本平台入站接口，会生成消息日志；提交成功仅表示已接收入队，不代表推送渠道已发送成功。
       </Typography.Text>
     </div>
   );
@@ -1238,11 +1240,7 @@ export function MessageStatusCell({ value }: { value: MessageLog["status"] }) {
   );
 }
 
-export function ProviderTypeCell({
-  value,
-}: {
-  value: ProviderRecord["providerType"];
-}) {
+export function ProviderTypeCell({ value }: { value: ProviderType }) {
   const meta = providerBrandMeta[value] || defaultBrandMeta;
   return (
     <span
@@ -1260,6 +1258,54 @@ export function ProviderTypeCell({
       </span>
     </span>
   );
+}
+
+export function StrongTextCell({
+  value,
+  maxWidth = 180,
+}: {
+  value?: string;
+  maxWidth?: number;
+}) {
+  const text = value || "-";
+  return (
+    <Typography.Text
+      strong
+      className="table-primary-text"
+      ellipsis={{ tooltip: text }}
+      style={{ maxWidth }}
+    >
+      {text}
+    </Typography.Text>
+  );
+}
+
+export function MonoNumberCell({ value }: { value?: string | number }) {
+  return <span className="table-number-text">{value ?? "-"}</span>;
+}
+
+export function MutedTextCell({
+  value,
+  maxWidth = 180,
+}: {
+  value?: string;
+  maxWidth?: number;
+}) {
+  const text = value || "-";
+  return (
+    <Typography.Text
+      type="secondary"
+      className="table-muted-text"
+      ellipsis={{ tooltip: text }}
+      style={{ maxWidth }}
+    >
+      {text}
+    </Typography.Text>
+  );
+}
+
+export function PlainEndpointText({ value }: { value: string }) {
+  return <span className="plain-endpoint-text">{value}</span>;
 }
 
 export function TemplateSourceCell({
@@ -1445,7 +1491,7 @@ function draftFromSource(source: SourceApiRecord): SourceDraft {
 
 export function sourceInputFromDraft(draft: SourceDraft): SourceInput {
   const dedupeTTLSeconds = draft.inboundDedupeEnabled
-    ? parsePositiveInteger(draft.inboundDedupeTtlSeconds, "去重保留时间")
+    ? parsePositiveInteger(draft.inboundDedupeTtlSeconds, "去重窗口时间")
     : defaultInboundDedupeTtlSeconds;
   const rateLimitPerSecond = draft.rateLimitEnabled
     ? parsePositiveInteger(draft.rateLimitPerSecond, "每秒最多接收")
@@ -2111,11 +2157,7 @@ export function filterMessageLogsByQuery(
 }
 
 type DeadLetterHandlingMode = "manual" | "auto";
-export type DeadLetterStatusFilter =
-  | "pending"
-  | "replayed"
-  | "handled"
-  | "all";
+export type DeadLetterStatusFilter = "pending" | "replayed" | "handled" | "all";
 
 type DeadLetterRow = {
   id: string;
@@ -2563,7 +2605,30 @@ export function performanceStageRowsForSelection(
     selectedRow?.stage_results && selectedRow.stage_results.length > 0
       ? selectedRow.stage_results
       : (result?.stage_results ?? []);
-  return rows.filter((item) => item.count > 0);
+  const dispatch = rows.find((item) => item.key === "dispatch");
+  return rows.filter((item) => {
+    if (item.count <= 0) {
+      return false;
+    }
+    if (
+      item.key === "completion" &&
+      dispatch &&
+      Math.abs(item.p99_ms - dispatch.p99_ms) < 5
+    ) {
+      return false;
+    }
+    if (item.key === "delivery_send" && item.p99_ms <= 1 && item.avg_ms <= 1) {
+      return false;
+    }
+    return true;
+  });
+}
+
+function performanceStageByKey(
+  row: PerformanceComparisonRow | null,
+  key: string,
+) {
+  return row?.stage_results?.find((stage) => stage.key === key) ?? null;
 }
 
 function formatPerformanceBytes(value?: number | null) {
@@ -2587,92 +2652,6 @@ function formatPerformanceBytes(value?: number | null) {
     })} KB`;
   }
   return `${value.toLocaleString("zh-CN")} B`;
-}
-
-function performanceBottleneckSummary(
-  result: PerformanceTestResult | null,
-  loading: boolean,
-) {
-  const diagnostics = result?.diagnostics;
-  if (loading && !result) {
-    return {
-      tone: "running",
-      title: "正在采集性能数据",
-      detail: "系统会每秒刷新压测进度、连接池等待、队列积压和每档耗时。",
-      evidence: ["等待首个并发档位完成"],
-    };
-  }
-  if (!result || !diagnostics) {
-    return {
-      tone: "idle",
-      title: "等待运行性能测试",
-      detail: "运行后会根据每档耗时、连接池、队列和资源变化生成瓶颈诊断。",
-      evidence: ["尚无采样数据"],
-    };
-  }
-  const waitAvg =
-    diagnostics.db_pool_wait_count_delta > 0
-      ? diagnostics.db_pool_wait_duration_delta_ms /
-        diagnostics.db_pool_wait_count_delta
-      : 0;
-  const evidence: string[] = [];
-  if (diagnostics.db_pool_wait_count_delta > 0) {
-    evidence.push(
-      `连接池等待 ${formatPerformanceNumber(diagnostics.db_pool_wait_count_delta)} 次，平均 ${formatPerformanceNumber(waitAvg, " ms")}`,
-    );
-  }
-  if (diagnostics.queue_backlog_delta > 0) {
-    evidence.push(
-      `队列积压增加 ${formatPerformanceNumber(diagnostics.queue_backlog_delta)} 条`,
-    );
-  }
-  if (
-    result.p99_inbound_ms >=
-    Math.max(result.route_p99_ms, result.template_render_p99_ms) * 1.5
-  ) {
-    evidence.push(
-      `入站处理 P99 ${formatPerformanceNumber(result.p99_inbound_ms, " ms")}`,
-    );
-  }
-  if (diagnostics.goroutine_growth_warning) {
-    evidence.push("goroutine 增长异常");
-  }
-  if (!evidence.length) {
-    evidence.push("未发现明显资源瓶颈");
-  }
-  if (waitAvg >= 100 || result.p99_inbound_ms >= 1000) {
-    return {
-      tone: "warning",
-      title: "主要瓶颈：PostgreSQL 连接池等待",
-      detail:
-        "当前压测存在连接池排队，优先评估 API 连接池、PostgreSQL max_connections 和写库耗时。",
-      evidence,
-    };
-  }
-  if ((diagnostics.queue_oldest_wait_after ?? 0) >= 30) {
-    return {
-      tone: "warning",
-      title: "主要瓶颈：worker 处理低于入站速度",
-      detail:
-        "入站写入速度已经超过 route_plan/send_message 消费速度，应检查 planning/sending worker 和队列积压。",
-      evidence,
-    };
-  }
-  if (diagnostics.goroutine_growth_warning) {
-    return {
-      tone: "danger",
-      title: "主要瓶颈：goroutine 异常增长",
-      detail:
-        "压测期间 goroutine 增长超过阈值，需要排查未释放的后台任务或阻塞调用。",
-      evidence,
-    };
-  }
-  return {
-    tone: "ok",
-    title: "未发现明显瓶颈",
-    detail: "当前推荐并发下连接池、队列和 goroutine 未出现明显异常。",
-    evidence,
-  };
 }
 
 function performanceGaugeTone(percent: number) {
@@ -2703,6 +2682,7 @@ export function performanceDiagnosticGaugeRows(
   row: PerformanceComparisonRow | null,
 ) {
   const diagnostics = row?.diagnostics;
+  const stage = (key: string) => performanceStageByKey(row, key);
   const waitAvg =
     diagnostics && diagnostics.db_pool_wait_count_delta > 0
       ? diagnostics.db_pool_wait_duration_delta_ms /
@@ -2748,6 +2728,16 @@ export function performanceDiagnosticGaugeRows(
       percentOfThreshold(gcAveragePauseMS, 10),
     ),
   );
+  const enqueueStage = stage("enqueue_inbound");
+  const routeWaitStage = stage("route_plan_lookup");
+  const sendWaitStage = stage("delivery_claim");
+  const resultWriteStage =
+    stage("delivery_complete") ?? stage("db.query.complete_delivery_batch");
+  const memoryDelta = Math.abs(diagnostics?.memory_alloc_delta_bytes ?? 0);
+  const memoryPercent = performanceGaugePercent(
+    percentOfThreshold(memoryDelta, 512 * 1024 * 1024),
+  );
+  const stagePercent = (value?: number) => percentOfThreshold(value ?? 0, 1000);
   return [
     {
       label: "DB 压力",
@@ -2770,6 +2760,50 @@ export function performanceDiagnosticGaugeRows(
       tone: performanceGaugeTone(queuePercent),
     },
     {
+      label: "入站队列发布",
+      value: enqueueStage
+        ? formatPerformanceNumber(enqueueStage.p99_ms, " ms")
+        : "-",
+      note: enqueueStage
+        ? `${formatPerformanceNumber(enqueueStage.count)} 次 / 平均 ${formatPerformanceNumber(enqueueStage.avg_ms, " ms")}`
+        : "等待采样",
+      percent: stagePercent(enqueueStage?.p99_ms),
+      tone: performanceGaugeTone(stagePercent(enqueueStage?.p99_ms)),
+    },
+    {
+      label: "RoutePlan 等待",
+      value: routeWaitStage
+        ? formatPerformanceNumber(routeWaitStage.p99_ms, " ms")
+        : "-",
+      note: routeWaitStage
+        ? `${formatPerformanceNumber(routeWaitStage.count)} 次 / 平均 ${formatPerformanceNumber(routeWaitStage.avg_ms, " ms")}`
+        : "等待采样",
+      percent: stagePercent(routeWaitStage?.p99_ms),
+      tone: performanceGaugeTone(stagePercent(routeWaitStage?.p99_ms)),
+    },
+    {
+      label: "Send 等待",
+      value: sendWaitStage
+        ? formatPerformanceNumber(sendWaitStage.p99_ms, " ms")
+        : "-",
+      note: sendWaitStage
+        ? `${formatPerformanceNumber(sendWaitStage.count)} 次 / 平均 ${formatPerformanceNumber(sendWaitStage.avg_ms, " ms")}`
+        : "等待采样",
+      percent: stagePercent(sendWaitStage?.p99_ms),
+      tone: performanceGaugeTone(stagePercent(sendWaitStage?.p99_ms)),
+    },
+    {
+      label: "Result 写入",
+      value: resultWriteStage
+        ? formatPerformanceNumber(resultWriteStage.p99_ms, " ms")
+        : "-",
+      note: resultWriteStage
+        ? `${formatPerformanceNumber(resultWriteStage.count)} 次 / 平均 ${formatPerformanceNumber(resultWriteStage.avg_ms, " ms")}`
+        : "等待采样",
+      percent: stagePercent(resultWriteStage?.p99_ms),
+      tone: performanceGaugeTone(stagePercent(resultWriteStage?.p99_ms)),
+    },
+    {
       label: "PostgreSQL I/O",
       value: diagnostics
         ? `${formatPerformanceNumber(diagnostics.postgres_blocks_read_delta)} 读块`
@@ -2779,6 +2813,17 @@ export function performanceDiagnosticGaugeRows(
         : "等待运行",
       percent: ioPercent,
       tone: performanceGaugeTone(ioPercent),
+    },
+    {
+      label: "内存增长",
+      value: diagnostics
+        ? formatPerformanceBytes(diagnostics.memory_alloc_delta_bytes)
+        : "-",
+      note: diagnostics
+        ? `Alloc ${formatPerformanceBytes(diagnostics.memory_alloc_bytes_before)} -> ${formatPerformanceBytes(diagnostics.memory_alloc_bytes_after)}`
+        : "等待运行",
+      percent: memoryPercent,
+      tone: performanceGaugeTone(memoryPercent),
     },
     {
       label: "运行时",
@@ -2794,12 +2839,15 @@ export function performanceDiagnosticGaugeRows(
       tone: performanceGaugeTone(runtimePercent),
     },
     {
-      label: "GC / 内存",
+      label: "GC 暂停",
       value: diagnostics
-        ? `${formatPerformanceBytes(diagnostics.memory_alloc_bytes_after)}`
+        ? formatPerformanceNumber(
+            diagnostics.gc_pause_total_delta_ms ?? 0,
+            " ms",
+          )
         : "-",
       note: diagnostics
-        ? `GC ${formatPerformanceNumber(diagnostics.gc_count_delta ?? 0)} 次，暂停 ${formatPerformanceNumber(diagnostics.gc_pause_total_delta_ms ?? 0, " ms")}`
+        ? `GC ${formatPerformanceNumber(gcCountDelta)} 次，平均暂停 ${formatPerformanceNumber(gcAveragePauseMS, " ms")}`
         : "等待运行",
       percent: gcPercent,
       tone: performanceGaugeTone(gcPercent),
@@ -2852,31 +2900,6 @@ function performanceConcurrencyDetailRows(
       note: "接收、主记录写入与入队",
     },
   ];
-}
-
-function performanceBottleneckType(
-  result: PerformanceTestResult | null,
-  selectedRow: PerformanceComparisonRow | null,
-) {
-  const diagnostics = selectedRow?.diagnostics ?? result?.diagnostics;
-  if (!diagnostics) {
-    return "待测试";
-  }
-  const waitAvg =
-    diagnostics.db_pool_wait_count_delta > 0
-      ? diagnostics.db_pool_wait_duration_delta_ms /
-        diagnostics.db_pool_wait_count_delta
-      : 0;
-  if (diagnostics.goroutine_growth_warning) {
-    return "worker";
-  }
-  if (diagnostics.db_pool_wait_count_delta > 0 || waitAvg >= 5) {
-    return "DB";
-  }
-  if ((diagnostics.queue_backlog_delta ?? 0) > 0) {
-    return "队列";
-  }
-  return "正常";
 }
 
 export function performanceAutoSelectedConcurrency({
@@ -2937,8 +2960,6 @@ function PerformanceTestResultView({
   const diagnosticGaugeRows = performanceDiagnosticGaugeRows(selectedRow);
   const detailRows = performanceConcurrencyDetailRows(selectedRow);
   const stageRows = performanceStageRowsForSelection(result, selectedRow);
-  const bottleneck = performanceBottleneckSummary(result, loading);
-  const bottleneckType = performanceBottleneckType(result, selectedRow);
   const progressPercent =
     run?.progress_percent ?? (loading ? 0 : result ? 100 : 0);
   const progressStatus =
@@ -2966,7 +2987,7 @@ function PerformanceTestResultView({
       footnote: result?.updated_setting_key ?? "运行后写入系统参数",
     },
     {
-      label: "推荐出站 QPS",
+      label: "出站 QPS",
       value: formatPerformanceNumber(performanceDispatchQPS(recommendedRow)),
       delta: peakQPSRow
         ? `峰值 ${formatPerformanceNumber(performanceDispatchQPS(peakQPSRow))} @ ${peakQPSRow.concurrency}`
@@ -2976,44 +2997,20 @@ function PerformanceTestResultView({
       footnote: "请求发出即计入",
     },
     {
-      label: "推荐出站 P99",
-      value: formatPerformanceNumber(performanceDispatchP99(recommendedRow), " ms"),
+      label: "出站 P99",
+      value: formatPerformanceNumber(
+        performanceDispatchP99(recommendedRow),
+        " ms",
+      ),
       delta: `完整 P99 ${formatPerformanceNumber(performanceCompletionP99(recommendedRow), " ms")}`,
       trend: "flat" as const,
       accent: "orange" as const,
       footnote: "入站到请求发出",
     },
-    {
-      label: "瓶颈类型",
-      value: bottleneckType,
-      delta: `${selectedRow ? `并发 ${selectedRow.concurrency}` : "等待运行"}`,
-      trend: bottleneckType === "正常" ? ("flat" as const) : ("down" as const),
-      accent:
-        bottleneckType === "正常"
-          ? ("purple" as const)
-          : bottleneckType === "DB"
-            ? ("orange" as const)
-            : ("red" as const),
-      footnote: "按选中并发档位判断",
-    },
   ];
   return (
     <div className="performance-test-results">
-      <section
-        className={`performance-test-diagnosis performance-test-diagnosis--${bottleneck.tone}`}
-      >
-        <div>
-          <Typography.Text type="secondary">瓶颈诊断</Typography.Text>
-          <Typography.Title level={5}>{bottleneck.title}</Typography.Title>
-          <Typography.Text>{bottleneck.detail}</Typography.Text>
-        </div>
-        <div className="performance-test-diagnosis__evidence">
-          {bottleneck.evidence.map((item) => (
-            <span key={item}>{item}</span>
-          ))}
-        </div>
-      </section>
-      <div className="metric-grid metric-grid--four performance-test-metrics">
+      <div className="metric-grid metric-grid--three performance-test-metrics">
         {metrics.map((metric) => (
           <MetricCard key={metric.label} {...metric} />
         ))}
@@ -3082,8 +3079,19 @@ function PerformanceTestResultView({
           <div className="performance-test-stage-list">
             {stageRows.map((stage) => (
               <div key={stage.key} className="performance-test-stage-item">
-                <span>{stage.label}</span>
-                <strong>{formatPerformanceNumber(stage.p99_ms, " ms")}</strong>
+                <div className="performance-test-stage-item__header">
+                  <span>{stage.label}</span>
+                  <strong>
+                    {formatPerformanceNumber(stage.p99_ms, " ms")}
+                  </strong>
+                </div>
+                <div className="performance-test-diagnostic-meter">
+                  <span
+                    style={{
+                      width: `${performanceGaugePercent(percentOfThreshold(stage.p99_ms, 1000))}%`,
+                    }}
+                  />
+                </div>
                 <Typography.Text type="secondary">
                   {formatPerformanceNumber(stage.count)} 次 / 平均{" "}
                   {formatPerformanceNumber(stage.avg_ms, " ms")}
@@ -3332,7 +3340,7 @@ export function SourceConfigForm({
       {value.inboundDedupeEnabled || value.rateLimitEnabled ? (
         <div className="source-access-value-grid">
           {value.inboundDedupeEnabled ? (
-            <Form.Item label="去重保留时间（秒）">
+            <Form.Item label="去重窗口时间（秒）">
               <InputNumber
                 min={1}
                 precision={0}
@@ -3785,21 +3793,72 @@ export function OverviewPage({ lastUpdated, onRefresh }: ConsolePageProps) {
         render: (_value, _record, index) => index + 1,
         width: 72,
       },
-      { title: "推送渠道名称", dataIndex: "name", width: 160 },
-      { title: "推送渠道类型", dataIndex: "providerType", width: 140 },
-      { title: "发送量", dataIndex: "sent", align: "right", width: 100 },
-      { title: "成功率", dataIndex: "success", align: "right", width: 100 },
-      { title: "失败数", dataIndex: "failures", align: "right", width: 90 },
-      { title: "QPS", dataIndex: "qps", align: "right", width: 90 },
-      { title: "平均耗时", dataIndex: "latency", align: "right", width: 110 },
-      { title: "P99", dataIndex: "p99", align: "right", width: 90 },
+      {
+        title: "推送渠道名称",
+        dataIndex: "name",
+        width: 160,
+        render: (value: string) => (
+          <StrongTextCell value={value} maxWidth={150} />
+        ),
+      },
+      {
+        title: "推送渠道类型",
+        dataIndex: "providerType",
+        width: 150,
+        render: (_value: string, record) => (
+          <ProviderTypeCell value={record.providerTypeKey} />
+        ),
+      },
+      {
+        title: "发送量",
+        dataIndex: "sent",
+        width: 100,
+        render: (value: string) => <MonoNumberCell value={value} />,
+      },
+      {
+        title: "成功率",
+        dataIndex: "success",
+        width: 100,
+        render: (value: string) => <MonoNumberCell value={value} />,
+      },
+      {
+        title: "失败数",
+        dataIndex: "failures",
+        width: 90,
+        render: (value: string) => <MonoNumberCell value={value} />,
+      },
+      {
+        title: "QPS",
+        dataIndex: "qps",
+        width: 90,
+        render: (value: string) => <MonoNumberCell value={value} />,
+      },
+      {
+        title: "平均耗时",
+        dataIndex: "latency",
+        width: 110,
+        render: (value: string) => <MonoNumberCell value={value} />,
+      },
+      {
+        title: "P99",
+        dataIndex: "p99",
+        width: 90,
+        render: (value: string) => <MonoNumberCell value={value} />,
+      },
       {
         title: "限流次数",
         dataIndex: "rateLimited",
-        align: "right",
         width: 100,
+        render: (value: number) => <MonoNumberCell value={value} />,
       },
-      { title: "最近错误", dataIndex: "lastError", width: 170 },
+      {
+        title: "最近错误",
+        dataIndex: "lastError",
+        width: 170,
+        render: (value: string) => (
+          <MutedTextCell value={value} maxWidth={160} />
+        ),
+      },
     ],
     platformRankingSort.state,
     [
@@ -3816,9 +3875,6 @@ export function OverviewPage({ lastUpdated, onRefresh }: ConsolePageProps) {
     ],
   );
   const platformRankingPage = usePagedRows(platformRankingRows, 10);
-  const hasRecentFailures =
-    viewModel.failureReasons.length > 0 || viewModel.recentAnomalies.length > 0;
-
   return (
     <PageFrame title="总览" lastUpdated={lastUpdated} onRefresh={onRefresh}>
       {loadState.error ? (
@@ -3845,67 +3901,20 @@ export function OverviewPage({ lastUpdated, onRefresh }: ConsolePageProps) {
             labels={viewModel.trendLabels}
             series={viewModel.trendSeries}
             seriesLabel="消息发送趋势"
+            height={220}
           />
         </section>
 
         <section className="analytics-panel">
           <div className="panel-heading">
-            <Typography.Title level={4}>最近失败</Typography.Title>
-            <Button type="link" onClick={() => openConsolePage("logs")}>
-              查看日志
-            </Button>
+            <Typography.Title level={4}>QPS 耗时趋势</Typography.Title>
           </div>
-          {hasRecentFailures ? (
-            <>
-              <Space direction="vertical" size={12} className="full-width">
-                {viewModel.failureReasons.map((item, index) => (
-                  <div className="rank-row" key={item.reason}>
-                    <Badge
-                      count={index + 1}
-                      color={index < 3 ? "#1677ff" : "#9ca3af"}
-                    />
-                    <span>{item.reason}</span>
-                    <Progress
-                      percent={item.ratio}
-                      showInfo={false}
-                      size="small"
-                    />
-                    <strong>{item.count}</strong>
-                  </div>
-                ))}
-              </Space>
-              {viewModel.recentAnomalies.length > 0 ? (
-                <>
-                  <Divider />
-                  <Typography.Title level={5} className="rank-section-title">
-                    异常记录
-                  </Typography.Title>
-                  <Space direction="vertical" size={8} className="full-width">
-                    {viewModel.recentAnomalies.map((item, index) => (
-                      <div
-                        className="rank-row"
-                        key={`${item.title}-${item.time}`}
-                      >
-                        <Badge
-                          count={index + 1}
-                          color={item.level === "高" ? "#f04438" : "#f79009"}
-                        />
-                        <span>{item.title}</span>
-                        <Progress
-                          percent={item.ratio}
-                          showInfo={false}
-                          size="small"
-                        />
-                        <strong>{item.count}</strong>
-                      </div>
-                    ))}
-                  </Space>
-                </>
-              ) : null}
-            </>
-          ) : (
-            <div className="overview-failure-empty">暂无失败推送</div>
-          )}
+          <MixedLineBarChart
+            labels={viewModel.trendLabels}
+            bars={viewModel.qpsLatencyTrend.bars}
+            line={viewModel.qpsLatencyTrend.line}
+            ariaLabel="QPS 耗时趋势"
+          />
         </section>
       </div>
 
@@ -4164,7 +4173,14 @@ export function SourcesPage({ lastUpdated, onRefresh }: ConsolePageProps) {
           />
         ),
       },
-      { title: "来源名称", dataIndex: "name", width: 160 },
+      {
+        title: "来源名称",
+        dataIndex: "name",
+        width: 160,
+        render: (value: string) => (
+          <StrongTextCell value={value} maxWidth={150} />
+        ),
+      },
       {
         title: "鉴权方式",
         dataIndex: "authMode",
@@ -4363,19 +4379,11 @@ export function SourcesPage({ lastUpdated, onRefresh }: ConsolePageProps) {
       >
         <Space direction="vertical" size={16} className="full-width">
           <SourcePayloadSampleHelp />
-          <Descriptions column={1} bordered size="small">
-            <Descriptions.Item label="来源编码">
-              <Typography.Text code>
-                {payloadViewSource?.code ?? "-"}
-              </Typography.Text>
-            </Descriptions.Item>
-            <Descriptions.Item label="接收时间">
-              {payloadViewSource?.lastInboundAt ?? "-"}
-            </Descriptions.Item>
-            <Descriptions.Item label="鉴权结果">
-              {payloadViewSource ? "通过" : "-"}
-            </Descriptions.Item>
-          </Descriptions>
+          <div className="source-payload-meta">
+            <span>来源编码：{payloadViewSource?.code ?? "-"}</span>
+            <span>接收时间：{payloadViewSource?.lastInboundAt ?? "-"}</span>
+            <span>鉴权结果：{payloadViewSource ? "通过" : "-"}</span>
+          </div>
           <pre className="code-block">
             {payloadViewLoading
               ? "加载中..."
@@ -4402,9 +4410,9 @@ export function SourcesPage({ lastUpdated, onRefresh }: ConsolePageProps) {
           <SourceInboundTestNote />
           <Descriptions column={1} bordered size="small">
             <Descriptions.Item label="入站接口">
-              <Typography.Text code>
-                POST /api/v1/ingest/{inboundTestSource?.code || "{source_code}"}
-              </Typography.Text>
+              <PlainEndpointText
+                value={`POST /api/v1/ingest/${inboundTestSource?.code || "{source_code}"}`}
+              />
             </Descriptions.Item>
             <Descriptions.Item label="鉴权方式">
               {inboundTestSource
@@ -7189,7 +7197,14 @@ export function RoutesPage({ lastUpdated, onRefresh }: ConsolePageProps) {
   };
   const groupColumns = withSortableColumns<RouteGroup>(
     [
-      { title: "路由组名称", dataIndex: "name", width: 220 },
+      {
+        title: "路由组名称",
+        dataIndex: "name",
+        width: 220,
+        render: (value: string) => (
+          <StrongTextCell value={value} maxWidth={210} />
+        ),
+      },
       {
         title: "绑定来源",
         key: "sourceName",
@@ -7280,12 +7295,7 @@ export function RoutesPage({ lastUpdated, onRefresh }: ConsolePageProps) {
         dataIndex: "name",
         width: 180,
         render: (value: string) => (
-          <Typography.Text
-            ellipsis={{ tooltip: value }}
-            style={{ display: "inline-block", maxWidth: 160 }}
-          >
-            {value || "-"}
-          </Typography.Text>
+          <StrongTextCell value={value} maxWidth={160} />
         ),
       },
       { title: "来源", dataIndex: "source", width: 140 },
@@ -9062,12 +9072,7 @@ export function TemplatesPage({ lastUpdated, onRefresh }: ConsolePageProps) {
         dataIndex: "name",
         width: 140,
         render: (value: string) => (
-          <Typography.Text
-            ellipsis={{ tooltip: value }}
-            style={{ display: "inline-block", maxWidth: 120 }}
-          >
-            {value}
-          </Typography.Text>
+          <StrongTextCell value={value} maxWidth={120} />
         ),
       },
       {
@@ -10978,8 +10983,22 @@ export function OrganizationPage({
 
   const columns = withSortableColumns<UserContactRow>(
     [
-      { title: "姓名", dataIndex: "name", width: 120 },
-      { title: "所属组织", dataIndex: "department", width: 140 },
+      {
+        title: "姓名",
+        dataIndex: "name",
+        width: 120,
+        render: (value: string) => (
+          <StrongTextCell value={value} maxWidth={110} />
+        ),
+      },
+      {
+        title: "所属组织",
+        dataIndex: "department",
+        width: 140,
+        render: (value: string) => (
+          <StrongTextCell value={value} maxWidth={130} />
+        ),
+      },
       { title: "手机号", dataIndex: "mobile", width: 130 },
       { title: "邮箱", dataIndex: "email", width: 170 },
       {
@@ -12330,8 +12349,8 @@ export function MessageLogDetailContent({
   selectedDetail: MessageDetailApiRecord | null;
 }) {
   const [activeSections, setActiveSections] = useState<string[]>([
+    "payload",
     "timeline",
-    "attempts",
   ]);
   const toggleSection = useCallback((sectionKey: string) => {
     setActiveSections((current) =>
@@ -12358,7 +12377,7 @@ export function MessageLogDetailContent({
     <Space direction="vertical" size={16} className="full-width">
       <Descriptions column={1} size="small" bordered>
         <Descriptions.Item label="Trace ID">
-          {selected.traceId}
+          <span className="trace-id-text">{selected.traceId}</span>
         </Descriptions.Item>
         <Descriptions.Item label="状态">
           <MessageStatusCell value={selected.status} />
@@ -12452,34 +12471,37 @@ export function MessageLogsPage({ lastUpdated, onRefresh }: ConsolePageProps) {
   const messageLogSort = useTableSort<MessageLog>();
   const filteredRows = filterMessageLogsByQuery(rows, messageLogQuery.applied);
   const sortedRows = sortRowsByTableState(filteredRows, messageLogSort.state);
-  const loadMessageLogs = useCallback(async (silent = false) => {
-    if (!silent) {
-      setLoadState({ loading: true, error: "" });
-    }
-    try {
-      const result = await consoleApi.listMessageLogs({
-        limit: pageSize,
-        offset: deadLetterPageOffset(currentPage, pageSize),
-        status:
-          messageLogQuery.applied.status === "all"
-            ? undefined
-            : messageLogQuery.applied.status,
-        traceId: messageLogQuery.applied.traceId || undefined,
-      });
-      setRows(result.messages.map(mapMessageLog));
-      setTotal(result.total);
-      setLoadState(emptyLoadState);
-    } catch (error) {
-      setRows([]);
-      setTotal(0);
-      setLoadState({ loading: false, error: userFacingError(error) });
-    }
-  }, [
-    currentPage,
-    messageLogQuery.applied.status,
-    messageLogQuery.applied.traceId,
-    pageSize,
-  ]);
+  const loadMessageLogs = useCallback(
+    async (silent = false) => {
+      if (!silent) {
+        setLoadState({ loading: true, error: "" });
+      }
+      try {
+        const result = await consoleApi.listMessageLogs({
+          limit: pageSize,
+          offset: deadLetterPageOffset(currentPage, pageSize),
+          status:
+            messageLogQuery.applied.status === "all"
+              ? undefined
+              : messageLogQuery.applied.status,
+          traceId: messageLogQuery.applied.traceId || undefined,
+        });
+        setRows(result.messages.map(mapMessageLog));
+        setTotal(result.total);
+        setLoadState(emptyLoadState);
+      } catch (error) {
+        setRows([]);
+        setTotal(0);
+        setLoadState({ loading: false, error: userFacingError(error) });
+      }
+    },
+    [
+      currentPage,
+      messageLogQuery.applied.status,
+      messageLogQuery.applied.traceId,
+      pageSize,
+    ],
+  );
 
   useEffect(() => {
     const silent = !isFirstLoad.current;
@@ -12563,7 +12585,7 @@ export function MessageLogsPage({ lastUpdated, onRefresh }: ConsolePageProps) {
   return (
     <PageFrame
       title="消息日志"
-      description="统一查询入站主记录、命中路由、出站请求响应和异步处理时间线。"
+      description="统一查询日志列表、命中路由、出站请求响应和异步处理时间线。"
       lastUpdated={lastUpdated}
       onRefresh={onRefresh}
     >
@@ -12671,7 +12693,7 @@ export function MessageLogsPage({ lastUpdated, onRefresh }: ConsolePageProps) {
         />
       </QueryBar>
       <ListContainer
-        title="入站主记录"
+        title="日志列表"
         total={total}
         pageSize={pageSize}
         currentPage={currentPage}
@@ -12734,39 +12756,42 @@ export function DeadLettersPage({ lastUpdated, onRefresh }: ConsolePageProps) {
   const sortedRows = sortRowsByTableState(rows, deadLetterSort.state);
   const handlingMode = deadLetterHandlingModeFromSettings(settingRows);
 
-  const loadDeadLetters = useCallback(async (silent = false) => {
-    if (!silent) {
-      setLoadState({ loading: true, error: "" });
-    }
-    try {
-      const offset = deadLetterPageOffset(currentPage, pageSize);
-      const [deadLetterResult, settingsResult] = await Promise.allSettled([
-        consoleApi.listDeadLetters({
-          limit: pageSize,
-          offset,
-          status: statusFilter,
-        }),
-        consoleApi.listSettings(),
-      ]);
-      if (deadLetterResult.status === "rejected") {
-        throw deadLetterResult.reason;
+  const loadDeadLetters = useCallback(
+    async (silent = false) => {
+      if (!silent) {
+        setLoadState({ loading: true, error: "" });
       }
-      setRows(deadLetterResult.value.dead_letters.map(mapDeadLetter));
-      setTotal(deadLetterResult.value.total);
-      setSettingRows(
-        settingsResult.status === "fulfilled"
-          ? settingsResult.value.settings
-          : [],
-      );
-      setSelectedIds([]);
-      setAllSelected(false);
-      setLoadState(emptyLoadState);
-    } catch (error) {
-      setRows([]);
-      setTotal(0);
-      setLoadState({ loading: false, error: userFacingError(error) });
-    }
-  }, [currentPage, pageSize, statusFilter]);
+      try {
+        const offset = deadLetterPageOffset(currentPage, pageSize);
+        const [deadLetterResult, settingsResult] = await Promise.allSettled([
+          consoleApi.listDeadLetters({
+            limit: pageSize,
+            offset,
+            status: statusFilter,
+          }),
+          consoleApi.listSettings(),
+        ]);
+        if (deadLetterResult.status === "rejected") {
+          throw deadLetterResult.reason;
+        }
+        setRows(deadLetterResult.value.dead_letters.map(mapDeadLetter));
+        setTotal(deadLetterResult.value.total);
+        setSettingRows(
+          settingsResult.status === "fulfilled"
+            ? settingsResult.value.settings
+            : [],
+        );
+        setSelectedIds([]);
+        setAllSelected(false);
+        setLoadState(emptyLoadState);
+      } catch (error) {
+        setRows([]);
+        setTotal(0);
+        setLoadState({ loading: false, error: userFacingError(error) });
+      }
+    },
+    [currentPage, pageSize, statusFilter],
+  );
 
   useEffect(() => {
     const silent = !isFirstLoad.current;
@@ -12934,7 +12959,10 @@ export function DeadLettersPage({ lastUpdated, onRefresh }: ConsolePageProps) {
         title={
           <Space size={10} wrap>
             <span>死信列表</span>
-            <Typography.Text type="secondary" className="dead-letter-selection-summary">
+            <Typography.Text
+              type="secondary"
+              className="dead-letter-selection-summary"
+            >
               {deadLetterSelectionTitle({
                 selectedCount,
                 total,
@@ -13306,34 +13334,37 @@ export function AuditPage({ lastUpdated, onRefresh }: ConsolePageProps) {
   const auditSort = useTableSort<AuditLogRow>();
   const filteredRows = filterAuditLogsByQuery(rows, auditQuery.applied);
   const sortedRows = sortRowsByTableState(filteredRows, auditSort.state);
-  const loadAuditLogs = useCallback(async (silent = false) => {
-    if (!silent) {
-      setLoadState({ loading: true, error: "" });
-    }
-    try {
-      const result = await consoleApi.listAuditLogs({
-        limit: pageSize,
-        offset: deadLetterPageOffset(currentPage, pageSize),
-        actor: auditQuery.applied.actor || undefined,
-        action:
-          auditQuery.applied.action === "all"
-            ? undefined
-            : auditQuery.applied.action,
-      });
-      setRows(result.audit_logs.map(mapAuditLog));
-      setTotal(result.total);
-      setLoadState(emptyLoadState);
-    } catch (error) {
-      setRows([]);
-      setTotal(0);
-      setLoadState({ loading: false, error: userFacingError(error) });
-    }
-  }, [
-    auditQuery.applied.action,
-    auditQuery.applied.actor,
-    currentPage,
-    pageSize,
-  ]);
+  const loadAuditLogs = useCallback(
+    async (silent = false) => {
+      if (!silent) {
+        setLoadState({ loading: true, error: "" });
+      }
+      try {
+        const result = await consoleApi.listAuditLogs({
+          limit: pageSize,
+          offset: deadLetterPageOffset(currentPage, pageSize),
+          actor: auditQuery.applied.actor || undefined,
+          action:
+            auditQuery.applied.action === "all"
+              ? undefined
+              : auditQuery.applied.action,
+        });
+        setRows(result.audit_logs.map(mapAuditLog));
+        setTotal(result.total);
+        setLoadState(emptyLoadState);
+      } catch (error) {
+        setRows([]);
+        setTotal(0);
+        setLoadState({ loading: false, error: userFacingError(error) });
+      }
+    },
+    [
+      auditQuery.applied.action,
+      auditQuery.applied.actor,
+      currentPage,
+      pageSize,
+    ],
+  );
   const openAuditLogDetail = async (record: AuditLogRow) => {
     setSelected(record);
     try {

@@ -194,6 +194,52 @@ func TestIngestWithRoutePlanPublisherSendsPayloadEventWithoutInboundDBWrite(t *t
 	}
 }
 
+func TestIngestWithPersistentLogUsesRecordOnlyRoutePlanEvent(t *testing.T) {
+	store := newMemoryStore(Source{
+		ID:        "source-1",
+		Code:      "orders",
+		Name:      "Orders",
+		Enabled:   true,
+		AuthMode:  AuthModeToken,
+		AuthToken: "sourceToken",
+	})
+	publisher := &recordingRoutePlanPublisher{}
+	service := NewService(
+		store,
+		WithTraceIDGenerator(func() string { return "trace-console-test" }),
+		WithRoutePlanPublisher(publisher),
+	)
+
+	result, err := service.Ingest(context.Background(), IngestInput{
+		SourceCode:        "orders",
+		Method:            http.MethodPost,
+		Path:              "/api/v1/ingest/orders",
+		Headers:           http.Header{"Authorization": []string{"Bearer sourceToken"}},
+		RemoteAddr:        "127.0.0.1:4321",
+		Body:              []byte(`{"title":"paid"}`),
+		PersistBeforePlan: true,
+	})
+	if err != nil {
+		t.Fatalf("ingest with persistent route-plan log: %v", err)
+	}
+	if result.TraceID != "trace-console-test" {
+		t.Fatalf("unexpected trace id: %+v", result)
+	}
+	if len(store.enqueued) != 1 {
+		t.Fatalf("expected one persisted inbound record, got %d", len(store.enqueued))
+	}
+	if !store.enqueued[0].SkipRoutePlan || store.enqueued[0].JobPayload != nil {
+		t.Fatalf("expected record-only inbound enqueue, got %+v", store.enqueued[0])
+	}
+	if len(publisher.events) != 1 {
+		t.Fatalf("expected one route plan event, got %d", len(publisher.events))
+	}
+	event := publisher.events[0]
+	if event.TraceID != "trace-console-test" || len(event.Payload) != 0 {
+		t.Fatalf("expected persisted route-plan event without payload, got %+v", event)
+	}
+}
+
 func TestIngestWithRuntimeDedupeStoreSendsPayloadEventWithoutInboundDBWrite(t *testing.T) {
 	store := newMemoryStore(Source{
 		ID:                   "source-1",

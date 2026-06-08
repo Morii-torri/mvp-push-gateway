@@ -761,6 +761,7 @@ export const consoleApi = {
   ) {
     const headers = {
       ...extraHeaders,
+      "X-MGP-Console-Ingest-Test": "true",
       ...(sourceToken ? { Authorization: `Bearer ${sourceToken}` } : {}),
     };
     return apiRequest<IngestSourcePayloadResponse>(

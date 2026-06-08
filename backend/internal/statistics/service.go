@@ -21,11 +21,12 @@ type Summary struct {
 }
 
 type TrendPoint struct {
-	BucketStart time.Time `json:"bucket_start"`
-	Sent        int       `json:"sent"`
-	Successful  int       `json:"successful"`
-	Failed      int       `json:"failed"`
-	QPS         float64   `json:"qps"`
+	BucketStart       time.Time `json:"bucket_start"`
+	Sent              int       `json:"sent"`
+	Successful        int       `json:"successful"`
+	Failed            int       `json:"failed"`
+	QPS               float64   `json:"qps"`
+	AverageDurationMS int       `json:"avg_duration_ms"`
 }
 
 type PlatformRanking struct {

@@ -217,6 +217,7 @@ export function CopyableIdentifier({
     <span className="copyable-identifier-wrapper" style={{ maxWidth }}>
       <Typography.Text
         code={code}
+        className="copyable-identifier-text"
         ellipsis={{
           tooltip: {
             title: value,
@@ -397,10 +398,12 @@ export function LineChart({
   labels,
   seriesLabel = "趋势",
   series,
+  height = 260,
 }: {
   points: number[];
   labels?: string[];
   seriesLabel?: string;
+  height?: number;
   series?: Array<{
     key: string;
     label: string;
@@ -409,7 +412,6 @@ export function LineChart({
   }>;
 }) {
   const width = 720;
-  const height = 260;
   const padding = { top: 24, right: 26, bottom: 40, left: 50 };
   const normalizedSeries =
     series && series.length > 0
@@ -464,7 +466,10 @@ export function LineChart({
       : Math.max(xLabels.length - 1, 1);
 
   return (
-    <div className="line-chart" aria-label={seriesLabel}>
+    <div
+      className={`line-chart${height <= 220 ? " line-chart--compact" : ""}`}
+      aria-label={seriesLabel}
+    >
       <svg viewBox={`0 0 ${width} ${height}`} role="img">
         <defs>
           <linearGradient
@@ -622,7 +627,7 @@ export function GroupedBarChart({
     groupWidth / Math.max(normalizedSeries.length, 1) - seriesGap,
     3,
   );
-  const barWidth = Math.min(rawBarWidth, 42);
+  const barWidth = Math.min(rawBarWidth, 28);
   const renderedGroupWidth =
     normalizedSeries.length * barWidth +
     Math.max(normalizedSeries.length - 1, 0) * seriesGap;
@@ -703,13 +708,13 @@ export function GroupedBarChart({
                 y={y}
                 width={barWidth}
                 height={Math.max(barHeight, value > 0 ? 2 : 0)}
-                rx="3"
+                rx="1.5"
                 className={`chart-bar${active ? " chart-bar--active" : ""}${onPointClick ? " chart-bar--clickable" : ""}`}
                 style={{ fill: item.color }}
                 onClick={() => onPointClick?.(label, index)}
               >
                 <title>
-                  {`并发 ${label} / ${item.label}: ${formatChartTick(value)}`}
+                  {`${label} / ${item.label}: ${formatChartTick(value)}`}
                 </title>
               </rect>
             );
@@ -729,6 +734,188 @@ export function GroupedBarChart({
       </div>
     </div>
   );
+}
+
+export function MixedLineBarChart({
+  labels,
+  bars,
+  line,
+  ariaLabel = "趋势图",
+  height = 220,
+}: {
+  labels: string[];
+  bars: {
+    label: string;
+    color: string;
+    points: number[];
+  };
+  line: {
+    label: string;
+    color: string;
+    points: number[];
+  };
+  ariaLabel?: string;
+  height?: number;
+}) {
+  const width = 720;
+  const padding = { top: 22, right: 58, bottom: 40, left: 58 };
+  const bucketCount = Math.max(
+    labels.length,
+    bars.points.length,
+    line.points.length,
+    1,
+  );
+  const innerWidth = width - padding.left - padding.right;
+  const innerHeight = height - padding.top - padding.bottom;
+  const bucketWidth = innerWidth / bucketCount;
+  const barWidth = Math.min(Math.max(bucketWidth * 0.34, 4), 18);
+  const maxBar = Math.max(...bars.points.map(safeChartNumber), 1);
+  const maxLine = Math.max(...line.points.map(safeChartNumber), 1);
+  const yTicks = [1, 0.66, 0.33, 0];
+  const xAxisLabels = labels
+    .map((label, index) => ({ label, index }))
+    .filter((_, index) => shouldRenderAxisLabel(index, labels.length));
+  const lineCoords = line.points.map((point, index) => {
+    const value = safeChartNumber(point);
+    const x = padding.left + bucketWidth * index + bucketWidth / 2;
+    const y = padding.top + innerHeight - (value / maxLine) * innerHeight;
+    return { x, y, value };
+  });
+  const linePath = lineCoords
+    .map(({ x, y }, index) => `${index === 0 ? "M" : "L"} ${x} ${y}`)
+    .join(" ");
+
+  return (
+    <div className="mixed-chart" aria-label={ariaLabel}>
+      <svg viewBox={`0 0 ${width} ${height}`} role="img">
+        {yTicks.map((ratio) => {
+          const y = padding.top + innerHeight - ratio * innerHeight;
+          return (
+            <g key={ratio}>
+              <line
+                x1={padding.left}
+                x2={padding.left + innerWidth}
+                y1={y}
+                y2={y}
+                className="chart-grid"
+              />
+              <text
+                x={padding.left - 10}
+                y={y + 4}
+                textAnchor="end"
+                className="chart-axis-label"
+              >
+                {formatChartTick(maxBar * ratio)}
+              </text>
+              <text
+                x={padding.left + innerWidth + 10}
+                y={y + 4}
+                textAnchor="start"
+                className="chart-axis-label"
+              >
+                {formatChartTick(maxLine * ratio)}
+              </text>
+            </g>
+          );
+        })}
+        <line
+          x1={padding.left}
+          x2={padding.left}
+          y1={padding.top}
+          y2={padding.top + innerHeight}
+          className="chart-axis"
+        />
+        <line
+          x1={padding.left + innerWidth}
+          x2={padding.left + innerWidth}
+          y1={padding.top}
+          y2={padding.top + innerHeight}
+          className="chart-axis"
+        />
+        <line
+          x1={padding.left}
+          x2={padding.left + innerWidth}
+          y1={padding.top + innerHeight}
+          y2={padding.top + innerHeight}
+          className="chart-axis"
+        />
+        {xAxisLabels.map(({ label, index }) => {
+          const x = padding.left + bucketWidth * index + bucketWidth / 2;
+          return (
+            <text
+              key={`${label}-${index}`}
+              x={x}
+              y={height - 14}
+              textAnchor="middle"
+              className="chart-axis-label"
+            >
+              {label}
+            </text>
+          );
+        })}
+        {bars.points.map((point, index) => {
+          const value = safeChartNumber(point);
+          const barHeight = (value / maxBar) * innerHeight;
+          const x =
+            padding.left + bucketWidth * index + (bucketWidth - barWidth) / 2;
+          const y = padding.top + innerHeight - barHeight;
+          return (
+            <rect
+              key={`bar-${index}`}
+              x={x}
+              y={y}
+              width={barWidth}
+              height={Math.max(barHeight, value > 0 ? 2 : 0)}
+              rx="1.5"
+              className="chart-bar"
+              style={{ fill: bars.color }}
+            >
+              <title>
+                {`${labels[index] ?? index + 1} / ${bars.label}: ${formatChartTick(value)}`}
+              </title>
+            </rect>
+          );
+        })}
+        <path
+          d={linePath}
+          className="chart-line"
+          style={{ stroke: line.color }}
+        />
+        {lineCoords.map(({ x, y, value }, index) =>
+          shouldRenderPointLabel(value, index, lineCoords.length) ? (
+            <circle
+              key={`point-${index}`}
+              cx={x}
+              cy={y}
+              r="2.4"
+              className="chart-point"
+              style={{ fill: line.color }}
+            />
+          ) : null,
+        )}
+      </svg>
+      <div className="chart-inline-legend">
+        <span className="chart-legend-item">
+          <span
+            className="chart-legend-dot chart-legend-dot--bar"
+            style={{ backgroundColor: bars.color }}
+          />
+          <span className="chart-legend-label">{bars.label}</span>
+        </span>
+        <span className="chart-legend-item">
+          <span
+            className="chart-legend-dot"
+            style={{ backgroundColor: line.color }}
+          />
+          <span className="chart-legend-label">{line.label}</span>
+        </span>
+      </div>
+    </div>
+  );
+}
+
+function safeChartNumber(value: number): number {
+  return Math.max(0, Number.isFinite(value) ? value : 0);
 }
 
 function shouldRenderAxisLabel(index: number, total: number): boolean {
