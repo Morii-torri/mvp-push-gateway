@@ -54,7 +54,9 @@ import {
   createSourceDraft,
   createRouteRuleDraft,
   createTemplateDraft,
+  deadLetterBatchSelectionForAction,
   deadLetterPageOffset,
+  deadLetterSelectionTitle,
   filterMessageLogsByQuery,
   filterProviderRowsByQuery,
   sortProviderRows,
@@ -6115,6 +6117,47 @@ describe("critical console pages", () => {
     expect(deadLetterPageOffset(1, 50)).toBe(0);
     expect(deadLetterPageOffset(3, 50)).toBe(100);
     expect(deadLetterPageOffset(0, 50)).toBe(0);
+  });
+
+  it("summarizes current-page and all-page dead-letter selections", () => {
+    expect(deadLetterSelectionTitle({ selectedCount: 0, total: 120 })).toBe(
+      "当前未选择",
+    );
+    expect(deadLetterSelectionTitle({ selectedCount: 50, total: 120 })).toBe(
+      "当前选中 50 条",
+    );
+    expect(
+      deadLetterSelectionTitle({
+        selectedCount: 120,
+        total: 120,
+        allSelected: true,
+      }),
+    ).toBe("已选择全部 120 条");
+  });
+
+  it("uses all dead-letter selection for replay, handle, and delete", () => {
+    expect(
+      deadLetterBatchSelectionForAction({
+        action: "replay",
+        allSelected: true,
+        ids: ["dead-1"],
+      }),
+    ).toEqual({ all: true });
+    expect(
+      deadLetterBatchSelectionForAction({
+        action: "handle",
+        allSelected: true,
+        ids: ["dead-1"],
+      }),
+    ).toEqual({ all: true });
+    expect(
+      deadLetterBatchSelectionForAction({
+        action: "delete",
+        allSelected: true,
+        ids: ["dead-1"],
+        status: "handled",
+      }),
+    ).toEqual({ all: true, status: "handled" });
   });
 
   it("summarizes performance confirmation ranges before running", () => {

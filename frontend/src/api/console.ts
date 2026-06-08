@@ -532,6 +532,31 @@ export type DeadLetterListQuery = {
   channelId?: string;
 };
 
+export type MessageLogListQueryApi = {
+  limit?: number;
+  offset?: number;
+  status?: string;
+  traceId?: string;
+  sourceId?: string;
+  channelId?: string;
+};
+
+export type AuditLogListQueryApi = {
+  limit?: number;
+  offset?: number;
+  actor?: string;
+  action?: string;
+  resourceType?: string;
+};
+
+export type DeadLetterBatchSelection =
+  | string[]
+  | {
+      all: true;
+      status?: string;
+      channelId?: string;
+    };
+
 export type AuditLogApiRecord = {
   id: string;
   actor_admin_id: string;
@@ -686,6 +711,17 @@ export type PerformanceTestRun = {
   created_at: string;
   updated_at: string;
 };
+
+function deadLetterBatchBody(selection: DeadLetterBatchSelection) {
+  if (Array.isArray(selection)) {
+    return { ids: selection };
+  }
+  return {
+    all: true,
+    ...(selection.status ? { status: selection.status } : {}),
+    ...(selection.channelId ? { channel_id: selection.channelId } : {}),
+  };
+}
 
 export const consoleApi = {
   listSources(fetcher?: ApiFetcher) {
@@ -1264,13 +1300,42 @@ export const consoleApi = {
       fetcher,
     });
   },
-  listMessageLogs(fetcher?: ApiFetcher) {
+  listMessageLogs(
+    optionsOrFetcher?: MessageLogListQueryApi | ApiFetcher,
+    fetcher?: ApiFetcher,
+  ) {
+    const options =
+      typeof optionsOrFetcher === "function" ? undefined : optionsOrFetcher;
+    const requestFetcher =
+      typeof optionsOrFetcher === "function" ? optionsOrFetcher : fetcher;
+    const params = new URLSearchParams();
+    if (options?.limit !== undefined) {
+      params.set("limit", String(options.limit));
+    }
+    if (options?.offset !== undefined) {
+      params.set("offset", String(options.offset));
+    }
+    if (options?.status) {
+      params.set("status", options.status);
+    }
+    if (options?.traceId) {
+      params.set("trace_id", options.traceId);
+    }
+    if (options?.sourceId) {
+      params.set("source_id", options.sourceId);
+    }
+    if (options?.channelId) {
+      params.set("channel_id", options.channelId);
+    }
+    const query = params.toString();
     return apiRequest<{
       messages: MessageLogApiRecord[];
       total: number;
       limit: number;
       offset: number;
-    }>("/messages", { fetcher });
+    }>(`/messages${query ? `?${query}` : ""}`, {
+      fetcher: requestFetcher,
+    });
   },
   getMessageLog(id: string, fetcher?: ApiFetcher) {
     return apiRequest<{ message: MessageDetailApiRecord }>(`/messages/${id}`, {
@@ -1308,43 +1373,73 @@ export const consoleApi = {
       fetcher: requestFetcher,
     });
   },
-  replayDeadLetters(ids: string[], fetcher?: ApiFetcher) {
+  replayDeadLetters(selection: DeadLetterBatchSelection, fetcher?: ApiFetcher) {
     return apiRequest<{ result: { processed: number; ids: string[] } }>(
       "/dead-letters/batch-replay",
       {
         method: "POST",
-        body: { ids },
+        body: deadLetterBatchBody(selection),
         fetcher,
       },
     );
   },
-  handleDeadLetters(ids: string[], reason = "manual", fetcher?: ApiFetcher) {
+  handleDeadLetters(
+    selection: DeadLetterBatchSelection,
+    reason = "manual",
+    fetcher?: ApiFetcher,
+  ) {
     return apiRequest<{ result: { processed: number; ids: string[] } }>(
       "/dead-letters/batch-handle",
       {
         method: "POST",
-        body: { ids, reason },
+        body: { ...deadLetterBatchBody(selection), reason },
         fetcher,
       },
     );
   },
-  deleteDeadLetters(ids: string[], fetcher?: ApiFetcher) {
+  deleteDeadLetters(selection: DeadLetterBatchSelection, fetcher?: ApiFetcher) {
     return apiRequest<{ result: { processed: number; ids: string[] } }>(
       "/dead-letters/batch-delete",
       {
         method: "POST",
-        body: { ids },
+        body: deadLetterBatchBody(selection),
         fetcher,
       },
     );
   },
-  listAuditLogs(fetcher?: ApiFetcher) {
+  listAuditLogs(
+    optionsOrFetcher?: AuditLogListQueryApi | ApiFetcher,
+    fetcher?: ApiFetcher,
+  ) {
+    const options =
+      typeof optionsOrFetcher === "function" ? undefined : optionsOrFetcher;
+    const requestFetcher =
+      typeof optionsOrFetcher === "function" ? optionsOrFetcher : fetcher;
+    const params = new URLSearchParams();
+    if (options?.limit !== undefined) {
+      params.set("limit", String(options.limit));
+    }
+    if (options?.offset !== undefined) {
+      params.set("offset", String(options.offset));
+    }
+    if (options?.actor) {
+      params.set("actor", options.actor);
+    }
+    if (options?.action) {
+      params.set("action", options.action);
+    }
+    if (options?.resourceType) {
+      params.set("resource_type", options.resourceType);
+    }
+    const query = params.toString();
     return apiRequest<{
       audit_logs: AuditLogApiRecord[];
       total: number;
       limit: number;
       offset: number;
-    }>("/audit-logs", { fetcher });
+    }>(`/audit-logs${query ? `?${query}` : ""}`, {
+      fetcher: requestFetcher,
+    });
   },
   getAuditLog(id: string, fetcher?: ApiFetcher) {
     return apiRequest<{ audit_log: AuditLogApiRecord }>(`/audit-logs/${id}`, {

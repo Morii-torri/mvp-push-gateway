@@ -46,14 +46,20 @@ type ListResult struct {
 }
 
 type BatchInput struct {
-	IDs []string `json:"ids"`
-	Now time.Time
+	IDs       []string `json:"ids"`
+	All       bool     `json:"all"`
+	Status    string   `json:"status"`
+	ChannelID string   `json:"channel_id"`
+	Now       time.Time
 }
 
 type HandleInput struct {
-	IDs    []string `json:"ids"`
-	Reason string   `json:"reason"`
-	Now    time.Time
+	IDs       []string `json:"ids"`
+	All       bool     `json:"all"`
+	Status    string   `json:"status"`
+	ChannelID string   `json:"channel_id"`
+	Reason    string   `json:"reason"`
+	Now       time.Time
 }
 
 type BatchResult struct {
@@ -92,8 +98,8 @@ func (s *Service) ListDeadLetters(ctx context.Context, filter ListFilter) (ListR
 }
 
 func (s *Service) ReplayDeadLetters(ctx context.Context, input BatchInput) (BatchResult, error) {
-	input.IDs = normalizeIDs(input.IDs)
-	if len(input.IDs) == 0 {
+	input = normalizeBatchInput(input)
+	if len(input.IDs) == 0 && !input.All {
 		return BatchResult{}, ErrInvalidInput
 	}
 	if input.Now.IsZero() {
@@ -104,7 +110,9 @@ func (s *Service) ReplayDeadLetters(ctx context.Context, input BatchInput) (Batc
 
 func (s *Service) MarkDeadLettersHandled(ctx context.Context, input HandleInput) (BatchResult, error) {
 	input.IDs = normalizeIDs(input.IDs)
-	if len(input.IDs) == 0 {
+	input.Status = normalizeStatus(input.Status)
+	input.ChannelID = strings.TrimSpace(input.ChannelID)
+	if len(input.IDs) == 0 && !input.All {
 		return BatchResult{}, ErrInvalidInput
 	}
 	input.Reason = strings.TrimSpace(input.Reason)
@@ -118,14 +126,21 @@ func (s *Service) MarkDeadLettersHandled(ctx context.Context, input HandleInput)
 }
 
 func (s *Service) DeleteDeadLetters(ctx context.Context, input BatchInput) (BatchResult, error) {
-	input.IDs = normalizeIDs(input.IDs)
-	if len(input.IDs) == 0 {
+	input = normalizeBatchInput(input)
+	if len(input.IDs) == 0 && !input.All {
 		return BatchResult{}, ErrInvalidInput
 	}
 	if input.Now.IsZero() {
 		input.Now = time.Now().UTC()
 	}
 	return s.store.DeleteDeadLetters(ctx, input)
+}
+
+func normalizeBatchInput(input BatchInput) BatchInput {
+	input.IDs = normalizeIDs(input.IDs)
+	input.Status = normalizeStatus(input.Status)
+	input.ChannelID = strings.TrimSpace(input.ChannelID)
+	return input
 }
 
 func normalizeStatus(value string) string {

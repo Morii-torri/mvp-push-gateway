@@ -90,6 +90,7 @@ import {
   type AuditLogApiRecord,
   type ChannelApiRecord,
   type ChannelInput,
+  type DeadLetterBatchSelection,
   type DeadLetterApiRecord,
   type DeliveryAttemptApiRecord,
   type JSONValue,
@@ -2110,6 +2111,11 @@ export function filterMessageLogsByQuery(
 }
 
 type DeadLetterHandlingMode = "manual" | "auto";
+export type DeadLetterStatusFilter =
+  | "pending"
+  | "replayed"
+  | "handled"
+  | "all";
 
 type DeadLetterRow = {
   id: string;
@@ -12431,6 +12437,9 @@ export function MessageLogsPage({ lastUpdated, onRefresh }: ConsolePageProps) {
   const [selectedDetail, setSelectedDetail] =
     useState<MessageDetailApiRecord | null>(null);
   const [rows, setRows] = useState<MessageLog[]>([]);
+  const [total, setTotal] = useState(0);
+  const [currentPage, setCurrentPage] = useState(1);
+  const [pageSize, setPageSize] = useState(50);
   const [loadState, setLoadState] = useState<ApiLoadState>(emptyLoadState);
   const isFirstLoad = useRef(true);
   const messageLogQuery = useAppliedFilters<MessageLogListQuery>({
@@ -12444,20 +12453,34 @@ export function MessageLogsPage({ lastUpdated, onRefresh }: ConsolePageProps) {
   const messageLogSort = useTableSort<MessageLog>();
   const filteredRows = filterMessageLogsByQuery(rows, messageLogQuery.applied);
   const sortedRows = sortRowsByTableState(filteredRows, messageLogSort.state);
-  const messageLogPage = usePagedRows(sortedRows);
   const loadMessageLogs = useCallback(async (silent = false) => {
     if (!silent) {
       setLoadState({ loading: true, error: "" });
     }
     try {
-      const result = await consoleApi.listMessageLogs();
+      const result = await consoleApi.listMessageLogs({
+        limit: pageSize,
+        offset: deadLetterPageOffset(currentPage, pageSize),
+        status:
+          messageLogQuery.applied.status === "all"
+            ? undefined
+            : messageLogQuery.applied.status,
+        traceId: messageLogQuery.applied.traceId || undefined,
+      });
       setRows(result.messages.map(mapMessageLog));
+      setTotal(result.total);
       setLoadState(emptyLoadState);
     } catch (error) {
       setRows([]);
+      setTotal(0);
       setLoadState({ loading: false, error: userFacingError(error) });
     }
-  }, []);
+  }, [
+    currentPage,
+    messageLogQuery.applied.status,
+    messageLogQuery.applied.traceId,
+    pageSize,
+  ]);
 
   useEffect(() => {
     const silent = !isFirstLoad.current;
@@ -12549,12 +12572,12 @@ export function MessageLogsPage({ lastUpdated, onRefresh }: ConsolePageProps) {
         className="query-bar--logs"
         onSearch={() => {
           messageLogQuery.applyFilters();
-          message.success(
-            `已筛选出 ${filterMessageLogsByQuery(rows, messageLogQuery.draft).length} 条日志`,
-          );
+          setCurrentPage(1);
+          message.success("已应用日志查询条件");
         }}
         onReset={() => {
           messageLogQuery.resetFilters();
+          setCurrentPage(1);
           message.info("日志查询条件已重置");
         }}
         extra={
@@ -12650,10 +12673,13 @@ export function MessageLogsPage({ lastUpdated, onRefresh }: ConsolePageProps) {
       </QueryBar>
       <ListContainer
         title="入站主记录"
-        total={filteredRows.length}
-        pageSize={messageLogPage.pageSize}
-        currentPage={messageLogPage.currentPage}
-        onPageChange={messageLogPage.onPageChange}
+        total={total}
+        pageSize={pageSize}
+        currentPage={currentPage}
+        onPageChange={(page, size) => {
+          setCurrentPage(page);
+          setPageSize(size);
+        }}
         fill
         scrollY={560}
       >
@@ -12665,7 +12691,7 @@ export function MessageLogsPage({ lastUpdated, onRefresh }: ConsolePageProps) {
           size="middle"
           pagination={false}
           columns={columns}
-          dataSource={messageLogPage.rows}
+          dataSource={sortedRows}
           onChange={messageLogSort.onChange}
           loading={loadState.loading}
           scroll={{ x: 1390 }}
@@ -12697,6 +12723,9 @@ export function DeadLettersPage({ lastUpdated, onRefresh }: ConsolePageProps) {
   const [total, setTotal] = useState(0);
   const [settingRows, setSettingRows] = useState<SettingApiRecord[]>([]);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const [allSelected, setAllSelected] = useState(false);
+  const [statusFilter, setStatusFilter] =
+    useState<DeadLetterStatusFilter>("pending");
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize, setPageSize] = useState(50);
   const [loadState, setLoadState] = useState<ApiLoadState>(emptyLoadState);
@@ -12713,7 +12742,11 @@ export function DeadLettersPage({ lastUpdated, onRefresh }: ConsolePageProps) {
     try {
       const offset = deadLetterPageOffset(currentPage, pageSize);
       const [deadLetterResult, settingsResult] = await Promise.allSettled([
-        consoleApi.listDeadLetters({ limit: pageSize, offset }),
+        consoleApi.listDeadLetters({
+          limit: pageSize,
+          offset,
+          status: statusFilter,
+        }),
         consoleApi.listSettings(),
       ]);
       if (deadLetterResult.status === "rejected") {
@@ -12727,13 +12760,14 @@ export function DeadLettersPage({ lastUpdated, onRefresh }: ConsolePageProps) {
           : [],
       );
       setSelectedIds([]);
+      setAllSelected(false);
       setLoadState(emptyLoadState);
     } catch (error) {
       setRows([]);
       setTotal(0);
       setLoadState({ loading: false, error: userFacingError(error) });
     }
-  }, [currentPage, pageSize]);
+  }, [currentPage, pageSize, statusFilter]);
 
   useEffect(() => {
     const silent = !isFirstLoad.current;
@@ -12764,7 +12798,20 @@ export function DeadLettersPage({ lastUpdated, onRefresh }: ConsolePageProps) {
   };
 
   const selectedRows = rows.filter((row) => selectedIds.includes(row.id));
-  const hasSelection = selectedIds.length > 0;
+  const selectedCount = allSelected ? total : selectedIds.length;
+  const hasSelection = selectedCount > 0;
+  const canReplaySelection = allSelected
+    ? statusFilter === "pending" || statusFilter === "all"
+    : selectedRows.some((row) => row.status === "pending");
+  const canDeleteSelection = allSelected
+    ? statusFilter !== "pending"
+    : selectedRows.some((row) => row.status !== "pending");
+  const currentPageFullySelected =
+    rows.length > 0 &&
+    rows.every((row) => selectedIds.includes(row.id)) &&
+    selectedIds.length >= rows.length;
+  const canSelectAll =
+    currentPageFullySelected && !allSelected && total > selectedIds.length;
   const eligibleSelectedIds = (action: "replay" | "handle" | "delete") =>
     selectedRows
       .filter((row) =>
@@ -12776,7 +12823,17 @@ export function DeadLettersPage({ lastUpdated, onRefresh }: ConsolePageProps) {
 
   const runBatchAction = async (action: "replay" | "handle" | "delete") => {
     const actionIds = eligibleSelectedIds(action);
-    if (actionIds.length === 0) {
+    const selection = deadLetterBatchSelectionForAction({
+      action,
+      allSelected,
+      ids: actionIds,
+      status: statusFilter,
+    });
+    if (
+      (action === "delete" && !canDeleteSelection) ||
+      (action !== "delete" && !canReplaySelection) ||
+      (Array.isArray(selection) && selection.length === 0)
+    ) {
       message.warning(
         action === "delete"
           ? "请先选择已处理或已重放的死信任务"
@@ -12788,10 +12845,10 @@ export function DeadLettersPage({ lastUpdated, onRefresh }: ConsolePageProps) {
     try {
       const result =
         action === "replay"
-          ? await consoleApi.replayDeadLetters(actionIds)
+          ? await consoleApi.replayDeadLetters(selection)
           : action === "handle"
-            ? await consoleApi.handleDeadLetters(actionIds, "manual")
-            : await consoleApi.deleteDeadLetters(actionIds);
+            ? await consoleApi.handleDeadLetters(selection, "manual")
+            : await consoleApi.deleteDeadLetters(selection);
       message.success(
         action === "replay"
           ? `已重放 ${result.result.processed} 条死信`
@@ -12809,13 +12866,14 @@ export function DeadLettersPage({ lastUpdated, onRefresh }: ConsolePageProps) {
 
   const confirmBatchDelete = () => {
     const actionIds = eligibleSelectedIds("delete");
-    if (actionIds.length === 0) {
+    if (!canDeleteSelection || (!allSelected && actionIds.length === 0)) {
       message.warning("请先选择已处理或已重放的死信任务");
       return;
     }
+    const deleteCount = allSelected ? total : actionIds.length;
     modal.confirm({
       title: "删除死信记录",
-      content: `将删除 ${actionIds.length} 条已处理或已重放的死信记录，待处理记录不会被删除。`,
+      content: `将删除 ${deleteCount.toLocaleString("zh-CN")} 条已处理或已重放的死信记录，待处理记录不会被删除。`,
       okText: "删除",
       okButtonProps: { danger: true },
       cancelText: "取消",
@@ -12874,19 +12932,60 @@ export function DeadLettersPage({ lastUpdated, onRefresh }: ConsolePageProps) {
       onRefresh={onRefresh}
     >
       <ListContainer
-        title="死信列表"
+        title={
+          <Space size={10} wrap>
+            <span>死信列表</span>
+            <Typography.Text type="secondary" className="dead-letter-selection-summary">
+              {deadLetterSelectionTitle({
+                selectedCount,
+                total,
+                allSelected,
+              })}
+            </Typography.Text>
+            {canSelectAll ? (
+              <Button
+                type="link"
+                size="small"
+                onClick={() => {
+                  setAllSelected(true);
+                  setSelectedIds([]);
+                }}
+              >
+                选择全部 {total.toLocaleString("zh-CN")} 条
+              </Button>
+            ) : null}
+          </Space>
+        }
         total={total}
         pageSize={pageSize}
         currentPage={currentPage}
         onPageChange={(page, size) => {
           setCurrentPage(page);
           setPageSize(size);
-          setSelectedIds([]);
+          if (!allSelected) {
+            setSelectedIds([]);
+          }
         }}
         fill
         scrollY={560}
         extra={
           <Space wrap>
+            <Typography.Text type="secondary">列表范围</Typography.Text>
+            <Segmented
+              value={statusFilter}
+              options={[
+                { label: "待处理", value: "pending" },
+                { label: "已重放", value: "replayed" },
+                { label: "已处理", value: "handled" },
+                { label: "全部", value: "all" },
+              ]}
+              onChange={(value) => {
+                setStatusFilter(value as DeadLetterStatusFilter);
+                setCurrentPage(1);
+                setSelectedIds([]);
+                setAllSelected(false);
+              }}
+            />
             <Typography.Text type="secondary">处理模式</Typography.Text>
             <Segmented
               value={handlingMode}
@@ -12900,14 +12999,14 @@ export function DeadLettersPage({ lastUpdated, onRefresh }: ConsolePageProps) {
             />
             <Button
               loading={actionLoading}
-              disabled={!hasSelection}
+              disabled={!hasSelection || !canReplaySelection}
               onClick={() => void runBatchAction("replay")}
             >
               批量重放
             </Button>
             <Button
               loading={actionLoading}
-              disabled={!hasSelection}
+              disabled={!hasSelection || !canReplaySelection}
               onClick={() => void runBatchAction("handle")}
             >
               标记已处理
@@ -12915,7 +13014,7 @@ export function DeadLettersPage({ lastUpdated, onRefresh }: ConsolePageProps) {
             <Button
               danger
               loading={actionLoading}
-              disabled={!hasSelection}
+              disabled={!hasSelection || !canDeleteSelection}
               onClick={confirmBatchDelete}
             >
               批量删除
@@ -12935,8 +13034,13 @@ export function DeadLettersPage({ lastUpdated, onRefresh }: ConsolePageProps) {
           onChange={deadLetterSort.onChange}
           loading={loadState.loading}
           rowSelection={{
-            selectedRowKeys: selectedIds,
-            onChange: (keys) => setSelectedIds(keys.map(String)),
+            selectedRowKeys: allSelected
+              ? rows.map((row) => row.id)
+              : selectedIds,
+            onChange: (keys) => {
+              setSelectedIds(keys.map(String));
+              setAllSelected(false);
+            },
           }}
           scroll={{ x: 1280 }}
           sticky
@@ -12948,6 +13052,41 @@ export function DeadLettersPage({ lastUpdated, onRefresh }: ConsolePageProps) {
 
 export function deadLetterPageOffset(page: number, pageSize: number) {
   return Math.max(0, page - 1) * Math.max(1, pageSize);
+}
+
+export function deadLetterSelectionTitle({
+  selectedCount,
+  total,
+  allSelected = false,
+}: {
+  selectedCount: number;
+  total: number;
+  allSelected?: boolean;
+}) {
+  if (selectedCount <= 0) {
+    return "当前未选择";
+  }
+  if (allSelected) {
+    return `已选择全部 ${total.toLocaleString("zh-CN")} 条`;
+  }
+  return `当前选中 ${selectedCount.toLocaleString("zh-CN")} 条`;
+}
+
+export function deadLetterBatchSelectionForAction({
+  action,
+  allSelected,
+  ids,
+  status,
+}: {
+  action: "replay" | "handle" | "delete";
+  allSelected: boolean;
+  ids: string[];
+  status?: DeadLetterStatusFilter;
+}): DeadLetterBatchSelection {
+  if (allSelected) {
+    return status ? { all: true, status } : { all: true };
+  }
+  return ids;
 }
 
 export function QueueMonitorPage({ lastUpdated, onRefresh }: ConsolePageProps) {
@@ -13155,6 +13294,9 @@ export function AuditPage({ lastUpdated, onRefresh }: ConsolePageProps) {
   const { message } = App.useApp();
   const [selected, setSelected] = useState<AuditLogRow | null>(null);
   const [rows, setRows] = useState<AuditLogRow[]>([]);
+  const [total, setTotal] = useState(0);
+  const [currentPage, setCurrentPage] = useState(1);
+  const [pageSize, setPageSize] = useState(50);
   const [loadState, setLoadState] = useState<ApiLoadState>(emptyLoadState);
   const isFirstLoad = useRef(true);
   const auditQuery = useAppliedFilters<AuditLogListQuery>({
@@ -13165,20 +13307,34 @@ export function AuditPage({ lastUpdated, onRefresh }: ConsolePageProps) {
   const auditSort = useTableSort<AuditLogRow>();
   const filteredRows = filterAuditLogsByQuery(rows, auditQuery.applied);
   const sortedRows = sortRowsByTableState(filteredRows, auditSort.state);
-  const auditPage = usePagedRows(sortedRows);
   const loadAuditLogs = useCallback(async (silent = false) => {
     if (!silent) {
       setLoadState({ loading: true, error: "" });
     }
     try {
-      const result = await consoleApi.listAuditLogs();
+      const result = await consoleApi.listAuditLogs({
+        limit: pageSize,
+        offset: deadLetterPageOffset(currentPage, pageSize),
+        actor: auditQuery.applied.actor || undefined,
+        action:
+          auditQuery.applied.action === "all"
+            ? undefined
+            : auditQuery.applied.action,
+      });
       setRows(result.audit_logs.map(mapAuditLog));
+      setTotal(result.total);
       setLoadState(emptyLoadState);
     } catch (error) {
       setRows([]);
+      setTotal(0);
       setLoadState({ loading: false, error: userFacingError(error) });
     }
-  }, []);
+  }, [
+    auditQuery.applied.action,
+    auditQuery.applied.actor,
+    currentPage,
+    pageSize,
+  ]);
   const openAuditLogDetail = async (record: AuditLogRow) => {
     setSelected(record);
     try {
@@ -13257,12 +13413,12 @@ export function AuditPage({ lastUpdated, onRefresh }: ConsolePageProps) {
       <QueryBar
         onSearch={() => {
           auditQuery.applyFilters();
-          message.success(
-            `已筛选出 ${filterAuditLogsByQuery(rows, auditQuery.draft).length} 条审计记录`,
-          );
+          setCurrentPage(1);
+          message.success("已应用审计查询条件");
         }}
         onReset={() => {
           auditQuery.resetFilters();
+          setCurrentPage(1);
           message.info("审计查询条件已重置");
         }}
         extra={
@@ -13320,10 +13476,13 @@ export function AuditPage({ lastUpdated, onRefresh }: ConsolePageProps) {
       </QueryBar>
       <ListContainer
         title="审计记录"
-        total={filteredRows.length}
-        pageSize={auditPage.pageSize}
-        currentPage={auditPage.currentPage}
-        onPageChange={auditPage.onPageChange}
+        total={total}
+        pageSize={pageSize}
+        currentPage={currentPage}
+        onPageChange={(page, size) => {
+          setCurrentPage(page);
+          setPageSize(size);
+        }}
         fill
         scrollY={560}
       >
@@ -13335,7 +13494,7 @@ export function AuditPage({ lastUpdated, onRefresh }: ConsolePageProps) {
           size="middle"
           pagination={false}
           columns={columns}
-          dataSource={auditPage.rows}
+          dataSource={sortedRows}
           onChange={auditSort.onChange}
           loading={loadState.loading}
           scroll={{ x: 1050 }}

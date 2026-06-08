@@ -36,8 +36,11 @@ type deadLetterResponse struct {
 }
 
 type deadLetterBatchRequest struct {
-	IDs    []string `json:"ids"`
-	Reason string   `json:"reason"`
+	IDs       []string `json:"ids"`
+	All       bool     `json:"all"`
+	Status    string   `json:"status"`
+	ChannelID string   `json:"channel_id"`
+	Reason    string   `json:"reason"`
 }
 
 type deadLetterBatchResponse struct {
@@ -105,14 +108,19 @@ func (h *Handler) deadLetterBatchReplayHandler(w http.ResponseWriter, r *http.Re
 		writeAPIError(w, http.StatusBadRequest, "MGP-REQ-001", "请求 JSON 不合法")
 		return
 	}
-	result, err := h.deadLetters.ReplayDeadLetters(r.Context(), deadletter.BatchInput{IDs: request.IDs})
+	result, err := h.deadLetters.ReplayDeadLetters(r.Context(), deadletter.BatchInput{
+		IDs:       request.IDs,
+		All:       request.All,
+		Status:    request.Status,
+		ChannelID: request.ChannelID,
+	})
 	if err != nil {
 		status, code, message := deadLetterErrorStatus(err)
 		writeAPIError(w, status, code, message)
 		return
 	}
 	response := deadLetterBatchResponse{Result: result}
-	h.recordAudit(r, adminUser, "batch_replay", "dead_letter", strings.Join(result.IDs, ","), map[string]any{"count": len(request.IDs)}, response)
+	h.recordAudit(r, adminUser, "batch_replay", "dead_letter", strings.Join(result.IDs, ","), map[string]any{"count": result.Processed}, response)
 	writeJSON(w, http.StatusOK, response)
 }
 
@@ -122,14 +130,20 @@ func (h *Handler) deadLetterBatchHandleHandler(w http.ResponseWriter, r *http.Re
 		writeAPIError(w, http.StatusBadRequest, "MGP-REQ-001", "请求 JSON 不合法")
 		return
 	}
-	result, err := h.deadLetters.MarkDeadLettersHandled(r.Context(), deadletter.HandleInput{IDs: request.IDs, Reason: request.Reason})
+	result, err := h.deadLetters.MarkDeadLettersHandled(r.Context(), deadletter.HandleInput{
+		IDs:       request.IDs,
+		All:       request.All,
+		Status:    request.Status,
+		ChannelID: request.ChannelID,
+		Reason:    request.Reason,
+	})
 	if err != nil {
 		status, code, message := deadLetterErrorStatus(err)
 		writeAPIError(w, status, code, message)
 		return
 	}
 	response := deadLetterBatchResponse{Result: result}
-	h.recordAudit(r, adminUser, "batch_handle", "dead_letter", strings.Join(result.IDs, ","), map[string]any{"count": len(request.IDs)}, response)
+	h.recordAudit(r, adminUser, "batch_handle", "dead_letter", strings.Join(result.IDs, ","), map[string]any{"count": result.Processed}, response)
 	writeJSON(w, http.StatusOK, response)
 }
 
@@ -139,14 +153,19 @@ func (h *Handler) deadLetterBatchDeleteHandler(w http.ResponseWriter, r *http.Re
 		writeAPIError(w, http.StatusBadRequest, "MGP-REQ-001", "请求 JSON 不合法")
 		return
 	}
-	result, err := h.deadLetters.DeleteDeadLetters(r.Context(), deadletter.BatchInput{IDs: request.IDs})
+	result, err := h.deadLetters.DeleteDeadLetters(r.Context(), deadletter.BatchInput{
+		IDs:       request.IDs,
+		All:       request.All,
+		Status:    request.Status,
+		ChannelID: request.ChannelID,
+	})
 	if err != nil {
 		status, code, message := deadLetterErrorStatus(err)
 		writeAPIError(w, status, code, message)
 		return
 	}
 	response := deadLetterBatchResponse{Result: result}
-	h.recordAudit(r, adminUser, "batch_delete", "dead_letter", strings.Join(result.IDs, ","), map[string]any{"count": len(request.IDs)}, response)
+	h.recordAudit(r, adminUser, "batch_delete", "dead_letter", strings.Join(result.IDs, ","), map[string]any{"count": result.Processed}, response)
 	writeJSON(w, http.StatusOK, response)
 }
 

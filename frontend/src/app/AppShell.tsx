@@ -302,6 +302,10 @@ export function parseSSEEvents(buffer: string) {
   return { events, rest };
 }
 
+export function notificationEventsShouldRefreshPages() {
+  return false;
+}
+
 function readDismissedNotifications() {
   if (typeof window === "undefined") {
     return new Set<string>();
@@ -413,7 +417,13 @@ function ConsoleChrome() {
     organization: "users",
     settings: "parameters",
   });
-  const [lastUpdated, setLastUpdated] = useState(() => new Date());
+  const [lastUpdated] = useState(() => new Date());
+  const [notificationUpdatedAt, setNotificationUpdatedAt] = useState(
+    () => new Date(),
+  );
+  const [pageRefreshTimes, setPageRefreshTimes] = useState<
+    Record<string, Date>
+  >(() => ({ overview: new Date() }));
   const [profileOpen, setProfileOpen] = useState(false);
   const [passwordOpen, setPasswordOpen] = useState(false);
   const [profileSaving, setProfileSaving] = useState(false);
@@ -489,7 +499,7 @@ function ConsoleChrome() {
             setNotificationState(
               buildHeaderNotificationState(payload.queue, payload.overview),
             );
-            setLastUpdated(new Date());
+            setNotificationUpdatedAt(new Date());
           });
         }
         scheduleReconnect();
@@ -562,10 +572,13 @@ function ConsoleChrome() {
         setActiveSubTabs((prev) => ({ ...prev, monitoring: "audit" }));
       }
 
-      setLastUpdated(new Date());
       setOpenPages((current) =>
         current.includes(nextPage) ? current : [...current, nextPage],
       );
+      setPageRefreshTimes((current) => ({
+        ...current,
+        [nextPage]: new Date(),
+      }));
       setActivePage(nextPage);
     },
     [navigationMap],
@@ -596,9 +609,11 @@ function ConsoleChrome() {
     });
   };
 
-  const CurrentPage = lazyPages[activePage];
   const refresh = () => {
-    setLastUpdated(new Date());
+    setPageRefreshTimes((current) => ({
+      ...current,
+      [activePage]: new Date(),
+    }));
     message.success("已刷新当前管理台数据");
   };
 
@@ -718,7 +733,7 @@ function ConsoleChrome() {
         <Space size={12} className="header-actions">
           <Tag color="success">SSE 实时</Tag>
           <Typography.Text type="secondary" className="refresh-time">
-            {formatRefreshTime(lastUpdated)}
+            {formatRefreshTime(notificationUpdatedAt)}
           </Typography.Text>
           <Button icon={<ReloadOutlined />} onClick={refresh}>
             手动刷新
@@ -819,7 +834,7 @@ function ConsoleChrome() {
                   }}
                 >
                   <PageComponent
-                    lastUpdated={lastUpdated}
+                    lastUpdated={pageRefreshTimes[pageKey] ?? lastUpdated}
                     onRefresh={refresh}
                     activeSubTab={activeSubTabs[pageKey]}
                     onSubTabChange={(key) => {

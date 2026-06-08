@@ -174,6 +174,75 @@ describe("console api wrappers", () => {
     ]);
   });
 
+  it("sends all-dead-letter batch actions without materializing every id", async () => {
+    tokenStore.set("admin-token");
+    const fetchMock = vi.fn(
+      async (_input: RequestInfo | URL, _init?: RequestInit) =>
+        json({ result: { processed: 123, ids: [] } }),
+    );
+
+    await consoleApi.replayDeadLetters({ all: true }, fetchMock);
+    await consoleApi.handleDeadLetters({ all: true }, "manual", fetchMock);
+
+    expect(
+      fetchMock.mock.calls.map(([input, init]) => [
+        String(input),
+        init?.method,
+        JSON.parse(String(init?.body)),
+      ]),
+    ).toEqual([
+      ["/api/v1/dead-letters/batch-replay", "POST", { all: true }],
+      [
+        "/api/v1/dead-letters/batch-handle",
+        "POST",
+        { all: true, reason: "manual" },
+      ],
+    ]);
+  });
+
+  it("keeps the selected dead-letter status window for all-page batch actions", async () => {
+    tokenStore.set("admin-token");
+    const fetchMock = vi.fn(
+      async (_input: RequestInfo | URL, _init?: RequestInit) =>
+        json({ result: { processed: 3, ids: [] } }),
+    );
+
+    await consoleApi.deleteDeadLetters(
+      { all: true, status: "handled" },
+      fetchMock,
+    );
+
+    expect(JSON.parse(String(fetchMock.mock.calls[0][1]?.body))).toEqual({
+      all: true,
+      status: "handled",
+    });
+  });
+
+  it("passes message and audit list pagination windows to the backend", async () => {
+    tokenStore.set("admin-token");
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.startsWith("/api/v1/messages")) {
+        return json({ messages: [], total: 120, limit: 50, offset: 50 });
+      }
+      return json({ audit_logs: [], total: 88, limit: 20, offset: 40 });
+    });
+
+    await consoleApi.listMessageLogs(
+      { limit: 50, offset: 50, status: "failed", traceId: "trace-1" },
+      fetchMock,
+    );
+    await consoleApi.listAuditLogs(
+      { limit: 20, offset: 40, action: "login", actor: "admin" },
+      fetchMock,
+    );
+
+    expect(fetchMock.mock.calls.map(([input]) => String(input))).toEqual([
+      "/api/v1/messages?limit=50&offset=50&status=failed&trace_id=trace-1",
+      "/api/v1/audit-logs?limit=20&offset=40&actor=admin&action=login",
+    ]);
+  });
+
   it("sends channel description when creating and updating provider instances", async () => {
     tokenStore.set("admin-token");
     const input = {

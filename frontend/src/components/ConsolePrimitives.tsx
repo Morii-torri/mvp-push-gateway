@@ -118,7 +118,7 @@ export function ListContainer({
   className = "",
   onPageChange,
 }: {
-  title: string;
+  title: ReactNode;
   children: ReactNode;
   total: number;
   pageSize?: number;
@@ -141,7 +141,11 @@ export function ListContainer({
   return (
     <section className={classNames}>
       <div className="list-container__header">
-        <Typography.Title level={4}>{title}</Typography.Title>
+        {typeof title === "string" ? (
+          <Typography.Title level={4}>{title}</Typography.Title>
+        ) : (
+          <div className="list-container__title-node">{title}</div>
+        )}
         {extra}
       </div>
       <div className="table-scroll" style={scrollStyle}>

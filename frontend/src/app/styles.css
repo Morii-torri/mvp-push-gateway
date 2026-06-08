@@ -631,6 +631,20 @@ body {
   margin: 0;
 }
 
+.list-container__title-node {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  color: #12213f;
+  font-size: 18px;
+  font-weight: 600;
+}
+
+.dead-letter-selection-summary {
+  font-size: 12px;
+  font-weight: 500;
+}
+
 .table-scroll {
   min-height: 0;
   overflow: auto;

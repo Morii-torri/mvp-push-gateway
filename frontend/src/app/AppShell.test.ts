@@ -6,6 +6,7 @@ import {
   createLogoutConfirmConfig,
   createProfileFormValues,
   filterHeaderNotificationState,
+  notificationEventsShouldRefreshPages,
   notificationReadKey,
   resolveNavigationPageKey,
 } from './AppShell';
@@ -160,6 +161,10 @@ describe('app shell logout confirmation', () => {
       'route-plan-pending',
     ]);
     expect(filtered.badgeCount).toBe(2);
+  });
+
+  it('does not treat notification SSE events as page refresh triggers', () => {
+    expect(notificationEventsShouldRefreshPages()).toBe(false);
   });
 
   it('maps legacy log pages back to the combined monitoring page', () => {
