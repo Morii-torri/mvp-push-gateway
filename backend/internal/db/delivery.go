@@ -337,7 +337,18 @@ func (r Repository) InsertSendDedupeKey(ctx context.Context, params delivery.Sen
 			expires_at,
 			message_id
 		)
-		VALUES ($1, 'send', $2, $3, $4, NULLIF($5, '')::uuid)
+		VALUES (
+			$1,
+			'send',
+			$2,
+			$3,
+			$4,
+			(
+				SELECT id
+				FROM message_records
+				WHERE id = NULLIF($5, '')::uuid
+			)
+		)
 		ON CONFLICT DO NOTHING
 	`, uuid.NewString(), params.ChannelID, params.DedupeKey, params.ExpiresAt, params.MessageID)
 	if err != nil {
@@ -480,6 +491,10 @@ func ensureExternalDeliveryLog(ctx context.Context, tx pgx.Tx, params delivery.C
 	if receivedAt.IsZero() {
 		receivedAt = time.Now().UTC()
 	}
+	queuedAt := params.DeliveryCreatedAt
+	if queuedAt.IsZero() {
+		queuedAt = receivedAt
+	}
 	payload := defaultJSON(params.InboundPayload)
 	headers := defaultJSON(params.InboundHeaders)
 	if _, err := tx.Exec(ctx, `
@@ -514,10 +529,10 @@ func ensureExternalDeliveryLog(ctx context.Context, tx pgx.Tx, params delivery.C
 			queued_at,
 			created_at,
 			updated_at
-		)
-		VALUES ($1, $2, $3, NULLIF($4, '')::uuid, $5, '{}'::jsonb, '{}'::jsonb, 'processing', $6, $7, $7, $7)
-		ON CONFLICT (id) DO NOTHING
-	`, attemptID, messageID, channelID, strings.TrimSpace(params.TemplateVersionID), defaultJSON(params.RecipientSnapshot), positive(params.AttemptNo, 1), receivedAt); err != nil {
+			)
+			VALUES ($1, $2, $3, NULLIF($4, '')::uuid, $5, '{}'::jsonb, '{}'::jsonb, 'processing', $6, $7, $7, $7)
+			ON CONFLICT (id) DO NOTHING
+		`, attemptID, messageID, channelID, strings.TrimSpace(params.TemplateVersionID), defaultJSON(params.RecipientSnapshot), positive(params.AttemptNo, 1), queuedAt); err != nil {
 		return fmt.Errorf("insert external delivery attempt: %w", err)
 	}
 	messageStatus := "accepted"
@@ -716,25 +731,23 @@ func insertExternalDeadLetter(ctx context.Context, tx pgx.Tx, params delivery.De
 			payload,
 			channel_id,
 			error_code,
-			error_message,
-			attempts,
-			dead_lettered_at,
-			created_at,
-			updated_at
-		)
-		VALUES (
-			$1,
+				error_message,
+				attempts,
+				dead_lettered_at,
+				created_at
+			)
+			VALUES (
+				$1,
 			NULL,
 			'send_message',
 			jsonb_build_object('delivery_attempt_id', $2::text),
 			NULLIF($3, '')::uuid,
 			NULLIF($4, ''),
-			$5,
-			$6,
-			$7,
-			$7,
-			$7
-		)
+				$5,
+				$6,
+				$7,
+				$7
+			)
 	`, uuid.NewString(), params.AttemptID, params.ChannelID, params.ErrorCode, params.ErrorMessage, positive(params.AttemptNo, 1), params.FinishedAt); err != nil {
 		return fmt.Errorf("insert external dead-letter send result: %w", err)
 	}

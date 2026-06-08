@@ -50,6 +50,10 @@ func (r Repository) ListSources(ctx context.Context) ([]source.Source, error) {
 		if err != nil {
 			return nil, err
 		}
+		configuredSource, err = r.decryptSourceSecrets(configuredSource)
+		if err != nil {
+			return nil, fmt.Errorf("decrypt source secrets: %w", err)
+		}
 		sources = append(sources, configuredSource)
 	}
 	if err := rows.Err(); err != nil {
@@ -59,6 +63,15 @@ func (r Repository) ListSources(ctx context.Context) ([]source.Source, error) {
 }
 
 func (r Repository) CreateSource(ctx context.Context, params source.CreateSourceParams) (source.Source, error) {
+	sourceID := uuid.NewString()
+	authToken, err := r.encryptSourceSecret(sourceID, "auth_token", params.AuthToken)
+	if err != nil {
+		return source.Source{}, fmt.Errorf("encrypt source auth token: %w", err)
+	}
+	hmacSecret, err := r.encryptSourceSecret(sourceID, "hmac_secret", params.HMACSecret)
+	if err != nil {
+		return source.Source{}, fmt.Errorf("encrypt source hmac secret: %w", err)
+	}
 	configuredSource, err := r.querySource(ctx, `
 		INSERT INTO inbound_sources (
 			id,
@@ -103,13 +116,13 @@ func (r Repository) CreateSource(ctx context.Context, params source.CreateSource
 			created_at,
 			updated_at
 	`,
-		uuid.NewString(),
+		sourceID,
 		params.Code,
 		params.Name,
 		params.Enabled,
 		params.AuthMode,
-		params.AuthToken,
-		params.HMACSecret,
+		authToken,
+		hmacSecret,
 		defaultStringSlice(params.IPAllowlist),
 		params.CompatMode,
 		params.InboundDedupeEnabled,
@@ -146,6 +159,14 @@ func (r Repository) GetSourceByCode(ctx context.Context, code string) (source.So
 }
 
 func (r Repository) UpdateSource(ctx context.Context, id string, params source.UpdateSourceParams) (source.Source, error) {
+	authToken, err := r.encryptSourceSecret(id, "auth_token", params.AuthToken)
+	if err != nil {
+		return source.Source{}, fmt.Errorf("encrypt source auth token: %w", err)
+	}
+	hmacSecret, err := r.encryptSourceSecret(id, "hmac_secret", params.HMACSecret)
+	if err != nil {
+		return source.Source{}, fmt.Errorf("encrypt source hmac secret: %w", err)
+	}
 	configuredSource, err := r.querySource(ctx, `
 		UPDATE inbound_sources
 		SET code = $2,
@@ -188,8 +209,8 @@ func (r Repository) UpdateSource(ctx context.Context, id string, params source.U
 		params.Name,
 		params.Enabled,
 		params.AuthMode,
-		params.AuthToken,
-		params.HMACSecret,
+		authToken,
+		hmacSecret,
 		defaultStringSlice(params.IPAllowlist),
 		params.CompatMode,
 		params.InboundDedupeEnabled,
@@ -642,7 +663,11 @@ func inboundMessageStatus(status string) string {
 }
 
 func (r Repository) querySource(ctx context.Context, sql string, args ...any) (source.Source, error) {
-	return scanSource(r.pool.QueryRow(ctx, sql, args...))
+	configuredSource, err := scanSource(r.pool.QueryRow(ctx, sql, args...))
+	if err != nil {
+		return source.Source{}, err
+	}
+	return r.decryptSourceSecrets(configuredSource)
 }
 
 type sourceScanner interface {
@@ -685,6 +710,19 @@ func scanSource(row sourceScanner) (source.Source, error) {
 	if latestPayloadUpdatedAt.Valid {
 		value := latestPayloadUpdatedAt.Time
 		configuredSource.LatestPayloadSampleUpdatedAt = &value
+	}
+	return configuredSource, nil
+}
+
+func (r Repository) decryptSourceSecrets(configuredSource source.Source) (source.Source, error) {
+	var err error
+	configuredSource.AuthToken, err = r.decryptSourceSecret(configuredSource.ID, "auth_token", configuredSource.AuthToken)
+	if err != nil {
+		return source.Source{}, err
+	}
+	configuredSource.HMACSecret, err = r.decryptSourceSecret(configuredSource.ID, "hmac_secret", configuredSource.HMACSecret)
+	if err != nil {
+		return source.Source{}, err
 	}
 	return configuredSource, nil
 }

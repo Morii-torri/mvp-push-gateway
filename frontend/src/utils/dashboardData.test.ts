@@ -70,7 +70,7 @@ describe("dashboard data mapping", () => {
     expect(buildOverviewViewModel(overview, "7d").metrics[5]?.delta).toBe(
       "按最近 7 天平均计算",
     );
-    expect(viewModel.metrics[2]?.label).toBe("失败发送量");
+    expect(viewModel.metrics[2]?.label).toBe("失败消息量");
     expect(viewModel.metrics[3]?.value).toBe("87.50%");
     expect(viewModel.metrics[4]?.label).toBe("平均耗时");
     expect(viewModel.metrics[4]?.value).toBe("180 ms");

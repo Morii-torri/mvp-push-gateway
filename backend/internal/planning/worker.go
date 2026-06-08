@@ -416,6 +416,11 @@ func (w *Worker) processMessage(ctx context.Context, job queue.Job, message Mess
 	}
 
 	finishedAt := w.now()
+	var annotateErr error
+	attempts, annotateErr = annotateAttemptLifecycle(attempts, finishedAt)
+	if annotateErr != nil {
+		return annotateErr
+	}
 	completeStartedAt := time.Now()
 	completeParams := CompletePlanningParams{
 		JobID:             job.ID,
@@ -784,6 +789,23 @@ func (w *Worker) capabilityForPlan(ctx context.Context, plan RoutePlan, provider
 		}
 	}
 	return w.repo.GetProviderCapability(ctx, providerType, messageType)
+}
+
+func annotateAttemptLifecycle(attempts []DeliveryAttemptPlan, at time.Time) ([]DeliveryAttemptPlan, error) {
+	for index := range attempts {
+		var payload delivery.SendMessageJobPayload
+		if err := json.Unmarshal(attempts[index].JobPayload, &payload); err != nil {
+			return nil, fmt.Errorf("%w: decode send message job payload: %w", errJobPlanning, err)
+		}
+		payload.RoutePlannedAt = at
+		payload.DeliveryCreatedAt = at
+		raw, err := json.Marshal(payload)
+		if err != nil {
+			return nil, fmt.Errorf("%w: encode send message job payload lifecycle: %w", errJobPlanning, err)
+		}
+		attempts[index].JobPayload = raw
+	}
+	return attempts, nil
 }
 
 func capabilityCacheKey(providerType provider.ProviderType, messageType string) string {

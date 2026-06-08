@@ -69,9 +69,9 @@ func TestRepositoryCompletePlanningAllowsExternalRoutePlanQueueWithoutPostgresJo
 	var sendJobCount int
 	if err := pool.QueryRow(ctx, `
 		SELECT
-			(SELECT status FROM message_records WHERE id = $1),
-			(SELECT count(*)::integer FROM delivery_attempts WHERE id = $2),
-			(SELECT count(*)::integer FROM jobs WHERE type = 'send_message' AND payload->>'delivery_attempt_id' = $2)
+				(SELECT status FROM message_records WHERE id = $1),
+				(SELECT count(*)::integer FROM delivery_attempts WHERE id = $2),
+				(SELECT count(*)::integer FROM jobs WHERE type = 'send_message' AND payload->>'delivery_attempt_id' = $2::text)
 	`, messageID, attemptID).Scan(&messageStatus, &attemptCount, &sendJobCount); err != nil {
 		t.Fatalf("query planning output: %v", err)
 	}
@@ -137,8 +137,8 @@ func TestRepositoryCompletePlanningSkipsSendJobsForExternalSendQueue(t *testing.
 	var sendJobCount int
 	if err := pool.QueryRow(ctx, `
 		SELECT
-			(SELECT count(*)::integer FROM delivery_attempts WHERE id = $1),
-			(SELECT count(*)::integer FROM jobs WHERE type = 'send_message' AND payload->>'delivery_attempt_id' = $1)
+				(SELECT count(*)::integer FROM delivery_attempts WHERE id = $1),
+				(SELECT count(*)::integer FROM jobs WHERE type = 'send_message' AND payload->>'delivery_attempt_id' = $1::text)
 	`, attemptID).Scan(&attemptCount, &sendJobCount); err != nil {
 		t.Fatalf("query external send queue output: %v", err)
 	}

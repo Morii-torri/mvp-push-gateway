@@ -267,6 +267,10 @@ func (r Repository) ListChannels(ctx context.Context) ([]provider.Channel, error
 		if err != nil {
 			return nil, err
 		}
+		channel, err = r.decryptChannelSecrets(channel)
+		if err != nil {
+			return nil, fmt.Errorf("decrypt channel secrets: %w", err)
+		}
 		channels = append(channels, channel)
 	}
 	if err := rows.Err(); err != nil {
@@ -276,6 +280,15 @@ func (r Repository) ListChannels(ctx context.Context) ([]provider.Channel, error
 }
 
 func (r Repository) CreateChannel(ctx context.Context, params provider.CreateChannelParams) (provider.Channel, error) {
+	channelID := uuid.NewString()
+	authConfig, err := r.encryptChannelSecretJSON(channelID, "auth_config", params.AuthConfig)
+	if err != nil {
+		return provider.Channel{}, fmt.Errorf("encrypt channel auth config: %w", err)
+	}
+	tokenConfig, err := r.encryptChannelSecretJSON(channelID, "token_config", params.TokenConfig)
+	if err != nil {
+		return provider.Channel{}, fmt.Errorf("encrypt channel token config: %w", err)
+	}
 	channel, err := r.queryChannel(ctx, `
 		INSERT INTO delivery_channels (
 			id,
@@ -294,13 +307,13 @@ func (r Repository) CreateChannel(ctx context.Context, params provider.CreateCha
 		)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
 		RETURNING `+channelSelectColumns(),
-		uuid.NewString(),
+		channelID,
 		params.ProviderType,
 		params.Name,
 		params.Enabled,
 		params.Description,
-		defaultJSON(params.AuthConfig),
-		defaultJSON(params.TokenConfig),
+		authConfig,
+		tokenConfig,
 		defaultJSON(params.SendConfig),
 		defaultJSON(params.RateLimitConfig),
 		params.ConcurrencyLimit,
@@ -323,6 +336,14 @@ func (r Repository) GetChannel(ctx context.Context, id string) (provider.Channel
 }
 
 func (r Repository) UpdateChannel(ctx context.Context, id string, params provider.UpdateChannelParams) (provider.Channel, error) {
+	authConfig, err := r.encryptChannelSecretJSON(id, "auth_config", params.AuthConfig)
+	if err != nil {
+		return provider.Channel{}, fmt.Errorf("encrypt channel auth config: %w", err)
+	}
+	tokenConfig, err := r.encryptChannelSecretJSON(id, "token_config", params.TokenConfig)
+	if err != nil {
+		return provider.Channel{}, fmt.Errorf("encrypt channel token config: %w", err)
+	}
 	channel, err := r.queryChannel(ctx, `
 		UPDATE delivery_channels
 		SET provider_type = $2,
@@ -345,8 +366,8 @@ func (r Repository) UpdateChannel(ctx context.Context, id string, params provide
 		params.Name,
 		params.Enabled,
 		params.Description,
-		defaultJSON(params.AuthConfig),
-		defaultJSON(params.TokenConfig),
+		authConfig,
+		tokenConfig,
 		defaultJSON(params.SendConfig),
 		defaultJSON(params.RateLimitConfig),
 		params.ConcurrencyLimit,
@@ -372,7 +393,11 @@ func (r Repository) DeleteChannel(ctx context.Context, id string) error {
 }
 
 func (r Repository) queryChannel(ctx context.Context, sql string, args ...any) (provider.Channel, error) {
-	return scanChannel(r.pool.QueryRow(ctx, sql, args...))
+	channel, err := scanChannel(r.pool.QueryRow(ctx, sql, args...))
+	if err != nil {
+		return provider.Channel{}, err
+	}
+	return r.decryptChannelSecrets(channel)
 }
 
 func scanCapabilityWithMetadata(row sourceScanner) (provider.Capability, error) {
@@ -474,6 +499,19 @@ func scanChannel(row sourceScanner) (provider.Channel, error) {
 		return provider.Channel{}, err
 	}
 	channel.ProviderType = provider.ProviderType(providerType)
+	return channel, nil
+}
+
+func (r Repository) decryptChannelSecrets(channel provider.Channel) (provider.Channel, error) {
+	var err error
+	channel.AuthConfig, err = r.decryptChannelSecretJSON(channel.ID, "auth_config", channel.AuthConfig)
+	if err != nil {
+		return provider.Channel{}, err
+	}
+	channel.TokenConfig, err = r.decryptChannelSecretJSON(channel.ID, "token_config", channel.TokenConfig)
+	if err != nil {
+		return provider.Channel{}, err
+	}
 	return channel, nil
 }
 

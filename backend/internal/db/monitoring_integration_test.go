@@ -261,6 +261,22 @@ func TestRepositoryGetOverviewStatisticsBuildsStable24hDashboard(t *testing.T) {
 		FinishedAt: now.Add(-10*time.Minute + 2*time.Second),
 		DurationMS: 1000,
 	})
+	insertMessageRecordForOverviewStats(t, ctx, pool, messageRecordStatsRow{
+		SourceID:     testUUID(12121),
+		MessageID:    testUUID(12122),
+		TraceID:      "trace-planning-failed",
+		Status:       "failed",
+		ErrorMessage: "recipient resolution failed",
+		ReceivedAt:   now.Add(-5 * time.Minute),
+	})
+	insertMessageRecordForOverviewStats(t, ctx, pool, messageRecordStatsRow{
+		SourceID:     testUUID(12123),
+		MessageID:    testUUID(12124),
+		TraceID:      "trace-no-route",
+		Status:       "no_route",
+		ErrorMessage: "no published route for source",
+		ReceivedAt:   now.Add(-4 * time.Minute),
+	})
 
 	overview, err := repository.GetOverviewStatistics(ctx, statistics.QueryParams{Now: now})
 	if err != nil {
@@ -284,17 +300,17 @@ func TestRepositoryGetOverviewStatisticsBuildsStable24hDashboard(t *testing.T) {
 	if overview.Summary.TotalSent != 3 {
 		t.Fatalf("expected total sent to exclude deduped/skipped attempts, got %d", overview.Summary.TotalSent)
 	}
-	if overview.Summary.TotalReceived != 6 {
-		t.Fatalf("expected total received 6, got %d", overview.Summary.TotalReceived)
+	if overview.Summary.TotalReceived != 8 {
+		t.Fatalf("expected total received 8, got %d", overview.Summary.TotalReceived)
 	}
-	if overview.Summary.SuccessRate != 66.67 {
-		t.Fatalf("expected success rate 66.67, got %v", overview.Summary.SuccessRate)
+	if overview.Summary.SuccessRate != 40 {
+		t.Fatalf("expected success rate 40 with planning/no-route failures included, got %v", overview.Summary.SuccessRate)
 	}
 	if overview.Summary.AverageDurationMS != 2000 {
 		t.Fatalf("expected average delivery duration 2000ms, got %d", overview.Summary.AverageDurationMS)
 	}
-	if overview.Summary.Failed != 1 {
-		t.Fatalf("expected failed 1, got %d", overview.Summary.Failed)
+	if overview.Summary.Failed != 3 {
+		t.Fatalf("expected failed 3 including planning/no-route failures, got %d", overview.Summary.Failed)
 	}
 	if len(overview.Trend) != 25 {
 		t.Fatalf("expected 25 trend buckets for inclusive 24h window, got %d", len(overview.Trend))
@@ -307,7 +323,7 @@ func TestRepositoryGetOverviewStatisticsBuildsStable24hDashboard(t *testing.T) {
 		totalTrendSuccessful += point.Successful
 		totalTrendFailed += point.Failed
 	}
-	if totalTrendSent != 3 || totalTrendSuccessful != 2 || totalTrendFailed != 1 {
+	if totalTrendSent != 3 || totalTrendSuccessful != 2 || totalTrendFailed != 3 {
 		t.Fatalf("expected trend totals to ignore deduped/skipped, got sent=%d successful=%d failed=%d", totalTrendSent, totalTrendSuccessful, totalTrendFailed)
 	}
 	if len(overview.PlatformRankings) != 2 {
@@ -572,6 +588,36 @@ type deliveryAttemptRow struct {
 	StartedAt    time.Time
 	FinishedAt   time.Time
 	DurationMS   int
+}
+
+type messageRecordStatsRow struct {
+	SourceID     string
+	MessageID    string
+	TraceID      string
+	Status       string
+	ErrorMessage string
+	ReceivedAt   time.Time
+}
+
+func insertMessageRecordForOverviewStats(t *testing.T, ctx context.Context, pool *pgxpool.Pool, row messageRecordStatsRow) {
+	t.Helper()
+
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO inbound_sources (id, code, name, auth_mode)
+		VALUES ($1, $2, $3, 'none')
+		ON CONFLICT (id) DO NOTHING
+	`, row.SourceID, "source-"+row.SourceID[len(row.SourceID)-4:], "Source "+row.SourceID[len(row.SourceID)-4:]); err != nil {
+		t.Fatalf("insert source for message record: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO message_records (
+			id, trace_id, source_id, received_at, headers, payload, payload_hash,
+			status, error_message, created_at, updated_at
+		)
+		VALUES ($1, $2, $3, $4, '{}'::jsonb, '{}'::jsonb, 'hash', $5, NULLIF($6, ''), $4, $4)
+	`, row.MessageID, row.TraceID, row.SourceID, row.ReceivedAt, row.Status, row.ErrorMessage); err != nil {
+		t.Fatalf("insert message record: %v", err)
+	}
 }
 
 func insertDeliveryAttemptForStats(t *testing.T, ctx context.Context, pool *pgxpool.Pool, row deliveryAttemptRow) {

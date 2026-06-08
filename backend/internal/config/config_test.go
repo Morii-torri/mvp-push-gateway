@@ -151,3 +151,17 @@ func TestLoadParsesTrustedProxyEntries(t *testing.T) {
 		}
 	}
 }
+
+func TestLoadAllowsSecretEncryptionKeyConfig(t *testing.T) {
+	t.Setenv("MGP_SECRET_ENCRYPTION_KEY", "base64-key-material")
+	t.Setenv("MGP_SECRET_ENCRYPTION_KEY_ID", "primary-2026-06")
+
+	cfg := config.Load()
+
+	if cfg.Security.SecretEncryptionKey != "base64-key-material" {
+		t.Fatalf("expected secret encryption key from environment, got %q", cfg.Security.SecretEncryptionKey)
+	}
+	if cfg.Security.SecretEncryptionKeyID != "primary-2026-06" {
+		t.Fatalf("expected secret encryption key id from environment, got %q", cfg.Security.SecretEncryptionKeyID)
+	}
+}

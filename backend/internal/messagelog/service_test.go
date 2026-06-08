@@ -2,6 +2,7 @@ package messagelog
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 	"time"
 )
@@ -51,14 +52,32 @@ func TestListMessagesDerivesLifecycleStatusAndClearsNoRouteMatch(t *testing.T) {
 
 func TestGetMessageBuildsLifecycleTimeline(t *testing.T) {
 	receivedAt := time.Date(2026, 6, 4, 10, 0, 0, 0, time.UTC)
+	validatedAt := receivedAt.Add(time.Millisecond)
+	routePlannedAt := receivedAt.Add(12 * time.Millisecond)
 	queuedAt := receivedAt.Add(2 * time.Second)
 	startedAt := receivedAt.Add(3 * time.Second)
 	finishedAt := receivedAt.Add(5 * time.Second)
+	updatedAt := receivedAt.Add(4 * time.Second)
+	requestSnapshot := mustJSON(t, map[string]any{
+		"lifecycle": map[string]any{
+			"route_planned_at":    routePlannedAt.Format(time.RFC3339Nano),
+			"delivery_created_at": queuedAt.Format(time.RFC3339Nano),
+			"request_started_at":  startedAt.Format(time.RFC3339Nano),
+		},
+	})
+	responseSnapshot := mustJSON(t, map[string]any{
+		"lifecycle": map[string]any{
+			"request_finished_at": finishedAt.Format(time.RFC3339Nano),
+			"request_duration_ms": 2000,
+		},
+	})
 	store := &memoryStore{
 		detail: MessageDetail{
 			MessageSummary: MessageSummary{
 				ID:              "message-1",
 				ReceivedAt:      receivedAt,
+				CreatedAt:       validatedAt,
+				UpdatedAt:       updatedAt,
 				Status:          "planned",
 				MatchedFlowID:   "flow-1",
 				MatchedFlowName: "生产路由",
@@ -66,11 +85,13 @@ func TestGetMessageBuildsLifecycleTimeline(t *testing.T) {
 			},
 			Attempts: []DeliveryAttempt{
 				{
-					ID:         "attempt-1",
-					Status:     "sent",
-					QueuedAt:   &queuedAt,
-					StartedAt:  &startedAt,
-					FinishedAt: &finishedAt,
+					ID:               "attempt-1",
+					Status:           "sent",
+					QueuedAt:         &queuedAt,
+					StartedAt:        &startedAt,
+					FinishedAt:       &finishedAt,
+					RequestSnapshot:  requestSnapshot,
+					ResponseSnapshot: responseSnapshot,
 				},
 			},
 		},
@@ -90,8 +111,21 @@ func TestGetMessageBuildsLifecycleTimeline(t *testing.T) {
 	if detail.LastOutboundAt == nil || !detail.LastOutboundAt.Equal(finishedAt) {
 		t.Fatalf("expected last outbound time %s, got %+v", finishedAt, detail.LastOutboundAt)
 	}
-	if !hasTimelineStage(detail.Timeline, "route_matched") || !hasTimelineStage(detail.Timeline, "delivery_finished") {
+	if !hasTimelineStage(detail.Timeline, "inbound_validated") ||
+		!hasTimelineStage(detail.Timeline, "route_planned") ||
+		!hasTimelineStage(detail.Timeline, "upstream_call_finished") {
 		t.Fatalf("expected route and delivery timeline events, got %+v", detail.Timeline)
+	}
+	if !hasTimelineEvent(detail.Timeline, "route_planned", routePlannedAt, 11) {
+		t.Fatalf("expected route_planned at %s with duration 11ms, got %+v", routePlannedAt, detail.Timeline)
+	}
+	if !hasTimelineEvent(detail.Timeline, "upstream_call_finished", finishedAt, 2000) {
+		t.Fatalf("expected upstream_call_finished at %s with duration 2000ms, got %+v", finishedAt, detail.Timeline)
+	}
+	for i := 1; i < len(detail.Timeline); i++ {
+		if detail.Timeline[i].At.Before(detail.Timeline[i-1].At) {
+			t.Fatalf("expected timeline to be sorted by time, got %+v", detail.Timeline)
+		}
 	}
 }
 
@@ -129,6 +163,24 @@ func hasTimelineStage(events []TimelineEvent, stage string) bool {
 		}
 	}
 	return false
+}
+
+func hasTimelineEvent(events []TimelineEvent, stage string, at time.Time, durationMS int) bool {
+	for _, event := range events {
+		if event.Stage == stage && event.At.Equal(at) && event.DurationMS == durationMS {
+			return true
+		}
+	}
+	return false
+}
+
+func mustJSON(t *testing.T, value any) json.RawMessage {
+	t.Helper()
+	raw, err := json.Marshal(value)
+	if err != nil {
+		t.Fatalf("marshal json: %v", err)
+	}
+	return raw
 }
 
 type memoryStore struct {

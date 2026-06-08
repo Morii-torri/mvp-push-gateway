@@ -579,7 +579,7 @@ func (s *Service) Ingest(ctx context.Context, input IngestInput) (IngestResult, 
 	now := s.now()
 	receivedAt := now.UTC()
 	s.scheduleLatestPayloadSample(configuredSource.ID, payload, receivedAt)
-	headers, err := json.Marshal(input.Headers)
+	headers, err := json.Marshal(redactInboundHeaders(input.Headers))
 	if err != nil {
 		return IngestResult{}, err
 	}
@@ -1043,6 +1043,33 @@ func sourceBearerToken(headers http.Header) string {
 		return ""
 	}
 	return strings.TrimSpace(strings.TrimPrefix(value, prefix))
+}
+
+func redactInboundHeaders(headers http.Header) http.Header {
+	redacted := make(http.Header, len(headers))
+	for key, values := range headers {
+		canonicalKey := http.CanonicalHeaderKey(key)
+		if sensitiveInboundHeader(canonicalKey) {
+			redacted[canonicalKey] = []string{"[REDACTED]"}
+			continue
+		}
+		redacted[canonicalKey] = append([]string(nil), values...)
+	}
+	return redacted
+}
+
+func sensitiveInboundHeader(key string) bool {
+	normalized := strings.ToLower(strings.TrimSpace(key))
+	compact := strings.NewReplacer("-", "", "_", "", " ", "").Replace(normalized)
+	return normalized == "authorization" ||
+		normalized == "cookie" ||
+		normalized == "set-cookie" ||
+		normalized == "x-mgp-signature" ||
+		strings.Contains(compact, "token") ||
+		strings.Contains(compact, "secret") ||
+		strings.Contains(compact, "password") ||
+		strings.Contains(compact, "apikey") ||
+		strings.Contains(compact, "accesskey")
 }
 
 func (s *Service) validHMAC(ctx context.Context, sourceID string, secret string, method string, path string, headers http.Header, body []byte) (bool, error) {

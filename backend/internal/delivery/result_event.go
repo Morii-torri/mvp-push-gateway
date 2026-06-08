@@ -19,6 +19,7 @@ type DeliveryResultEvent struct {
 	ChannelID         string          `json:"channel_id,omitempty"`
 	TemplateVersionID string          `json:"template_version_id,omitempty"`
 	RecipientSnapshot json.RawMessage `json:"recipient_snapshot,omitempty"`
+	DeliveryCreatedAt time.Time       `json:"delivery_created_at,omitempty"`
 	TraceID           string          `json:"trace_id,omitempty"`
 	AttemptNo         int             `json:"attempt_no"`
 	Status            Status          `json:"status"`
@@ -57,6 +58,7 @@ func NewDeliveryResultEvent(params CompleteDeliveryParams) DeliveryResultEvent {
 		ChannelID:         strings.TrimSpace(params.ChannelID),
 		TemplateVersionID: strings.TrimSpace(params.TemplateVersionID),
 		RecipientSnapshot: cloneRawMessage(params.RecipientSnapshot),
+		DeliveryCreatedAt: params.DeliveryCreatedAt,
 		TraceID:           strings.TrimSpace(params.TraceID),
 		AttemptNo:         params.AttemptNo,
 		Status:            params.Status,
@@ -82,6 +84,7 @@ func NewRetryDeliveryResultEvent(params RetryDeliveryParams) DeliveryResultEvent
 		ChannelID:         strings.TrimSpace(params.ChannelID),
 		TemplateVersionID: strings.TrimSpace(params.TemplateVersionID),
 		RecipientSnapshot: cloneRawMessage(params.RecipientSnapshot),
+		DeliveryCreatedAt: params.DeliveryCreatedAt,
 		TraceID:           strings.TrimSpace(params.TraceID),
 		AttemptNo:         params.AttemptNo,
 		Status:            StatusFailed,
@@ -109,6 +112,7 @@ func NewDeadLetterDeliveryResultEvent(params DeadLetterDeliveryParams) DeliveryR
 		SourceID:          strings.TrimSpace(params.SourceID),
 		TemplateVersionID: strings.TrimSpace(params.TemplateVersionID),
 		RecipientSnapshot: cloneRawMessage(params.RecipientSnapshot),
+		DeliveryCreatedAt: params.DeliveryCreatedAt,
 		TraceID:           strings.TrimSpace(params.TraceID),
 		AttemptNo:         params.AttemptNo,
 		Status:            StatusFailed,
@@ -152,6 +156,7 @@ func (e DeliveryResultEvent) CompleteDeliveryParams() CompleteDeliveryParams {
 		ChannelID:         strings.TrimSpace(e.ChannelID),
 		TemplateVersionID: strings.TrimSpace(e.TemplateVersionID),
 		RecipientSnapshot: cloneRawMessage(e.RecipientSnapshot),
+		DeliveryCreatedAt: e.DeliveryCreatedAt,
 		TraceID:           strings.TrimSpace(e.TraceID),
 		AttemptNo:         e.AttemptNo,
 		Status:            e.Status,
@@ -179,6 +184,7 @@ func (e DeliveryResultEvent) RetryDeliveryParams() RetryDeliveryParams {
 		ChannelID:         strings.TrimSpace(e.ChannelID),
 		TemplateVersionID: strings.TrimSpace(e.TemplateVersionID),
 		RecipientSnapshot: cloneRawMessage(e.RecipientSnapshot),
+		DeliveryCreatedAt: e.DeliveryCreatedAt,
 		TraceID:           strings.TrimSpace(e.TraceID),
 		AttemptNo:         e.AttemptNo,
 		ErrorCode:         strings.TrimSpace(e.ErrorCode),
@@ -204,6 +210,7 @@ func (e DeliveryResultEvent) DeadLetterDeliveryParams() DeadLetterDeliveryParams
 		SourceID:          strings.TrimSpace(e.SourceID),
 		TemplateVersionID: strings.TrimSpace(e.TemplateVersionID),
 		RecipientSnapshot: cloneRawMessage(e.RecipientSnapshot),
+		DeliveryCreatedAt: e.DeliveryCreatedAt,
 		TraceID:           strings.TrimSpace(e.TraceID),
 		AttemptNo:         e.AttemptNo,
 		ErrorCode:         strings.TrimSpace(e.ErrorCode),

@@ -6,12 +6,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
 	"mvp-push-gateway/backend/internal/provider"
+	"mvp-push-gateway/backend/internal/secretbox"
 )
 
 func (r Repository) GetTokenCache(ctx context.Context, cacheKey string) (provider.TokenCacheEntry, bool, error) {
@@ -41,6 +43,10 @@ func (r Repository) GetTokenCache(ctx context.Context, cacheKey string) (provide
 	}
 	if err != nil {
 		return provider.TokenCacheEntry{}, false, fmt.Errorf("get provider token cache: %w", err)
+	}
+	entry.Token, err = r.decryptProviderAccessToken(entry.CacheKey, entry.Token)
+	if err != nil {
+		return provider.TokenCacheEntry{}, false, fmt.Errorf("decrypt provider token cache: %w", err)
 	}
 	return entry, true, nil
 }
@@ -121,7 +127,11 @@ func (r Repository) StoreTokenCache(ctx context.Context, params provider.StoreTo
 	if len(metadata) == 0 || !json.Valid(metadata) {
 		metadata = json.RawMessage(`{}`)
 	}
-	_, err := r.pool.Exec(ctx, `
+	token, err := r.encryptProviderAccessToken(params.CacheKey, params.Token)
+	if err != nil {
+		return fmt.Errorf("encrypt provider token cache: %w", err)
+	}
+	_, err = r.pool.Exec(ctx, `
 		INSERT INTO provider_token_cache (
 			id,
 			provider_type,
@@ -169,7 +179,7 @@ func (r Repository) StoreTokenCache(ctx context.Context, params provider.StoreTo
 		params.CacheKey,
 		params.ChannelID,
 		params.TokenURL,
-		params.Token,
+		token,
 		params.ExpiresAt,
 		params.RefreshAfterAt,
 		params.RefreshedAt,
@@ -246,4 +256,28 @@ func scanTokenCacheEntry(row sourceScanner) (provider.TokenCacheEntry, error) {
 		entry.RefreshLockUntil = &refreshLockUntil.Time
 	}
 	return entry, nil
+}
+
+func providerAccessTokenAAD(cacheKey string) string {
+	return "provider_token_cache.access_token:" + strings.TrimSpace(cacheKey)
+}
+
+func (r Repository) encryptProviderAccessToken(cacheKey string, token string) (string, error) {
+	if strings.TrimSpace(token) == "" || secretbox.IsEncryptedString(token) {
+		return token, nil
+	}
+	if r.secretCipher == nil {
+		return token, nil
+	}
+	return r.secretCipher.EncryptString(token, providerAccessTokenAAD(cacheKey))
+}
+
+func (r Repository) decryptProviderAccessToken(cacheKey string, token string) (string, error) {
+	if !secretbox.IsEncryptedString(token) {
+		return token, nil
+	}
+	if r.secretCipher == nil {
+		return "", secretbox.ErrMissingCipherKey
+	}
+	return r.secretCipher.DecryptString(token, providerAccessTokenAAD(cacheKey))
 }

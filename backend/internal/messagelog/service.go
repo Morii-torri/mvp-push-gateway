@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"sort"
 	"strings"
 	"time"
 )
@@ -97,6 +98,7 @@ type TimelineEvent struct {
 	At          time.Time `json:"at"`
 	Status      string    `json:"status"`
 	Description string    `json:"description"`
+	DurationMS  int       `json:"duration_ms"`
 	ErrorCode   string    `json:"error_code,omitempty"`
 }
 
@@ -163,52 +165,179 @@ func buildTimeline(detail MessageDetail) []TimelineEvent {
 		At:          detail.ReceivedAt,
 		Status:      detail.InboundStatus,
 		Description: "入站请求已接收",
+		DurationMS:  0,
 		ErrorCode:   detail.ErrorCode,
 	}}
+	if isTimelineTime(detail.CreatedAt) && detail.CreatedAt.After(detail.ReceivedAt) {
+		events = append(events, TimelineEvent{
+			Stage:       "inbound_validated",
+			At:          detail.CreatedAt,
+			Status:      detail.InboundStatus,
+			Description: inboundValidationDescription(detail.InboundStatus),
+			DurationMS:  timelineDurationMS(detail.ReceivedAt, detail.CreatedAt),
+			ErrorCode:   detail.ErrorCode,
+		})
+	}
+	routePlannedAt := routePlannedAt(detail)
 	if detail.Status == "no_route" {
 		events = append(events, TimelineEvent{
 			Stage:       "route_no_match",
-			At:          detail.UpdatedAtOrReceivedAt(),
+			At:          routePlannedAt,
 			Status:      detail.Status,
-			Description: "路由规划未命中可执行规则",
+			Description: "路由规划完成，未命中可执行规则",
 			ErrorCode:   detail.ErrorCode,
 		})
 	} else if len(detail.MatchedRuleIDs) > 0 {
 		events = append(events, TimelineEvent{
-			Stage:       "route_matched",
-			At:          detail.UpdatedAtOrReceivedAt(),
+			Stage:       "route_planned",
+			At:          routePlannedAt,
 			Status:      detail.InboundStatus,
-			Description: "路由规划已命中规则",
+			Description: "路由规划完成，命中规则",
 		})
 	}
 	for _, attempt := range detail.Attempts {
-		if attempt.QueuedAt != nil {
+		if at, ok := lifecycleTime(attempt.RequestSnapshot, "delivery_created_at"); ok || attempt.QueuedAt != nil {
+			if !ok {
+				at = *attempt.QueuedAt
+			}
 			events = append(events, TimelineEvent{
-				Stage:       "delivery_queued",
-				At:          *attempt.QueuedAt,
+				Stage:       "delivery_created",
+				At:          at,
 				Status:      attempt.Status,
-				Description: "出站投递任务已排队",
+				Description: deliveryCreatedDescription(attempt),
 			})
 		}
-		if attempt.StartedAt != nil {
+		if at, ok := lifecycleTime(attempt.RequestSnapshot, "request_started_at"); ok || attempt.StartedAt != nil {
+			if !ok {
+				at = *attempt.StartedAt
+			}
 			events = append(events, TimelineEvent{
-				Stage:       "delivery_started",
-				At:          *attempt.StartedAt,
+				Stage:       "upstream_request_sent",
+				At:          at,
 				Status:      attempt.Status,
-				Description: "开始调用上级平台",
+				Description: "上级请求已发出",
 			})
 		}
-		if attempt.FinishedAt != nil {
+		if at, ok := lifecycleTime(attempt.ResponseSnapshot, "request_finished_at"); ok || attempt.FinishedAt != nil {
+			if !ok {
+				at = *attempt.FinishedAt
+			}
+			durationMS := attempt.DurationMS
+			if value, ok := lifecycleDurationMS(attempt.ResponseSnapshot, "request_duration_ms"); ok {
+				durationMS = value
+			}
 			events = append(events, TimelineEvent{
-				Stage:       "delivery_finished",
-				At:          *attempt.FinishedAt,
+				Stage:       "upstream_call_finished",
+				At:          at,
 				Status:      attempt.Status,
-				Description: "上级平台调用结束",
+				Description: upstreamFinishedDescription(attempt),
+				DurationMS:  durationMS,
 				ErrorCode:   attempt.ErrorCode,
 			})
 		}
 	}
+	sort.SliceStable(events, func(i, j int) bool {
+		return events[i].At.Before(events[j].At)
+	})
+	fillTimelineDurations(events)
 	return events
+}
+
+func fillTimelineDurations(events []TimelineEvent) {
+	for index := range events {
+		if index == 0 {
+			events[index].DurationMS = 0
+			continue
+		}
+		if events[index].DurationMS > 0 {
+			continue
+		}
+		events[index].DurationMS = timelineDurationMS(events[index-1].At, events[index].At)
+	}
+}
+
+func routePlannedAt(detail MessageDetail) time.Time {
+	for _, attempt := range detail.Attempts {
+		if at, ok := lifecycleTime(attempt.RequestSnapshot, "route_planned_at"); ok {
+			return at
+		}
+	}
+	for _, attempt := range detail.Attempts {
+		if attempt.QueuedAt != nil && attempt.QueuedAt.After(detail.ReceivedAt) {
+			return *attempt.QueuedAt
+		}
+	}
+	return detail.UpdatedAtOrReceivedAt()
+}
+
+func lifecycleTime(snapshot json.RawMessage, key string) (time.Time, bool) {
+	var fields map[string]json.RawMessage
+	if !decodeSnapshotObject(snapshotField(snapshot, "lifecycle"), &fields) {
+		return time.Time{}, false
+	}
+	var value string
+	if err := json.Unmarshal(fields[key], &value); err != nil {
+		return time.Time{}, false
+	}
+	at, err := time.Parse(time.RFC3339Nano, strings.TrimSpace(value))
+	if err != nil {
+		return time.Time{}, false
+	}
+	return at, true
+}
+
+func lifecycleDurationMS(snapshot json.RawMessage, key string) (int, bool) {
+	var fields map[string]json.RawMessage
+	if !decodeSnapshotObject(snapshotField(snapshot, "lifecycle"), &fields) {
+		return 0, false
+	}
+	var value int
+	if err := json.Unmarshal(fields[key], &value); err != nil {
+		return 0, false
+	}
+	return value, true
+}
+
+func inboundValidationDescription(status string) string {
+	switch strings.TrimSpace(status) {
+	case "deduped":
+		return "入站校验完成，命中去重"
+	case "silenced":
+		return "入站校验完成，命中免打扰"
+	case "failed":
+		return "入站校验完成，校验失败"
+	default:
+		return "入站校验完成"
+	}
+}
+
+func deliveryCreatedDescription(attempt DeliveryAttempt) string {
+	if strings.TrimSpace(attempt.ChannelName) == "" {
+		return "出站投递已创建"
+	}
+	return "出站投递已创建，目标：" + strings.TrimSpace(attempt.ChannelName)
+}
+
+func upstreamFinishedDescription(attempt DeliveryAttempt) string {
+	switch strings.TrimSpace(attempt.Status) {
+	case "sent":
+		return "上级调用结束，成功"
+	case "failed", "dead":
+		return "上级调用结束，失败"
+	default:
+		return "上级调用结束"
+	}
+}
+
+func isTimelineTime(value time.Time) bool {
+	return !value.IsZero()
+}
+
+func timelineDurationMS(start time.Time, end time.Time) int {
+	if start.IsZero() || end.IsZero() || end.Before(start) {
+		return 0
+	}
+	return int(end.Sub(start) / time.Millisecond)
 }
 
 func (detail MessageDetail) UpdatedAtOrReceivedAt() time.Time {

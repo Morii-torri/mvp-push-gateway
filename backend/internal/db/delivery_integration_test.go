@@ -65,6 +65,59 @@ func TestRepositoryInsertSendDedupeKeyScopedByChannel(t *testing.T) {
 	}
 }
 
+func TestRepositoryInsertSendDedupeKeyDoesNotRequirePersistedMessage(t *testing.T) {
+	pool := openMigratedPool(t)
+	defer pool.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	repository := NewRepository(pool)
+	channel := createTestChannel(t, ctx, repository, "webhook-fast-dedupe")
+	messageID := "00000000-0000-0000-0000-00000000d001"
+	expiresAt := time.Date(2026, 5, 8, 14, 0, 0, 0, time.UTC)
+
+	inserted, err := repository.InsertSendDedupeKey(ctx, delivery.SendDedupeParams{
+		ChannelID: channel.ID,
+		DedupeKey: "trace-fast-path",
+		ExpiresAt: expiresAt,
+		MessageID: messageID,
+	})
+	if err != nil {
+		t.Fatalf("insert send dedupe key before message record exists: %v", err)
+	}
+	if !inserted {
+		t.Fatalf("expected first fast-path send dedupe insert to succeed")
+	}
+
+	inserted, err = repository.InsertSendDedupeKey(ctx, delivery.SendDedupeParams{
+		ChannelID: channel.ID,
+		DedupeKey: "trace-fast-path",
+		ExpiresAt: expiresAt,
+		MessageID: messageID,
+	})
+	if err != nil {
+		t.Fatalf("insert duplicate fast-path send dedupe key: %v", err)
+	}
+	if inserted {
+		t.Fatalf("expected duplicate fast-path send dedupe insert to be ignored")
+	}
+
+	var linkedMessageID string
+	if err := pool.QueryRow(ctx, `
+		SELECT COALESCE(message_id::text, '')
+		FROM dedupe_keys
+		WHERE scope = 'send'
+			AND channel_id = $1
+			AND dedupe_key = 'trace-fast-path'
+	`, channel.ID).Scan(&linkedMessageID); err != nil {
+		t.Fatalf("query send dedupe key: %v", err)
+	}
+	if linkedMessageID != "" {
+		t.Fatalf("expected send dedupe key to remain unlinked until async message persistence, got %q", linkedMessageID)
+	}
+}
+
 func TestRepositoryCompleteDeliveryUpdatesAttemptAndJob(t *testing.T) {
 	pool := openMigratedPool(t)
 	defer pool.Close()

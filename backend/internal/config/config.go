@@ -20,6 +20,7 @@ type Config struct {
 	Server   ServerConfig
 	Postgres PostgresConfig
 	Queue    QueueConfig
+	Security SecurityConfig
 }
 
 type AppConfig struct {
@@ -71,6 +72,11 @@ type ResultWriterConfig struct {
 	FlushIntervalMS int
 }
 
+type SecurityConfig struct {
+	SecretEncryptionKey   string
+	SecretEncryptionKeyID string
+}
+
 func Load() Config {
 	return Config{
 		App: AppConfig{
@@ -108,6 +114,10 @@ func Load() Config {
 				BatchSize:       envIntOrDefault("MGP_RESULT_WRITER_BATCH_SIZE", 500),
 				FlushIntervalMS: envIntOrDefault("MGP_RESULT_WRITER_FLUSH_INTERVAL_MS", 50),
 			},
+		},
+		Security: SecurityConfig{
+			SecretEncryptionKey:   strings.TrimSpace(os.Getenv("MGP_SECRET_ENCRYPTION_KEY")),
+			SecretEncryptionKeyID: strings.TrimSpace(envOrDefault("MGP_SECRET_ENCRYPTION_KEY_ID", "primary")),
 		},
 	}
 }

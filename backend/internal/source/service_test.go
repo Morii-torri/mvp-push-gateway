@@ -88,6 +88,60 @@ func TestIngestAcceptsBearerSourceToken(t *testing.T) {
 	}
 }
 
+func TestIngestRedactsSensitiveHeadersBeforeLogging(t *testing.T) {
+	store := newMemoryStore(Source{
+		ID:        "source-1",
+		Code:      "orders",
+		Name:      "Orders",
+		Enabled:   true,
+		AuthMode:  AuthModeToken,
+		AuthToken: "sourceToken",
+	})
+	service := NewService(
+		store,
+		WithTraceIDGenerator(func() string { return "trace-redacted-headers" }),
+		WithLatestPayloadFlushInterval(10*time.Millisecond),
+	)
+
+	headers := http.Header{}
+	headers.Set("Authorization", "Bearer sourceToken")
+	headers.Set("X-MGP-Signature", "sha256=signature")
+	headers.Set("X-API-Key", "api-key-1")
+	headers.Set("X-Business-ID", "order-1001")
+	_, err := service.Ingest(context.Background(), IngestInput{
+		SourceCode: "orders",
+		Method:     http.MethodPost,
+		Path:       "/api/v1/ingest/orders",
+		Headers:    headers,
+		RemoteAddr: "127.0.0.1:4321",
+		Body:       []byte(`{"title":"paid"}`),
+	})
+	if err != nil {
+		t.Fatalf("ingest with bearer token: %v", err)
+	}
+	waitForLatestPayloadUpdates(t, store, 1)
+	if len(store.enqueued) != 1 {
+		t.Fatalf("expected one queued route_plan job, got %d", len(store.enqueued))
+	}
+
+	var storedHeaders map[string][]string
+	if err := json.Unmarshal(store.enqueued[0].Headers, &storedHeaders); err != nil {
+		t.Fatalf("decode stored headers: %v", err)
+	}
+	if got := strings.Join(storedHeaders["Authorization"], ","); strings.Contains(got, "sourceToken") {
+		t.Fatalf("stored headers leaked source token: %s", store.enqueued[0].Headers)
+	}
+	if got := strings.Join(storedHeaders["X-Mgp-Signature"], ","); strings.Contains(got, "signature") {
+		t.Fatalf("stored headers leaked hmac signature: %s", store.enqueued[0].Headers)
+	}
+	if got := strings.Join(storedHeaders["X-Api-Key"], ","); strings.Contains(got, "api-key-1") {
+		t.Fatalf("stored headers leaked api key: %s", store.enqueued[0].Headers)
+	}
+	if got := strings.Join(storedHeaders["X-Business-Id"], ","); got != "order-1001" {
+		t.Fatalf("expected non-sensitive business header to be preserved, got %q in %s", got, store.enqueued[0].Headers)
+	}
+}
+
 func TestIngestPublishesRoutePlanEventWhenPublisherConfigured(t *testing.T) {
 	store := newMemoryStore(Source{
 		ID:                   "source-1",

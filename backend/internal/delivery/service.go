@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"io"
 	"math"
-	"net"
 	"net/http"
 	"net/http/httptrace"
 	"net/url"
@@ -41,26 +40,11 @@ const maxUpstreamResponseBodyBytes = 64 * 1024
 
 var ErrRetryScheduled = errors.New("delivery retry scheduled")
 
-var defaultDeliveryHTTPTransport = &http.Transport{
-	Proxy:                 http.ProxyFromEnvironment,
-	DialContext:           (&net.Dialer{Timeout: 2 * time.Second, KeepAlive: 30 * time.Second}).DialContext,
-	ForceAttemptHTTP2:     true,
-	MaxIdleConns:          512,
-	MaxIdleConnsPerHost:   128,
-	IdleConnTimeout:       90 * time.Second,
-	TLSHandshakeTimeout:   2 * time.Second,
-	ResponseHeaderTimeout: 5 * time.Second,
-	ExpectContinueTimeout: time.Second,
-}
-
 func defaultDeliveryHTTPClientFactory(timeout time.Duration) *http.Client {
 	if timeout <= 0 {
 		timeout = 5 * time.Second
 	}
-	return &http.Client{
-		Timeout:   timeout,
-		Transport: defaultDeliveryHTTPTransport,
-	}
+	return provider.NewEgressHTTPClient(timeout)
 }
 
 type Attempt struct {
@@ -94,6 +78,8 @@ type SendMessageJobPayload struct {
 	ChannelID         string          `json:"channel_id,omitempty"`
 	TemplateVersionID string          `json:"template_version_id,omitempty"`
 	RecipientSnapshot json.RawMessage `json:"recipient_snapshot,omitempty"`
+	RoutePlannedAt    time.Time       `json:"route_planned_at,omitempty"`
+	DeliveryCreatedAt time.Time       `json:"delivery_created_at,omitempty"`
 	DedupeKey         string          `json:"dedupe_key"`
 	DedupeTTLSeconds  int             `json:"dedupe_ttl_seconds"`
 	MessageType       string          `json:"message_type"`
@@ -166,6 +152,7 @@ type CompleteDeliveryParams struct {
 	ChannelID         string
 	TemplateVersionID string
 	RecipientSnapshot json.RawMessage
+	DeliveryCreatedAt time.Time
 	TraceID           string
 	AttemptNo         int
 	Status            Status
@@ -187,6 +174,7 @@ type RetryDeliveryParams struct {
 	ChannelID         string
 	TemplateVersionID string
 	RecipientSnapshot json.RawMessage
+	DeliveryCreatedAt time.Time
 	TraceID           string
 	AttemptNo         int
 	ErrorCode         string
@@ -210,6 +198,7 @@ type DeadLetterDeliveryParams struct {
 	SourceID          string
 	TemplateVersionID string
 	RecipientSnapshot json.RawMessage
+	DeliveryCreatedAt time.Time
 	TraceID           string
 	AttemptNo         int
 	ErrorCode         string
@@ -524,6 +513,7 @@ func (w *Worker) ProcessOne(ctx context.Context, job queue.Job) error {
 		"target_context":      targetContext,
 		"rendered_message":    snapshotValue(payload.Body),
 		"resolved_recipients": payload.Recipient,
+		"lifecycle":           deliveryLifecycleSnapshot(payload),
 		"capability": map[string]any{
 			"provider_type": string(channel.ProviderType),
 			"message_type":  messageType,
@@ -630,8 +620,10 @@ func (w *Worker) ProcessOne(ctx context.Context, job queue.Job) error {
 	requestSnapshot["send"] = redactedBuiltRequestSnapshot(builtRequest, payload.Recipient)
 
 	sendStartedAt := time.Now()
+	setSnapshotTime(requestSnapshot, "lifecycle", "request_started_at", sendStartedAt)
 	statusCode, responseHeaders, responseBody, responseBodyTruncated, sendErr := w.send(ctx, channel, builtRequest, payload.TraceID, sendStartedAt)
-	recordTiming(ctx, payload.TraceID, TimingSendHTTP, time.Since(sendStartedAt))
+	sendFinishedAt := time.Now()
+	recordTiming(ctx, payload.TraceID, TimingSendHTTP, sendFinishedAt.Sub(sendStartedAt))
 	if sendErr == nil && tokenBehavior.Resolver != nil && shouldRefreshToken(responseBody, capability, capabilitySource, tokenBehavior.Resolver.RefreshCodes) {
 		_ = w.tokenManager.Invalidate(ctx, resolvedTokenCacheKey, "upstream token refresh code")
 		resolution, tokenErr := w.tokenManager.ResolveWithResolver(ctx, provider.TokenResolveInput{
@@ -664,9 +656,15 @@ func (w *Worker) ProcessOne(ctx context.Context, job queue.Job) error {
 		requestSnapshot["final_request"] = redactedBuiltRequestSnapshot(builtRequest, nil)
 		requestSnapshot["send"] = redactedBuiltRequestSnapshot(builtRequest, payload.Recipient)
 		sendStartedAt = time.Now()
+		setSnapshotTime(requestSnapshot, "lifecycle", "request_started_at", sendStartedAt)
 		statusCode, responseHeaders, responseBody, responseBodyTruncated, sendErr = w.send(ctx, channel, builtRequest, payload.TraceID, sendStartedAt)
-		recordTiming(ctx, payload.TraceID, TimingSendHTTP, time.Since(sendStartedAt))
+		sendFinishedAt = time.Now()
+		recordTiming(ctx, payload.TraceID, TimingSendHTTP, sendFinishedAt.Sub(sendStartedAt))
 		responseSnapshot["token_refreshed"] = true
+	}
+	responseSnapshot["lifecycle"] = map[string]any{
+		"request_finished_at": sendFinishedAt.Format(time.RFC3339Nano),
+		"request_duration_ms": durationMS(sendStartedAt, sendFinishedAt),
 	}
 	upstreamResponse := map[string]any{
 		"status_code": statusCode,
@@ -720,6 +718,7 @@ func (w *Worker) ProcessOne(ctx context.Context, job queue.Job) error {
 		ChannelID:         attempt.ChannelID,
 		TemplateVersionID: attempt.TemplateVersionID,
 		RecipientSnapshot: attempt.RecipientSnapshot,
+		DeliveryCreatedAt: timeFromPtr(attempt.QueuedAt),
 		TraceID:           payload.TraceID,
 		AttemptNo:         attemptNo,
 		Status:            StatusSent,
@@ -764,10 +763,48 @@ func attemptFromDirectPayload(payload SendMessageJobPayload) (Attempt, bool) {
 		TemplateVersionID: templateVersionID,
 		RecipientSnapshot: append(json.RawMessage(nil), payload.RecipientSnapshot...),
 		Status:            StatusProcessing,
+		QueuedAt:          timePtrIfSet(payload.DeliveryCreatedAt),
 		InboundHeaders:    append(json.RawMessage(nil), payload.InboundHeaders...),
 		InboundPayload:    append(json.RawMessage(nil), payload.InboundPayload...),
 		InboundReceivedAt: payload.InboundReceivedAt,
 	}, true
+}
+
+func deliveryLifecycleSnapshot(payload SendMessageJobPayload) map[string]any {
+	lifecycle := map[string]any{}
+	if !payload.RoutePlannedAt.IsZero() {
+		lifecycle["route_planned_at"] = payload.RoutePlannedAt.Format(time.RFC3339Nano)
+	}
+	if !payload.DeliveryCreatedAt.IsZero() {
+		lifecycle["delivery_created_at"] = payload.DeliveryCreatedAt.Format(time.RFC3339Nano)
+	}
+	return lifecycle
+}
+
+func setSnapshotTime(snapshot map[string]any, parent string, key string, value time.Time) {
+	if value.IsZero() {
+		return
+	}
+	parentValue, _ := snapshot[parent].(map[string]any)
+	if parentValue == nil {
+		parentValue = map[string]any{}
+		snapshot[parent] = parentValue
+	}
+	parentValue[key] = value.Format(time.RFC3339Nano)
+}
+
+func timePtrIfSet(value time.Time) *time.Time {
+	if value.IsZero() {
+		return nil
+	}
+	return &value
+}
+
+func timeFromPtr(value *time.Time) time.Time {
+	if value == nil {
+		return time.Time{}
+	}
+	return *value
 }
 
 func (w *Worker) loadCapability(ctx context.Context, providerType provider.ProviderType, messageType string) (provider.Capability, string, error) {
@@ -846,6 +883,7 @@ func (w *Worker) failAttempt(
 			SourceID:          attempt.SourceID,
 			TemplateVersionID: attempt.TemplateVersionID,
 			RecipientSnapshot: attempt.RecipientSnapshot,
+			DeliveryCreatedAt: timeFromPtr(attempt.QueuedAt),
 			AttemptNo:         attemptNo,
 			ErrorCode:         errorCode,
 			ErrorMessage:      errorMessage,
@@ -872,6 +910,7 @@ func (w *Worker) failAttempt(
 		ChannelID:         attempt.ChannelID,
 		TemplateVersionID: attempt.TemplateVersionID,
 		RecipientSnapshot: attempt.RecipientSnapshot,
+		DeliveryCreatedAt: timeFromPtr(attempt.QueuedAt),
 		AttemptNo:         attemptNo,
 		ErrorCode:         errorCode,
 		ErrorMessage:      errorMessage,

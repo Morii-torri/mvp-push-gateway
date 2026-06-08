@@ -25,6 +25,7 @@ describe('console label mappings', () => {
     expect(getInboundStatusMeta('partial_sent').label).toBe('部分成功');
     expect(getInboundStatusMeta('no_route').label).toBe('未命中路由');
     expect(getInboundStatusMeta('silenced').label).toBe('已静默');
+    expect(getInboundStatusMeta('sent').label).toBe('已接收');
   });
 
   it('maps unified message lifecycle statuses without exposing raw enum values', () => {

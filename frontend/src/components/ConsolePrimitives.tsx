@@ -288,7 +288,7 @@ export function MetricCard({
       <SendOutlined />
     ) : label === "成功发送量" ? (
       <CheckCircleOutlined />
-    ) : label === "失败发送量" ? (
+    ) : label === "失败发送量" || label === "失败消息量" ? (
       <CloseCircleOutlined />
     ) : label.includes("成功率") ? (
       <DashboardOutlined />
@@ -342,7 +342,11 @@ export function MetricCard({
       dPath = "M0,28 C20,25 40,5 60,12 C80,18 95,2 100,6";
     } else if (label === "成功发送量") {
       dPath = "M0,26 L20,22 L45,8 L70,10 L85,2 L100,0";
-    } else if (label === "失败发送量" || label === "死信数量") {
+    } else if (
+      label === "失败发送量" ||
+      label === "失败消息量" ||
+      label === "死信数量"
+    ) {
       dPath = "M0,28 L30,28 L50,28 L70,6 L85,24 L100,28";
     } else if (label === "平均 QPS") {
       dPath =

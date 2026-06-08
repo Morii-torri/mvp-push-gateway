@@ -561,6 +561,21 @@ func (r Repository) getOverviewSummary(ctx context.Context, windowStart, now tim
 			WHERE COALESCE(finished_at, queued_at) >= $1
 				AND COALESCE(finished_at, queued_at) <= $2
 		),
+		message_failures AS (
+			SELECT count(*)::integer AS failed
+			FROM message_records AS message
+			WHERE message.status IN ('failed', 'no_route')
+				AND message.received_at >= $1
+				AND message.received_at <= $2
+				AND NOT EXISTS (
+					SELECT 1
+					FROM delivery_attempts AS attempt
+					WHERE attempt.message_id = message.id
+						AND attempt.status IN ('sent', 'failed')
+						AND COALESCE(attempt.finished_at, attempt.queued_at) >= $1
+						AND COALESCE(attempt.finished_at, attempt.queued_at) <= $2
+				)
+		),
 		received_summary AS (
 			SELECT count(*)::integer AS total_received
 			FROM message_records
@@ -570,12 +585,19 @@ func (r Repository) getOverviewSummary(ctx context.Context, windowStart, now tim
 		SELECT
 			delivery_summary.total_sent,
 			delivery_summary.successful,
-			delivery_summary.failed,
-			COALESCE(round((delivery_summary.successful::numeric * 100.0) / NULLIF(delivery_summary.total_sent::numeric, 0), 2), 0)::float8 AS success_rate,
+			(delivery_summary.failed + message_failures.failed)::integer AS failed,
+			COALESCE(
+				round(
+					(delivery_summary.successful::numeric * 100.0)
+					/ NULLIF((delivery_summary.successful + delivery_summary.failed + message_failures.failed)::numeric, 0),
+					2
+				),
+				0
+			)::float8 AS success_rate,
 			delivery_summary.average_duration_ms,
 			COALESCE(round(delivery_summary.total_sent::numeric / $3::numeric, 2), 0)::float8 AS average_qps,
 			received_summary.total_received
-		FROM delivery_summary, received_summary
+		FROM delivery_summary, message_failures, received_summary
 	`, windowStart, now, windowSeconds).Scan(
 		&summary.TotalSent,
 		&summary.Successful,
@@ -615,16 +637,35 @@ func (r Repository) getOverviewTrend(ctx context.Context, windowStart, now time.
 			WHERE COALESCE(finished_at, queued_at) >= $1
 				AND COALESCE(finished_at, queued_at) <= $2
 			GROUP BY date_bin($3::interval, COALESCE(finished_at, queued_at), $4::timestamptz)
+		),
+		message_failures AS (
+			SELECT
+				date_bin($3::interval, message.received_at, $4::timestamptz) AS bucket_start,
+				count(*)::integer AS failed
+			FROM message_records AS message
+			WHERE message.status IN ('failed', 'no_route')
+				AND message.received_at >= $1
+				AND message.received_at <= $2
+				AND NOT EXISTS (
+					SELECT 1
+					FROM delivery_attempts AS attempt
+					WHERE attempt.message_id = message.id
+						AND attempt.status IN ('sent', 'failed')
+						AND COALESCE(attempt.finished_at, attempt.queued_at) >= $1
+						AND COALESCE(attempt.finished_at, attempt.queued_at) <= $2
+				)
+			GROUP BY date_bin($3::interval, message.received_at, $4::timestamptz)
 		)
 		SELECT
 			buckets.bucket_start,
 			COALESCE(attempts.sent, 0)::integer,
 			COALESCE(attempts.successful, 0)::integer,
-			COALESCE(attempts.failed, 0)::integer,
+			(COALESCE(attempts.failed, 0) + COALESCE(message_failures.failed, 0))::integer,
 			COALESCE(round(COALESCE(attempts.sent, 0)::numeric / $5::numeric, 2), 0)::float8 AS qps,
 			COALESCE(attempts.avg_duration_ms, 0)::integer
 		FROM buckets
 		LEFT JOIN attempts ON attempts.bucket_start = buckets.bucket_start
+		LEFT JOIN message_failures ON message_failures.bucket_start = buckets.bucket_start
 		ORDER BY buckets.bucket_start ASC
 	`, windowStart, now, bucketInterval, time.Unix(0, 0).UTC(), bucketSeconds)
 	if err != nil {

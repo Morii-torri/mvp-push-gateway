@@ -100,7 +100,7 @@ const inboundStatusMeta: Record<InboundStatus, TagMeta> = {
   silenced: { label: '已静默', color: 'warning' },
   planned: { label: '已规划', color: 'cyan' },
   partial_sent: { label: '部分成功', color: 'orange' },
-  sent: { label: '全部成功', color: 'success' },
+  sent: { label: '已接收', color: 'success' },
   failed: { label: '失败', color: 'error' },
   no_route: { label: '未命中路由', color: 'warning' },
 };

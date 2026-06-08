@@ -28,6 +28,7 @@ import (
 	"mvp-push-gateway/backend/internal/recipient"
 	"mvp-push-gateway/backend/internal/route"
 	appruntime "mvp-push-gateway/backend/internal/runtime"
+	"mvp-push-gateway/backend/internal/secretbox"
 	"mvp-push-gateway/backend/internal/settings"
 	"mvp-push-gateway/backend/internal/source"
 	"mvp-push-gateway/backend/internal/statistics"
@@ -42,8 +43,12 @@ func main() {
 	var pools *db.PoolSet
 	var workerHarness *appruntime.Harness
 	var startJetStreamConsumers func(context.Context)
+	secretCipher, err := secretbox.NewCipherFromBase64(cfg.Security.SecretEncryptionKeyID, cfg.Security.SecretEncryptionKey)
+	if err != nil {
+		log.Fatalf("secret encryption key invalid: %v", err)
+	}
+	repositoryOptions := []db.RepositoryOption{db.WithSecretCipher(secretCipher)}
 	if cfg.Postgres.DSN != "" {
-		var err error
 		pools, err = db.OpenPools(ctx, cfg.Postgres)
 		if err != nil {
 			log.Fatalf("database connection failed: %v", err)
@@ -58,7 +63,7 @@ func main() {
 			}
 		}()
 
-		repository := db.NewRepository(pools.API)
+		repository := db.NewRepository(pools.API, repositoryOptions...)
 		if err := repository.Ping(ctx); err != nil {
 			log.Fatalf("database ping failed: %v", err)
 		}
@@ -121,23 +126,23 @@ func main() {
 			monitoringOptions = append(monitoringOptions, monitoring.WithJetStreamStatsProvider(natsPublisher))
 		}
 		monitoringService := monitoring.NewService(
-			db.NewRepository(pools.API),
-			db.NewRepository(pools.Maintenance),
+			db.NewRepository(pools.API, repositoryOptions...),
+			db.NewRepository(pools.Maintenance, repositoryOptions...),
 			monitoringOptions...,
 		)
-		statisticsService := statistics.NewService(db.NewRepository(pools.API))
+		statisticsService := statistics.NewService(db.NewRepository(pools.API, repositoryOptions...))
 		planningOptions := []planning.WorkerOption{}
 		deliveryOptions := []delivery.WorkerOption{}
 		if broker != nil {
 			planningOptions = append(planningOptions, planning.WithSendPublisher(broker))
 			deliveryOptions = append(deliveryOptions, delivery.WithResultPublisher(delivery.NewQueueResultPublisher(broker)))
 		}
-		planningWorker := planning.NewWorker(db.NewRepositoryWithAsyncRuntimeLogWriter(pools.Planning, asyncRuntimeLogs), planningOptions...)
-		deliveryWorker := delivery.NewWorker(db.NewRepositoryWithAsyncRuntimeLogWriter(pools.Sending, asyncRuntimeLogs), deliveryOptions...)
+		planningWorker := planning.NewWorker(db.NewRepositoryWithAsyncRuntimeLogWriter(pools.Planning, asyncRuntimeLogs, repositoryOptions...), planningOptions...)
+		deliveryWorker := delivery.NewWorker(db.NewRepositoryWithAsyncRuntimeLogWriter(pools.Sending, asyncRuntimeLogs, repositoryOptions...), deliveryOptions...)
 		if broker != nil {
 			resultQueueWorker := delivery.NewResultQueueWorker(
 				broker,
-				delivery.NewResultWriter(db.NewRepositoryWithAsyncRuntimeLogWriter(pools.Sending, asyncRuntimeLogs)),
+				delivery.NewResultWriter(db.NewRepositoryWithAsyncRuntimeLogWriter(pools.Sending, asyncRuntimeLogs, repositoryOptions...)),
 			)
 			startJetStreamConsumers = func(ctx context.Context) {
 				startConsumerGroup(ctx, "route-plan", cfg.Queue.NATS.RouteConsumers, func(ctx context.Context) error {
@@ -149,7 +154,7 @@ func main() {
 				startConsumerGroup(ctx, "result-writer", cfg.Queue.NATS.ResultConsumers, resultQueueWorker.Run)
 			}
 		}
-		routeRuntimeRepository := db.NewRepository(pools.Maintenance)
+		routeRuntimeRepository := db.NewRepository(pools.Maintenance, repositoryOptions...)
 		var routePlanChangeListener appruntime.RoutePlanChangeListener = routeRuntimeRepository
 		if natsPublisher != nil {
 			routePlanChangeListener = natsPublisher
@@ -169,7 +174,7 @@ func main() {
 			DeliveryBatchSizeFunc: func(ctx context.Context) int {
 				return settingsService.IntSetting(ctx, settings.KeyRuntimeDeliveryConcurrency, settings.DefaultDeliveryGlobalConcurrency)
 			},
-			Recovery:         db.NewRepository(pools.Maintenance),
+			Recovery:         db.NewRepository(pools.Maintenance, repositoryOptions...),
 			RetentionCleaner: monitoringService,
 			RetentionDaysFunc: func(ctx context.Context) int {
 				return settingsService.IntSetting(ctx, settings.KeyLogsRetentionDays, monitoring.DefaultRetentionDays)

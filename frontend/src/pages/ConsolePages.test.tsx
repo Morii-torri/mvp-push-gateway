@@ -81,6 +81,7 @@ import {
   sourceInputFromDraft,
   sourceRowsWithDetails,
   templateDraftWithSourcePayload,
+  templateRouteDependencyUpdatePlan,
   templateRecordWithRestoredVersion,
   templateReceivedPreview,
   templateRenderedPreview,
@@ -104,6 +105,7 @@ import {
   providerShowsTokenCacheStatus,
   InboundStatusCell,
   MessageStatusCell,
+  OutboundStatusCell,
   MessageLogDetailContent,
   ProviderEnabledCell,
   ProviderNameCell,
@@ -382,15 +384,24 @@ describe("critical console pages", () => {
           attempts: [],
           timeline: [
             {
+              stage: "upstream_call_finished",
+              at: "2026-05-20T12:36:23.552225+08:00",
+              status: "sent",
+              description: "上级平台调用结束",
+              duration_ms: 20,
+            },
+            {
               stage: "inbound_received",
               at: "2026-05-20T12:36:21.552225+08:00",
               status: "accepted",
+              duration_ms: 0,
             },
             {
-              stage: "delivery_queued",
-              at: "2026-06-04T02:00:02Z",
+              stage: "delivery_created",
+              at: "2026-05-20T12:36:22.552225+08:00",
               status: "queued",
-              description: "出站投递任务已排队",
+              description: "出站投递已创建",
+              duration_ms: 5,
             },
           ],
         }}
@@ -399,7 +410,15 @@ describe("critical console pages", () => {
 
     expect(markup).toContain("入站 Payload");
     expect(markup).toContain("异步时间线");
-    expect(markup).toContain("2026-05-20 12:36:21.552225 - 入站请求已接收");
+    expect(markup).toContain("2026-05-20 12:36:21.552225 - 入站请求已接收，用时 0 ms");
+    expect(markup).toContain("出站投递已创建，用时 5 ms");
+    expect(markup).toContain("上级平台调用结束，用时 20 ms");
+    expect(markup.indexOf("入站请求已接收")).toBeLessThan(
+      markup.indexOf("出站投递已创建"),
+    );
+    expect(markup.indexOf("出站投递已创建")).toBeLessThan(
+      markup.indexOf("上级平台调用结束"),
+    );
     expect(markup).not.toContain("inbound_received");
     expect(markup).toContain("出站投递详情");
     expect(markup).toContain('data-message-detail-section="payload-expanded"');
@@ -661,6 +680,14 @@ describe("critical console pages", () => {
 
     expect(markup).toContain("已接收");
     expect(markup).toContain("inbound-status-cell");
+    expect(markup).not.toContain("premium-status-tag");
+  });
+
+  it("renders outbound status as quiet inline text instead of a status pill", () => {
+    const markup = renderPage(<OutboundStatusCell value="sent" />);
+
+    expect(markup).toContain("发送成功");
+    expect(markup).toContain("outbound-status-cell");
     expect(markup).not.toContain("premium-status-tag");
   });
 
@@ -4761,6 +4788,77 @@ describe("critical console pages", () => {
       changedTargets: 1,
       ruleNames: ["高优先级告警"],
     });
+  });
+
+  it("plans dependency route updates as published route versions", () => {
+    const rule: RouteRuleApiRecord = {
+      id: "rule-1",
+      rule_key: "rule-key-1",
+      sort_order: 10,
+      name: "Bark 告警",
+      condition_tree: { operator: "always" },
+      enabled: true,
+      action: {
+        targets: [
+          {
+            id: "target-1",
+            channel_id: "channel-1",
+            template_version_id: "version-old",
+            enabled: true,
+            sort_order: 10,
+          },
+        ],
+        recipient_strategy: { mode: "system" },
+        send_dedupe_config: {},
+        failure_policy: {},
+      },
+      hit_count: 0,
+      last_hit_at: null,
+      created_at: "2026-05-15T08:00:00Z",
+      updated_at: "2026-05-15T08:00:00Z",
+    };
+
+    const plan = templateRouteDependencyUpdatePlan(
+      [
+        {
+          flow: {
+            id: "flow-1",
+          },
+          rules: [rule],
+        },
+      ],
+      new Set(["version-old"]),
+      { id: "version-new", version_no: 6 },
+      "Bark-mb",
+    );
+
+    expect(plan).toEqual([
+      {
+        flowId: "flow-1",
+        rules: [
+          {
+            rule_key: "rule-key-1",
+            sort_order: 10,
+            name: "Bark 告警",
+            condition_tree: { operator: "always" },
+            enabled: true,
+            action: {
+              targets: [
+                {
+                  channel_id: "channel-1",
+                  template_version_id: "version-new",
+                  enabled: true,
+                },
+              ],
+              recipient_strategy: { mode: "system" },
+              send_dedupe_config: {},
+              failure_policy: {},
+            },
+          },
+        ],
+        versionInfo: "模板 Bark-mb 更新到 v6",
+      },
+    ]);
   });
 
   it("updates the current version pointer after restoring a historical version", () => {

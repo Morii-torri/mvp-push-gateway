@@ -1240,6 +1240,22 @@ export function MessageStatusCell({ value }: { value: MessageLog["status"] }) {
   );
 }
 
+export function OutboundStatusCell({
+  value,
+}: {
+  value: NonNullable<MessageLog["outboundStatus"]>;
+}) {
+  const meta = getOutboundStatusMeta(value);
+  return (
+    <span
+      className={`outbound-status-cell outbound-status-cell--${meta.color || "default"}`}
+    >
+      <span className="outbound-status-cell__dot" />
+      <span className="outbound-status-cell__label">{meta.label}</span>
+    </span>
+  );
+}
+
 export function ProviderTypeCell({ value }: { value: ProviderType }) {
   const meta = providerBrandMeta[value] || defaultBrandMeta;
   return (
@@ -8346,6 +8362,12 @@ export type TemplateRouteDependency = {
   ruleNames: string[];
 };
 
+export type TemplateRouteDependencyUpdatePlanItem = {
+  flowId: string;
+  rules: RouteRuleInput[];
+  versionInfo: string;
+};
+
 export function templateRouteRuleInputWithVersion(
   rule: RouteRuleApiRecord,
   oldVersionIds: Set<string>,
@@ -8394,6 +8416,40 @@ export function templateRouteRuleInputWithVersion(
     },
     changedTargets,
   };
+}
+
+export function templateRouteDependencyUpdatePlan(
+  items: Array<{
+    flow: Pick<RouteFlowApiRecord, "id">;
+    rules: RouteRuleApiRecord[];
+  }>,
+  oldVersionIds: Set<string>,
+  newVersion: Pick<TemplateVersionApiRecord, "id" | "version_no">,
+  templateName: string,
+): TemplateRouteDependencyUpdatePlanItem[] {
+  const normalizedTemplateName = templateName.trim() || "模板";
+  const versionInfo = `模板 ${normalizedTemplateName} 更新到 v${newVersion.version_no}`;
+  return items
+    .map((item) => {
+      let changedTargets = 0;
+      const rules = item.rules.map((rule) => {
+        const result = templateRouteRuleInputWithVersion(
+          rule,
+          oldVersionIds,
+          newVersion.id,
+        );
+        changedTargets += result.changedTargets;
+        return result.input;
+      });
+      return {
+        flowId: item.flow.id,
+        rules,
+        versionInfo,
+        changedTargets,
+      };
+    })
+    .filter((item) => item.changedTargets > 0)
+    .map(({ changedTargets: _changedTargets, ...item }) => item);
 }
 
 export function templateRouteDependencyFromRules(
@@ -8899,19 +8955,21 @@ export function TemplatesPage({ lastUpdated, onRefresh }: ConsolePageProps) {
         okText: "更新路由到新版本",
         cancelText: "暂不更新",
         onOk: async () => {
-          for (const item of dependencies) {
-            const nextRules = item.rules.map(
-              (rule) =>
-                templateRouteRuleInputWithVersion(
-                  rule,
-                  oldVersionIds,
-                  newVersion.id,
-                ).input,
-            );
-            await consoleApi.saveRouteRules(item.flow.id, nextRules);
+          const templateName =
+            templateRows.find((item) => item.id === templateID)?.name ??
+            templateDraft.name;
+          const updatePlan = templateRouteDependencyUpdatePlan(
+            dependencies,
+            oldVersionIds,
+            newVersion,
+            templateName,
+          );
+          for (const item of updatePlan) {
+            await consoleApi.saveRouteRules(item.flowId, item.rules);
+            await consoleApi.publishRouteFlow(item.flowId, item.versionInfo);
           }
           message.success(
-            `已更新 ${dependencies.length} 个路由组到模板 v${newVersion.version_no}`,
+            `已更新并发布 ${updatePlan.length} 个路由组到模板 v${newVersion.version_no}`,
           );
         },
       });
@@ -10500,12 +10558,22 @@ function timelineStageLabel(stage: string) {
   switch (stage) {
     case "inbound_received":
       return "入站请求已接收";
+    case "inbound_validated":
+      return "入站校验完成";
     case "route_planned":
-      return "路由规划已完成";
+      return "路由规划完成";
     case "route_no_match":
-      return "未命中路由";
+      return "路由规划完成，未命中可执行规则";
+    case "route_matched":
+      return "路由规划完成，命中规则";
+    case "delivery_created":
+      return "出站投递已创建";
     case "delivery_queued":
       return "出站投递任务已排队";
+    case "upstream_request_sent":
+      return "上级请求已发出";
+    case "upstream_call_finished":
+      return "上级调用结束";
     case "delivery_started":
       return "出站投递已开始";
     case "delivery_succeeded":
@@ -10524,6 +10592,26 @@ function timelineStatusLabel(status: string) {
     return "";
   }
   return getMessageStatusMeta(normalizeMessageStatus(status)).label;
+}
+
+function timelineEventSortValue(item: JSONValue): number {
+  if (!isRecord(item)) {
+    return Number.MAX_SAFE_INTEGER;
+  }
+  const at = stringField(item.at);
+  const value = Date.parse(at);
+  return Number.isFinite(value) ? value : Number.MAX_SAFE_INTEGER;
+}
+
+function numberField(value: JSONValue | undefined): number | null {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function formatTimelineDuration(value: number | null): string {
+  if (value === null) {
+    return "";
+  }
+  return `，用时 ${Math.max(0, Math.round(value)).toLocaleString("zh-CN")} ms`;
 }
 
 type AuditLogRow = Omit<AuditLog, "status"> & { raw: AuditLogApiRecord };
@@ -12360,18 +12448,28 @@ export function MessageLogDetailContent({
     );
   }, []);
   const attempts = selectedDetail?.attempts ?? [];
-  const timelineItems = (selectedDetail?.timeline ?? []).map((item, index) => {
-    const record = isRecord(item) ? item : {};
-    const stage = stringField(record.stage);
-    const description =
-      stringField(record.description) ||
-      timelineStageLabel(stage) ||
-      timelineStatusLabel(stringField(record.status)) ||
-      `步骤 ${index + 1}`;
-    return {
-      children: `${formatTimelineTime(stringField(record.at))} - ${description}`,
-    };
-  });
+  const timelineItems = (selectedDetail?.timeline ?? [])
+    .map((item, index) => ({ item, index }))
+    .sort((left, right) => {
+      const diff =
+        timelineEventSortValue(left.item) - timelineEventSortValue(right.item);
+      return diff || left.index - right.index;
+    })
+    .map(({ item, index }) => {
+      const record = isRecord(item) ? item : {};
+      const stage = stringField(record.stage);
+      const description =
+        stringField(record.description) ||
+        timelineStageLabel(stage) ||
+        timelineStatusLabel(stringField(record.status)) ||
+        `步骤 ${index + 1}`;
+      const duration = formatTimelineDuration(
+        numberField(record.duration_ms),
+      );
+      return {
+        children: `${formatTimelineTime(stringField(record.at))} - ${description}${duration}`,
+      };
+    });
 
   return (
     <Space direction="vertical" size={16} className="full-width">
@@ -12403,7 +12501,7 @@ export function MessageLogDetailContent({
         </Descriptions.Item>
         <Descriptions.Item label="出站状态">
           {selected.outboundStatus ? (
-            <StatusTag meta={getOutboundStatusMeta(selected.outboundStatus)} />
+            <OutboundStatusCell value={selected.outboundStatus} />
           ) : (
             "-"
           )}

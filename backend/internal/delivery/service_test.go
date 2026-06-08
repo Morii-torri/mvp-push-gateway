@@ -110,6 +110,19 @@ func TestWorkerProcessBatchScopesSendDedupeByChannel(t *testing.T) {
 	}
 }
 
+func TestDefaultDeliveryHTTPClientRejectsLoopbackEgress(t *testing.T) {
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, "http://127.0.0.1:1/webhook", strings.NewReader(`{}`))
+	if err != nil {
+		t.Fatalf("create request: %v", err)
+	}
+
+	client := defaultDeliveryHTTPClientFactory(100 * time.Millisecond)
+	_, err = client.Do(req)
+	if !errors.Is(err, provider.ErrInvalidInput) {
+		t.Fatalf("expected loopback egress to be rejected as invalid input, got %v", err)
+	}
+}
+
 func TestProcessSendMessageUsesEventMetadataWithoutLoadingAttempt(t *testing.T) {
 	var sent int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

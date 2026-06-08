@@ -1795,6 +1795,20 @@ body {
   vertical-align: middle;
 }
 
+.outbound-status-cell {
+  --outbound-status-color: #64748b;
+  display: inline-flex;
+  max-width: 100%;
+  min-width: 0;
+  align-items: center;
+  gap: 7px;
+  color: #344054;
+  font-size: 13px;
+  font-weight: 550;
+  line-height: 1.3;
+  vertical-align: middle;
+}
+
 .message-status-cell__dot {
   width: 7px;
   height: 7px;
@@ -1838,6 +1852,51 @@ body {
 
 .message-status-cell--default {
   --message-status-color: #98a2b3;
+}
+
+.outbound-status-cell__dot {
+  width: 7px;
+  height: 7px;
+  flex: 0 0 7px;
+  border-radius: 999px;
+  background: var(--outbound-status-color);
+  box-shadow: 0 0 0 3px
+    color-mix(in srgb, var(--outbound-status-color) 12%, transparent);
+}
+
+.outbound-status-cell__label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.outbound-status-cell--processing {
+  --outbound-status-color: #1677ff;
+}
+
+.outbound-status-cell--success {
+  --outbound-status-color: #12b76a;
+}
+
+.outbound-status-cell--cyan {
+  --outbound-status-color: #0891b2;
+}
+
+.outbound-status-cell--orange {
+  --outbound-status-color: #f97316;
+}
+
+.outbound-status-cell--warning {
+  --outbound-status-color: #f79009;
+}
+
+.outbound-status-cell--error {
+  --outbound-status-color: #f04438;
+}
+
+.outbound-status-cell--default {
+  --outbound-status-color: #98a2b3;
 }
 
 .inbound-status-cell__dot {

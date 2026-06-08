@@ -11,10 +11,14 @@ import (
 	"time"
 )
 
-func newEgressHTTPClient(timeout time.Duration) *http.Client {
+func NewEgressHTTPClient(timeout time.Duration) *http.Client {
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	transport.DialContext = egressDialContext
 	return &http.Client{Timeout: timeout, Transport: transport}
+}
+
+func newEgressHTTPClient(timeout time.Duration) *http.Client {
+	return NewEgressHTTPClient(timeout)
 }
 
 func egressDialContext(ctx context.Context, network string, address string) (net.Conn, error) {

@@ -9,6 +9,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"mvp-push-gateway/backend/internal/config"
+	"mvp-push-gateway/backend/internal/secretbox"
 	"mvp-push-gateway/backend/internal/source"
 )
 
@@ -97,14 +98,31 @@ func (p *PoolSet) Close() {
 type Repository struct {
 	pool             *pgxpool.Pool
 	asyncRuntimeLogs *AsyncRuntimeLogWriter
+	secretCipher     *secretbox.Cipher
 }
 
-func NewRepository(pool *pgxpool.Pool) Repository {
-	return Repository{pool: pool}
+type RepositoryOption func(*Repository)
+
+func WithSecretCipher(cipher *secretbox.Cipher) RepositoryOption {
+	return func(r *Repository) {
+		r.secretCipher = cipher
+	}
 }
 
-func NewRepositoryWithAsyncRuntimeLogWriter(pool *pgxpool.Pool, writer *AsyncRuntimeLogWriter) Repository {
-	return Repository{pool: pool, asyncRuntimeLogs: writer}
+func NewRepository(pool *pgxpool.Pool, options ...RepositoryOption) Repository {
+	repository := Repository{pool: pool}
+	for _, option := range options {
+		option(&repository)
+	}
+	return repository
+}
+
+func NewRepositoryWithAsyncRuntimeLogWriter(pool *pgxpool.Pool, writer *AsyncRuntimeLogWriter, options ...RepositoryOption) Repository {
+	repository := Repository{pool: pool, asyncRuntimeLogs: writer}
+	for _, option := range options {
+		option(&repository)
+	}
+	return repository
 }
 
 func (r Repository) acquireConn(ctx context.Context, traceID string, stage SQLTimingStage) (*pgxpool.Conn, error) {

@@ -200,9 +200,9 @@ export function defaultOverviewViewModel(): OverviewViewModel {
       ),
       metricCard(
         "failed",
-        "失败发送量",
+        "失败消息量",
         "0 条",
-        `${windowCopy(defaultWindow)}失败总量`,
+        `${windowCopy(defaultWindow)}失败/未命中总量`,
         "flat",
         "red",
       ),
@@ -347,9 +347,9 @@ export function buildOverviewViewModel(
       ),
       metricCard(
         "failed",
-        "失败发送量",
+        "失败消息量",
         `${formatInteger(data.summary.failed)} 条`,
-        `${windowCopy(window)}失败总量`,
+        `${windowCopy(window)}失败/未命中总量`,
         "up",
         "red",
       ),
