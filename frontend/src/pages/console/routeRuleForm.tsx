@@ -287,7 +287,12 @@ export function RouteConditionEditor({
           </div>
         );
       })}
-      <Alert type="info" showIcon message={`条件表达式：${conditionPreview}`} />
+      <div className="route-expression-preview" aria-label={`条件表达式：${conditionPreview}`}>
+        <Typography.Text type="secondary">条件表达式：</Typography.Text>
+        <Typography.Text code className="route-expression-preview__value">
+          {conditionPreview}
+        </Typography.Text>
+      </div>
     </div>
   );
 }
@@ -949,6 +954,7 @@ function summarizeRouteDedupe(value: JSONValue): string {
 }
 
 export function routeRuleToInput(rule: RouteRuleRow, index: number): RouteRuleInput {
+  const targets = Array.isArray(rule.targets) ? rule.targets : [];
   return {
     rule_key: rule.id,
     sort_order: index + 1,
@@ -956,11 +962,19 @@ export function routeRuleToInput(rule: RouteRuleRow, index: number): RouteRuleIn
     condition_tree: rule.conditionTree,
     enabled: rule.enabled,
     action: {
-      targets: rule.targets
-        .filter((target) => target.channelId && target.templateVersionId)
+      targets: targets
+        .filter((target): target is RouteActionTargetDraft =>
+          Boolean(
+            target &&
+            typeof target.channelId === 'string' &&
+            typeof target.templateVersionId === 'string' &&
+            target.channelId.trim() &&
+            target.templateVersionId.trim(),
+          ),
+        )
         .map((target) => ({
-          channel_id: target.channelId,
-          template_version_id: target.templateVersionId,
+          channel_id: target.channelId.trim(),
+          template_version_id: target.templateVersionId.trim(),
           enabled: target.enabled,
         })),
       recipient_strategy: rule.recipientStrategyConfig,

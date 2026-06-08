@@ -30,6 +30,8 @@ var (
 	ErrInvalidConfig     = errors.New("invalid route config")
 )
 
+const routeSimulationSlowRuleThresholdMS int64 = 100
+
 type Flow struct {
 	ID               string
 	SourceID         string
@@ -44,16 +46,18 @@ type Flow struct {
 }
 
 type Version struct {
-	ID               string
-	FlowID           string
-	VersionNo        int
-	CanvasSnapshot   json.RawMessage
-	CompiledRules    json.RawMessage
-	ValidationStatus string
-	ValidationErrors json.RawMessage
-	PublishedAt      *time.Time
-	CreatedAt        time.Time
-	UpdatedAt        time.Time
+	ID                 string
+	FlowID             string
+	VersionNo          int
+	DraftBaseVersionID string
+	DraftBaseVersionNo int
+	CanvasSnapshot     json.RawMessage
+	CompiledRules      json.RawMessage
+	ValidationStatus   string
+	ValidationErrors   json.RawMessage
+	PublishedAt        *time.Time
+	CreatedAt          time.Time
+	UpdatedAt          time.Time
 }
 
 type ActionTarget struct {
@@ -107,8 +111,10 @@ type CanvasState struct {
 }
 
 type RuleSet struct {
-	VersionID string `json:"version_id"`
-	Rules     []Rule `json:"rules"`
+	VersionID          string `json:"version_id"`
+	DraftBaseVersionID string `json:"draft_base_version_id,omitempty"`
+	DraftBaseVersionNo int    `json:"draft_base_version_no,omitempty"`
+	Rules              []Rule `json:"rules"`
 }
 
 type ValidationError struct {
@@ -131,6 +137,8 @@ type RuleTrace struct {
 	Matched       bool   `json:"matched"`
 	Evaluated     bool   `json:"evaluated"`
 	DurationMS    int64  `json:"duration_ms"`
+	SkipReason    string `json:"skip_reason,omitempty"`
+	SlowRule      bool   `json:"slow_rule"`
 	StopReason    string `json:"stop_reason,omitempty"`
 }
 
@@ -139,6 +147,11 @@ type SimulationResult struct {
 	StopReason  string      `json:"stop_reason"`
 	MatchedRule *RuleTrace  `json:"matched_rule"`
 	RuleResults []RuleTrace `json:"rule_results"`
+}
+
+type CoarseFilterResult struct {
+	Skipped bool
+	Reason  string
 }
 
 type CreateFlowInput struct {
@@ -215,6 +228,7 @@ type Store interface {
 	GetDraft(ctx context.Context, flowID string) (Draft, error)
 	ListVersions(ctx context.Context, flowID string) ([]Version, error)
 	GetVersionRules(ctx context.Context, flowID string, versionID string) (RuleSet, error)
+	CheckoutVersion(ctx context.Context, flowID string, versionID string) (Draft, error)
 	DeleteVersion(ctx context.Context, flowID string, versionID string) error
 	UpdateCanvas(ctx context.Context, flowID string, snapshot json.RawMessage, mode FlowMode) (Draft, error)
 	ReplaceRules(ctx context.Context, flowID string, versionID string, rules []Rule) ([]Rule, error)
@@ -226,10 +240,15 @@ type Store interface {
 	ValidateRuleReferences(ctx context.Context, flowID string, versionID string, rules []Rule) ([]ValidationError, error)
 }
 
+type ChangePublisher interface {
+	PublishRoutePlanChange(context.Context, string) error
+}
+
 type Service struct {
-	store Store
-	now   func() time.Time
-	newID func() string
+	store           Store
+	now             func() time.Time
+	newID           func() string
+	changePublisher ChangePublisher
 }
 
 type Option func(*Service)
@@ -247,6 +266,12 @@ func WithIDGenerator(generator func() string) Option {
 		if generator != nil {
 			s.newID = generator
 		}
+	}
+}
+
+func WithChangePublisher(publisher ChangePublisher) Option {
+	return func(s *Service) {
+		s.changePublisher = publisher
 	}
 }
 
@@ -285,19 +310,30 @@ func (s *Service) UpdateFlow(ctx context.Context, id string, input UpdateFlowInp
 	if strings.TrimSpace(id) == "" {
 		return Flow{}, ErrInvalidInput
 	}
+	previous, _ := s.store.GetFlow(ctx, id)
 	params, err := normalizeFlowInput(input, s.newID)
 	if err != nil {
 		return Flow{}, err
 	}
 	params.ID = id
-	return s.store.UpdateFlow(ctx, id, params)
+	updated, err := s.store.UpdateFlow(ctx, id, params)
+	if err != nil {
+		return Flow{}, err
+	}
+	s.publishRoutePlanChanges(ctx, previous.SourceID, updated.SourceID)
+	return updated, nil
 }
 
 func (s *Service) DeleteFlow(ctx context.Context, id string) error {
 	if strings.TrimSpace(id) == "" {
 		return ErrInvalidInput
 	}
-	return s.store.DeleteFlow(ctx, id)
+	previous, _ := s.store.GetFlow(ctx, id)
+	if err := s.store.DeleteFlow(ctx, id); err != nil {
+		return err
+	}
+	s.publishRoutePlanChanges(ctx, previous.SourceID)
+	return nil
 }
 
 func (s *Service) ListVersions(ctx context.Context, flowID string) ([]Version, error) {
@@ -311,7 +347,12 @@ func (s *Service) ActivateVersion(ctx context.Context, flowID string, versionID 
 	if strings.TrimSpace(flowID) == "" || strings.TrimSpace(versionID) == "" {
 		return Flow{}, ErrInvalidInput
 	}
-	return s.store.ActivateVersion(ctx, flowID, versionID)
+	updated, err := s.store.ActivateVersion(ctx, flowID, versionID)
+	if err != nil {
+		return Flow{}, err
+	}
+	s.publishRoutePlanChanges(ctx, updated.SourceID)
+	return updated, nil
 }
 
 func (s *Service) GetCanvas(ctx context.Context, flowID string) (CanvasState, error) {
@@ -344,7 +385,7 @@ func (s *Service) GetRules(ctx context.Context, flowID string) (RuleSet, error) 
 	if err != nil {
 		return RuleSet{}, err
 	}
-	return RuleSet{VersionID: draft.Version.ID, Rules: sortRules(draft.Rules)}, nil
+	return ruleSetFromDraft(draft), nil
 }
 
 func (s *Service) GetVersionRules(ctx context.Context, flowID string, versionID string) (RuleSet, error) {
@@ -358,11 +399,46 @@ func (s *Service) GetVersionRules(ctx context.Context, flowID string, versionID 
 	return RuleSet{VersionID: ruleSet.VersionID, Rules: sortRules(ruleSet.Rules)}, nil
 }
 
+func (s *Service) CheckoutVersion(ctx context.Context, flowID string, versionID string) (RuleSet, error) {
+	if strings.TrimSpace(flowID) == "" || strings.TrimSpace(versionID) == "" {
+		return RuleSet{}, ErrInvalidInput
+	}
+	draft, err := s.store.CheckoutVersion(ctx, flowID, versionID)
+	if err != nil {
+		return RuleSet{}, err
+	}
+	return ruleSetFromDraft(draft), nil
+}
+
 func (s *Service) DeleteVersion(ctx context.Context, flowID string, versionID string) error {
 	if strings.TrimSpace(flowID) == "" || strings.TrimSpace(versionID) == "" {
 		return ErrInvalidInput
 	}
 	return s.store.DeleteVersion(ctx, flowID, versionID)
+}
+
+func ruleSetFromDraft(draft Draft) RuleSet {
+	return RuleSet{
+		VersionID:          draft.Version.ID,
+		DraftBaseVersionID: draft.Version.DraftBaseVersionID,
+		DraftBaseVersionNo: draft.Version.DraftBaseVersionNo,
+		Rules:              sortRules(draft.Rules),
+	}
+}
+
+func (s *Service) publishRoutePlanChanges(ctx context.Context, sourceIDs ...string) {
+	if s == nil || s.changePublisher == nil {
+		return
+	}
+	seen := map[string]bool{}
+	for _, sourceID := range sourceIDs {
+		sourceID = strings.TrimSpace(sourceID)
+		if sourceID == "" || seen[sourceID] {
+			continue
+		}
+		seen[sourceID] = true
+		_ = s.changePublisher.PublishRoutePlanChange(ctx, sourceID)
+	}
 }
 
 func (s *Service) SaveRules(ctx context.Context, flowID string, input SaveRulesInput) (RuleSet, error) {
@@ -437,7 +513,7 @@ func (s *Service) Publish(ctx context.Context, flowID string, versionInfo ...str
 		return Version{}, ErrInvalidConfig
 	}
 	validationJSON, _ := json.Marshal(validationErrors)
-	return s.store.Publish(ctx, PublishParams{
+	published, err := s.store.Publish(ctx, PublishParams{
 		FlowID:           flowID,
 		DraftVersionID:   draft.Version.ID,
 		VersionInfo:      normalizedVersionInfo,
@@ -446,6 +522,14 @@ func (s *Service) Publish(ctx context.Context, flowID string, versionInfo ...str
 		ValidationErrors: validationJSON,
 		PublishedAt:      s.now().UTC(),
 	})
+	if err != nil {
+		return Version{}, err
+	}
+	flow, flowErr := s.store.GetFlow(ctx, flowID)
+	if flowErr == nil {
+		s.publishRoutePlanChanges(ctx, flow.SourceID)
+	}
+	return published, nil
 }
 
 func (s *Service) Simulate(ctx context.Context, flowID string, input SimulateInput) (SimulationResult, error) {
@@ -490,10 +574,23 @@ func (s *Service) Simulate(ctx context.Context, flowID string, input SimulateInp
 			continue
 		}
 
+		coarse, err := CoarseFilterConditionTree(rule.ConditionTree, scope)
+		if err != nil {
+			return SimulationResult{}, ErrInvalidConfig
+		}
+		if coarse.Skipped {
+			trace.CoarseSkipped = true
+			trace.SkipReason = coarse.Reason
+			trace.StopReason = "coarse_filter"
+			ruleResults = append(ruleResults, trace)
+			continue
+		}
+
 		startedAt := time.Now()
 		matched, evalErr := EvaluateConditionTreeWithMatchGroups(rule.ConditionTree, scope, matchGroups)
 		trace.DurationMS = time.Since(startedAt).Milliseconds()
 		trace.Evaluated = true
+		trace.SlowRule = trace.DurationMS >= routeSimulationSlowRuleThresholdMS
 		if evalErr != nil {
 			return SimulationResult{}, ErrInvalidConfig
 		}
@@ -582,9 +679,6 @@ func normalizeRuleInputs(flowID string, versionID string, inputs []RuleInput, id
 		ruleID := idGenerator()
 		actionID := idGenerator()
 		targets := normalizeActionTargets(input.Action)
-		if len(targets) == 0 {
-			return nil, ErrInvalidInput
-		}
 		actionTargets := make([]ActionTarget, 0, len(targets))
 		channelIDs := make([]string, 0, len(targets))
 		templateVersionID := ""
@@ -1115,8 +1209,71 @@ func EvaluateConditionTreeWithMatchGroups(raw json.RawMessage, payload map[strin
 	return node.evaluate(payload, matchGroups)
 }
 
+func CoarseFilterConditionTree(raw json.RawMessage, scope map[string]any) (CoarseFilterResult, error) {
+	node, err := parseConditionNode(raw)
+	if err != nil {
+		return CoarseFilterResult{}, err
+	}
+	return node.coarseFilter(scope)
+}
+
 func evaluateConditionTree(raw json.RawMessage, payload map[string]any) (bool, error) {
 	return EvaluateConditionTree(raw, payload)
+}
+
+func (n conditionNode) coarseFilter(scope map[string]any) (CoarseFilterResult, error) {
+	switch n.Operator {
+	case "always", "exists", "not_exists", "not_equals", "not_contains", "not_in_match_group", "not_match_group":
+		return CoarseFilterResult{}, nil
+	case "and":
+		for _, child := range n.Conditions {
+			result, err := child.coarseFilter(scope)
+			if err != nil {
+				return CoarseFilterResult{}, err
+			}
+			if result.Skipped {
+				return result, nil
+			}
+		}
+		return CoarseFilterResult{}, nil
+	case "or":
+		if len(n.Conditions) == 0 {
+			return CoarseFilterResult{}, ErrInvalidConfig
+		}
+		reasons := make([]string, 0, len(n.Conditions))
+		for _, child := range n.Conditions {
+			result, err := child.coarseFilter(scope)
+			if err != nil {
+				return CoarseFilterResult{}, err
+			}
+			if !result.Skipped {
+				return CoarseFilterResult{}, nil
+			}
+			reasons = append(reasons, result.Reason)
+		}
+		return CoarseFilterResult{Skipped: true, Reason: strings.Join(sortedUniqueStrings(reasons), ",")}, nil
+	}
+
+	if !operatorCanCoarseSkipMissingField(n.Operator) {
+		return CoarseFilterResult{}, nil
+	}
+	path := strings.TrimSpace(n.Path)
+	if path == "" {
+		return CoarseFilterResult{}, nil
+	}
+	if _, exists := lookupPath(scope, path); exists {
+		return CoarseFilterResult{}, nil
+	}
+	return CoarseFilterResult{Skipped: true, Reason: "missing_field:" + path}, nil
+}
+
+func operatorCanCoarseSkipMissingField(operator string) bool {
+	switch operator {
+	case "equals", "contains", "regex", "in", "gt", "gte", "lt", "lte", "greater_than", "greater_than_or_equal", "less_than", "less_than_or_equal", "in_match_group", "match_group":
+		return true
+	default:
+		return false
+	}
 }
 
 func (n conditionNode) evaluate(scope map[string]any, matchGroups map[string][]string) (bool, error) {

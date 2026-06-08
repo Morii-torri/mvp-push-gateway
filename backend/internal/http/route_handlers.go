@@ -44,17 +44,19 @@ type routeVersionsResponse struct {
 }
 
 type routeVersionResponse struct {
-	ID               string          `json:"id"`
-	FlowID           string          `json:"flow_id"`
-	VersionNo        int             `json:"version_no"`
-	CanvasSnapshot   json.RawMessage `json:"canvas_snapshot"`
-	CompiledRules    json.RawMessage `json:"compiled_rules"`
-	ValidationStatus string          `json:"validation_status"`
-	ValidationErrors json.RawMessage `json:"validation_errors"`
-	VersionInfo      string          `json:"version_info"`
-	PublishedAt      *string         `json:"published_at"`
-	CreatedAt        string          `json:"created_at"`
-	UpdatedAt        string          `json:"updated_at"`
+	ID                 string          `json:"id"`
+	FlowID             string          `json:"flow_id"`
+	VersionNo          int             `json:"version_no"`
+	DraftBaseVersionID string          `json:"draft_base_version_id,omitempty"`
+	DraftBaseVersionNo int             `json:"draft_base_version_no,omitempty"`
+	CanvasSnapshot     json.RawMessage `json:"canvas_snapshot"`
+	CompiledRules      json.RawMessage `json:"compiled_rules"`
+	ValidationStatus   string          `json:"validation_status"`
+	ValidationErrors   json.RawMessage `json:"validation_errors"`
+	VersionInfo        string          `json:"version_info"`
+	PublishedAt        *string         `json:"published_at"`
+	CreatedAt          string          `json:"created_at"`
+	UpdatedAt          string          `json:"updated_at"`
 }
 
 type routeCanvasRequest struct {
@@ -94,8 +96,10 @@ type routeActionTargetRequest struct {
 }
 
 type routeRulesResponse struct {
-	VersionID string              `json:"version_id"`
-	Rules     []routeRuleResponse `json:"rules"`
+	VersionID          string              `json:"version_id"`
+	DraftBaseVersionID string              `json:"draft_base_version_id,omitempty"`
+	DraftBaseVersionNo int                 `json:"draft_base_version_no,omitempty"`
+	Rules              []routeRuleResponse `json:"rules"`
 }
 
 type routeRuleResponse struct {
@@ -237,6 +241,10 @@ func (h *Handler) routeFlowDetailHandler(w http.ResponseWriter, r *http.Request)
 			h.routeActivateVersionHandler(w, r, flowID, parts[2], adminUser)
 			return
 		}
+		if len(parts) == 4 && parts[3] == "checkout" && r.Method == http.MethodPost {
+			h.routeCheckoutVersionHandler(w, r, flowID, parts[2], adminUser)
+			return
+		}
 	case "canvas":
 		h.routeCanvasHandler(w, r, flowID, adminUser)
 		return
@@ -337,6 +345,18 @@ func (h *Handler) routeActivateVersionHandler(w http.ResponseWriter, r *http.Req
 	}
 	response := routeFlowDetailResponse{Flow: toRouteFlowResponse(updated)}
 	h.recordAudit(r, adminUser, "activate", "route_version", versionID, map[string]string{"flow_id": flowID}, response)
+	writeJSON(w, http.StatusOK, response)
+}
+
+func (h *Handler) routeCheckoutVersionHandler(w http.ResponseWriter, r *http.Request, flowID string, versionID string, adminUser auth.Admin) {
+	ruleSet, err := h.routes.CheckoutVersion(r.Context(), flowID, versionID)
+	if err != nil {
+		status, code, message := routeErrorStatus(err)
+		writeAPIError(w, status, code, message)
+		return
+	}
+	response := toRouteRulesResponse(ruleSet)
+	h.recordAudit(r, adminUser, "checkout", "route_version", versionID, map[string]string{"flow_id": flowID}, response)
 	writeJSON(w, http.StatusOK, response)
 }
 
@@ -524,17 +544,19 @@ func toRouteFlowResponse(flow route.Flow) routeFlowResponse {
 
 func toRouteVersionResponse(version route.Version) routeVersionResponse {
 	return routeVersionResponse{
-		ID:               version.ID,
-		FlowID:           version.FlowID,
-		VersionNo:        version.VersionNo,
-		CanvasSnapshot:   nullableRawJSON(version.CanvasSnapshot),
-		CompiledRules:    nullableRawJSON(version.CompiledRules),
-		ValidationStatus: version.ValidationStatus,
-		ValidationErrors: nullableRawJSON(version.ValidationErrors),
-		VersionInfo:      routeVersionInfo(version.CompiledRules),
-		PublishedAt:      formatOptionalTime(version.PublishedAt),
-		CreatedAt:        formatTime(version.CreatedAt),
-		UpdatedAt:        formatTime(version.UpdatedAt),
+		ID:                 version.ID,
+		FlowID:             version.FlowID,
+		VersionNo:          version.VersionNo,
+		DraftBaseVersionID: version.DraftBaseVersionID,
+		DraftBaseVersionNo: version.DraftBaseVersionNo,
+		CanvasSnapshot:     nullableRawJSON(version.CanvasSnapshot),
+		CompiledRules:      nullableRawJSON(version.CompiledRules),
+		ValidationStatus:   version.ValidationStatus,
+		ValidationErrors:   nullableRawJSON(version.ValidationErrors),
+		VersionInfo:        routeVersionInfo(version.CompiledRules),
+		PublishedAt:        formatOptionalTime(version.PublishedAt),
+		CreatedAt:          formatTime(version.CreatedAt),
+		UpdatedAt:          formatTime(version.UpdatedAt),
 	}
 }
 
@@ -574,7 +596,12 @@ func toRouteRulesResponse(ruleSet route.RuleSet) routeRulesResponse {
 			UpdatedAt: formatTime(item.UpdatedAt),
 		})
 	}
-	return routeRulesResponse{VersionID: ruleSet.VersionID, Rules: items}
+	return routeRulesResponse{
+		VersionID:          ruleSet.VersionID,
+		DraftBaseVersionID: ruleSet.DraftBaseVersionID,
+		DraftBaseVersionNo: ruleSet.DraftBaseVersionNo,
+		Rules:              items,
+	}
 }
 
 func routeActionTargetsInput(items []routeActionTargetRequest) []route.ActionTargetInput {

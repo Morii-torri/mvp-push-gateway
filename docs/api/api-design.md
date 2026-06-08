@@ -92,8 +92,9 @@ SHA256_HEX(raw_body)
 第一版管理台认证实现约定：
 
 - 空库迁移完成后，`GET /setup/status` 返回 `setup_open=true`；创建管理员后返回 `setup_open=false`。
-- `POST /setup/admin` 只允许成功一次，密码使用 Argon2id 哈希保存，不写死初始化账号或密码。
+- `POST /setup/admin` 只允许成功一次，请求必须包含 `password` 和 `confirm_password` 且两者一致；密码使用 Argon2id 哈希保存，不写死初始化账号或密码。
 - 登录成功返回 Bearer 会话令牌，后续管理台接口使用 `Authorization: Bearer <token>`。
+- `POST /auth/change-password` 修改成功后，同一管理员的既有 session 会全部撤销，管理台前端应清理本地 token 并要求重新登录。
 - 第一版不做 RBAC，登录用户即管理员。
 
 ## 来源管理
@@ -141,10 +142,16 @@ SHA256_HEX(raw_body)
 | `GET` | `/org-tree` |
 | `GET` / `POST` | `/users` |
 | `GET` / `PUT` / `DELETE` | `/users/{id}` |
+| `POST` | `/users/profile` |
+| `PUT` | `/users/{id}/profile` |
 | `POST` | `/users/import` |
 | `GET` | `/users/import-template` |
 
-用户平台身份支持 `channel_id` 可选字段。`channel_id` 为空表示该 provider type 的默认身份；填写后表示绑定到具体推送渠道实例。发送规划按目标渠道实例优先匹配，找不到实例级身份时再回退到类型级默认身份。
+用户平台身份支持 `channel_id` 可选字段。`channel_id` 为空表示该 provider type 的默认身份；填写后表示绑定到具体推送渠道实例。发送规划按目标渠道实例优先匹配，找不到实例级身份时依次回退到 provider 默认身份、`common` 默认身份。对 `email` / `mobile` 接收人字段，如果没有任何平台身份，则使用人员基础资料中的邮箱或手机号作为最终兜底。
+
+用户平台身份的 `channel_id` 必须属于同一 `provider_type`，`email` / `mobile` 身份值需要满足基础格式校验。接收人组中的用户和组织 ID 必须引用已存在资源；当用户或组织仍被接收人组引用时，删除接口返回参数错误，调用方需要先调整接收人组。
+
+`/users/profile` 和 `/users/{id}/profile` 用于管理台人员详情 Drawer 的事务化保存。请求体包含 `user` 与保存后的完整 `identities` 集合：带 `id` 的身份会更新，不带 `id` 的身份会新增，旧身份集合中未出现在请求里的记录会删除。`PUT /users/{id}/profile` 支持 `expected_updated_at`；若人员记录已被其他操作更新，返回 `409 / MGP-RCP-002`，调用方需要刷新后重试。旧的 `/users`、`/users/{id}`、`/users/{id}/identities`、`/user-identities/{id}` 仍保留兼容，但管理台保存人员时应优先使用 profile 接口避免部分提交。
 
 ## 匹配组和接收人组
 
@@ -261,17 +268,18 @@ SHA256_HEX(raw_body)
 | `GET` | `/route-flows/{id}/versions` | 路由版本列表 |
 | `GET` | `/route-flows/{id}/versions/{version_id}/rules` | 只读查看指定版本规则 |
 | `POST` | `/route-flows/{id}/versions/{version_id}/activate` | 切换当前执行版本 |
+| `POST` | `/route-flows/{id}/versions/{version_id}/checkout` | 基于历史发布版本检出工作副本 |
 | `DELETE` | `/route-flows/{id}/versions/{version_id}` | 删除非当前执行的历史发布版本 |
 | `GET` | `/route-flows/{id}/canvas` | 画布快照 |
-| `PUT` | `/route-flows/{id}/canvas` | 保存画布草稿 |
-| `GET` | `/route-flows/{id}/rules` | 草稿规则表格 |
+| `PUT` | `/route-flows/{id}/canvas` | 保存画布工作副本 |
+| `GET` | `/route-flows/{id}/rules` | 工作副本规则表格 |
 | `PUT` | `/route-flows/{id}/rules` | 保存传统表格 |
 | `PUT` | `/route-flows/{id}/rules/reorder` | 拖拽排序或移动策略 |
 | `POST` | `/route-flows/{id}/validate` | 校验 |
 | `POST` | `/route-flows/{id}/publish` | 发布版本 |
 | `POST` | `/route-flows/{id}/simulate` | 用样例 payload 模拟命中 |
 
-创建或启用路由组时，后端必须检查同来源是否已有启用路由组；若存在，返回 `MGP-ROUTE-003` 并提示“路由组已存在”。同一来源的 v1/v2 等变更通过版本发布和版本切换完成。`current_version_id` 是当前执行版本，影响线上 planning worker 使用的发布模型；`/route-flows/{id}/rules` 始终返回最新未发布草稿，历史发布版本通过 `/route-flows/{id}/versions/{version_id}/rules` 只读查看。`GET /route-flows` 返回的路由组摘要包含 `rule_count` 和 `total_hit_count`，两者基于最新未发布草稿规则及规则计数器聚合，用于列表和详情摘要展示。历史版本删除只允许删除已发布且不是当前执行版本的版本；当前执行版本和未发布草稿不能删除。
+创建或启用路由组时，后端必须检查同来源是否已有启用路由组；若存在，返回 `MGP-ROUTE-003` 并提示“路由组已存在”。同一来源的 v1/v2 等变更通过版本发布和版本切换完成。`current_version_id` 是当前执行版本，影响线上 planning worker 使用的发布模型；`/route-flows/{id}/rules` 始终返回最新未发布工作副本，历史发布版本通过 `/route-flows/{id}/versions/{version_id}/rules` 只读查看。`POST /route-flows/{id}/versions/{version_id}/checkout` 会把指定发布版本复制到当前工作副本，并返回 `draft_base_version_id` / `draft_base_version_no`，但不会改变线上当前执行版本。`GET /route-flows` 返回的路由组摘要包含 `rule_count` 和 `total_hit_count`，两者基于最新未发布工作副本规则及规则计数器聚合，用于列表和详情摘要展示。历史版本删除只允许删除已发布且不是当前执行版本的版本；当前执行版本和未发布工作副本不能删除。
 
 发布路由时，后端把已保存规则集编译为 `compiled_rules`；画布只保存 React Flow 布局快照，不作为独立执行源。第一版执行模式固定为 `first_match_stop`：按 `sort_order` 从小到大执行，第一条启用且命中的策略执行动作后停止继续匹配。模拟接口必须返回粗过滤跳过结果、完整条件命中结果、最终命中策略、停止匹配原因和慢规则提示，便于发布前发现性能风险。
 
@@ -353,7 +361,9 @@ SHA256_HEX(raw_body)
 | `GET` | `/monitor/slow-rules` | 慢规则列表和命中统计 |
 | `GET` | `/monitor/transactions` | 从入站接收到全部出站完成的总耗时统计 |
 | `GET` | `/dead-letters` | 死信任务分页 |
-| `POST` | `/dead-letters/{id}/replay` | 重放死信任务 |
+| `POST` | `/dead-letters/batch-replay` | 批量重放待处理死信任务 |
+| `POST` | `/dead-letters/batch-handle` | 批量标记待处理死信任务 |
+| `POST` | `/dead-letters/batch-delete` | 批量删除已处理或已重放死信记录 |
 
 `/monitor/queues` 返回示例：
 
@@ -385,6 +395,18 @@ SHA256_HEX(raw_body)
 | `GET` | `/stats/errors` |
 
 第一版不提供定时发送 API。后续若恢复，需要单独设计 `/scheduled-messages`、调度 job 和页面。
+
+## 系统设置
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| `GET` | `/settings` | 系统参数列表 |
+| `PUT` | `/settings/{key}` | 更新系统参数 |
+| `POST` | `/settings/performance-test` | 运行性能测试并写入推荐并发 |
+
+`PUT /settings/{key}` 会按参数 key 校验值类型和范围。并发、日志保留期、payload 上限和轮询间隔必须是整数；`admin.single_account_mode` 必须是布尔值；`dead_letter.processing_mode` 只允许 `manual` 或 `auto`。
+
+`POST /settings/performance-test` 会临时创建测试来源、渠道、模板和路由，运行结束后自动清理生成资源。接口在同一后端进程内做短窗口限频，连续触发会返回 `429 / MGP-SETTINGS-002`。
 
 ## 标准错误码
 

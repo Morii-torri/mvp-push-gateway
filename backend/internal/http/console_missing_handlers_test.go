@@ -413,12 +413,13 @@ func (f *fakeMessageLogService) GetMessage(context.Context, string) (messagelog.
 }
 
 type fakeAuditService struct {
-	listResult  audit.ListResult
-	getResult   audit.Log
-	recordInput audit.RecordInput
-	listCalls   int
-	getCalls    int
-	recordCalls int
+	listResult   audit.ListResult
+	getResult    audit.Log
+	recordInput  audit.RecordInput
+	recordInputs []audit.RecordInput
+	listCalls    int
+	getCalls     int
+	recordCalls  int
 }
 
 func (f *fakeAuditService) ListLogs(context.Context, audit.ListFilter) (audit.ListResult, error) {
@@ -434,6 +435,7 @@ func (f *fakeAuditService) GetLog(context.Context, string) (audit.Log, error) {
 func (f *fakeAuditService) Record(_ context.Context, input audit.RecordInput) (audit.Log, error) {
 	f.recordCalls++
 	f.recordInput = input
+	f.recordInputs = append(f.recordInputs, input)
 	return audit.Log{ID: "audit-new", ActorUsername: input.ActorUsername, Action: input.Action, ResourceType: input.ResourceType, ResourceID: input.ResourceID}, nil
 }
 
@@ -479,19 +481,46 @@ func (f *fakeSettingsService) RunPerformanceTest(_ context.Context, input settin
 	if f.performanceTestErr != nil {
 		return settings.PerformanceTestResult{}, f.performanceTestErr
 	}
+	return fakePerformanceTestResult(input), nil
+}
+
+func (f *fakeSettingsService) BuildPerformanceTestResult(input settings.PerformanceTestInput) (settings.PerformanceTestResult, error) {
+	return fakePerformanceTestResult(input), nil
+}
+
+func fakePerformanceTestResult(input settings.PerformanceTestInput) settings.PerformanceTestResult {
 	return settings.PerformanceTestResult{
 		MessageCount:                 input.MessageCount,
+		SourceCount:                  input.SourceCount,
+		PayloadVariantCount:          input.PayloadVariantCount,
 		GeneratedSourceCode:          input.GeneratedSourceCode,
 		GeneratedRouteName:           input.GeneratedRouteName,
 		GeneratedChannelName:         input.GeneratedChannelName,
+		AcceptedCount:                len(input.Observations),
+		SuccessRate:                  100,
+		AvgInboundMS:                 1,
+		P95InboundMS:                 1,
+		AvgRouteMS:                   1,
+		RouteP95MS:                   1,
+		AvgEndToEndMS:                3,
+		EndToEndP95MS:                3,
 		RecommendedGlobalConcurrency: 10,
+		EstimatedSendQPS:             100,
+		DurationMS:                   3,
+		RecommendationReason:         "测试推荐",
 		UpdatedSettingKey:            settings.KeyRuntimeDeliveryConcurrency,
-	}, nil
+		StageResults: []settings.PerformanceTestStageResult{
+			{Key: "ingest", Label: "模拟入站", Count: len(input.Observations), AvgMS: 1, P95MS: 1, DurationMS: 1},
+		},
+	}
 }
 
 type fakeProviderService struct {
 	testSendResult     provider.TestSendResult
 	testSendInput      provider.TestSendInput
+	createChannelInput provider.CreateChannelInput
+	listResult         []provider.Channel
+	deletedChannelIDs  []string
 	testSendCalls      int
 	createChannelCalls int
 	deleteChannelCalls int
@@ -506,11 +535,12 @@ func (f *fakeProviderService) ListProviderCapabilities(context.Context) ([]provi
 }
 
 func (f *fakeProviderService) ListChannels(context.Context) ([]provider.Channel, error) {
-	return nil, nil
+	return f.listResult, nil
 }
 
 func (f *fakeProviderService) CreateChannel(_ context.Context, input provider.CreateChannelInput) (provider.Channel, error) {
 	f.createChannelCalls++
+	f.createChannelInput = input
 	return provider.Channel{ID: "channel-1", ProviderType: input.ProviderType, Name: input.Name, Enabled: input.Enabled}, nil
 }
 
@@ -522,8 +552,9 @@ func (f *fakeProviderService) UpdateChannel(_ context.Context, id string, input 
 	return provider.Channel{ID: id, ProviderType: input.ProviderType, Name: input.Name, Enabled: input.Enabled}, nil
 }
 
-func (f *fakeProviderService) DeleteChannel(context.Context, string) error {
+func (f *fakeProviderService) DeleteChannel(_ context.Context, id string) error {
 	f.deleteChannelCalls++
+	f.deletedChannelIDs = append(f.deletedChannelIDs, id)
 	return nil
 }
 

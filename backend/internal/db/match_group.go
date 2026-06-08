@@ -2,6 +2,7 @@ package db
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 
@@ -9,6 +10,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"mvp-push-gateway/backend/internal/matchgroup"
+	"mvp-push-gateway/backend/internal/route"
 )
 
 func (r Repository) ListGroups(ctx context.Context) ([]matchgroup.Group, error) {
@@ -84,6 +86,13 @@ func (r Repository) UpdateGroup(ctx context.Context, id string, params matchgrou
 }
 
 func (r Repository) DeleteGroup(ctx context.Context, id string) error {
+	referenced, err := r.GroupReferenced(ctx, id)
+	if err != nil {
+		return err
+	}
+	if referenced {
+		return matchgroup.ErrInUse
+	}
 	tag, err := r.pool.Exec(ctx, `DELETE FROM match_groups WHERE id = $1`, id)
 	if err != nil {
 		return fmt.Errorf("delete match group: %w", err)
@@ -92,6 +101,38 @@ func (r Repository) DeleteGroup(ctx context.Context, id string) error {
 		return matchgroup.ErrNotFound
 	}
 	return nil
+}
+
+func (r Repository) GroupReferenced(ctx context.Context, id string) (bool, error) {
+	rows, err := r.pool.Query(ctx, `
+		SELECT condition_tree
+		FROM route_rules
+		WHERE condition_tree::text LIKE '%' || $1 || '%'
+	`, id)
+	if err != nil {
+		return false, fmt.Errorf("query match group references: %w", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var raw json.RawMessage
+		if err := rows.Scan(&raw); err != nil {
+			return false, fmt.Errorf("scan match group reference: %w", err)
+		}
+		ids, err := route.ExtractMatchGroupIDs(raw)
+		if err != nil {
+			return false, fmt.Errorf("parse match group reference: %w", err)
+		}
+		for _, referencedID := range ids {
+			if referencedID == id {
+				return true, nil
+			}
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return false, fmt.Errorf("iterate match group references: %w", err)
+	}
+	return false, nil
 }
 
 func (r Repository) ListItems(ctx context.Context, groupID string) ([]matchgroup.Item, error) {

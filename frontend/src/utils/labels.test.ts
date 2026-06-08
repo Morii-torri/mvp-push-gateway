@@ -5,6 +5,7 @@ import {
   getAuthModeMeta,
   getJobStatusMeta,
   getInboundStatusMeta,
+  getMessageStatusMeta,
   getOutboundStatusMeta,
   getProviderTypeLabel,
   getJobTypeLabel,
@@ -24,6 +25,13 @@ describe('console label mappings', () => {
     expect(getInboundStatusMeta('partial_sent').label).toBe('部分成功');
     expect(getInboundStatusMeta('no_route').label).toBe('未命中路由');
     expect(getInboundStatusMeta('silenced').label).toBe('已静默');
+  });
+
+  it('maps unified message lifecycle statuses without exposing raw enum values', () => {
+    expect(getMessageStatusMeta('queued').label).toBe('待发送');
+    expect(getMessageStatusMeta('processing').label).toBe('发送中');
+    expect(getMessageStatusMeta('dead').label).toBe('死信');
+    expect(getMessageStatusMeta('no_route').label).toBe('未命中路由');
   });
 
   it('maps provider, outbound, job and validation enums into Chinese display text', () => {

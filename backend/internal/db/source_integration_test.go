@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"sync"
 	"testing"
 	"time"
 
@@ -12,6 +13,26 @@ import (
 
 	"mvp-push-gateway/backend/internal/source"
 )
+
+type sourceSQLTimingRecorder struct {
+	mu     sync.Mutex
+	stages map[string]int
+}
+
+func (r *sourceSQLTimingRecorder) RecordSQLTiming(_ string, stage SQLTimingStage, _ time.Duration) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.stages == nil {
+		r.stages = map[string]int{}
+	}
+	r.stages[string(stage)]++
+}
+
+func (r *sourceSQLTimingRecorder) count(stage SQLTimingStage) int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.stages[string(stage)]
+}
 
 func TestRepositoryDuplicateInboundWritesDedupedMessageWithoutSecondJob(t *testing.T) {
 	dsn := os.Getenv("MGP_TEST_DATABASE_URL")
@@ -93,6 +114,99 @@ func TestRepositoryDuplicateInboundWritesDedupedMessageWithoutSecondJob(t *testi
 	}
 	if jobCount != 1 {
 		t.Fatalf("expected only the first inbound to enqueue a route_plan job, got %d", jobCount)
+	}
+}
+
+func TestRepositoryEnqueueInboundUsesPostgresFastPathForNormalAcceptedMessages(t *testing.T) {
+	pool := openMigratedPool(t)
+	defer pool.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	sourceID := "00000000-0000-0000-0000-00000000a0f1"
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO inbound_sources (id, code, name, auth_mode)
+		VALUES ($1, 'fast-orders', 'Fast Orders', 'token')
+	`, sourceID); err != nil {
+		t.Fatalf("insert source: %v", err)
+	}
+
+	recorder := &sourceSQLTimingRecorder{}
+	timedCtx := WithSQLTimingRecorder(ctx, recorder)
+	params := enqueueParams(sourceID, "00000000-0000-0000-0000-00000000b0f1", "trace-fast", time.Date(2026, 5, 8, 10, 0, 0, 0, time.UTC))
+	params.DedupeEnabled = false
+	params.DedupeKey = ""
+	if err := NewRepository(pool).EnqueueInbound(timedCtx, params); err != nil {
+		t.Fatalf("enqueue fast inbound: %v", err)
+	}
+
+	if recorder.count(SQLTimingEnqueueInboundFast) != 1 {
+		t.Fatalf("expected one enqueue fast SQL timing, got stages=%+v", recorder.stages)
+	}
+	if recorder.count(SQLTimingInsertMessageRecord) != 0 || recorder.count(SQLTimingInsertRoutePlanJob) != 0 {
+		t.Fatalf("expected fast path not to use split insert timings, got stages=%+v", recorder.stages)
+	}
+
+	var messageCount int
+	var jobCount int
+	if err := pool.QueryRow(ctx, `
+		SELECT
+			(SELECT count(*)::integer FROM message_records WHERE trace_id = 'trace-fast'),
+			(SELECT count(*)::integer FROM jobs WHERE type = 'route_plan' AND payload->>'message_id' = $1)
+	`, params.MessageID).Scan(&messageCount, &jobCount); err != nil {
+		t.Fatalf("query fast path rows: %v", err)
+	}
+	if messageCount != 1 || jobCount != 1 {
+		t.Fatalf("expected fast path to persist one message and one route job, got messages=%d jobs=%d", messageCount, jobCount)
+	}
+}
+
+func TestRepositoryEnqueueInboundUsesFastRecordOnlyPathForJetStream(t *testing.T) {
+	pool := openMigratedPool(t)
+	defer pool.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	sourceID := "00000000-0000-0000-0000-00000000a0f2"
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO inbound_sources (id, code, name, auth_mode)
+		VALUES ($1, 'fast-jetstream-orders', 'Fast JetStream Orders', 'token')
+	`, sourceID); err != nil {
+		t.Fatalf("insert source: %v", err)
+	}
+
+	recorder := &sourceSQLTimingRecorder{}
+	timedCtx := WithSQLTimingRecorder(ctx, recorder)
+	params := enqueueParams(sourceID, "00000000-0000-0000-0000-00000000b0f2", "trace-fast-jetstream", time.Date(2026, 5, 8, 10, 0, 0, 0, time.UTC))
+	params.DedupeEnabled = false
+	params.DedupeKey = ""
+	params.SkipRoutePlan = true
+	params.JobType = ""
+	params.JobPayload = nil
+	if err := NewRepository(pool).EnqueueInbound(timedCtx, params); err != nil {
+		t.Fatalf("enqueue fast JetStream inbound: %v", err)
+	}
+
+	if recorder.count(SQLTimingEnqueueInboundFast) != 1 || recorder.count(SQLTimingInsertMessageRecord) != 1 {
+		t.Fatalf("expected fast record-only SQL timings, got stages=%+v", recorder.stages)
+	}
+	if recorder.count(SQLTimingInsertRoutePlanJob) != 0 || recorder.count(SQLTimingCommitInbound) != 0 {
+		t.Fatalf("expected JetStream fast path not to insert PostgreSQL job or commit transaction, got stages=%+v", recorder.stages)
+	}
+
+	var messageCount int
+	var jobCount int
+	if err := pool.QueryRow(ctx, `
+		SELECT
+			(SELECT count(*)::integer FROM message_records WHERE trace_id = 'trace-fast-jetstream'),
+			(SELECT count(*)::integer FROM jobs WHERE type = 'route_plan' AND payload->>'message_id' = $1)
+	`, params.MessageID).Scan(&messageCount, &jobCount); err != nil {
+		t.Fatalf("query JetStream fast path rows: %v", err)
+	}
+	if messageCount != 1 || jobCount != 0 {
+		t.Fatalf("expected fast JetStream path to persist one message and no PostgreSQL route job, got messages=%d jobs=%d", messageCount, jobCount)
 	}
 }
 
@@ -204,6 +318,80 @@ func TestRepositoryEnqueueSilencedInboundWritesMessageWithoutRoutePlanJob(t *tes
 	}
 }
 
+func TestRepositoryDeleteSourceRuntimeDataDeletesSendJobsAndDeadLetters(t *testing.T) {
+	dsn := os.Getenv("MGP_TEST_DATABASE_URL")
+	if dsn == "" {
+		t.Skip("MGP_TEST_DATABASE_URL is not set")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	schemaName := createMigratedTestSchema(ctx, t, dsn)
+	defer dropTestSchema(schemaName)
+
+	poolConfig, err := pgxpool.ParseConfig(dsn)
+	if err != nil {
+		t.Fatalf("parse pool config: %v", err)
+	}
+	poolConfig.ConnConfig.RuntimeParams["search_path"] = schemaName
+
+	pool, err := pgxpool.NewWithConfig(ctx, poolConfig)
+	if err != nil {
+		t.Fatalf("open test pool: %v", err)
+	}
+	defer pool.Close()
+
+	sourceID := "00000000-0000-0000-0000-00000000a021"
+	messageID := "00000000-0000-0000-0000-00000000b021"
+	channelID := "00000000-0000-0000-0000-00000000c021"
+	attemptID := "00000000-0000-0000-0000-00000000d021"
+	sendJobID := "00000000-0000-0000-0000-00000000e021"
+	routeJobID := "00000000-0000-0000-0000-00000000f021"
+	if _, err := pool.Exec(ctx, `INSERT INTO inbound_sources (id, code, name, auth_mode) VALUES ($1, 'runtime-cleanup', 'Runtime cleanup', 'token')`, sourceID); err != nil {
+		t.Fatalf("seed source: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `INSERT INTO delivery_channels (id, provider_type, name, enabled, send_config) VALUES ($1, 'webhook', 'Runtime cleanup channel', true, '{"url":"https://example.test","method":"POST"}')`, channelID); err != nil {
+		t.Fatalf("seed channel: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `INSERT INTO message_records (id, trace_id, source_id, headers, payload, payload_hash) VALUES ($1, 'trace-runtime-cleanup', $2, '{}', '{"ok":true}', 'hash-runtime-cleanup')`, messageID, sourceID); err != nil {
+		t.Fatalf("seed message: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `INSERT INTO delivery_attempts (id, message_id, channel_id, recipient_snapshot, request_snapshot, response_snapshot) VALUES ($1, $2, $3, '{}', '{}', '{}')`, attemptID, messageID, channelID); err != nil {
+		t.Fatalf("seed attempt: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO jobs (id, type, status, payload, run_at, max_attempts, channel_id)
+		VALUES
+			($1, 'send_message', 'dead', jsonb_build_object('delivery_attempt_id', $2::text), now(), 1, $3),
+			($4, 'route_plan', 'dead', jsonb_build_object('source_id', $5::text, 'message_id', $6::text), now(), 1, NULL)
+	`, sendJobID, attemptID, channelID, routeJobID, sourceID, messageID); err != nil {
+		t.Fatalf("seed jobs: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO dead_letter_jobs (id, job_id, type, payload, channel_id, error_code, error_message, attempts)
+		VALUES
+			(gen_random_uuid(), $1, 'send_message', jsonb_build_object('delivery_attempt_id', $2::text), $3, 'MGP-SEND-001', 'invalid provider input', 1),
+			(gen_random_uuid(), $4, 'route_plan', jsonb_build_object('source_id', $5::text, 'message_id', $6::text), NULL, 'MGP-ROUTE-001', 'route failed', 1)
+	`, sendJobID, attemptID, channelID, routeJobID, sourceID, messageID); err != nil {
+		t.Fatalf("seed dead letters: %v", err)
+	}
+
+	if err := NewRepository(pool).DeleteSourceRuntimeData(ctx, sourceID); err != nil {
+		t.Fatalf("delete source runtime data: %v", err)
+	}
+
+	for _, table := range []string{"dead_letter_jobs", "jobs", "delivery_attempts", "message_records"} {
+		var count int
+		if err := pool.QueryRow(ctx, `SELECT count(*)::integer FROM `+table).Scan(&count); err != nil {
+			t.Fatalf("count %s: %v", table, err)
+		}
+		if count != 0 {
+			t.Fatalf("expected %s to be cleaned, got %d rows", table, count)
+		}
+	}
+}
+
 func TestRepositoryUpdateSourcePreservesLatestPayloadSample(t *testing.T) {
 	dsn := os.Getenv("MGP_TEST_DATABASE_URL")
 	if dsn == "" {
@@ -280,6 +468,178 @@ func TestRepositoryUpdateSourcePreservesLatestPayloadSample(t *testing.T) {
 	}
 	if !preservedAt.Equal(latestAt) {
 		t.Fatalf("expected database latest timestamp %s, got %s", latestAt, preservedAt)
+	}
+}
+
+func TestRepositoryPerformanceDeliveryStatusesReturnsSentByTraceID(t *testing.T) {
+	dsn := os.Getenv("MGP_TEST_DATABASE_URL")
+	if dsn == "" {
+		t.Skip("MGP_TEST_DATABASE_URL is not set")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	schemaName := createMigratedTestSchema(ctx, t, dsn)
+	defer dropTestSchema(schemaName)
+
+	poolConfig, err := pgxpool.ParseConfig(dsn)
+	if err != nil {
+		t.Fatalf("parse pool config: %v", err)
+	}
+	poolConfig.ConnConfig.RuntimeParams["search_path"] = schemaName
+
+	pool, err := pgxpool.NewWithConfig(ctx, poolConfig)
+	if err != nil {
+		t.Fatalf("open test pool: %v", err)
+	}
+	defer pool.Close()
+
+	sourceID := "00000000-0000-0000-0000-00000000a031"
+	channelID := "00000000-0000-0000-0000-00000000c031"
+	sentMessageID := "00000000-0000-0000-0000-00000000b031"
+	failedMessageID := "00000000-0000-0000-0000-00000000b032"
+	receivedAt := time.Date(2026, 6, 8, 10, 0, 0, 0, time.UTC)
+	finishedAt := receivedAt.Add(250 * time.Millisecond)
+	persistedAt := receivedAt.Add(300 * time.Millisecond)
+	if _, err := pool.Exec(ctx, `INSERT INTO inbound_sources (id, code, name, auth_mode) VALUES ($1, 'delivery-status', 'Delivery status', 'token')`, sourceID); err != nil {
+		t.Fatalf("seed source: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `INSERT INTO delivery_channels (id, provider_type, name, enabled, send_config) VALUES ($1, 'webhook', 'Delivery status channel', true, '{"url":"https://example.test","method":"POST"}')`, channelID); err != nil {
+		t.Fatalf("seed channel: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO message_records (id, trace_id, source_id, received_at, headers, payload, payload_hash)
+		VALUES
+			($1, 'trace-sent', $2, $4, '{}', '{"ok":true}', 'hash-sent'),
+			($3, 'trace-failed', $2, $4, '{}', '{"ok":false}', 'hash-failed')
+	`, sentMessageID, sourceID, failedMessageID, receivedAt); err != nil {
+		t.Fatalf("seed messages: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO delivery_attempts (id, message_id, channel_id, recipient_snapshot, request_snapshot, response_snapshot, status, finished_at, updated_at)
+		VALUES
+			(gen_random_uuid(), $1, $2, '{}', '{}', '{}', 'sent', $4, $5),
+			(gen_random_uuid(), $3, $2, '{}', '{}', '{}', 'failed', NULL, $5)
+	`, sentMessageID, channelID, failedMessageID, finishedAt, persistedAt); err != nil {
+		t.Fatalf("seed attempts: %v", err)
+	}
+
+	repository := NewRepository(pool)
+	statuses, err := repository.PerformanceDeliveryStatuses(ctx, []string{"trace-sent", "trace-failed", "trace-missing"})
+	if err != nil {
+		t.Fatalf("query performance delivery statuses: %v", err)
+	}
+	if !statuses["trace-sent"] {
+		t.Fatalf("expected sent trace to be successful, got %+v", statuses)
+	}
+	if statuses["trace-failed"] || statuses["trace-missing"] {
+		t.Fatalf("expected failed and missing traces to be unsuccessful, got %+v", statuses)
+	}
+	details, err := repository.PerformanceDeliveryStatusDetails(ctx, []string{"trace-sent", "trace-failed", "trace-missing"})
+	if err != nil {
+		t.Fatalf("query performance delivery status details: %v", err)
+	}
+	if !details["trace-sent"].Sent || !details["trace-sent"].ReceivedAt.Equal(receivedAt) || !details["trace-sent"].FinishedAt.Equal(finishedAt) || !details["trace-sent"].PersistedAt.Equal(persistedAt) {
+		t.Fatalf("expected sent trace details, got %+v", details["trace-sent"])
+	}
+	if details["trace-failed"].Sent || details["trace-missing"].Sent {
+		t.Fatalf("expected failed and missing details to be unsuccessful, got %+v", details)
+	}
+}
+
+func TestRepositoryKeepsNewestLatestPayloadSampleBySampleTime(t *testing.T) {
+	dsn := os.Getenv("MGP_TEST_DATABASE_URL")
+	if dsn == "" {
+		t.Skip("MGP_TEST_DATABASE_URL is not set")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	schemaName := createMigratedTestSchema(ctx, t, dsn)
+	defer dropTestSchema(schemaName)
+
+	poolConfig, err := pgxpool.ParseConfig(dsn)
+	if err != nil {
+		t.Fatalf("parse pool config: %v", err)
+	}
+	poolConfig.ConnConfig.RuntimeParams["search_path"] = schemaName
+
+	pool, err := pgxpool.NewWithConfig(ctx, poolConfig)
+	if err != nil {
+		t.Fatalf("open test pool: %v", err)
+	}
+	defer pool.Close()
+
+	sourceID := "00000000-0000-0000-0000-00000000a102"
+	baseSampledAt := time.Date(2026, 6, 5, 10, 0, 0, 0, time.UTC)
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO inbound_sources (
+			id,
+			code,
+			name,
+			latest_payload_sample,
+			latest_payload_sample_updated_at
+		)
+		VALUES ($1, 'orders', 'Orders', '{"title":"old"}'::jsonb, $2)
+	`, sourceID, baseSampledAt); err != nil {
+		t.Fatalf("insert source: %v", err)
+	}
+	repository := NewRepository(pool)
+
+	if err := repository.UpdateLatestPayloadSample(ctx, sourceID, json.RawMessage(`{"title":"older"}`), baseSampledAt.Add(-time.Second)); err != nil {
+		t.Fatalf("update latest payload with older sample time: %v", err)
+	}
+	var latestPayload string
+	var latestPayloadAt time.Time
+	if err := pool.QueryRow(ctx, `
+		SELECT latest_payload_sample::text, latest_payload_sample_updated_at
+		FROM inbound_sources
+		WHERE id = $1
+	`, sourceID).Scan(&latestPayload, &latestPayloadAt); err != nil {
+		t.Fatalf("query latest payload: %v", err)
+	}
+	if latestPayload != `{"title": "old"}` && latestPayload != `{"title":"old"}` {
+		t.Fatalf("expected older sample to be ignored, got %s", latestPayload)
+	}
+	if !latestPayloadAt.Equal(baseSampledAt) {
+		t.Fatalf("expected timestamp to remain %s, got %s", baseSampledAt, latestPayloadAt)
+	}
+
+	newerSampledAt := baseSampledAt.Add(time.Second)
+	if err := repository.UpdateLatestPayloadSample(ctx, sourceID, json.RawMessage(`{"title":"new"}`), newerSampledAt); err != nil {
+		t.Fatalf("update latest payload with newer sample time: %v", err)
+	}
+	if err := pool.QueryRow(ctx, `
+		SELECT latest_payload_sample::text, latest_payload_sample_updated_at
+		FROM inbound_sources
+		WHERE id = $1
+	`, sourceID).Scan(&latestPayload, &latestPayloadAt); err != nil {
+		t.Fatalf("query refreshed latest payload: %v", err)
+	}
+	if latestPayload != `{"title": "new"}` && latestPayload != `{"title":"new"}` {
+		t.Fatalf("expected newer sample to refresh latest payload, got %s", latestPayload)
+	}
+	if !latestPayloadAt.Equal(newerSampledAt) {
+		t.Fatalf("expected timestamp to update to %s, got %s", newerSampledAt, latestPayloadAt)
+	}
+
+	if err := repository.UpdateLatestPayloadSample(ctx, sourceID, json.RawMessage(`{"title":"stale"}`), baseSampledAt); err != nil {
+		t.Fatalf("update latest payload with stale sample time: %v", err)
+	}
+	if err := pool.QueryRow(ctx, `
+		SELECT latest_payload_sample::text, latest_payload_sample_updated_at
+		FROM inbound_sources
+		WHERE id = $1
+	`, sourceID).Scan(&latestPayload, &latestPayloadAt); err != nil {
+		t.Fatalf("query payload after stale update: %v", err)
+	}
+	if latestPayload != `{"title": "new"}` && latestPayload != `{"title":"new"}` {
+		t.Fatalf("expected stale sample to be ignored after newer sample, got %s", latestPayload)
+	}
+	if !latestPayloadAt.Equal(newerSampledAt) {
+		t.Fatalf("expected timestamp to remain %s, got %s", newerSampledAt, latestPayloadAt)
 	}
 }
 

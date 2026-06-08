@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"mvp-push-gateway/backend/internal/route"
 	"mvp-push-gateway/backend/internal/settings"
 	"mvp-push-gateway/backend/internal/source"
 )
@@ -109,8 +110,18 @@ func (h *Handler) sourcesHandler(w http.ResponseWriter, r *http.Request) {
 			writeAPIError(w, status, code, message)
 			return
 		}
+		autoFlow, autoCreated, err := h.createDefaultRouteFlowForSource(r.Context(), created)
+		if err != nil {
+			_ = h.sources.DeleteSource(r.Context(), created.ID)
+			status, code, message := routeErrorStatus(err)
+			writeAPIError(w, status, code, message)
+			return
+		}
 		response := sourceCreateResponse{Source: toSourceResponse(created)}
 		h.recordAudit(r, adminUser, "create", "source", created.ID, input, response)
+		if autoCreated {
+			h.recordAudit(r, adminUser, "create", "route_flow", autoFlow.ID, map[string]string{"source_id": created.ID, "reason": "auto_create_with_source"}, routeFlowDetailResponse{Flow: toRouteFlowResponse(autoFlow)})
+		}
 		writeJSON(w, http.StatusCreated, response)
 	default:
 		methodNotAllowed(w, http.MethodGet+", "+http.MethodPost)
@@ -174,6 +185,22 @@ func (h *Handler) sourceDetailHandler(w http.ResponseWriter, r *http.Request) {
 	default:
 		methodNotAllowed(w, http.MethodGet+", "+http.MethodPut+", "+http.MethodDelete)
 	}
+}
+
+func (h *Handler) createDefaultRouteFlowForSource(ctx context.Context, created source.Source) (route.Flow, bool, error) {
+	if h.routes == nil {
+		return route.Flow{}, false, nil
+	}
+	flow, err := h.routes.CreateFlow(ctx, route.CreateFlowInput{
+		SourceID: created.ID,
+		Name:     strings.TrimSpace(created.Name) + " 路由组",
+		Enabled:  true,
+		Mode:     route.ModeTable,
+	})
+	if err != nil {
+		return route.Flow{}, false, err
+	}
+	return flow, true, nil
 }
 
 func (h *Handler) ingestHandler(w http.ResponseWriter, r *http.Request) {
@@ -402,6 +429,10 @@ func sourceErrorStatus(err error) (int, string, string) {
 		return http.StatusBadRequest, "MGP-PAYLOAD-001", "请求 JSON 不合法"
 	case errors.Is(err, source.ErrInvalidDedupeConfig):
 		return http.StatusBadRequest, "MGP-DEDUPE-001", "入站去重配置不合法"
+	case errors.Is(err, source.ErrDedupeStoreFailed):
+		return http.StatusServiceUnavailable, "MGP-DEDUPE-002", "入站去重服务暂不可用"
+	case errors.Is(err, source.ErrHMACNonceStoreFailed):
+		return http.StatusServiceUnavailable, "MGP-HMAC-002", "HMAC 重放防护服务暂不可用"
 	case errors.Is(err, source.ErrAlreadyExists):
 		return http.StatusConflict, "MGP-SRC-001", "来源编码已存在"
 	case errors.Is(err, source.ErrNotFound):

@@ -146,6 +146,7 @@ describe('dashboard data mapping', () => {
         batch_size: 200,
         last_batch_deleted: 14,
         total_deleted: 42,
+        deleted_audit_logs: 3,
         deleted_dedupe_keys: 2,
         completed: false,
         has_more: true,
@@ -161,10 +162,25 @@ describe('dashboard data mapping', () => {
     expect(viewModel.platformHealth.map((item) => item.health)).toEqual(['警告', '异常']);
     expect(viewModel.platformHealth[1]?.lastError).toBe('-');
     expect(viewModel.trendPoints).toEqual([14]);
+    expect(viewModel.trendSeries).toEqual([
+      {
+        key: 'route_plan',
+        label: '路由规划处理量',
+        points: [4],
+        color: '#1677ff',
+      },
+      {
+        key: 'send_message',
+        label: '出站发送处理量',
+        points: [9],
+        color: '#22c55e',
+      },
+      { key: 'dead_letters', label: '死信数量', points: [1], color: '#ef4444' },
+    ]);
     expect(buildQueueMonitoringViewModel(queue, '7d').trendLabels).toEqual(['05/09']);
     expect(viewModel.slowRules[0]?.avgDuration).toBe('320 ms');
     expect(viewModel.cleanupRows[0]?.value).toBe('30 天');
-    expect(viewModel.cleanupRows[1]?.status).toBe('单批上限 200，去重键 2');
+    expect(viewModel.cleanupRows[1]?.status).toBe('单批上限 200，去重键 2，审计 3');
     expect(viewModel.cleanupRows[2]?.status).toBe('未完成，仍有剩余');
     expect(viewModel.cleanupRows[3]?.status).toBe('仍有历史数据待清理');
   });
@@ -176,12 +192,8 @@ describe('dashboard data mapping', () => {
     expect(overview.metrics).toHaveLength(6);
     expect(overview.metrics.map((item) => item.label)).toContain('总发送量');
     expect(queue.metrics.map((item) => item.label)).toContain('路由规划积压');
-    expect(queue.cleanupRows.map((item) => item.status)).toEqual([
-      '默认策略',
-      '单批上限 200',
-      '待下一次执行',
-      '当前批次后无剩余',
-    ]);
+    expect(queue.cleanupRows.map((item) => item.status)).toEqual(['默认策略', '单批上限 200', '待下一次执行', '当前批次后无剩余']);
+    expect(queue.trendSeries.map((item) => item.label)).toEqual(['路由规划处理量', '出站发送处理量', '死信数量']);
   });
 
   it('gracefully handles missing, null, undefined, or NaN values by showing safe defaults', () => {

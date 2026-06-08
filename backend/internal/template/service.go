@@ -93,6 +93,7 @@ type PublishTemplateVersionParams struct {
 	VersionInput
 	CompiledPreview  json.RawMessage
 	UsedVariables    []string
+	AllowedFilters   []string
 	ValidationStatus string
 	ValidationErrors json.RawMessage
 }
@@ -183,6 +184,7 @@ func (s *Service) Parse(input VersionInput) (ValidationResult, error) {
 	result := ValidationResult{Status: "valid", Variables: ParseVariables(input.TemplateBody)}
 	addRequiredVersionFieldErrors(&result, input)
 	addRecipientFieldErrors(&result, input.TemplateBody)
+	addTemplateCapabilityErrors(&result, input.TemplateBody)
 	if result.Status != "valid" {
 		return result, ErrInvalidTemplate
 	}
@@ -213,6 +215,7 @@ func (s *Service) Validate(input VersionInput) ValidationResult {
 	}
 	addRequiredVersionFieldErrors(&result, input)
 	addRecipientFieldErrors(&result, input.TemplateBody)
+	addTemplateCapabilityErrors(&result, input.TemplateBody)
 	if result.Status != "valid" {
 		return result
 	}
@@ -230,6 +233,24 @@ func (s *Service) Validate(input VersionInput) ValidationResult {
 		return result
 	}
 
+	preview, err := s.engine.Render(input.TemplateBody, templateRenderContext(payloadMap))
+	if err != nil {
+		result.Status = "invalid"
+		result.Errors = append(result.Errors, ValidationError{Code: "MGP-TPL-005", Message: err.Error()})
+		return result
+	}
+	renderedValue, err := decodeRenderedJSON(preview)
+	if err != nil {
+		result.Status = "invalid"
+		result.Errors = append(result.Errors, ValidationError{
+			Code:    "MGP-TPL-JSON",
+			Message: "模板使用 sample_payload 渲染后的结果必须是合法 JSON",
+			Path:    "template_body",
+		})
+		return result
+	}
+
+	addRenderedRecipientFieldErrors(&result, renderedValue)
 	schema, schemaFound, err := effectiveMessageSchema(input)
 	if err != nil {
 		result.Status = "invalid"
@@ -241,7 +262,7 @@ func (s *Service) Validate(input VersionInput) ValidationResult {
 		return result
 	}
 	if schemaFound {
-		if err := validateTemplateBodySchema(&result, input.TemplateBody, schema); err != nil {
+		if err := validateRenderedMessageSchema(&result, renderedValue, schema); err != nil {
 			result.Status = "invalid"
 			result.Errors = append(result.Errors, ValidationError{
 				Code:    "MGP-TPL-SCHEMA",
@@ -251,13 +272,6 @@ func (s *Service) Validate(input VersionInput) ValidationResult {
 		}
 	}
 	if result.Status != "valid" {
-		return result
-	}
-
-	preview, err := s.engine.Render(input.TemplateBody, map[string]any{"payload": payloadMap})
-	if err != nil {
-		result.Status = "invalid"
-		result.Errors = append(result.Errors, ValidationError{Code: "MGP-TPL-005", Message: err.Error()})
 		return result
 	}
 	result.Preview = preview
@@ -282,6 +296,7 @@ func (s *Service) Publish(ctx context.Context, templateID string, input VersionI
 		VersionInput:     input,
 		CompiledPreview:  previewJSON,
 		UsedVariables:    variablePaths(result.Variables),
+		AllowedFilters:   parseTemplateFilters(input.TemplateBody),
 		ValidationStatus: "valid",
 		ValidationErrors: errorsJSON,
 	})
@@ -306,6 +321,8 @@ func (s *Service) RestoreTemplateVersion(ctx context.Context, templateID string,
 
 var payloadVariablePattern = regexp.MustCompile(`\{\{\s*([^{}]+?)\s*\}\}`)
 var payloadPathPattern = regexp.MustCompile(`\bpayload(?:\.[A-Za-z_][A-Za-z0-9_]*)+\b`)
+var templateFilterPattern = regexp.MustCompile(`\{\{\s*([^{}]+?)\s*\}\}`)
+var templateTagPattern = regexp.MustCompile(`\{%-?\s*([A-Za-z_][A-Za-z0-9_]*)\b`)
 var defaultFilterPattern = regexp.MustCompile(`(?i)\|\s*default\s*(?:[:(])`)
 var defaultFilterSingleQuotePattern = regexp.MustCompile(`(?i)\|\s*default\(\s*'((?:\\.|[^\\'])*)'\s*\)`)
 var defaultFilterDoubleQuotePattern = regexp.MustCompile(`(?i)\|\s*default\(\s*"((?:\\.|[^\\"])*)"\s*\)`)
@@ -361,6 +378,44 @@ func addRequiredVersionFieldErrors(result *ValidationResult, input VersionInput)
 
 func addRecipientFieldErrors(result *ValidationResult, templateBody string) {
 	for _, path := range recipientFieldPaths(templateBody) {
+		appendValidationError(result, ValidationError{
+			Code:    "MGP-TPL-RECIPIENT",
+			Message: "模板内容不能包含接收人字段，接收人应由路由和平台适配器处理",
+			Path:    path,
+		})
+	}
+}
+
+func addTemplateCapabilityErrors(result *ValidationResult, templateBody string) {
+	for _, filter := range parseTemplateFilters(templateBody) {
+		if !isAllowedTemplateFilter(filter) {
+			appendValidationError(result, ValidationError{
+				Code:    "MGP-TPL-FILTER",
+				Message: "模板使用了未允许的 filter",
+				Path:    filter,
+			})
+		}
+	}
+	for _, tag := range parseTemplateTags(templateBody) {
+		if !isAllowedTemplateTag(tag) {
+			appendValidationError(result, ValidationError{
+				Code:    "MGP-TPL-TAG",
+				Message: "模板使用了未允许的 tag",
+				Path:    tag,
+			})
+		}
+	}
+}
+
+func addRenderedRecipientFieldErrors(result *ValidationResult, value any) {
+	found := map[string]bool{}
+	collectRecipientFieldPaths("", value, found)
+	paths := make([]string, 0, len(found))
+	for path := range found {
+		paths = append(paths, path)
+	}
+	sort.Strings(paths)
+	for _, path := range paths {
 		appendValidationError(result, ValidationError{
 			Code:    "MGP-TPL-RECIPIENT",
 			Message: "模板内容不能包含接收人字段，接收人应由路由和平台适配器处理",
@@ -457,6 +512,74 @@ func defaultFilterReplacement(value string) string {
 	return `| default:"` + value + `"`
 }
 
+func parseTemplateFilters(templateBody string) []string {
+	seen := map[string]bool{}
+	filters := []string{}
+	for _, match := range templateFilterPattern.FindAllStringSubmatch(templateBody, -1) {
+		if len(match) < 2 {
+			continue
+		}
+		segments := strings.Split(match[1], "|")
+		for _, segment := range segments[1:] {
+			name := leadingIdentifier(segment)
+			if name == "" || seen[name] {
+				continue
+			}
+			seen[name] = true
+			filters = append(filters, name)
+		}
+	}
+	sort.Strings(filters)
+	return filters
+}
+
+func parseTemplateTags(templateBody string) []string {
+	seen := map[string]bool{}
+	tags := []string{}
+	for _, match := range templateTagPattern.FindAllStringSubmatch(templateBody, -1) {
+		if len(match) < 2 {
+			continue
+		}
+		tag := strings.TrimSpace(match[1])
+		if tag == "" || seen[tag] {
+			continue
+		}
+		seen[tag] = true
+		tags = append(tags, tag)
+	}
+	sort.Strings(tags)
+	return tags
+}
+
+func leadingIdentifier(value string) string {
+	value = strings.TrimSpace(value)
+	for index, char := range value {
+		if index == 0 {
+			if char != '_' && (char < 'A' || char > 'Z') && (char < 'a' || char > 'z') {
+				return ""
+			}
+			continue
+		}
+		if char != '_' && (char < 'A' || char > 'Z') && (char < 'a' || char > 'z') && (char < '0' || char > '9') {
+			return value[:index]
+		}
+	}
+	return value
+}
+
+func isAllowedTemplateFilter(filter string) bool {
+	return filter == "default"
+}
+
+func isAllowedTemplateTag(tag string) bool {
+	switch tag {
+	case "if", "elif", "else", "endif", "for", "empty", "endfor":
+		return true
+	default:
+		return false
+	}
+}
+
 func effectiveMessageSchema(input VersionInput) (json.RawMessage, bool, error) {
 	if hasExplicitMessageSchema(input.MessageBodySchema) {
 		if !json.Valid(input.MessageBodySchema) {
@@ -480,30 +603,36 @@ func hasExplicitMessageSchema(raw json.RawMessage) bool {
 	return true
 }
 
-func validateTemplateBodySchema(result *ValidationResult, templateBody string, schema json.RawMessage) error {
-	required, expectsObject, err := requiredContentFields(schema)
+func validateRenderedMessageSchema(result *ValidationResult, value any, schema json.RawMessage) error {
+	shape, err := messageSchemaShape(schema)
 	if err != nil {
 		return err
 	}
-	object, parsed := decodeTemplateBodyJSONObject(templateBody)
-	if !parsed {
+	if !shape.ExpectsObject {
 		return nil
 	}
-	if object == nil {
-		if expectsObject {
-			appendValidationError(result, ValidationError{
-				Code:    "MGP-TPL-SCHEMA",
-				Message: "template_body 必须是 JSON 对象",
-				Path:    "template_body",
-			})
-		}
+	object, ok := value.(map[string]any)
+	if !ok {
+		appendValidationError(result, ValidationError{
+			Code:    "MGP-TPL-SCHEMA",
+			Message: "模板渲染结果必须是 JSON 对象",
+			Path:    "template_body",
+		})
 		return nil
 	}
-	for _, field := range required {
+	for _, field := range shape.Required {
 		if _, ok := object[field]; !ok {
 			appendValidationError(result, ValidationError{
 				Code:    "MGP-TPL-REQUIRED",
 				Message: "模板内容缺少消息 schema 必填字段",
+				Path:    field,
+			})
+			continue
+		}
+		if expectedTypes := shape.PropertyTypes[field]; len(expectedTypes) > 0 && !jsonValueMatchesAnyType(object[field], expectedTypes) {
+			appendValidationError(result, ValidationError{
+				Code:    "MGP-TPL-SCHEMA",
+				Message: "模板内容字段类型与消息 schema 不匹配",
 				Path:    field,
 			})
 		}
@@ -511,17 +640,25 @@ func validateTemplateBodySchema(result *ValidationResult, templateBody string, s
 	return nil
 }
 
-func requiredContentFields(raw json.RawMessage) ([]string, bool, error) {
+type messageSchemaInfo struct {
+	Required      []string
+	ExpectsObject bool
+	PropertyTypes map[string][]string
+}
+
+func messageSchemaShape(raw json.RawMessage) (messageSchemaInfo, error) {
 	var schema struct {
-		Type       string                     `json:"type"`
-		Required   []string                   `json:"required"`
-		Properties map[string]json.RawMessage `json:"properties"`
+		Type       any      `json:"type"`
+		Required   []string `json:"required"`
+		Properties map[string]struct {
+			Type any `json:"type"`
+		} `json:"properties"`
 	}
 	if len(bytes.TrimSpace(raw)) == 0 {
-		return nil, false, nil
+		return messageSchemaInfo{}, nil
 	}
 	if err := json.Unmarshal(raw, &schema); err != nil {
-		return nil, false, err
+		return messageSchemaInfo{}, err
 	}
 	fields := make([]string, 0, len(schema.Required))
 	for _, field := range schema.Required {
@@ -530,8 +667,81 @@ func requiredContentFields(raw json.RawMessage) ([]string, bool, error) {
 			fields = append(fields, field)
 		}
 	}
-	expectsObject := schema.Type == "object" || len(schema.Properties) > 0 || len(fields) > 0
-	return fields, expectsObject, nil
+	expectsObject := schemaTypeContains(schema.Type, "object") || len(schema.Properties) > 0 || len(fields) > 0
+	propertyTypes := make(map[string][]string, len(schema.Properties))
+	for field, property := range schema.Properties {
+		propertyTypes[field] = schemaTypeNames(property.Type)
+	}
+	return messageSchemaInfo{Required: fields, ExpectsObject: expectsObject, PropertyTypes: propertyTypes}, nil
+}
+
+func schemaTypeContains(value any, expected string) bool {
+	for _, item := range schemaTypeNames(value) {
+		if item == expected {
+			return true
+		}
+	}
+	return false
+}
+
+func schemaTypeNames(value any) []string {
+	switch typed := value.(type) {
+	case string:
+		typed = strings.TrimSpace(typed)
+		if typed == "" {
+			return nil
+		}
+		return []string{typed}
+	case []any:
+		names := make([]string, 0, len(typed))
+		for _, item := range typed {
+			if name, ok := item.(string); ok {
+				name = strings.TrimSpace(name)
+				if name != "" {
+					names = append(names, name)
+				}
+			}
+		}
+		return names
+	default:
+		return nil
+	}
+}
+
+func jsonValueMatchesAnyType(value any, expectedTypes []string) bool {
+	if len(expectedTypes) == 0 {
+		return true
+	}
+	for _, expectedType := range expectedTypes {
+		if jsonValueMatchesType(value, expectedType) {
+			return true
+		}
+	}
+	return false
+}
+
+func jsonValueMatchesType(value any, expectedType string) bool {
+	switch expectedType {
+	case "", "any":
+		return true
+	case "object":
+		_, ok := value.(map[string]any)
+		return ok
+	case "array":
+		_, ok := value.([]any)
+		return ok
+	case "string":
+		_, ok := value.(string)
+		return ok
+	case "number", "integer":
+		_, ok := value.(float64)
+		return ok
+	case "boolean":
+		_, ok := value.(bool)
+		return ok
+	default:
+		return true
+	}
 }
 
 func normalizeTemplateInput(input TemplateInput) (CreateTemplateParams, error) {
@@ -590,6 +800,28 @@ func decodeTemplateBodyJSONObject(templateBody string) (map[string]any, bool) {
 		return nil, true
 	}
 	return object, true
+}
+
+func decodeRenderedJSON(rendered string) (any, error) {
+	var value any
+	if err := json.Unmarshal([]byte(rendered), &value); err != nil {
+		return nil, err
+	}
+	return value, nil
+}
+
+func templateRenderContext(payloadMap map[string]any) map[string]any {
+	return map[string]any{
+		"payload": payloadMap,
+		"message": map[string]any{
+			"id":       "sample-message",
+			"trace_id": "sample-trace",
+		},
+		"source": map[string]any{
+			"id": "sample-source",
+		},
+		"now": time.Now().UTC().Format(time.RFC3339),
+	}
 }
 
 func variablePaths(variables []VariableRef) []string {

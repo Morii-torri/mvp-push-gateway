@@ -110,7 +110,7 @@ func (r Repository) CreateSource(ctx context.Context, params source.CreateSource
 		params.AuthMode,
 		params.AuthToken,
 		params.HMACSecret,
-		params.IPAllowlist,
+		defaultStringSlice(params.IPAllowlist),
 		params.CompatMode,
 		params.InboundDedupeEnabled,
 		params.InboundDedupeStrategy,
@@ -190,7 +190,7 @@ func (r Repository) UpdateSource(ctx context.Context, id string, params source.U
 		params.AuthMode,
 		params.AuthToken,
 		params.HMACSecret,
-		params.IPAllowlist,
+		defaultStringSlice(params.IPAllowlist),
 		params.CompatMode,
 		params.InboundDedupeEnabled,
 		params.InboundDedupeStrategy,
@@ -221,19 +221,183 @@ func (r Repository) DeleteSource(ctx context.Context, id string) error {
 	return nil
 }
 
-func (r Repository) UpdateLatestPayloadSample(ctx context.Context, sourceID string, payload json.RawMessage) error {
+func (r Repository) DeleteSourceRuntimeData(ctx context.Context, sourceID string) error {
+	tx, err := r.pool.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return fmt.Errorf("begin delete source runtime data transaction: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	if _, err := tx.Exec(ctx, `
+		WITH source_messages AS (
+			SELECT id::text AS message_id
+			FROM message_records
+			WHERE source_id = $1::uuid
+		),
+		source_attempts AS (
+			SELECT attempt.id::text AS attempt_id
+			FROM delivery_attempts AS attempt
+			JOIN source_messages AS message ON message.message_id = attempt.message_id::text
+		),
+		source_jobs AS (
+			SELECT id
+			FROM jobs
+			WHERE payload->>'source_id' = $1::text
+				OR payload->>'message_id' IN (SELECT message_id FROM source_messages)
+				OR payload->>'delivery_attempt_id' IN (SELECT attempt_id FROM source_attempts)
+		)
+		DELETE FROM dead_letter_jobs
+		WHERE job_id IN (SELECT id FROM source_jobs)
+			OR payload->>'source_id' = $1::text
+			OR payload->>'message_id' IN (SELECT message_id FROM source_messages)
+			OR payload->>'delivery_attempt_id' IN (SELECT attempt_id FROM source_attempts)
+	`, sourceID); err != nil {
+		return fmt.Errorf("delete source runtime dead letters: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `
+		WITH source_messages AS (
+			SELECT id::text AS message_id
+			FROM message_records
+			WHERE source_id = $1::uuid
+		),
+		source_attempts AS (
+			SELECT attempt.id::text AS attempt_id
+			FROM delivery_attempts AS attempt
+			JOIN source_messages AS message ON message.message_id = attempt.message_id::text
+		)
+		DELETE FROM jobs
+		WHERE payload->>'source_id' = $1::text
+			OR payload->>'message_id' IN (SELECT message_id FROM source_messages)
+			OR payload->>'delivery_attempt_id' IN (SELECT attempt_id FROM source_attempts)
+	`, sourceID); err != nil {
+		return fmt.Errorf("delete source runtime jobs: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `DELETE FROM message_records WHERE source_id = $1`, sourceID); err != nil {
+		return fmt.Errorf("delete source runtime messages: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit delete source runtime data transaction: %w", err)
+	}
+	return nil
+}
+
+func (r Repository) PerformanceDeliveryStatuses(ctx context.Context, traceIDs []string) (map[string]bool, error) {
+	statuses := make(map[string]bool, len(traceIDs))
+	cleaned := cleanStrings(traceIDs)
+	if len(cleaned) == 0 {
+		return statuses, nil
+	}
+	rows, err := r.pool.Query(ctx, `
+		SELECT
+			message.trace_id,
+			COALESCE(bool_or(attempt.status = 'sent'), false) AS sent
+		FROM message_records AS message
+		LEFT JOIN delivery_attempts AS attempt ON attempt.message_id = message.id
+		WHERE message.trace_id = ANY($1::text[])
+		GROUP BY message.trace_id
+	`, cleaned)
+	if err != nil {
+		return nil, fmt.Errorf("query performance delivery statuses: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var traceID string
+		var sent bool
+		if err := rows.Scan(&traceID, &sent); err != nil {
+			return nil, fmt.Errorf("scan performance delivery status: %w", err)
+		}
+		statuses[traceID] = sent
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("performance delivery status rows: %w", err)
+	}
+	for _, traceID := range cleaned {
+		if _, ok := statuses[traceID]; !ok {
+			statuses[traceID] = false
+		}
+	}
+	return statuses, nil
+}
+
+func (r Repository) PerformanceDeliveryStatusDetails(ctx context.Context, traceIDs []string) (map[string]source.PerformanceDeliveryStatus, error) {
+	statuses := make(map[string]source.PerformanceDeliveryStatus, len(traceIDs))
+	cleaned := cleanStrings(traceIDs)
+	if len(cleaned) == 0 {
+		return statuses, nil
+	}
+	rows, err := r.pool.Query(ctx, `
+		SELECT
+			message.trace_id,
+			COALESCE(bool_or(attempt.status = 'sent'), false) AS sent,
+			message.received_at,
+			max(attempt.finished_at) FILTER (WHERE attempt.status = 'sent') AS finished_at,
+			max(attempt.updated_at) FILTER (WHERE attempt.status = 'sent') AS persisted_at
+		FROM message_records AS message
+		LEFT JOIN delivery_attempts AS attempt ON attempt.message_id = message.id
+		WHERE message.trace_id = ANY($1::text[])
+		GROUP BY message.trace_id, message.received_at
+	`, cleaned)
+	if err != nil {
+		return nil, fmt.Errorf("query performance delivery status details: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var traceID string
+		var sent bool
+		var receivedAt time.Time
+		var finishedAt pgtype.Timestamptz
+		var persistedAt pgtype.Timestamptz
+		if err := rows.Scan(&traceID, &sent, &receivedAt, &finishedAt, &persistedAt); err != nil {
+			return nil, fmt.Errorf("scan performance delivery status details: %w", err)
+		}
+		item := source.PerformanceDeliveryStatus{
+			Sent:       sent,
+			ReceivedAt: receivedAt,
+		}
+		if finishedAt.Valid {
+			item.FinishedAt = finishedAt.Time
+		}
+		if persistedAt.Valid {
+			item.PersistedAt = persistedAt.Time
+		}
+		statuses[traceID] = item
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("performance delivery status detail rows: %w", err)
+	}
+	for _, traceID := range cleaned {
+		if _, ok := statuses[traceID]; !ok {
+			statuses[traceID] = source.PerformanceDeliveryStatus{}
+		}
+	}
+	return statuses, nil
+}
+
+func (r Repository) UpdateLatestPayloadSample(ctx context.Context, sourceID string, payload json.RawMessage, sampledAt time.Time) error {
 	tag, err := r.pool.Exec(ctx, `
 		UPDATE inbound_sources
 		SET latest_payload_sample = $2,
-			latest_payload_sample_updated_at = now(),
+			latest_payload_sample_updated_at = $3,
 			updated_at = now()
 		WHERE id = $1
-	`, sourceID, payload)
+			AND (
+				latest_payload_sample_updated_at IS NULL
+				OR latest_payload_sample_updated_at <= $3
+			)
+	`, sourceID, payload, sampledAt.UTC())
 	if err != nil {
 		return fmt.Errorf("update latest payload sample: %w", err)
 	}
 	if tag.RowsAffected() == 0 {
-		return source.ErrNotFound
+		var exists bool
+		err := r.pool.QueryRow(ctx, `SELECT true FROM inbound_sources WHERE id = $1`, sourceID).Scan(&exists)
+		if err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return source.ErrNotFound
+			}
+			return fmt.Errorf("check latest payload source exists: %w", err)
+		}
+		return nil
 	}
 	return nil
 }
@@ -264,12 +428,26 @@ func (r Repository) ReserveHMACNonce(ctx context.Context, sourceID string, nonce
 }
 
 func (r Repository) EnqueueInbound(ctx context.Context, params source.EnqueueInboundParams) error {
-	tx, err := r.pool.BeginTx(ctx, pgx.TxOptions{})
+	conn, err := r.acquireConn(ctx, params.TraceID, SQLTimingAcquireEnqueueInbound)
+	if err != nil {
+		return fmt.Errorf("acquire enqueue inbound connection: %w", err)
+	}
+	defer conn.Release()
+
+	if useFastInboundEnqueue(params) {
+		return enqueueInboundFast(ctx, conn, params)
+	}
+	if useFastInboundRecordOnly(params) {
+		return enqueueInboundRecordOnlyFast(ctx, conn, params)
+	}
+
+	tx, err := conn.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {
 		return fmt.Errorf("begin enqueue inbound transaction: %w", err)
 	}
 	defer tx.Rollback(ctx)
 
+	startedAt := time.Now()
 	if _, err := tx.Exec(ctx, `
 		INSERT INTO message_records (
 			id,
@@ -287,8 +465,11 @@ func (r Repository) EnqueueInbound(ctx context.Context, params source.EnqueueInb
 	`, params.MessageID, params.TraceID, params.SourceID, params.ReceivedAt, params.Headers, params.Payload, params.PayloadHash, inboundMessageStatus(params.Status), params.ErrorCode, params.ErrorMessage); err != nil {
 		return fmt.Errorf("insert message record: %w", err)
 	}
+	recordSQLTiming(ctx, params.TraceID, SQLTimingInsertMessageRecord, time.Since(startedAt))
+	source.RecordIngestTiming(ctx, source.IngestTimingInsertMessageRecord, time.Since(startedAt))
 
 	if params.DedupeEnabled {
+		startedAt = time.Now()
 		tag, err := tx.Exec(ctx, `
 			INSERT INTO dedupe_keys (
 				id,
@@ -304,6 +485,8 @@ func (r Repository) EnqueueInbound(ctx context.Context, params source.EnqueueInb
 		if err != nil {
 			return fmt.Errorf("insert inbound dedupe key: %w", err)
 		}
+		recordSQLTiming(ctx, params.TraceID, SQLTimingInsertInboundDedupeKey, time.Since(startedAt))
+		source.RecordIngestTiming(ctx, source.IngestTimingInsertInboundDedupeKey, time.Since(startedAt))
 		if tag.RowsAffected() == 0 {
 			if _, err := tx.Exec(ctx, `
 				UPDATE message_records
@@ -315,20 +498,27 @@ func (r Repository) EnqueueInbound(ctx context.Context, params source.EnqueueInb
 			`, params.MessageID); err != nil {
 				return fmt.Errorf("mark inbound message deduped: %w", err)
 			}
+			startedAt = time.Now()
 			if err := tx.Commit(ctx); err != nil {
 				return fmt.Errorf("commit duplicate inbound transaction: %w", err)
 			}
+			recordSQLTiming(ctx, params.TraceID, SQLTimingCommitInbound, time.Since(startedAt))
+			source.RecordIngestTiming(ctx, source.IngestTimingCommitInboundTransaction, time.Since(startedAt))
 			return source.ErrDuplicateInbound
 		}
 	}
 
 	if params.SkipRoutePlan {
+		startedAt = time.Now()
 		if err := tx.Commit(ctx); err != nil {
 			return fmt.Errorf("commit skipped route plan inbound transaction: %w", err)
 		}
+		recordSQLTiming(ctx, params.TraceID, SQLTimingCommitInbound, time.Since(startedAt))
+		source.RecordIngestTiming(ctx, source.IngestTimingCommitInboundTransaction, time.Since(startedAt))
 		return nil
 	}
 
+	startedAt = time.Now()
 	if _, err := tx.Exec(ctx, `
 		INSERT INTO jobs (
 			id,
@@ -343,10 +533,104 @@ func (r Repository) EnqueueInbound(ctx context.Context, params source.EnqueueInb
 	`, uuid.NewString(), params.JobType, params.JobPayload, params.SourceID); err != nil {
 		return fmt.Errorf("insert route plan job: %w", err)
 	}
+	recordSQLTiming(ctx, params.TraceID, SQLTimingInsertRoutePlanJob, time.Since(startedAt))
+	source.RecordIngestTiming(ctx, source.IngestTimingInsertRoutePlanJob, time.Since(startedAt))
 
+	startedAt = time.Now()
 	if err := tx.Commit(ctx); err != nil {
 		return fmt.Errorf("commit enqueue inbound transaction: %w", err)
 	}
+	recordSQLTiming(ctx, params.TraceID, SQLTimingCommitInbound, time.Since(startedAt))
+	source.RecordIngestTiming(ctx, source.IngestTimingCommitInboundTransaction, time.Since(startedAt))
+	return nil
+}
+
+func useFastInboundEnqueue(params source.EnqueueInboundParams) bool {
+	status := inboundMessageStatus(params.Status)
+	return !params.DedupeEnabled &&
+		!params.SkipRoutePlan &&
+		status == "accepted" &&
+		params.ErrorCode == "" &&
+		params.ErrorMessage == "" &&
+		params.JobType == "route_plan" &&
+		len(params.JobPayload) > 0
+}
+
+func useFastInboundRecordOnly(params source.EnqueueInboundParams) bool {
+	status := inboundMessageStatus(params.Status)
+	return !params.DedupeEnabled &&
+		params.SkipRoutePlan &&
+		status == "accepted" &&
+		params.ErrorCode == "" &&
+		params.ErrorMessage == "" &&
+		params.JobType == "" &&
+		len(params.JobPayload) == 0
+}
+
+type sqlExecer interface {
+	Exec(ctx context.Context, sql string, arguments ...any) (pgconn.CommandTag, error)
+}
+
+func enqueueInboundFast(ctx context.Context, conn sqlExecer, params source.EnqueueInboundParams) error {
+	startedAt := time.Now()
+	if _, err := conn.Exec(ctx, `
+		WITH inserted_message AS (
+			INSERT INTO message_records (
+				id,
+				trace_id,
+				source_id,
+				received_at,
+				headers,
+				payload,
+				payload_hash,
+				status,
+				error_code,
+				error_message
+			)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NULL, NULL)
+			RETURNING id
+		)
+		INSERT INTO jobs (
+			id,
+			type,
+			status,
+			payload,
+			run_at,
+			max_attempts,
+			queue_key
+		)
+		SELECT $9, 'route_plan', 'queued', $10, now(), 3, $11
+		FROM inserted_message
+	`, params.MessageID, params.TraceID, params.SourceID, params.ReceivedAt, params.Headers, params.Payload, params.PayloadHash, inboundMessageStatus(params.Status), uuid.NewString(), params.JobPayload, params.SourceID); err != nil {
+		return fmt.Errorf("enqueue inbound fast path: %w", err)
+	}
+	recordSQLTiming(ctx, params.TraceID, SQLTimingEnqueueInboundFast, time.Since(startedAt))
+	return nil
+}
+
+func enqueueInboundRecordOnlyFast(ctx context.Context, conn sqlExecer, params source.EnqueueInboundParams) error {
+	startedAt := time.Now()
+	if _, err := conn.Exec(ctx, `
+		INSERT INTO message_records (
+			id,
+			trace_id,
+			source_id,
+			received_at,
+			headers,
+			payload,
+			payload_hash,
+			status,
+			error_code,
+			error_message
+		)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NULL, NULL)
+	`, params.MessageID, params.TraceID, params.SourceID, params.ReceivedAt, params.Headers, params.Payload, params.PayloadHash, inboundMessageStatus(params.Status)); err != nil {
+		return fmt.Errorf("enqueue inbound record fast path: %w", err)
+	}
+	duration := time.Since(startedAt)
+	recordSQLTiming(ctx, params.TraceID, SQLTimingEnqueueInboundFast, duration)
+	recordSQLTiming(ctx, params.TraceID, SQLTimingInsertMessageRecord, duration)
+	source.RecordIngestTiming(ctx, source.IngestTimingInsertMessageRecord, duration)
 	return nil
 }
 

@@ -9,6 +9,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"mvp-push-gateway/backend/internal/config"
+	"mvp-push-gateway/backend/internal/source"
 )
 
 var ErrMissingDSN = errors.New("postgres dsn is required")
@@ -94,11 +95,26 @@ func (p *PoolSet) Close() {
 }
 
 type Repository struct {
-	pool *pgxpool.Pool
+	pool             *pgxpool.Pool
+	asyncRuntimeLogs *AsyncRuntimeLogWriter
 }
 
 func NewRepository(pool *pgxpool.Pool) Repository {
 	return Repository{pool: pool}
+}
+
+func NewRepositoryWithAsyncRuntimeLogWriter(pool *pgxpool.Pool, writer *AsyncRuntimeLogWriter) Repository {
+	return Repository{pool: pool, asyncRuntimeLogs: writer}
+}
+
+func (r Repository) acquireConn(ctx context.Context, traceID string, stage SQLTimingStage) (*pgxpool.Conn, error) {
+	startedAt := time.Now()
+	conn, err := r.pool.Acquire(ctx)
+	recordSQLTiming(ctx, traceID, stage, time.Since(startedAt))
+	if err != nil {
+		return nil, err
+	}
+	return conn, nil
 }
 
 func (r Repository) Ping(ctx context.Context) error {
@@ -106,4 +122,33 @@ func (r Repository) Ping(ctx context.Context) error {
 		return errors.New("postgres pool is nil")
 	}
 	return r.pool.Ping(ctx)
+}
+
+func (r Repository) RuntimeStats(ctx context.Context) (source.RuntimeStats, error) {
+	if r.pool == nil {
+		return source.RuntimeStats{}, nil
+	}
+	stats := r.pool.Stat()
+	result := source.RuntimeStats{
+		DBPoolAcquireCount:   stats.AcquireCount(),
+		DBPoolWaitCount:      stats.EmptyAcquireCount(),
+		DBPoolWaitDurationMS: stats.AcquireDuration().Milliseconds(),
+		DBPoolAcquiredConns:  stats.AcquiredConns(),
+		DBPoolTotalConns:     stats.TotalConns(),
+	}
+	_ = r.pool.QueryRow(ctx, `
+		SELECT
+			current_setting('max_connections')::int,
+			COALESCE(blks_read, 0),
+			COALESCE(blks_hit, 0),
+			COALESCE(temp_bytes, 0)
+		FROM pg_stat_database
+		WHERE datname = current_database()
+	`).Scan(
+		&result.PostgresMaxConnections,
+		&result.PostgresBlocksRead,
+		&result.PostgresBlocksHit,
+		&result.PostgresTempBytes,
+	)
+	return result, nil
 }

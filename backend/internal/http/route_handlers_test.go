@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 
 	httpapi "mvp-push-gateway/backend/internal/http"
@@ -358,6 +359,57 @@ func TestRouteVersionRulesReturnsReadOnlyHistoricalRules(t *testing.T) {
 	}
 }
 
+func TestRouteVersionCheckoutCopiesHistoricalVersionIntoWorkingDraft(t *testing.T) {
+	routeService := &fakeRouteService{
+		checkoutResult: route.RuleSet{
+			VersionID:          "draft-4",
+			DraftBaseVersionID: "version-2",
+			DraftBaseVersionNo: 2,
+			Rules: []route.Rule{{
+				ID:        "rule-copy",
+				RuleKey:   "00000000-0000-0000-0000-000000000301",
+				SortOrder: 1,
+				Name:      "从 v2 检出的规则",
+				Enabled:   true,
+			}},
+		},
+	}
+	handler := httpapi.NewHandler(
+		testConfig(),
+		httpapi.WithAuthService(fakeAuthService{authenticatedToken: "admin-session"}),
+		httpapi.WithRouteService(routeService),
+	)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/route-flows/flow-1/versions/version-2/checkout", nil)
+	req.Header.Set("Authorization", "Bearer admin-session")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	if routeService.checkoutFlowID != "flow-1" || routeService.checkoutVersionID != "version-2" {
+		t.Fatalf("expected service to checkout flow/version ids, got flow=%q version=%q", routeService.checkoutFlowID, routeService.checkoutVersionID)
+	}
+	var body struct {
+		VersionID          string `json:"version_id"`
+		DraftBaseVersionID string `json:"draft_base_version_id"`
+		DraftBaseVersionNo int    `json:"draft_base_version_no"`
+		Rules              []struct {
+			Name string `json:"name"`
+		} `json:"rules"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
+		t.Fatalf("decode checkout response: %v", err)
+	}
+	if body.VersionID != "draft-4" || body.DraftBaseVersionID != "version-2" || body.DraftBaseVersionNo != 2 {
+		t.Fatalf("unexpected checkout response metadata: %+v", body)
+	}
+	if len(body.Rules) != 1 || body.Rules[0].Name != "从 v2 检出的规则" {
+		t.Fatalf("unexpected checkout rules: %+v", body.Rules)
+	}
+}
+
 func TestDeleteRouteVersionRemovesHistoricalVersion(t *testing.T) {
 	routeService := &fakeRouteService{}
 	handler := httpapi.NewHandler(
@@ -380,24 +432,36 @@ func TestDeleteRouteVersionRemovesHistoricalVersion(t *testing.T) {
 }
 
 type fakeRouteService struct {
-	listResult         []route.Flow
-	getResult          route.Flow
-	createResult       route.Flow
-	updateResult       route.Flow
-	versionsResult     []route.Version
-	canvasResult       route.CanvasState
-	rulesResult        route.RuleSet
-	versionRulesResult route.RuleSet
-	validateResult     route.ValidationResult
-	publishResult      route.Version
-	simulateResult     route.SimulationResult
+	mu sync.Mutex
+
+	listResult          []route.Flow
+	getResult           route.Flow
+	createResult        route.Flow
+	updateResult        route.Flow
+	versionsResult      []route.Version
+	canvasResult        route.CanvasState
+	rulesResult         route.RuleSet
+	versionRulesResult  route.RuleSet
+	checkoutResult      route.RuleSet
+	validateResult      route.ValidationResult
+	publishResult       route.Version
+	simulateResult      route.SimulationResult
+	simulateStarted     chan struct{}
+	simulateBlock       chan struct{}
+	simulateStartedOnce sync.Once
 
 	saveRulesInput         route.SaveRulesInput
+	saveRulesInputs        []route.SaveRulesInput
 	saveRulesFlowID        string
 	versionRulesFlowID     string
 	versionRulesVersionID  string
+	checkoutFlowID         string
+	checkoutVersionID      string
 	deleteVersionFlowID    string
 	deleteVersionVersionID string
+	createInput            route.CreateFlowInput
+	simulateInputs         []route.SimulateInput
+	deletedFlowIDs         []string
 
 	createErr        error
 	getErr           error
@@ -410,8 +474,10 @@ type fakeRouteService struct {
 	simulateErr      error
 
 	listCalls      int
+	createCalls    int
 	deleteCalls    int
 	saveRulesCalls int
+	simulateCalls  int
 }
 
 func (f *fakeRouteService) ListFlows(context.Context) ([]route.Flow, error) {
@@ -419,7 +485,9 @@ func (f *fakeRouteService) ListFlows(context.Context) ([]route.Flow, error) {
 	return f.listResult, nil
 }
 
-func (f *fakeRouteService) CreateFlow(context.Context, route.CreateFlowInput) (route.Flow, error) {
+func (f *fakeRouteService) CreateFlow(_ context.Context, input route.CreateFlowInput) (route.Flow, error) {
+	f.createCalls++
+	f.createInput = input
 	if f.createErr != nil {
 		return route.Flow{}, f.createErr
 	}
@@ -443,8 +511,9 @@ func (f *fakeRouteService) UpdateFlow(context.Context, string, route.UpdateFlowI
 	return f.updateResult, nil
 }
 
-func (f *fakeRouteService) DeleteFlow(context.Context, string) error {
+func (f *fakeRouteService) DeleteFlow(_ context.Context, id string) error {
 	f.deleteCalls++
+	f.deletedFlowIDs = append(f.deletedFlowIDs, id)
 	return f.deleteErr
 }
 
@@ -476,10 +545,17 @@ func (f *fakeRouteService) GetVersionRules(_ context.Context, flowID string, ver
 	return f.versionRulesResult, nil
 }
 
+func (f *fakeRouteService) CheckoutVersion(_ context.Context, flowID string, versionID string) (route.RuleSet, error) {
+	f.checkoutFlowID = flowID
+	f.checkoutVersionID = versionID
+	return f.checkoutResult, nil
+}
+
 func (f *fakeRouteService) SaveRules(_ context.Context, flowID string, input route.SaveRulesInput) (route.RuleSet, error) {
 	f.saveRulesCalls++
 	f.saveRulesFlowID = flowID
 	f.saveRulesInput = input
+	f.saveRulesInputs = append(f.saveRulesInputs, input)
 	if f.saveRulesErr != nil {
 		return route.RuleSet{}, f.saveRulesErr
 	}
@@ -504,9 +580,26 @@ func (f *fakeRouteService) Publish(context.Context, string, ...string) (route.Ve
 	return f.publishResult, nil
 }
 
-func (f *fakeRouteService) Simulate(context.Context, string, route.SimulateInput) (route.SimulationResult, error) {
+func (f *fakeRouteService) Simulate(ctx context.Context, _ string, input route.SimulateInput) (route.SimulationResult, error) {
+	f.mu.Lock()
+	f.simulateCalls++
+	f.simulateInputs = append(f.simulateInputs, input)
 	if f.simulateErr != nil {
+		f.mu.Unlock()
 		return route.SimulationResult{}, f.simulateErr
+	}
+	if f.simulateStarted != nil {
+		f.simulateStartedOnce.Do(func() {
+			close(f.simulateStarted)
+		})
+	}
+	f.mu.Unlock()
+	if f.simulateBlock != nil {
+		select {
+		case <-ctx.Done():
+			return route.SimulationResult{}, ctx.Err()
+		case <-f.simulateBlock:
+		}
 	}
 	return f.simulateResult, nil
 }

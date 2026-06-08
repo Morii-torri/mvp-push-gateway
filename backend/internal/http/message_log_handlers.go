@@ -32,12 +32,15 @@ type messageSummaryResponse struct {
 	SourceName          string   `json:"source_name"`
 	ReceivedAt          string   `json:"received_at"`
 	Status              string   `json:"status"`
+	InboundStatus       string   `json:"inbound_status"`
 	MatchedFlowID       string   `json:"matched_flow_id"`
 	MatchedFlowName     string   `json:"matched_flow_name"`
 	MatchedRuleIDs      []string `json:"matched_rule_ids"`
 	ErrorCode           string   `json:"error_code"`
 	ErrorMessage        string   `json:"error_message"`
 	OutboundStatus      string   `json:"outbound_status"`
+	FirstOutboundAt     *string  `json:"first_outbound_at"`
+	LastOutboundAt      *string  `json:"last_outbound_at"`
 	AttemptCount        int      `json:"attempt_count"`
 	TargetChannelIDs    []string `json:"target_channel_ids"`
 	TargetChannelNames  []string `json:"target_channel_names"`
@@ -182,12 +185,15 @@ func toMessageSummaryResponse(item messagelog.MessageSummary) messageSummaryResp
 		SourceName:          item.SourceName,
 		ReceivedAt:          formatTime(item.ReceivedAt),
 		Status:              item.Status,
+		InboundStatus:       item.InboundStatus,
 		MatchedFlowID:       item.MatchedFlowID,
 		MatchedFlowName:     item.MatchedFlowName,
 		MatchedRuleIDs:      item.MatchedRuleIDs,
 		ErrorCode:           item.ErrorCode,
 		ErrorMessage:        item.ErrorMessage,
 		OutboundStatus:      item.OutboundStatus,
+		FirstOutboundAt:     formatOptionalTime(item.FirstOutboundAt),
+		LastOutboundAt:      formatOptionalTime(item.LastOutboundAt),
 		AttemptCount:        item.AttemptCount,
 		TargetChannelIDs:    item.TargetChannelIDs,
 		TargetChannelNames:  item.TargetChannelNames,

@@ -83,6 +83,25 @@ describe('api client', () => {
     expect(storage.getItem(ADMIN_TOKEN_KEY)).toBeNull();
     expect(dispatchEventMock).toHaveBeenCalledWith(expect.objectContaining({ type: AUTH_EXPIRED_EVENT }));
   });
+
+  it('returns to login without service-unavailable copy on backend gateway failures', async () => {
+    tokenStore.set('admin-token');
+    const fetchMock = vi.fn(async () =>
+      new Response('', {
+        status: 503,
+        headers: { 'Content-Type': 'text/html' },
+      }),
+    );
+
+    await expect(apiRequest('/sources', { fetcher: fetchMock })).rejects.toMatchObject({
+      status: 503,
+      authExpired: true,
+      userMessage: '请重新登录',
+    } satisfies Partial<ApiClientError>);
+
+    expect(storage.getItem(ADMIN_TOKEN_KEY)).toBeNull();
+    expect(dispatchEventMock).toHaveBeenCalledWith(expect.objectContaining({ type: AUTH_EXPIRED_EVENT }));
+  });
 });
 
 function memoryStorage(): Storage {

@@ -169,11 +169,12 @@ func (r Repository) PublishTemplateVersion(ctx context.Context, templateID strin
 			sample_payload,
 			compiled_preview,
 			used_variables,
+			allowed_filters,
 			validation_status,
 			validation_errors,
 			published_at
 		)
-		VALUES ($1, $2, $3, $4, $5, 'pongo2', 'jinja-like-v1', $6, $7, $8, $9, $10, $11, $12, now())
+		VALUES ($1, $2, $3, $4, $5, 'pongo2', 'jinja-like-v1', $6, $7, $8, $9, $10, $11, $12, $13, now())
 		RETURNING `+templateVersionSelectColumns(),
 		versionID,
 		templateID,
@@ -184,7 +185,8 @@ func (r Repository) PublishTemplateVersion(ctx context.Context, templateID strin
 		defaultJSON(params.MessageBodySchema),
 		defaultJSON(params.SamplePayload),
 		params.CompiledPreview,
-		params.UsedVariables,
+		defaultStringSlice(params.UsedVariables),
+		defaultStringSlice(params.AllowedFilters),
 		params.ValidationStatus,
 		params.ValidationErrors,
 	)
@@ -200,26 +202,6 @@ func (r Repository) PublishTemplateVersion(ctx context.Context, templateID strin
 		WHERE id = $1
 	`, templateID, version.ID); err != nil {
 		return msgtemplate.TemplateVersion{}, fmt.Errorf("update current template version: %w", err)
-	}
-
-	if _, err := tx.Exec(ctx, `
-		UPDATE route_action_targets
-		SET template_version_id = $2
-		WHERE template_version_id IN (
-			SELECT id FROM template_versions WHERE template_id = $1
-		)
-	`, templateID, version.ID); err != nil {
-		return msgtemplate.TemplateVersion{}, fmt.Errorf("update route action target template versions: %w", err)
-	}
-
-	if _, err := tx.Exec(ctx, `
-		UPDATE route_actions
-		SET template_version_id = $2
-		WHERE template_version_id IN (
-			SELECT id FROM template_versions WHERE template_id = $1
-		)
-	`, templateID, version.ID); err != nil {
-		return msgtemplate.TemplateVersion{}, fmt.Errorf("update route action template versions: %w", err)
 	}
 
 	if err := tx.Commit(ctx); err != nil {
@@ -318,6 +300,13 @@ func templateVersionSelectColumns() string {
 		created_at,
 		updated_at
 	`
+}
+
+func defaultStringSlice(values []string) []string {
+	if values == nil {
+		return []string{}
+	}
+	return values
 }
 
 func mapTemplateQueryError(operation string, err error) error {

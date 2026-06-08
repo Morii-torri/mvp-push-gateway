@@ -10,8 +10,11 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"sync"
 	"testing"
 	"time"
+
+	"mvp-push-gateway/backend/internal/queue"
 )
 
 func TestIngestRejectsLegacyXMGPTokens(t *testing.T) {
@@ -53,7 +56,11 @@ func TestIngestAcceptsBearerSourceToken(t *testing.T) {
 		AuthMode:  AuthModeToken,
 		AuthToken: "sourceToken",
 	})
-	service := NewService(store, WithTraceIDGenerator(func() string { return "trace-token" }))
+	service := NewService(
+		store,
+		WithTraceIDGenerator(func() string { return "trace-token" }),
+		WithLatestPayloadFlushInterval(10*time.Millisecond),
+	)
 
 	headers := http.Header{}
 	headers.Set("Authorization", "Bearer sourceToken")
@@ -72,14 +79,235 @@ func TestIngestAcceptsBearerSourceToken(t *testing.T) {
 	if result.TraceID != "trace-token" || result.Status != "accepted" {
 		t.Fatalf("unexpected ingest result: %+v", result)
 	}
-	if store.latestPayloadUpdates != 1 {
-		t.Fatalf("expected latest payload update, got %d", store.latestPayloadUpdates)
-	}
+	waitForLatestPayloadUpdates(t, store, 1)
 	if len(store.enqueued) != 1 {
 		t.Fatalf("expected one queued route_plan job, got %d", len(store.enqueued))
 	}
 	if store.enqueued[0].MessageID == "" || store.enqueued[0].SourceID != "source-1" || store.enqueued[0].TraceID != "trace-token" {
 		t.Fatalf("unexpected queued message: %+v", store.enqueued[0])
+	}
+}
+
+func TestIngestPublishesRoutePlanEventWhenPublisherConfigured(t *testing.T) {
+	store := newMemoryStore(Source{
+		ID:                   "source-1",
+		Code:                 "orders",
+		Name:                 "Orders",
+		Enabled:              true,
+		AuthMode:             AuthModeToken,
+		AuthToken:            "sourceToken",
+		InboundDedupeEnabled: true,
+		InboundDedupeConfig:  json.RawMessage(`{"ttl_seconds":60}`),
+	})
+	publisher := &recordingRoutePlanPublisher{}
+	service := NewService(
+		store,
+		WithTraceIDGenerator(func() string { return "trace-route-publish" }),
+		WithRoutePlanPublisher(publisher),
+	)
+
+	headers := http.Header{}
+	headers.Set("Authorization", "Bearer sourceToken")
+	result, err := service.Ingest(context.Background(), IngestInput{
+		SourceCode: "orders",
+		Method:     http.MethodPost,
+		Path:       "/api/v1/ingest/orders",
+		Headers:    headers,
+		RemoteAddr: "127.0.0.1:4321",
+		Body:       []byte(`{"title":"paid"}`),
+	})
+	if err != nil {
+		t.Fatalf("ingest with route plan publisher: %v", err)
+	}
+	if result.Status != "accepted" || result.TraceID != "trace-route-publish" {
+		t.Fatalf("unexpected ingest result: %+v", result)
+	}
+	if len(store.enqueued) != 1 {
+		t.Fatalf("expected one persisted inbound record when inbound dedupe is enabled, got %d", len(store.enqueued))
+	}
+	persisted := store.enqueued[0]
+	if !persisted.SkipRoutePlan || persisted.JobType != "" || len(persisted.JobPayload) != 0 {
+		t.Fatalf("expected PostgreSQL route_plan job to be skipped when publisher is configured, got %+v", persisted)
+	}
+	if len(publisher.events) != 1 {
+		t.Fatalf("expected one route plan event, got %d", len(publisher.events))
+	}
+	event := publisher.events[0]
+	if event.MessageID != persisted.MessageID || event.SourceID != "source-1" || event.TraceID != "trace-route-publish" {
+		t.Fatalf("unexpected route plan event: %+v persisted=%+v", event, persisted)
+	}
+	if event.MessageIDForDedup() != "trace-route-publish" {
+		t.Fatalf("expected trace id to be used as route-plan dedupe id, got %q", event.MessageIDForDedup())
+	}
+	if len(event.Payload) != 0 {
+		t.Fatalf("expected persisted route-plan event to omit payload so planning reloads the message record, got %s", event.Payload)
+	}
+}
+
+func TestIngestWithRoutePlanPublisherSendsPayloadEventWithoutInboundDBWrite(t *testing.T) {
+	store := newMemoryStore(Source{
+		ID:        "source-1",
+		Code:      "orders",
+		Name:      "Orders",
+		Enabled:   true,
+		AuthMode:  AuthModeToken,
+		AuthToken: "sourceToken",
+	})
+	publisher := &recordingRoutePlanPublisher{}
+	service := NewService(
+		store,
+		WithTraceIDGenerator(func() string { return "trace-direct-route" }),
+		WithRoutePlanPublisher(publisher),
+	)
+	body := []byte(`{"title":"paid"}`)
+	headers := http.Header{"Authorization": []string{"Bearer sourceToken"}}
+
+	result, err := service.Ingest(context.Background(), IngestInput{
+		SourceCode: "orders",
+		Method:     http.MethodPost,
+		Path:       "/api/v1/ingest/orders",
+		Headers:    headers,
+		RemoteAddr: "127.0.0.1:4321",
+		Body:       body,
+	})
+	if err != nil {
+		t.Fatalf("ingest with route plan publisher: %v", err)
+	}
+	if result.TraceID != "trace-direct-route" {
+		t.Fatalf("unexpected trace id: %+v", result)
+	}
+	if len(store.enqueued) != 0 {
+		t.Fatalf("expected direct JetStream path to skip inbound DB write, got %d enqueued records", len(store.enqueued))
+	}
+	if len(publisher.events) != 1 {
+		t.Fatalf("expected one route plan event, got %d", len(publisher.events))
+	}
+	event := publisher.events[0]
+	if event.MessageID == "" || event.SourceID != "source-1" || event.TraceID != "trace-direct-route" {
+		t.Fatalf("unexpected route plan event identifiers: %+v", event)
+	}
+	if string(event.Payload) != `{"title":"paid"}` {
+		t.Fatalf("expected route plan event to carry inbound payload, got %s", event.Payload)
+	}
+	if len(event.Headers) == 0 || event.ReceivedAt.IsZero() {
+		t.Fatalf("expected route plan event to carry headers and receive time, got %+v", event)
+	}
+}
+
+func TestIngestWithRuntimeDedupeStoreSendsPayloadEventWithoutInboundDBWrite(t *testing.T) {
+	store := newMemoryStore(Source{
+		ID:                   "source-1",
+		Code:                 "orders",
+		Name:                 "Orders",
+		Enabled:              true,
+		AuthMode:             AuthModeToken,
+		AuthToken:            "sourceToken",
+		InboundDedupeEnabled: true,
+		InboundDedupeConfig:  json.RawMessage(`{"ttl_seconds":60}`),
+	})
+	runtimeStore := &recordingRuntimeStateStore{dedupeReserved: true}
+	publisher := &recordingRoutePlanPublisher{}
+	service := NewService(
+		store,
+		WithTraceIDGenerator(func() string { return "trace-runtime-dedupe" }),
+		WithRoutePlanPublisher(publisher),
+		WithInboundDedupeStore(runtimeStore),
+	)
+
+	result, err := service.Ingest(context.Background(), IngestInput{
+		SourceCode: "orders",
+		Method:     http.MethodPost,
+		Path:       "/api/v1/ingest/orders",
+		Headers:    http.Header{"Authorization": []string{"Bearer sourceToken"}},
+		RemoteAddr: "127.0.0.1:4321",
+		Body:       []byte(`{"title":"paid"}`),
+	})
+	if err != nil {
+		t.Fatalf("ingest with runtime dedupe store: %v", err)
+	}
+	if result.TraceID != "trace-runtime-dedupe" || len(store.enqueued) != 0 {
+		t.Fatalf("expected fast ingest without inbound DB write, result=%+v enqueued=%d", result, len(store.enqueued))
+	}
+	if runtimeStore.reserveCalls != 1 || runtimeStore.lastDedupeKey == "" || runtimeStore.lastExpiresAt.IsZero() {
+		t.Fatalf("expected one runtime dedupe reservation, got %+v", runtimeStore)
+	}
+	if len(publisher.events) != 1 || string(publisher.events[0].Payload) != `{"title":"paid"}` {
+		t.Fatalf("expected payload route event, got %+v", publisher.events)
+	}
+}
+
+func TestIngestWithRuntimeDedupeStoreRecordsDuplicateWithoutPublishing(t *testing.T) {
+	store := newMemoryStore(Source{
+		ID:                   "source-1",
+		Code:                 "orders",
+		Name:                 "Orders",
+		Enabled:              true,
+		AuthMode:             AuthModeToken,
+		AuthToken:            "sourceToken",
+		InboundDedupeEnabled: true,
+		InboundDedupeConfig:  json.RawMessage(`{"ttl_seconds":60}`),
+	})
+	runtimeStore := &recordingRuntimeStateStore{dedupeReserved: false}
+	publisher := &recordingRoutePlanPublisher{}
+	service := NewService(
+		store,
+		WithTraceIDGenerator(func() string { return "trace-runtime-duplicate" }),
+		WithRoutePlanPublisher(publisher),
+		WithInboundDedupeStore(runtimeStore),
+	)
+
+	_, err := service.Ingest(context.Background(), IngestInput{
+		SourceCode: "orders",
+		Method:     http.MethodPost,
+		Path:       "/api/v1/ingest/orders",
+		Headers:    http.Header{"Authorization": []string{"Bearer sourceToken"}},
+		RemoteAddr: "127.0.0.1:4321",
+		Body:       []byte(`{"title":"paid"}`),
+	})
+	if !errors.Is(err, ErrDuplicateInbound) {
+		t.Fatalf("expected duplicate inbound error, got %v", err)
+	}
+	if len(publisher.events) != 0 {
+		t.Fatalf("expected duplicate not to publish route plan event, got %+v", publisher.events)
+	}
+	if len(store.enqueued) != 1 {
+		t.Fatalf("expected duplicate marker record, got %d", len(store.enqueued))
+	}
+	record := store.enqueued[0]
+	if record.Status != "deduped" || record.ErrorCode != "MGP-DEDUPE-001" || !record.SkipRoutePlan || record.DedupeEnabled {
+		t.Fatalf("unexpected duplicate marker: %+v", record)
+	}
+}
+
+func TestListSourcesOverlaysLatestPayloadFromRuntimeStore(t *testing.T) {
+	store := newMemoryStore(Source{
+		ID:        "source-1",
+		Code:      "orders",
+		Name:      "Orders",
+		Enabled:   true,
+		AuthMode:  AuthModeNone,
+		CreatedAt: time.Date(2026, 6, 8, 10, 0, 0, 0, time.UTC),
+		UpdatedAt: time.Date(2026, 6, 8, 10, 0, 0, 0, time.UTC),
+	})
+	sampledAt := time.Date(2026, 6, 8, 10, 1, 0, 0, time.UTC)
+	runtimeStore := &recordingRuntimeStateStore{
+		latestPayloads: map[string]latestPayloadSample{
+			"source-1": {payload: json.RawMessage(`{"title":"runtime"}`), sampledAt: sampledAt},
+		},
+	}
+	service := NewService(store, WithLatestPayloadStore(runtimeStore))
+
+	sources, err := service.ListSources(context.Background())
+	if err != nil {
+		t.Fatalf("list sources: %v", err)
+	}
+	if len(sources) != 1 {
+		t.Fatalf("expected one source, got %d", len(sources))
+	}
+	if string(sources[0].LatestPayloadSample) != `{"title":"runtime"}` ||
+		sources[0].LatestPayloadSampleUpdatedAt == nil ||
+		!sources[0].LatestPayloadSampleUpdatedAt.Equal(sampledAt) {
+		t.Fatalf("expected runtime latest payload overlay, got %+v", sources[0])
 	}
 }
 
@@ -99,6 +327,7 @@ func TestIngestSilencesMessageDuringQuietHours(t *testing.T) {
 		store,
 		WithNow(func() time.Time { return quietNow }),
 		WithTraceIDGenerator(func() string { return "trace-silenced" }),
+		WithLatestPayloadFlushInterval(10*time.Millisecond),
 	)
 
 	result, err := service.Ingest(context.Background(), IngestInput{
@@ -115,9 +344,7 @@ func TestIngestSilencesMessageDuringQuietHours(t *testing.T) {
 	if result.TraceID != "trace-silenced" || result.Status != "silenced" || result.Message != "silenced" {
 		t.Fatalf("unexpected silenced ingest result: %+v", result)
 	}
-	if store.latestPayloadUpdates != 1 {
-		t.Fatalf("expected latest payload update, got %d", store.latestPayloadUpdates)
-	}
+	waitForLatestPayloadUpdates(t, store, 1)
 	if len(store.enqueued) != 1 {
 		t.Fatalf("expected one stored inbound record, got %d", len(store.enqueued))
 	}
@@ -242,7 +469,11 @@ func TestIngestRejectsReplayedHMACNonce(t *testing.T) {
 		AuthMode:   AuthModeHMAC,
 		HMACSecret: "hmacSecret",
 	})
-	service := NewService(store, WithNow(func() time.Time { return now }))
+	service := NewService(
+		store,
+		WithNow(func() time.Time { return now }),
+		WithLatestPayloadFlushInterval(10*time.Millisecond),
+	)
 	input := IngestInput{
 		SourceCode: "orders",
 		Method:     http.MethodPost,
@@ -258,9 +489,7 @@ func TestIngestRejectsReplayedHMACNonce(t *testing.T) {
 	if _, err := service.Ingest(context.Background(), input); !errors.Is(err, ErrUnauthorized) {
 		t.Fatalf("expected replayed hmac nonce to be unauthorized, got %v", err)
 	}
-	if store.latestPayloadUpdates != 1 {
-		t.Fatalf("expected replay to be rejected before latest payload update, got %d updates", store.latestPayloadUpdates)
-	}
+	waitForLatestPayloadUpdates(t, store, 1)
 }
 
 func TestIngestRejectsReplayedHMACNonceAcrossServiceInstances(t *testing.T) {
@@ -275,8 +504,16 @@ func TestIngestRejectsReplayedHMACNonceAcrossServiceInstances(t *testing.T) {
 		AuthMode:   AuthModeHMAC,
 		HMACSecret: "hmacSecret",
 	})
-	firstService := NewService(store, WithNow(func() time.Time { return now }))
-	secondService := NewService(store, WithNow(func() time.Time { return now }))
+	firstService := NewService(
+		store,
+		WithNow(func() time.Time { return now }),
+		WithLatestPayloadFlushInterval(10*time.Millisecond),
+	)
+	secondService := NewService(
+		store,
+		WithNow(func() time.Time { return now }),
+		WithLatestPayloadFlushInterval(10*time.Millisecond),
+	)
 	input := IngestInput{
 		SourceCode: "orders",
 		Method:     http.MethodPost,
@@ -292,8 +529,82 @@ func TestIngestRejectsReplayedHMACNonceAcrossServiceInstances(t *testing.T) {
 	if _, err := secondService.Ingest(context.Background(), input); !errors.Is(err, ErrUnauthorized) {
 		t.Fatalf("expected second service replayed hmac nonce to be unauthorized, got %v", err)
 	}
-	if store.latestPayloadUpdates != 1 {
-		t.Fatalf("expected cross-instance replay to be rejected before latest payload update, got %d updates", store.latestPayloadUpdates)
+	waitForLatestPayloadUpdates(t, store, 1)
+}
+
+func TestIngestUsesRuntimeHMACNonceStoreWhenConfigured(t *testing.T) {
+	now := time.Unix(1778138400, 0).UTC()
+	store := newMemoryStore(Source{
+		ID:         "source-1",
+		Code:       "orders",
+		Name:       "Orders",
+		Enabled:    true,
+		AuthMode:   AuthModeHMAC,
+		HMACSecret: "hmacSecret",
+	})
+	runtimeStore := &recordingRuntimeStateStore{hmacReserved: true}
+	service := NewService(
+		store,
+		WithNow(func() time.Time { return now }),
+		WithHMACNonceStore(runtimeStore),
+		WithLatestPayloadFlushInterval(10*time.Millisecond),
+	)
+	body := []byte(`{"title":"paid"}`)
+
+	_, err := service.Ingest(context.Background(), IngestInput{
+		SourceCode: "orders",
+		Method:     http.MethodPost,
+		Path:       "/api/v1/ingest/orders",
+		Headers:    signedHeaders("hmacSecret", http.MethodPost, "/api/v1/ingest/orders", body),
+		RemoteAddr: "127.0.0.1:4321",
+		Body:       body,
+	})
+	if err != nil {
+		t.Fatalf("ingest with runtime hmac nonce store: %v", err)
+	}
+	if runtimeStore.hmacCalls != 1 || runtimeStore.lastHMACNonce != "nonce-1" || runtimeStore.lastHMACExpiresAt.IsZero() {
+		t.Fatalf("expected runtime hmac nonce reservation, got %+v", runtimeStore)
+	}
+	if len(store.hmacNonces) != 0 {
+		t.Fatalf("expected database hmac nonce store to be bypassed, got %+v", store.hmacNonces)
+	}
+	waitForLatestPayloadUpdates(t, store, 1)
+}
+
+func TestIngestRejectsRuntimeHMACNonceDuplicate(t *testing.T) {
+	now := time.Unix(1778138400, 0).UTC()
+	store := newMemoryStore(Source{
+		ID:         "source-1",
+		Code:       "orders",
+		Name:       "Orders",
+		Enabled:    true,
+		AuthMode:   AuthModeHMAC,
+		HMACSecret: "hmacSecret",
+	})
+	runtimeStore := &recordingRuntimeStateStore{hmacReserved: false}
+	service := NewService(
+		store,
+		WithNow(func() time.Time { return now }),
+		WithHMACNonceStore(runtimeStore),
+	)
+	body := []byte(`{"title":"paid"}`)
+
+	_, err := service.Ingest(context.Background(), IngestInput{
+		SourceCode: "orders",
+		Method:     http.MethodPost,
+		Path:       "/api/v1/ingest/orders",
+		Headers:    signedHeaders("hmacSecret", http.MethodPost, "/api/v1/ingest/orders", body),
+		RemoteAddr: "127.0.0.1:4321",
+		Body:       body,
+	})
+	if !errors.Is(err, ErrUnauthorized) {
+		t.Fatalf("expected duplicate runtime hmac nonce to be unauthorized, got %v", err)
+	}
+	if runtimeStore.hmacCalls != 1 {
+		t.Fatalf("expected one runtime hmac nonce reservation, got %+v", runtimeStore)
+	}
+	if store.latestPayloadUpdates != 0 {
+		t.Fatalf("expected duplicate hmac nonce to stop before latest payload update, got %d", store.latestPayloadUpdates)
 	}
 }
 
@@ -446,6 +757,7 @@ func TestIngestUpdatesLatestPayloadAndQueuesWithoutRoutes(t *testing.T) {
 		store,
 		WithTraceIDGenerator(func() string { return "trace-latest" }),
 		WithNow(func() time.Time { return time.Date(2026, 5, 8, 10, 0, 0, 0, time.UTC) }),
+		WithLatestPayloadFlushInterval(10*time.Millisecond),
 	)
 
 	_, err := service.Ingest(context.Background(), IngestInput{
@@ -460,6 +772,7 @@ func TestIngestUpdatesLatestPayloadAndQueuesWithoutRoutes(t *testing.T) {
 		t.Fatalf("ingest without routes: %v", err)
 	}
 
+	waitForLatestPayloadUpdates(t, store, 1)
 	var latest map[string]string
 	if err := json.Unmarshal(store.latestPayload, &latest); err != nil {
 		t.Fatalf("decode latest payload: %v", err)
@@ -469,6 +782,45 @@ func TestIngestUpdatesLatestPayloadAndQueuesWithoutRoutes(t *testing.T) {
 	}
 	if len(store.enqueued) != 1 || store.enqueued[0].JobType != "route_plan" {
 		t.Fatalf("expected one route_plan job, got %+v", store.enqueued)
+	}
+}
+
+func TestIngestCoalescesLatestPayloadSampleUpdatesPerSource(t *testing.T) {
+	now := time.Date(2026, 6, 5, 10, 0, 0, 0, time.UTC)
+	store := newMemoryStore(Source{ID: "source-1", Code: "orders", Name: "Orders", Enabled: true, AuthMode: AuthModeNone})
+	service := NewService(
+		store,
+		WithNow(func() time.Time { return now }),
+		WithTraceIDGenerator(func() string { return "trace-coalesce" }),
+		WithLatestPayloadFlushInterval(10*time.Millisecond),
+	)
+	input := IngestInput{
+		SourceCode: "orders",
+		Method:     http.MethodPost,
+		Path:       "/api/v1/ingest/orders",
+		Body:       []byte(`{"title":"first"}`),
+	}
+
+	if _, err := service.Ingest(context.Background(), input); err != nil {
+		t.Fatalf("first ingest: %v", err)
+	}
+	input.Body = []byte(`{"title":"second"}`)
+	if _, err := service.Ingest(context.Background(), input); err != nil {
+		t.Fatalf("second ingest inside throttle window: %v", err)
+	}
+	waitForLatestPayloadUpdates(t, store, 1)
+	if latest := store.latestPayloadString(); latest != `{"title":"second"}` {
+		t.Fatalf("expected latest payload flush to keep last payload in window, got %s", latest)
+	}
+
+	now = now.Add(time.Second)
+	input.Body = []byte(`{"title":"third"}`)
+	if _, err := service.Ingest(context.Background(), input); err != nil {
+		t.Fatalf("third ingest after throttle window: %v", err)
+	}
+	waitForLatestPayloadUpdates(t, store, 2)
+	if latest := store.latestPayloadString(); latest != `{"title":"third"}` {
+		t.Fatalf("expected latest payload to refresh after throttle window, got %s", store.latestPayload)
 	}
 }
 
@@ -800,6 +1152,106 @@ func TestNormalizeSourceInputRejectsInvalidQuietHoursWindows(t *testing.T) {
 	}
 }
 
+func TestIngestCachesSourceConfigAndInvalidatesAfterUpdate(t *testing.T) {
+	store := newMemoryStore(Source{
+		ID:        "source-1",
+		Code:      "orders",
+		Name:      "Orders",
+		Enabled:   true,
+		AuthMode:  AuthModeToken,
+		AuthToken: "sourceToken",
+	})
+	traceIndex := 0
+	service := NewService(
+		store,
+		WithTraceIDGenerator(func() string {
+			traceIndex++
+			return fmt.Sprintf("trace-cache-%d", traceIndex)
+		}),
+		WithLatestPayloadFlushInterval(0),
+		WithSourceConfigCacheTTL(time.Minute),
+	)
+	input := IngestInput{
+		SourceCode: "orders",
+		Method:     http.MethodPost,
+		Path:       "/api/v1/ingest/orders",
+		Headers:    http.Header{"Authorization": []string{"Bearer sourceToken"}},
+		RemoteAddr: "127.0.0.1:4321",
+		Body:       []byte(`{"title":"paid"}`),
+	}
+
+	if _, err := service.Ingest(context.Background(), input); err != nil {
+		t.Fatalf("first ingest: %v", err)
+	}
+	if _, err := service.Ingest(context.Background(), input); err != nil {
+		t.Fatalf("second ingest: %v", err)
+	}
+	if store.getSourceByCodeCalls != 1 {
+		t.Fatalf("expected source config cache hit, got %d source lookups", store.getSourceByCodeCalls)
+	}
+
+	if _, err := service.UpdateSource(context.Background(), "source-1", UpdateSourceInput{
+		Code:      "orders",
+		Name:      "Orders API",
+		Enabled:   true,
+		AuthMode:  AuthModeToken,
+		AuthToken: "sourceToken",
+	}); err != nil {
+		t.Fatalf("update source: %v", err)
+	}
+	if _, err := service.Ingest(context.Background(), input); err != nil {
+		t.Fatalf("ingest after source update: %v", err)
+	}
+	if store.getSourceByCodeCalls != 1 {
+		t.Fatalf("expected update to refresh source config cache, got %d source lookups", store.getSourceByCodeCalls)
+	}
+}
+
+func TestIngestSourceConfigCacheCoalescesConcurrentMisses(t *testing.T) {
+	store := newMemoryStore(Source{
+		ID:        "source-1",
+		Code:      "orders",
+		Name:      "Orders",
+		Enabled:   true,
+		AuthMode:  AuthModeToken,
+		AuthToken: "sourceToken",
+	})
+	service := NewService(
+		store,
+		WithLatestPayloadFlushInterval(0),
+		WithSourceConfigCacheTTL(time.Minute),
+	)
+	input := IngestInput{
+		SourceCode: "orders",
+		Method:     http.MethodPost,
+		Path:       "/api/v1/ingest/orders",
+		Headers:    http.Header{"Authorization": []string{"Bearer sourceToken"}},
+		RemoteAddr: "127.0.0.1:4321",
+		Body:       []byte(`{"title":"paid"}`),
+	}
+
+	var wg sync.WaitGroup
+	errs := make(chan error, 32)
+	for index := 0; index < 32; index++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, err := service.Ingest(context.Background(), input)
+			errs <- err
+		}()
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatalf("concurrent ingest: %v", err)
+		}
+	}
+	if calls := store.getSourceByCodeCallCount(); calls != 1 {
+		t.Fatalf("expected concurrent source cache miss to be coalesced, got %d source lookups", calls)
+	}
+}
+
 func TestNormalizeSourceInputAlwaysUsesPayloadHashDedupeStrategy(t *testing.T) {
 	for _, strategy := range []DedupeStrategy{"", DedupeStrategyPayloadHash, DedupeStrategy("fields"), DedupeStrategy("expression")} {
 		t.Run(string(strategy), func(t *testing.T) {
@@ -892,12 +1344,96 @@ func signedHeaders(secret string, method string, path string, body []byte) http.
 }
 
 type memoryStore struct {
+	mu                   sync.Mutex
 	sources              map[string]Source
 	latestPayload        json.RawMessage
 	latestPayloadUpdates int
+	latestPayloadAt      time.Time
 	enqueued             []EnqueueInboundParams
 	updateCalls          int
+	getSourceByCodeCalls int
 	hmacNonces           map[string]time.Time
+}
+
+type recordingRoutePlanPublisher struct {
+	events []queue.RoutePlanEvent
+	err    error
+}
+
+func (p *recordingRoutePlanPublisher) PublishRoutePlan(_ context.Context, event queue.RoutePlanEvent) (queue.PublishResult, error) {
+	p.events = append(p.events, event)
+	return queue.PublishResult{Stream: "MGP_ROUTE_PLAN", Sequence: uint64(len(p.events))}, p.err
+}
+
+type recordingRuntimeStateStore struct {
+	latestPayloads map[string]latestPayloadSample
+	deletedLatest  []string
+
+	dedupeReserved bool
+	reserveErr     error
+	reserveCalls   int
+	lastSourceID   string
+	lastDedupeKey  string
+	lastMessageID  string
+	lastExpiresAt  time.Time
+
+	hmacReserved      bool
+	hmacErr           error
+	hmacCalls         int
+	lastHMACSourceID  string
+	lastHMACNonce     string
+	lastHMACExpiresAt time.Time
+}
+
+func (s *recordingRuntimeStateStore) PutLatestPayloadSample(_ context.Context, sourceID string, payload json.RawMessage, sampledAt time.Time) error {
+	if s.latestPayloads == nil {
+		s.latestPayloads = make(map[string]latestPayloadSample)
+	}
+	s.latestPayloads[sourceID] = latestPayloadSample{
+		payload:   append(json.RawMessage(nil), payload...),
+		sampledAt: sampledAt,
+	}
+	return nil
+}
+
+func (s *recordingRuntimeStateStore) GetLatestPayloadSample(_ context.Context, sourceID string) (json.RawMessage, time.Time, bool, error) {
+	if s == nil || s.latestPayloads == nil {
+		return nil, time.Time{}, false, nil
+	}
+	sample, ok := s.latestPayloads[sourceID]
+	if !ok {
+		return nil, time.Time{}, false, nil
+	}
+	return append(json.RawMessage(nil), sample.payload...), sample.sampledAt, true, nil
+}
+
+func (s *recordingRuntimeStateStore) DeleteLatestPayloadSample(_ context.Context, sourceID string) error {
+	s.deletedLatest = append(s.deletedLatest, sourceID)
+	delete(s.latestPayloads, sourceID)
+	return nil
+}
+
+func (s *recordingRuntimeStateStore) ReserveInboundDedupeKey(_ context.Context, sourceID string, dedupeKey string, messageID string, expiresAt time.Time) (bool, error) {
+	s.reserveCalls++
+	s.lastSourceID = sourceID
+	s.lastDedupeKey = dedupeKey
+	s.lastMessageID = messageID
+	s.lastExpiresAt = expiresAt
+	if s.reserveErr != nil {
+		return false, s.reserveErr
+	}
+	return s.dedupeReserved, nil
+}
+
+func (s *recordingRuntimeStateStore) ReserveHMACNonce(_ context.Context, sourceID string, nonce string, _ time.Time, expiresAt time.Time) (bool, error) {
+	s.hmacCalls++
+	s.lastHMACSourceID = sourceID
+	s.lastHMACNonce = nonce
+	s.lastHMACExpiresAt = expiresAt
+	if s.hmacErr != nil {
+		return false, s.hmacErr
+	}
+	return s.hmacReserved, nil
 }
 
 func newMemoryStore(sources ...Source) *memoryStore {
@@ -912,7 +1448,13 @@ func newMemoryStore(sources ...Source) *memoryStore {
 }
 
 func (m *memoryStore) ListSources(context.Context) ([]Source, error) {
-	panic("not used")
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	sources := make([]Source, 0, len(m.sources))
+	for _, configuredSource := range m.sources {
+		sources = append(sources, configuredSource)
+	}
+	return sources, nil
 }
 
 func (m *memoryStore) CreateSource(context.Context, CreateSourceParams) (Source, error) {
@@ -920,6 +1462,8 @@ func (m *memoryStore) CreateSource(context.Context, CreateSourceParams) (Source,
 }
 
 func (m *memoryStore) GetSource(_ context.Context, id string) (Source, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	for _, configuredSource := range m.sources {
 		if configuredSource.ID == id {
 			return configuredSource, nil
@@ -929,6 +1473,9 @@ func (m *memoryStore) GetSource(_ context.Context, id string) (Source, error) {
 }
 
 func (m *memoryStore) GetSourceByCode(_ context.Context, code string) (Source, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.getSourceByCodeCalls++
 	source, ok := m.sources[code]
 	if !ok {
 		return Source{}, ErrNotFound
@@ -936,11 +1483,27 @@ func (m *memoryStore) GetSourceByCode(_ context.Context, code string) (Source, e
 	return source, nil
 }
 
+func (m *memoryStore) getSourceByCodeCallCount() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.getSourceByCodeCalls
+}
+
 func (m *memoryStore) UpdateSource(_ context.Context, id string, params UpdateSourceParams) (Source, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	m.updateCalls++
-	existing, err := m.GetSource(context.Background(), id)
-	if err != nil {
-		return Source{}, err
+	var existing Source
+	found := false
+	for _, configuredSource := range m.sources {
+		if configuredSource.ID == id {
+			existing = configuredSource
+			found = true
+			break
+		}
+	}
+	if !found {
+		return Source{}, ErrNotFound
 	}
 	updated := Source{
 		ID:                           existing.ID,
@@ -971,13 +1534,46 @@ func (m *memoryStore) DeleteSource(context.Context, string) error {
 	panic("not used")
 }
 
-func (m *memoryStore) UpdateLatestPayloadSample(_ context.Context, sourceID string, payload json.RawMessage) error {
-	m.latestPayloadUpdates++
-	m.latestPayload = append(json.RawMessage(nil), payload...)
+func (m *memoryStore) DeleteSourceRuntimeData(context.Context, string) error {
 	return nil
 }
 
+func (m *memoryStore) UpdateLatestPayloadSample(_ context.Context, sourceID string, payload json.RawMessage, sampledAt time.Time) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.latestPayloadUpdates++
+	m.latestPayload = append(json.RawMessage(nil), payload...)
+	m.latestPayloadAt = sampledAt
+	return nil
+}
+
+func (m *memoryStore) latestPayloadString() string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return string(m.latestPayload)
+}
+
+func (m *memoryStore) latestPayloadUpdateCount() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.latestPayloadUpdates
+}
+
+func waitForLatestPayloadUpdates(t *testing.T, store *memoryStore, expected int) {
+	t.Helper()
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		if store.latestPayloadUpdateCount() == expected {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatalf("expected %d latest payload updates, got %d", expected, store.latestPayloadUpdateCount())
+}
+
 func (m *memoryStore) ReserveHMACNonce(_ context.Context, sourceID string, nonce string, now time.Time, expiresAt time.Time) (bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	key := sourceID + "\x00" + nonce
 	for existingKey, existingExpiresAt := range m.hmacNonces {
 		if !existingExpiresAt.After(now) {
@@ -992,6 +1588,8 @@ func (m *memoryStore) ReserveHMACNonce(_ context.Context, sourceID string, nonce
 }
 
 func (m *memoryStore) EnqueueInbound(_ context.Context, params EnqueueInboundParams) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	m.enqueued = append(m.enqueued, params)
 	return nil
 }

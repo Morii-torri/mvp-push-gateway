@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"strings"
 
+	"mvp-push-gateway/backend/internal/auth"
 	"mvp-push-gateway/backend/internal/provider"
 )
 
@@ -55,6 +56,7 @@ type channelResponse struct {
 	ProviderType     provider.ProviderType `json:"provider_type"`
 	Name             string                `json:"name"`
 	Enabled          bool                  `json:"enabled"`
+	Description      string                `json:"description"`
 	AuthConfig       json.RawMessage       `json:"auth_config"`
 	TokenConfig      json.RawMessage       `json:"token_config"`
 	SendConfig       json.RawMessage       `json:"send_config"`
@@ -75,6 +77,7 @@ type channelRequest struct {
 	ProviderType     provider.ProviderType `json:"provider_type"`
 	Name             string                `json:"name"`
 	Enabled          *bool                 `json:"enabled"`
+	Description      string                `json:"description"`
 	AuthConfig       json.RawMessage       `json:"auth_config"`
 	TokenConfig      json.RawMessage       `json:"token_config"`
 	SendConfig       json.RawMessage       `json:"send_config"`
@@ -83,6 +86,10 @@ type channelRequest struct {
 	TimeoutMS        int                   `json:"timeout_ms"`
 	RetryPolicy      json.RawMessage       `json:"retry_policy"`
 	DeadLetterPolicy json.RawMessage       `json:"dead_letter_policy"`
+}
+
+type channelPatchRequest struct {
+	Enabled *bool `json:"enabled"`
 }
 
 type channelResponseBody struct {
@@ -189,23 +196,23 @@ func (h *Handler) channelDetailHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	channelID := parts[0]
 	if len(parts) == 2 && parts[1] == "build-request" {
-		h.channelBuildRequestHandler(w, r, channelID)
+		h.channelBuildRequestHandler(w, r, channelID, adminUser)
 		return
 	}
 	if len(parts) == 2 && parts[1] == "test-send" {
-		h.channelTestSendHandler(w, r, channelID)
+		h.channelTestSendHandler(w, r, channelID, adminUser)
 		return
 	}
 	if len(parts) == 2 && parts[1] == "refresh-token" {
-		h.channelRefreshTokenHandler(w, r, channelID)
+		h.channelRefreshTokenHandler(w, r, channelID, adminUser)
 		return
 	}
 	if len(parts) == 3 && parts[1] == "feishu" && parts[2] == "resolve-open-id" {
-		h.channelFeishuResolveOpenIDHandler(w, r, channelID)
+		h.channelFeishuResolveOpenIDHandler(w, r, channelID, adminUser)
 		return
 	}
 	if len(parts) == 3 && parts[1] == "dingtalk" && parts[2] == "resolve-user-id" {
-		h.channelDingTalkResolveUserIDHandler(w, r, channelID)
+		h.channelDingTalkResolveUserIDHandler(w, r, channelID, adminUser)
 		return
 	}
 	if len(parts) != 1 {
@@ -237,6 +244,44 @@ func (h *Handler) channelDetailHandler(w http.ResponseWriter, r *http.Request) {
 		response := channelResponseBody{Channel: toChannelResponse(updated)}
 		h.recordAudit(r, adminUser, "update", "channel", channelID, request, response)
 		writeJSON(w, http.StatusOK, response)
+	case http.MethodPatch:
+		var request channelPatchRequest
+		if err := decodeJSON(r, &request); err != nil {
+			writeAPIError(w, http.StatusBadRequest, "MGP-REQ-001", "请求 JSON 不合法")
+			return
+		}
+		if request.Enabled == nil {
+			writeAPIError(w, http.StatusBadRequest, "MGP-REQ-001", "enabled 不能为空")
+			return
+		}
+		current, err := h.providers.GetChannel(r.Context(), channelID)
+		if err != nil {
+			status, code, message := providerErrorStatus(err)
+			writeAPIError(w, status, code, message)
+			return
+		}
+		updated, err := h.providers.UpdateChannel(r.Context(), channelID, provider.UpdateChannelInput{
+			ProviderType:     current.ProviderType,
+			Name:             current.Name,
+			Enabled:          *request.Enabled,
+			Description:      current.Description,
+			AuthConfig:       current.AuthConfig,
+			TokenConfig:      current.TokenConfig,
+			SendConfig:       current.SendConfig,
+			RateLimitConfig:  current.RateLimitConfig,
+			ConcurrencyLimit: current.ConcurrencyLimit,
+			TimeoutMS:        current.TimeoutMS,
+			RetryPolicy:      current.RetryPolicy,
+			DeadLetterPolicy: current.DeadLetterPolicy,
+		})
+		if err != nil {
+			status, code, message := providerErrorStatus(err)
+			writeAPIError(w, status, code, message)
+			return
+		}
+		response := channelResponseBody{Channel: toChannelResponse(updated)}
+		h.recordAudit(r, adminUser, "update_status", "channel", channelID, request, response)
+		writeJSON(w, http.StatusOK, response)
 	case http.MethodDelete:
 		if err := h.providers.DeleteChannel(r.Context(), channelID); err != nil {
 			status, code, message := providerErrorStatus(err)
@@ -247,11 +292,11 @@ func (h *Handler) channelDetailHandler(w http.ResponseWriter, r *http.Request) {
 		h.recordAudit(r, adminUser, "delete", "channel", channelID, nil, response)
 		writeJSON(w, http.StatusOK, response)
 	default:
-		methodNotAllowed(w, http.MethodGet+", "+http.MethodPut+", "+http.MethodDelete)
+		methodNotAllowed(w, http.MethodGet+", "+http.MethodPut+", "+http.MethodPatch+", "+http.MethodDelete)
 	}
 }
 
-func (h *Handler) channelBuildRequestHandler(w http.ResponseWriter, r *http.Request, channelID string) {
+func (h *Handler) channelBuildRequestHandler(w http.ResponseWriter, r *http.Request, channelID string, adminUser auth.Admin) {
 	if r.Method != http.MethodPost {
 		methodNotAllowed(w, http.MethodPost)
 		return
@@ -267,10 +312,12 @@ func (h *Handler) channelBuildRequestHandler(w http.ResponseWriter, r *http.Requ
 		writeAPIError(w, status, code, message)
 		return
 	}
-	writeJSON(w, http.StatusOK, buildRequestResponse{Request: provider.RedactBuiltRequest(built)})
+	response := buildRequestResponse{Request: provider.RedactBuiltRequest(built)}
+	h.recordAudit(r, adminUser, "build_request", "channel", channelID, providerActionRequestSummary(request), response)
+	writeJSON(w, http.StatusOK, response)
 }
 
-func (h *Handler) channelTestSendHandler(w http.ResponseWriter, r *http.Request, channelID string) {
+func (h *Handler) channelTestSendHandler(w http.ResponseWriter, r *http.Request, channelID string, adminUser auth.Admin) {
 	if r.Method != http.MethodPost {
 		methodNotAllowed(w, http.MethodPost)
 		return
@@ -286,10 +333,12 @@ func (h *Handler) channelTestSendHandler(w http.ResponseWriter, r *http.Request,
 		writeAPIError(w, status, code, message)
 		return
 	}
-	writeJSON(w, http.StatusOK, testSendResponse{Result: result})
+	response := testSendResponse{Result: result}
+	h.recordAudit(r, adminUser, "test_send", "channel", channelID, testSendAuditRequestSummary(request), testSendAuditResponseSummary(result))
+	writeJSON(w, http.StatusOK, response)
 }
 
-func (h *Handler) channelFeishuResolveOpenIDHandler(w http.ResponseWriter, r *http.Request, channelID string) {
+func (h *Handler) channelFeishuResolveOpenIDHandler(w http.ResponseWriter, r *http.Request, channelID string, adminUser auth.Admin) {
 	if r.Method != http.MethodPost {
 		methodNotAllowed(w, http.MethodPost)
 		return
@@ -305,10 +354,11 @@ func (h *Handler) channelFeishuResolveOpenIDHandler(w http.ResponseWriter, r *ht
 		writeAPIError(w, status, code, message)
 		return
 	}
+	h.recordAudit(r, adminUser, "resolve_feishu_open_id", "channel", channelID, map[string]int{"mobile_count": len(request.Mobiles)}, resolveAuditResponseSummary(result.Success, len(result.Items), len(result.Errors)))
 	writeJSON(w, http.StatusOK, result)
 }
 
-func (h *Handler) channelDingTalkResolveUserIDHandler(w http.ResponseWriter, r *http.Request, channelID string) {
+func (h *Handler) channelDingTalkResolveUserIDHandler(w http.ResponseWriter, r *http.Request, channelID string, adminUser auth.Admin) {
 	if r.Method != http.MethodPost {
 		methodNotAllowed(w, http.MethodPost)
 		return
@@ -324,10 +374,11 @@ func (h *Handler) channelDingTalkResolveUserIDHandler(w http.ResponseWriter, r *
 		writeAPIError(w, status, code, message)
 		return
 	}
+	h.recordAudit(r, adminUser, "resolve_dingtalk_user_id", "channel", channelID, map[string]int{"query_word_count": len(request.QueryWords)}, resolveAuditResponseSummary(result.Success, len(result.Items), len(result.Errors)))
 	writeJSON(w, http.StatusOK, result)
 }
 
-func (h *Handler) channelRefreshTokenHandler(w http.ResponseWriter, r *http.Request, channelID string) {
+func (h *Handler) channelRefreshTokenHandler(w http.ResponseWriter, r *http.Request, channelID string, adminUser auth.Admin) {
 	if r.Method != http.MethodPost {
 		methodNotAllowed(w, http.MethodPost)
 		return
@@ -338,13 +389,49 @@ func (h *Handler) channelRefreshTokenHandler(w http.ResponseWriter, r *http.Requ
 		writeAPIError(w, statusErr, code, message)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{
+	response := map[string]any{
 		"status":             "ok",
 		"is_cached":          status.IsCached,
 		"token_cache_status": status.Status,
 		"token_refreshed_at": status.TokenRefreshed,
 		"token_expires_at":   status.ExpiresAt,
-	})
+	}
+	h.recordAudit(r, adminUser, "refresh_token", "channel", channelID, map[string]string{"operation": "refresh_token"}, response)
+	writeJSON(w, http.StatusOK, response)
+}
+
+func providerActionRequestSummary(request provider.BuildRequestInput) map[string]any {
+	return map[string]any{
+		"has_token":     strings.TrimSpace(request.Token) != "",
+		"has_recipient": request.Recipient != nil,
+		"has_body":      len(strings.TrimSpace(string(request.Body))) > 0,
+	}
+}
+
+func testSendAuditRequestSummary(request provider.TestSendInput) map[string]any {
+	summary := providerActionRequestSummary(request.BuildRequestInput)
+	summary["send"] = request.Send
+	summary["live_send_confirmed"] = request.LiveSendConfirmed
+	return summary
+}
+
+func testSendAuditResponseSummary(result provider.TestSendResult) map[string]any {
+	return map[string]any{
+		"status":       result.Status,
+		"status_code":  result.StatusCode,
+		"duration_ms":  result.DurationMS,
+		"has_error":    strings.TrimSpace(result.ErrorMessage) != "",
+		"request_url":  result.Request.URL,
+		"request_type": result.Request.Method,
+	}
+}
+
+func resolveAuditResponseSummary(success bool, itemCount int, errorCount int) map[string]any {
+	return map[string]any{
+		"success":     success,
+		"item_count":  itemCount,
+		"error_count": errorCount,
+	}
 }
 
 func (r channelRequest) toInput() provider.CreateChannelInput {
@@ -356,6 +443,7 @@ func (r channelRequest) toInput() provider.CreateChannelInput {
 		ProviderType:     r.ProviderType,
 		Name:             r.Name,
 		Enabled:          enabled,
+		Description:      r.Description,
 		AuthConfig:       r.AuthConfig,
 		TokenConfig:      r.TokenConfig,
 		SendConfig:       r.SendConfig,
@@ -408,6 +496,7 @@ func toChannelResponse(channel provider.Channel) channelResponse {
 		ProviderType:     channel.ProviderType,
 		Name:             channel.Name,
 		Enabled:          channel.Enabled,
+		Description:      channel.Description,
 		AuthConfig:       defaultRawJSON(channel.AuthConfig),
 		TokenConfig:      defaultRawJSON(channel.TokenConfig),
 		SendConfig:       defaultRawJSON(channel.SendConfig),

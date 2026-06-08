@@ -79,10 +79,11 @@ export async function apiRequest<T>(path: string, options: ApiRequestOptions = {
 
   if (!response.ok) {
     const authExpired = auth && response.status === 401;
-    const error = await parseError(response, authExpired);
-    if (response.status === 401) {
+    const returnToLogin = authExpired || isBackendGatewayFailure(response.status);
+    const error = await parseError(response, returnToLogin);
+    if (response.status === 401 || returnToLogin) {
       tokenStore.clear();
-      if (authExpired) {
+      if (returnToLogin) {
         notifyAuthExpired();
       }
     }
@@ -122,7 +123,7 @@ export function normalizeApiPath(path: string): string {
 async function parseError(response: Response, authExpired = false): Promise<ApiClientError> {
   const body = await safeJSON<BackendErrorBody>(response);
   const code = body?.error?.code ?? `HTTP-${response.status}`;
-  const message = body?.error?.message ?? fallbackErrorMessage(response.status);
+  const message = authExpired ? fallbackErrorMessage(response.status) : (body?.error?.message ?? fallbackErrorMessage(response.status));
   return new ApiClientError(response.status, code, message, { authExpired });
 }
 
@@ -157,11 +158,18 @@ function fallbackErrorMessage(status: number): string {
   if (status === 429) {
     return '请求过于频繁，请稍后重试';
   }
-  return '服务暂时不可用，请稍后重试';
+  if (isBackendGatewayFailure(status)) {
+    return '请重新登录';
+  }
+  return '请求失败，请稍后重试';
 }
 
 export function isAuthExpiredError(error: unknown): error is ApiClientError {
   return error instanceof ApiClientError && error.authExpired;
+}
+
+function isBackendGatewayFailure(status: number): boolean {
+  return status === 502 || status === 503 || status === 504;
 }
 
 function notifyAuthExpired() {

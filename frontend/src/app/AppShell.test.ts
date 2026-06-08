@@ -5,6 +5,8 @@ import {
   createAccountMenuItems,
   createLogoutConfirmConfig,
   createProfileFormValues,
+  filterHeaderNotificationState,
+  notificationReadKey,
   resolveNavigationPageKey,
 } from './AppShell';
 
@@ -115,6 +117,49 @@ describe('app shell logout confirmation', () => {
       '异常渠道',
     ]);
     expect(state.items[0]?.description).toContain('最老任务等待 1 分钟');
+  });
+
+  it('filters dismissed header notifications and recalculates the badge', () => {
+    const state = buildHeaderNotificationState(
+      {
+        summary: {
+          route_plan_pending: 2,
+          send_message_pending: 0,
+          oldest_job_wait_seconds: 30,
+          planning_avg_duration_ms: 0,
+          planning_p95_duration_ms: 0,
+          sending_avg_duration_ms: 0,
+          sending_p95_duration_ms: 0,
+          platform_failure_rate: 0,
+          rate_limited_count: 0,
+          dead_letter_count: 5,
+        },
+        platform_health: [],
+        slow_rules: [],
+        cleanup_status: {
+          last_run_at: null,
+          retention_days: 30,
+          batch_size: 200,
+          last_batch_deleted: 0,
+          total_deleted: 0,
+          deleted_dedupe_keys: 0,
+          completed: true,
+          has_more: false,
+        },
+      },
+      null,
+    );
+    const deadLetter = state.items.find((item) => item.key === 'dead-letter');
+
+    const filtered = filterHeaderNotificationState(
+      state,
+      new Set([notificationReadKey(deadLetter!)]),
+    );
+
+    expect(filtered.items.map((item) => item.key)).toEqual([
+      'route-plan-pending',
+    ]);
+    expect(filtered.badgeCount).toBe(2);
   });
 
   it('maps legacy log pages back to the combined monitoring page', () => {

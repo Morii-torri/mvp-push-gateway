@@ -5,14 +5,17 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net/mail"
 	"strings"
 	"time"
+	"unicode"
 )
 
 var (
 	ErrNotFound      = errors.New("recipient resource not found")
 	ErrAlreadyExists = errors.New("recipient resource already exists")
 	ErrInvalidInput  = errors.New("invalid recipient input")
+	ErrConflict      = errors.New("recipient resource conflict")
 )
 
 type OrgUnit struct {
@@ -83,6 +86,39 @@ type UserIdentityInput struct {
 	Verified      bool   `json:"verified"`
 }
 
+type UserProfileIdentityInput struct {
+	ID            string `json:"id"`
+	ProviderType  string `json:"provider_type"`
+	ChannelID     string `json:"channel_id"`
+	IdentityKind  string `json:"identity_kind"`
+	IdentityValue string `json:"identity_value"`
+	Verified      bool   `json:"verified"`
+}
+
+type UserProfileInput struct {
+	User              UserInput                  `json:"user"`
+	Identities        []UserProfileIdentityInput `json:"identities"`
+	ExpectedUpdatedAt string                     `json:"expected_updated_at"`
+}
+
+type UserProfile struct {
+	User       User
+	Identities []UserIdentity
+}
+
+type UserProfileIdentityParams = UserProfileIdentityInput
+
+type CreateUserProfileParams struct {
+	User       CreateUserParams
+	Identities []UserProfileIdentityParams
+}
+
+type SaveUserProfileParams struct {
+	User              UpdateUserParams
+	Identities        []UserProfileIdentityParams
+	ExpectedUpdatedAt *time.Time
+}
+
 type RecipientGroupInput struct {
 	Name            string   `json:"name"`
 	UserIDs         []string `json:"user_ids"`
@@ -110,8 +146,10 @@ type Store interface {
 
 	ListUsers(ctx context.Context) ([]User, error)
 	CreateUser(ctx context.Context, params CreateUserParams) (User, error)
+	CreateUserProfile(ctx context.Context, params CreateUserProfileParams) (UserProfile, error)
 	GetUser(ctx context.Context, id string) (User, error)
 	UpdateUser(ctx context.Context, id string, params UpdateUserParams) (User, error)
+	SaveUserProfile(ctx context.Context, id string, params SaveUserProfileParams) (UserProfile, error)
 	DeleteUser(ctx context.Context, id string) error
 
 	ListUserIdentities(ctx context.Context, userID string) ([]UserIdentity, error)
@@ -184,6 +222,14 @@ func (s *Service) CreateUser(ctx context.Context, input UserInput) (User, error)
 	return s.store.CreateUser(ctx, params)
 }
 
+func (s *Service) CreateUserProfile(ctx context.Context, input UserProfileInput) (UserProfile, error) {
+	params, err := normalizeCreateUserProfile(input)
+	if err != nil {
+		return UserProfile{}, err
+	}
+	return s.store.CreateUserProfile(ctx, params)
+}
+
 func (s *Service) GetUser(ctx context.Context, id string) (User, error) {
 	if strings.TrimSpace(id) == "" {
 		return User{}, ErrInvalidInput
@@ -200,6 +246,17 @@ func (s *Service) UpdateUser(ctx context.Context, id string, input UserInput) (U
 		return User{}, err
 	}
 	return s.store.UpdateUser(ctx, id, params)
+}
+
+func (s *Service) SaveUserProfile(ctx context.Context, id string, input UserProfileInput) (UserProfile, error) {
+	if strings.TrimSpace(id) == "" {
+		return UserProfile{}, ErrInvalidInput
+	}
+	params, err := normalizeSaveUserProfile(input)
+	if err != nil {
+		return UserProfile{}, err
+	}
+	return s.store.SaveUserProfile(ctx, id, params)
 }
 
 func (s *Service) DeleteUser(ctx context.Context, id string) error {
@@ -297,7 +354,29 @@ func normalizeOrgUnit(input OrgUnitInput) (CreateOrgUnitParams, error) {
 	if input.Code == "" || input.Name == "" {
 		return CreateOrgUnitParams{}, ErrInvalidInput
 	}
+	if !isNumericOrgCode(input.Code) {
+		return CreateOrgUnitParams{}, ErrInvalidInput
+	}
+	if input.ParentID == "" {
+		if len(input.Code) != 4 {
+			return CreateOrgUnitParams{}, ErrInvalidInput
+		}
+	} else if len(input.Code) < 6 || len(input.Code)%2 != 0 {
+		return CreateOrgUnitParams{}, ErrInvalidInput
+	}
 	return input, nil
+}
+
+func isNumericOrgCode(value string) bool {
+	if value == "" {
+		return false
+	}
+	for _, char := range value {
+		if char < '0' || char > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 func normalizeUser(input UserInput) (CreateUserParams, error) {
@@ -308,6 +387,9 @@ func normalizeUser(input UserInput) (CreateUserParams, error) {
 	}
 	attrs, err := normalizeJSON(input.Attributes)
 	if err != nil {
+		return CreateUserParams{}, err
+	}
+	if err := validateUserFallbackAttributes(attrs); err != nil {
 		return CreateUserParams{}, err
 	}
 	input.Attributes = attrs
@@ -323,7 +405,73 @@ func normalizeUserIdentity(input UserIdentityInput) (CreateUserIdentityParams, e
 	if input.UserID == "" || input.ProviderType == "" || input.IdentityKind == "" || input.IdentityValue == "" {
 		return CreateUserIdentityParams{}, ErrInvalidInput
 	}
+	if !validIdentityValue(input.IdentityKind, input.IdentityValue) {
+		return CreateUserIdentityParams{}, ErrInvalidInput
+	}
 	return input, nil
+}
+
+func normalizeCreateUserProfile(input UserProfileInput) (CreateUserProfileParams, error) {
+	user, err := normalizeUser(input.User)
+	if err != nil {
+		return CreateUserProfileParams{}, err
+	}
+	identities, err := normalizeUserProfileIdentities(input.Identities)
+	if err != nil {
+		return CreateUserProfileParams{}, err
+	}
+	for _, identity := range identities {
+		if identity.ID != "" {
+			return CreateUserProfileParams{}, ErrInvalidInput
+		}
+	}
+	return CreateUserProfileParams{User: user, Identities: identities}, nil
+}
+
+func normalizeSaveUserProfile(input UserProfileInput) (SaveUserProfileParams, error) {
+	user, err := normalizeUser(input.User)
+	if err != nil {
+		return SaveUserProfileParams{}, err
+	}
+	identities, err := normalizeUserProfileIdentities(input.Identities)
+	if err != nil {
+		return SaveUserProfileParams{}, err
+	}
+	var expectedUpdatedAt *time.Time
+	if strings.TrimSpace(input.ExpectedUpdatedAt) != "" {
+		parsed, err := time.Parse(time.RFC3339, strings.TrimSpace(input.ExpectedUpdatedAt))
+		if err != nil {
+			return SaveUserProfileParams{}, ErrInvalidInput
+		}
+		expectedUpdatedAt = &parsed
+	}
+	return SaveUserProfileParams{User: user, Identities: identities, ExpectedUpdatedAt: expectedUpdatedAt}, nil
+}
+
+func normalizeUserProfileIdentities(inputs []UserProfileIdentityInput) ([]UserProfileIdentityParams, error) {
+	identities := make([]UserProfileIdentityParams, 0, len(inputs))
+	seenIDs := map[string]bool{}
+	for _, input := range inputs {
+		input.ID = strings.TrimSpace(input.ID)
+		input.ProviderType = strings.TrimSpace(input.ProviderType)
+		input.ChannelID = strings.TrimSpace(input.ChannelID)
+		input.IdentityKind = strings.TrimSpace(input.IdentityKind)
+		input.IdentityValue = strings.TrimSpace(input.IdentityValue)
+		if input.ProviderType == "" || input.IdentityKind == "" || input.IdentityValue == "" {
+			return nil, ErrInvalidInput
+		}
+		if input.ID != "" {
+			if seenIDs[input.ID] {
+				return nil, ErrInvalidInput
+			}
+			seenIDs[input.ID] = true
+		}
+		if !validIdentityValue(input.IdentityKind, input.IdentityValue) {
+			return nil, ErrInvalidInput
+		}
+		identities = append(identities, input)
+	}
+	return identities, nil
 }
 
 func normalizeRecipientGroup(input RecipientGroupInput) (CreateRecipientGroupParams, error) {
@@ -357,4 +505,47 @@ func clean(values []string) []string {
 		}
 	}
 	return cleaned
+}
+
+func validIdentityValue(kind string, value string) bool {
+	switch kind {
+	case "email":
+		address, err := mail.ParseAddress(value)
+		return err == nil && address.Address == value && strings.Contains(value, "@")
+	case "mobile":
+		normalized := strings.TrimPrefix(value, "+")
+		if len(normalized) < 6 || len(normalized) > 20 {
+			return false
+		}
+		for _, char := range normalized {
+			if !unicode.IsDigit(char) {
+				return false
+			}
+		}
+		return true
+	default:
+		return true
+	}
+}
+
+func validateUserFallbackAttributes(raw json.RawMessage) error {
+	var attributes map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &attributes); err != nil {
+		return ErrInvalidInput
+	}
+	for _, kind := range []string{"email", "mobile"} {
+		value, ok := attributes[kind]
+		if !ok || string(bytes.TrimSpace(value)) == "null" {
+			continue
+		}
+		var text string
+		if err := json.Unmarshal(value, &text); err != nil {
+			return ErrInvalidInput
+		}
+		text = strings.TrimSpace(text)
+		if text != "" && !validIdentityValue(kind, text) {
+			return ErrInvalidInput
+		}
+	}
+	return nil
 }

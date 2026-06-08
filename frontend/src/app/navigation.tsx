@@ -43,7 +43,7 @@ export const navigationItems: NavigationItem[] = [
   { key: 'providers', icon: decorativeIcon(<ApartmentOutlined />), label: '推送渠道' },
   { key: 'templates', icon: decorativeIcon(<FileTextOutlined />), label: '消息模板' },
   { key: 'routes', icon: decorativeIcon(<DeploymentUnitOutlined />), label: '路由策略' },
-  { key: 'monitoring', icon: decorativeIcon(<HistoryOutlined />), label: '日志与监控' },
+  { key: 'monitoring', icon: decorativeIcon(<HistoryOutlined />), label: '日志监控' },
   { key: 'organization', icon: decorativeIcon(<TeamOutlined />), label: '组织人员' },
   { key: 'settings', icon: decorativeIcon(<SettingOutlined />), label: '系统设置' },
 ];

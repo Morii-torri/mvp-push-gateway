@@ -184,14 +184,14 @@ Rendered message content
 - 推送渠道
 - 消息模板
 - 路由策略
-- 日志与监控
+- 日志监控
 - 系统设置
 
 合并建议：
 
 - 组织人员、接收人组：放入“路由策略”或“系统设置”的二级页。
 - 匹配组：放入“路由策略”的二级页。
-- 消息日志、队列监控、操作审计：合并为“日志与监控”的 tabs。
+- 消息日志、队列监控、操作审计：合并为“日志监控”的 tabs。
 
 保留当前页面能力，但降低一级菜单数量。
 
@@ -233,7 +233,7 @@ Status as of 2026-05-12: mostly completed as documentation/model sync. Core ment
    - 推送渠道
    - 消息模板
    - 路由策略
-   - 日志与监控
+   - 日志监控
    - 系统设置
 4. Rename terminology in docs where safe:
    - 上级平台 -> 推送渠道.
@@ -537,7 +537,7 @@ Status as of 2026-05-12: not completed. Documentation refresh is partially done;
    - 模板中心 -> 消息模板.
    - 路由编排 -> 路由策略.
 2. Merge pages:
-   - 日志与监控 tabs: 消息日志, 队列监控, 操作审计.
+- 日志监控 tabs: 消息日志, 队列监控, 操作审计.
    - 路由策略 tabs: 路由组, 匹配组, 接收人组.
    - 系统设置 tabs: 系统参数, 组织人员.
 3. Keep old routes as redirects or compatibility aliases if needed.

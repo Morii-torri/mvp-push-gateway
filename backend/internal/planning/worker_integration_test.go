@@ -196,7 +196,7 @@ func TestWorkerPlansLegacyActionIntoDeliveryAttemptAndSendJob(t *testing.T) {
 	}
 }
 
-func TestWorkerResolvesTemplateRouteTargetToCurrentTemplateVersion(t *testing.T) {
+func TestWorkerKeepsTemplateRouteTargetOnReferencedVersion(t *testing.T) {
 	pool := openMigratedPool(t)
 	defer pool.Close()
 
@@ -307,8 +307,8 @@ func TestWorkerResolvesTemplateRouteTargetToCurrentTemplateVersion(t *testing.T)
 		t.Fatalf("decode send job payload: %v", err)
 	}
 	body, ok := decoded["body"].(map[string]any)
-	if attemptTemplateVersionID != v2.ID || !ok || body["title"] != "critical v2" {
-		t.Fatalf("expected current template version %s and v2 body, got version=%s payload=%+v", v2.ID, attemptTemplateVersionID, decoded)
+	if attemptTemplateVersionID != v1.ID || !ok || body["title"] != "critical v1" {
+		t.Fatalf("expected referenced template version %s and v1 body after publishing %s, got version=%s payload=%+v", v1.ID, v2.ID, attemptTemplateVersionID, decoded)
 	}
 }
 

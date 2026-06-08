@@ -5,12 +5,15 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"mvp-push-gateway/backend/internal/auth"
 	httpapi "mvp-push-gateway/backend/internal/http"
+	"mvp-push-gateway/backend/internal/route"
 	"mvp-push-gateway/backend/internal/settings"
 	"mvp-push-gateway/backend/internal/source"
 )
@@ -158,6 +161,37 @@ func TestSourceCRUDRoutesUseAdminAuthentication(t *testing.T) {
 			sourceService.updateCalls,
 			sourceService.deleteCalls,
 		)
+	}
+}
+
+func TestSourceCreateAutoCreatesDefaultRouteFlow(t *testing.T) {
+	sourceService := &fakeSourceService{}
+	routeService := &fakeRouteService{}
+	handler := httpapi.NewHandler(
+		testConfig(),
+		httpapi.WithAuthService(fakeAuthService{authenticatedToken: "admin-session"}),
+		httpapi.WithSourceService(sourceService),
+		httpapi.WithRouteService(routeService),
+	)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/sources", strings.NewReader(`{
+		"code":"orders",
+		"name":"订单系统",
+		"auth_mode":"token",
+		"auth_token":"sourceToken"
+	}`))
+	req.Header.Set("Authorization", "Bearer admin-session")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("expected status 201, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	if routeService.createCalls != 1 {
+		t.Fatalf("expected one default route flow create call, got %d", routeService.createCalls)
+	}
+	if routeService.createInput.SourceID != "source-1" || routeService.createInput.Name != "订单系统 路由组" || !routeService.createInput.Enabled || routeService.createInput.Mode != route.ModeTable {
+		t.Fatalf("unexpected default route flow input: %+v", routeService.createInput)
 	}
 }
 
@@ -415,6 +449,8 @@ func TestIngestErrorCodesMatchPublishedContract(t *testing.T) {
 		{name: "payload too large", err: source.ErrPayloadTooLarge, expectedStatus: http.StatusRequestEntityTooLarge, expectedCode: "MGP-PAYLOAD-002"},
 		{name: "duplicate inbound", err: source.ErrDuplicateInbound, expectedStatus: http.StatusConflict, expectedCode: "MGP-DEDUPE-001"},
 		{name: "invalid dedupe config", err: source.ErrInvalidDedupeConfig, expectedStatus: http.StatusBadRequest, expectedCode: "MGP-DEDUPE-001"},
+		{name: "dedupe store failed", err: source.ErrDedupeStoreFailed, expectedStatus: http.StatusServiceUnavailable, expectedCode: "MGP-DEDUPE-002"},
+		{name: "hmac nonce store failed", err: source.ErrHMACNonceStoreFailed, expectedStatus: http.StatusServiceUnavailable, expectedCode: "MGP-HMAC-002"},
 		{name: "rate limited", err: source.ErrRateLimited, expectedStatus: http.StatusTooManyRequests, expectedCode: "MGP-RATE-001"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -464,10 +500,15 @@ func TestSourceCRUDErrorCodesAvoidLegacySourceCodes(t *testing.T) {
 }
 
 type fakeSourceService struct {
-	listResult   []source.Source
-	getResult    source.Source
-	updateResult source.Source
-	ingestResult source.IngestResult
+	mu sync.Mutex
+
+	listResult          []source.Source
+	getResult           source.Source
+	updateResult        source.Source
+	ingestResult        source.IngestResult
+	runtimeStatsResults []source.RuntimeStats
+	deliveryStatuses    map[string]bool
+	deliveryStatusSteps []map[string]bool
 
 	createErr error
 	getErr    error
@@ -475,14 +516,21 @@ type fakeSourceService struct {
 	deleteErr error
 	ingestErr error
 
-	listCalls   int
-	createCalls int
-	getCalls    int
-	updateCalls int
-	deleteCalls int
+	listCalls               int
+	createCalls             int
+	getCalls                int
+	updateCalls             int
+	deleteCalls             int
+	ingestCalls             int
+	runtimeStatsCalls       int
+	deliveryStatusCalls     int
+	cleanupRuntimeDataCalls int
 
-	ingestInput source.IngestInput
-	updateInput source.UpdateSourceInput
+	ingestInput      source.IngestInput
+	ingestInputs     []source.IngestInput
+	createInputs     []source.CreateSourceInput
+	deletedSourceIDs []string
+	updateInput      source.UpdateSourceInput
 }
 
 func (f *fakeSourceService) ListSources(context.Context) ([]source.Source, error) {
@@ -492,16 +540,22 @@ func (f *fakeSourceService) ListSources(context.Context) ([]source.Source, error
 
 func (f *fakeSourceService) CreateSource(_ context.Context, input source.CreateSourceInput) (source.Source, error) {
 	f.createCalls++
+	f.createInputs = append(f.createInputs, input)
 	if f.createErr != nil {
 		return source.Source{}, f.createErr
 	}
+	sourceID := "source-1"
+	if f.createCalls > 1 {
+		sourceID = "source-" + strconv.Itoa(f.createCalls)
+	}
 	return source.Source{
-		ID:        "source-1",
-		Code:      input.Code,
-		Name:      input.Name,
-		Enabled:   input.Enabled,
-		AuthMode:  input.AuthMode,
-		AuthToken: input.AuthToken,
+		ID:         sourceID,
+		Code:       input.Code,
+		Name:       input.Name,
+		Enabled:    input.Enabled,
+		AuthMode:   input.AuthMode,
+		AuthToken:  input.AuthToken,
+		HMACSecret: input.HMACSecret,
 	}, nil
 }
 
@@ -531,20 +585,63 @@ func (f *fakeSourceService) UpdateSource(_ context.Context, _ string, input sour
 	}, nil
 }
 
-func (f *fakeSourceService) DeleteSource(context.Context, string) error {
+func (f *fakeSourceService) DeleteSource(_ context.Context, id string) error {
 	f.deleteCalls++
+	f.deletedSourceIDs = append(f.deletedSourceIDs, id)
 	if f.deleteErr != nil {
 		return f.deleteErr
 	}
 	return nil
 }
 
+func (f *fakeSourceService) DeleteSourceRuntimeData(context.Context, string) error {
+	f.cleanupRuntimeDataCalls++
+	return nil
+}
+
 func (f *fakeSourceService) Ingest(_ context.Context, input source.IngestInput) (source.IngestResult, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.ingestCalls++
 	f.ingestInput = input
+	f.ingestInputs = append(f.ingestInputs, input)
 	if f.ingestErr != nil {
 		return source.IngestResult{}, f.ingestErr
 	}
 	return f.ingestResult, nil
+}
+
+func (f *fakeSourceService) RuntimeStats(context.Context) (source.RuntimeStats, error) {
+	f.runtimeStatsCalls++
+	if len(f.runtimeStatsResults) == 0 {
+		return source.RuntimeStats{}, nil
+	}
+	index := f.runtimeStatsCalls - 1
+	if index >= len(f.runtimeStatsResults) {
+		index = len(f.runtimeStatsResults) - 1
+	}
+	return f.runtimeStatsResults[index], nil
+}
+
+func (f *fakeSourceService) PerformanceDeliveryStatuses(_ context.Context, traceIDs []string) (map[string]bool, error) {
+	f.deliveryStatusCalls++
+	currentStatuses := f.deliveryStatuses
+	if len(f.deliveryStatusSteps) > 0 {
+		index := f.deliveryStatusCalls - 1
+		if index >= len(f.deliveryStatusSteps) {
+			index = len(f.deliveryStatusSteps) - 1
+		}
+		currentStatuses = f.deliveryStatusSteps[index]
+	}
+	statuses := make(map[string]bool, len(traceIDs))
+	for _, traceID := range traceIDs {
+		if currentStatuses == nil {
+			statuses[traceID] = true
+			continue
+		}
+		statuses[traceID] = currentStatuses[traceID]
+	}
+	return statuses, nil
 }
 
 type httpSourceStore struct {
@@ -579,7 +676,11 @@ func (s *httpSourceStore) DeleteSource(context.Context, string) error {
 	return nil
 }
 
-func (s *httpSourceStore) UpdateLatestPayloadSample(context.Context, string, json.RawMessage) error {
+func (s *httpSourceStore) DeleteSourceRuntimeData(context.Context, string) error {
+	return nil
+}
+
+func (s *httpSourceStore) UpdateLatestPayloadSample(context.Context, string, json.RawMessage, time.Time) error {
 	s.latestPayloadUpdates++
 	return nil
 }

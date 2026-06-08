@@ -41,7 +41,7 @@ func TestTokenManagerCachesByResolvedWeComCredentials(t *testing.T) {
 	store := newMemoryTokenCacheStore()
 	manager := NewTokenManager(store, WithTokenManagerNow(func() time.Time {
 		return time.Date(2026, 5, 22, 9, 0, 0, 0, time.UTC)
-	}))
+	}), WithTokenManagerHTTPClientFactory(localTestHTTPClientFactory))
 
 	channelA := Channel{ID: "channel-a", ProviderType: ProviderWeComApp, AuthConfig: json.RawMessage(`{"corpid":"corp-1","corpsecret":"secret-1"}`)}
 	first, err := manager.Resolve(ctx, capability, channelA, false)

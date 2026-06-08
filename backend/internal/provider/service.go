@@ -99,6 +99,7 @@ type Channel struct {
 	ProviderType     ProviderType
 	Name             string
 	Enabled          bool
+	Description      string
 	AuthConfig       json.RawMessage
 	TokenConfig      json.RawMessage
 	SendConfig       json.RawMessage
@@ -120,6 +121,7 @@ type CreateChannelInput struct {
 	ProviderType     ProviderType    `json:"provider_type"`
 	Name             string          `json:"name"`
 	Enabled          bool            `json:"enabled"`
+	Description      string          `json:"description"`
 	AuthConfig       json.RawMessage `json:"auth_config"`
 	TokenConfig      json.RawMessage `json:"token_config"`
 	SendConfig       json.RawMessage `json:"send_config"`
@@ -171,16 +173,38 @@ type Store interface {
 }
 
 type Service struct {
-	store        Store
-	tokenManager *TokenManager
+	store             Store
+	tokenManager      *TokenManager
+	httpClientFactory func(time.Duration) *http.Client
 }
 
-func NewService(store Store) *Service {
+type ServiceOption func(*Service)
+
+func WithProviderHTTPClientFactory(factory func(time.Duration) *http.Client) ServiceOption {
+	return func(s *Service) {
+		if factory != nil {
+			s.httpClientFactory = factory
+			if s.tokenManager != nil {
+				s.tokenManager.httpClientFactory = factory
+			}
+		}
+	}
+}
+
+func NewService(store Store, options ...ServiceOption) *Service {
 	var tokenStore TokenCacheStore
 	if candidate, ok := store.(TokenCacheStore); ok {
 		tokenStore = candidate
 	}
-	return &Service{store: store, tokenManager: NewTokenManager(tokenStore)}
+	service := &Service{
+		store:             store,
+		httpClientFactory: newEgressHTTPClient,
+	}
+	service.tokenManager = NewTokenManager(tokenStore, WithTokenManagerHTTPClientFactory(service.httpClientFactory))
+	for _, option := range options {
+		option(service)
+	}
+	return service
 }
 
 func (s *Service) SeedProviderCapabilities(ctx context.Context) error {
@@ -253,10 +277,10 @@ func (s *Service) BuildRequest(ctx context.Context, channelID string, input Buil
 	if err != nil {
 		return BuiltRequest{}, err
 	}
-	if strings.TrimSpace(input.Token) == "" && RequiresTokenResolution(channel.ProviderType) {
-		if token, err := s.autoResolveToken(ctx, channel); err == nil && token != "" {
-			input.Token = token
-		}
+	if token, err := s.managedToken(ctx, channel); err != nil {
+		return BuiltRequest{}, err
+	} else if token != "" {
+		input.Token = token
 	}
 	return BuildRequest(channel, input)
 }
@@ -266,10 +290,10 @@ func (s *Service) BuildDeliveryRequest(ctx context.Context, channelID string, in
 	if err != nil {
 		return BuiltRequest{}, err
 	}
-	if strings.TrimSpace(input.Token) == "" && RequiresTokenResolution(channel.ProviderType) {
-		if token, err := s.autoResolveToken(ctx, channel); err == nil && token != "" {
-			input.Token = token
-		}
+	if token, err := s.managedToken(ctx, channel); err != nil {
+		return BuiltRequest{}, err
+	} else if token != "" {
+		input.Token = token
 	}
 	return BuildDeliveryRequest(channel, input)
 }
@@ -279,10 +303,10 @@ func (s *Service) TestSend(ctx context.Context, channelID string, input TestSend
 	if err != nil {
 		return TestSendResult{}, err
 	}
-	if strings.TrimSpace(input.Token) == "" && RequiresTokenResolution(channel.ProviderType) {
-		if token, err := s.autoResolveToken(ctx, channel); err == nil && token != "" {
-			input.Token = token
-		}
+	if token, err := s.managedToken(ctx, channel); err != nil {
+		return TestSendResult{}, err
+	} else if token != "" {
+		input.Token = token
 	}
 	deliveryInput := testSendDeliveryInput(channel, input)
 	built, err := BuildDeliveryRequest(channel, deliveryInput)
@@ -636,6 +660,7 @@ func webhookContentSchema() json.RawMessage {
 
 func normalizeChannelInput(input CreateChannelInput) (CreateChannelParams, error) {
 	input.Name = strings.TrimSpace(input.Name)
+	input.Description = strings.TrimSpace(input.Description)
 	if input.Name == "" || !validProviderType(input.ProviderType) {
 		return CreateChannelParams{}, ErrInvalidInput
 	}
@@ -1088,7 +1113,7 @@ func sendBuiltRequest(ctx context.Context, channel Channel, built BuiltRequest) 
 	if timeout <= 0 {
 		timeout = 5 * time.Second
 	}
-	client := &http.Client{Timeout: timeout}
+	client := newEgressHTTPClient(timeout)
 	resp, err := client.Do(req)
 	if err != nil {
 		return 0, nil, nil, err
@@ -1103,6 +1128,10 @@ func sendBuiltRequest(ctx context.Context, channel Channel, built BuiltRequest) 
 
 var smtpTLSConfigForHost = func(host string) *tls.Config {
 	return &tls.Config{ServerName: host, MinVersion: tls.VersionTLS12}
+}
+
+var smtpResolveEgressAddress = func(ctx context.Context, endpoint smtpEndpoint) (string, error) {
+	return resolveEgressDialAddress(ctx, endpoint.host, endpoint.port)
 }
 
 func sendSMTPBuiltRequest(ctx context.Context, channel Channel, built BuiltRequest) (int, map[string][]string, []byte, error) {
@@ -1197,6 +1226,7 @@ func sendSMTPBuiltRequest(ctx context.Context, channel Channel, built BuiltReque
 
 type smtpEndpoint struct {
 	host     string
+	port     string
 	address  string
 	security string
 }
@@ -1215,13 +1245,17 @@ func smtpEndpointFromRequest(rawURL string, body map[string]any) (smtpEndpoint, 
 	if security != "SSL" && security != "STARTTLS" {
 		return smtpEndpoint{}, fmt.Errorf("%w: SMTP 仅支持 SSL 或 STARTTLS", ErrInvalidInput)
 	}
-	return smtpEndpoint{host: host, address: net.JoinHostPort(host, port), security: security}, nil
+	return smtpEndpoint{host: host, port: port, address: net.JoinHostPort(host, port), security: security}, nil
 }
 
 func dialSMTPClient(ctx context.Context, endpoint smtpEndpoint, timeout time.Duration) (*smtp.Client, error) {
+	dialAddress, err := smtpResolveEgressAddress(ctx, endpoint)
+	if err != nil {
+		return nil, err
+	}
 	dialer := &net.Dialer{Timeout: timeout}
 	if endpoint.security == "STARTTLS" {
-		conn, err := dialer.DialContext(ctx, "tcp", endpoint.address)
+		conn, err := dialer.DialContext(ctx, "tcp", dialAddress)
 		if err != nil {
 			return nil, err
 		}
@@ -1236,7 +1270,7 @@ func dialSMTPClient(ctx context.Context, endpoint smtpEndpoint, timeout time.Dur
 		}
 		return client, nil
 	}
-	conn, err := tls.DialWithDialer(dialer, "tcp", endpoint.address, smtpTLSConfigForHost(endpoint.host))
+	conn, err := tls.DialWithDialer(dialer, "tcp", dialAddress, smtpTLSConfigForHost(endpoint.host))
 	if err != nil {
 		return nil, err
 	}
@@ -1351,7 +1385,7 @@ func RedactBuiltRequest(request BuiltRequest) BuiltRequest {
 		URL:     redactURL(request.URL),
 		Headers: redactHeaders(request.Headers),
 		Query:   redactQuery(request.Query),
-		Body:    request.Body,
+		Body:    redactBody(request.Body),
 	}
 }
 
@@ -1394,13 +1428,50 @@ func redactQuery(query map[string]string) map[string]string {
 	return redacted
 }
 
-func sensitiveTokenField(key string) bool {
-	switch strings.ToLower(strings.TrimSpace(key)) {
-	case "access_token", "authorization", "token", "corpsecret", "secret", "appsecret":
-		return true
-	default:
-		return false
+func redactBody(raw json.RawMessage) json.RawMessage {
+	if len(bytes.TrimSpace(raw)) == 0 {
+		return raw
 	}
+	var value any
+	if err := json.Unmarshal(raw, &value); err != nil {
+		return raw
+	}
+	redacted, err := json.Marshal(redactSensitiveJSON(value, ""))
+	if err != nil {
+		return raw
+	}
+	return redacted
+}
+
+func redactSensitiveJSON(value any, key string) any {
+	if sensitiveTokenField(key) {
+		return "***"
+	}
+	switch typed := value.(type) {
+	case map[string]any:
+		redacted := make(map[string]any, len(typed))
+		for itemKey, itemValue := range typed {
+			redacted[itemKey] = redactSensitiveJSON(itemValue, itemKey)
+		}
+		return redacted
+	case []any:
+		redacted := make([]any, len(typed))
+		for i, item := range typed {
+			redacted[i] = redactSensitiveJSON(item, "")
+		}
+		return redacted
+	default:
+		return value
+	}
+}
+
+func sensitiveTokenField(key string) bool {
+	normalized := strings.ToLower(strings.TrimSpace(key))
+	normalized = strings.NewReplacer("_", "", "-", "", ".", "").Replace(normalized)
+	return strings.Contains(normalized, "token") ||
+		strings.Contains(normalized, "secret") ||
+		strings.Contains(normalized, "password") ||
+		strings.Contains(normalized, "authorization")
 }
 
 func requestConfigFrom(channel Channel, input BuildRequestInput) (requestConfig, error) {
@@ -1631,13 +1702,23 @@ func (s *Service) autoResolveToken(ctx context.Context, channel Channel) (string
 	return "", nil
 }
 
+func (s *Service) managedToken(ctx context.Context, channel Channel) (string, error) {
+	if !RequiresTokenResolution(channel.ProviderType) {
+		return "", nil
+	}
+	if token := credentialValue(channel.AuthConfig, "access_token"); token != "" {
+		return token, nil
+	}
+	return s.autoResolveToken(ctx, channel)
+}
+
 func (s *Service) RefreshToken(ctx context.Context, id string) (TokenCacheStatus, error) {
 	channel, err := s.GetChannel(ctx, id)
 	if err != nil {
 		return TokenCacheStatus{}, err
 	}
 	if !RequiresTokenResolution(channel.ProviderType) {
-		return TokenCacheStatus{}, fmt.Errorf("channel type does not require token resolution")
+		return TokenCacheStatus{}, fmt.Errorf("%w: channel type does not require token resolution", ErrInvalidInput)
 	}
 	capabilities := DefaultCapabilities()
 	for _, capability := range capabilities {
@@ -1657,7 +1738,7 @@ func (s *Service) RefreshToken(ctx context.Context, id string) (TokenCacheStatus
 			return current.withFallback(status), nil
 		}
 	}
-	return TokenCacheStatus{}, fmt.Errorf("no capability found for channel provider type")
+	return TokenCacheStatus{}, fmt.Errorf("%w: no capability found for channel provider type", ErrInvalidInput)
 }
 
 func (s *Service) ResolveFeishuOpenID(ctx context.Context, channelID string, mobiles []string) (FeishuOpenIDResolveResult, error) {
@@ -1769,7 +1850,7 @@ func (s *Service) requestDingTalkUserID(ctx context.Context, channel Channel, to
 	if timeout <= 0 {
 		timeout = 5 * time.Second
 	}
-	client := &http.Client{Timeout: timeout}
+	client := s.httpClientFactory(timeout)
 	result := DingTalkUserIDResolveResult{Success: true, Items: make([]DingTalkUserIDResolveItem, 0, len(queryWords))}
 	for _, queryWord := range queryWords {
 		body := map[string]any{
@@ -1876,7 +1957,7 @@ func (s *Service) requestFeishuOpenID(ctx context.Context, channel Channel, toke
 	if timeout <= 0 {
 		timeout = 5 * time.Second
 	}
-	resp, err := (&http.Client{Timeout: timeout}).Do(req)
+	resp, err := s.httpClientFactory(timeout).Do(req)
 	if err != nil {
 		return FeishuOpenIDResolveResult{}, 0, err
 	}

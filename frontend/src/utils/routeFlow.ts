@@ -230,14 +230,14 @@ function routeRecipientNodeSummary(config: unknown): string {
 
 function routeSendGroupNodeTitle(rule: RouteRuleFlowSummary): string {
   const summary = rule.sendGroupSummary || '';
-  if (summary) {
+  if (summary && summary !== '-') {
     return summary
       .split('、')
       .map((item) => item.split(' -> ')[0]?.trim())
       .filter(Boolean)
       .join('、') || '-';
   }
-  return rule.targetProviders.join('、') || '-';
+  return rule.targetProviders.join('、') || '未配置发送目标';
 }
 
 export function buildRouteConditionTree(

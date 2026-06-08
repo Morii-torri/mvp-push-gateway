@@ -34,6 +34,10 @@ func TestFreshEnvironmentHTTPFlowCoversSetupAuthSourceTemplateRouteAndIngest(t *
 
 	repository := dbrepo.NewRepository(pool)
 	now := time.Date(2026, 5, 11, 9, 30, 0, 0, time.UTC)
+	providerService := provider.NewService(repository)
+	if err := providerService.SeedProviderCapabilities(ctx); err != nil {
+		t.Fatalf("seed provider capabilities: %v", err)
+	}
 
 	handler := httpapi.NewHandler(
 		integrationTestConfig(),
@@ -42,8 +46,9 @@ func TestFreshEnvironmentHTTPFlowCoversSetupAuthSourceTemplateRouteAndIngest(t *
 			repository,
 			source.WithNow(func() time.Time { return now }),
 			source.WithTraceIDGenerator(func() string { return "trace-http-flow-001" }),
+			source.WithLatestPayloadFlushInterval(10*time.Millisecond),
 		)),
-		httpapi.WithProviderService(provider.NewService(repository)),
+		httpapi.WithProviderService(providerService),
 		httpapi.WithTemplateService(msgtemplate.NewService(repository)),
 		httpapi.WithRouteService(route.NewService(
 			repository,
@@ -57,9 +62,10 @@ func TestFreshEnvironmentHTTPFlowCoversSetupAuthSourceTemplateRouteAndIngest(t *
 	}
 
 	adminCreated := doJSON[setupAdminBody](t, handler, http.MethodPost, "/api/v1/setup/admin", "", map[string]any{
-		"username":     "Admin",
-		"password":     "valid-password-123",
-		"display_name": "系统管理员",
+		"username":         "Admin",
+		"password":         "valid-password-123",
+		"confirm_password": "valid-password-123",
+		"display_name":     "系统管理员",
 	}, http.StatusCreated)
 	if adminCreated.Admin.Username != "admin" || !adminCreated.Admin.MustChangePassword {
 		t.Fatalf("unexpected created admin: %+v", adminCreated.Admin)
@@ -71,8 +77,9 @@ func TestFreshEnvironmentHTTPFlowCoversSetupAuthSourceTemplateRouteAndIngest(t *
 	}
 
 	assertStatusCode(t, handler, http.MethodPost, "/api/v1/setup/admin", "", map[string]any{
-		"username": "second-admin",
-		"password": "valid-password-456",
+		"username":         "second-admin",
+		"password":         "valid-password-456",
+		"confirm_password": "valid-password-456",
 	}, http.StatusConflict)
 
 	login := doJSON[loginBody](t, handler, http.MethodPost, "/api/v1/auth/login", "", map[string]any{
@@ -95,6 +102,7 @@ func TestFreshEnvironmentHTTPFlowCoversSetupAuthSourceTemplateRouteAndIngest(t *
 	if !changePassword.OK {
 		t.Fatalf("expected password change success, got %+v", changePassword)
 	}
+	assertStatusCode(t, handler, http.MethodGet, "/api/v1/auth/me", login.Token, nil, http.StatusUnauthorized)
 
 	assertStatusCode(t, handler, http.MethodPost, "/api/v1/auth/login", "", map[string]any{
 		"username": "admin",
@@ -109,13 +117,7 @@ func TestFreshEnvironmentHTTPFlowCoversSetupAuthSourceTemplateRouteAndIngest(t *
 		t.Fatal("expected rotated password login token")
 	}
 
-	logout := doJSON[okBody](t, handler, http.MethodPost, "/api/v1/auth/logout", rotatedLogin.Token, nil, http.StatusOK)
-	if !logout.OK {
-		t.Fatalf("expected logout success, got %+v", logout)
-	}
-	assertStatusCode(t, handler, http.MethodGet, "/api/v1/auth/me", rotatedLogin.Token, nil, http.StatusUnauthorized)
-
-	sourceCreated := doJSON[sourceCreateBody](t, handler, http.MethodPost, "/api/v1/sources", login.Token, map[string]any{
+	sourceCreated := doJSON[sourceCreateBody](t, handler, http.MethodPost, "/api/v1/sources", rotatedLogin.Token, map[string]any{
 		"code":                    "orders",
 		"name":                    "Orders",
 		"auth_mode":               "token",
@@ -132,7 +134,7 @@ func TestFreshEnvironmentHTTPFlowCoversSetupAuthSourceTemplateRouteAndIngest(t *
 		t.Fatalf("expected no latest payload sample before ingest, got %s", sourceCreated.Source.LatestPayloadSample)
 	}
 
-	templateCreated := doJSON[templateBody](t, handler, http.MethodPost, "/api/v1/templates", login.Token, map[string]any{
+	templateCreated := doJSON[templateBody](t, handler, http.MethodPost, "/api/v1/templates", rotatedLogin.Token, map[string]any{
 		"name":        "Alert Template",
 		"description": "Title renderer",
 		"source_id":   sourceCreated.Source.ID,
@@ -142,10 +144,10 @@ func TestFreshEnvironmentHTTPFlowCoversSetupAuthSourceTemplateRouteAndIngest(t *
 		t.Fatalf("unexpected template source: %+v", templateCreated.Template)
 	}
 
-	templateVersion := doJSON[templateVersionBody](t, handler, http.MethodPost, "/api/v1/templates/"+templateCreated.Template.ID+"/publish", login.Token, map[string]any{
-		"message_type":         "text",
+	templateVersion := doJSON[templateVersionBody](t, handler, http.MethodPost, "/api/v1/templates/"+templateCreated.Template.ID+"/publish", rotatedLogin.Token, map[string]any{
+		"message_type":         "json",
 		"target_provider_type": "webhook",
-		"template_body":        "标题：{{ payload.title }}",
+		"template_body":        `{"body":{"title":"{{ payload.title }}"}}`,
 		"message_body_schema":  map[string]any{},
 		"sample_payload":       map[string]any{"title": "critical"},
 	}, http.StatusCreated)
@@ -156,7 +158,7 @@ func TestFreshEnvironmentHTTPFlowCoversSetupAuthSourceTemplateRouteAndIngest(t *
 		t.Fatalf("expected payload.title variable capture, got %+v", templateVersion.Version.UsedVariables)
 	}
 
-	channelCreated := doJSON[channelBody](t, handler, http.MethodPost, "/api/v1/channels", login.Token, map[string]any{
+	channelCreated := doJSON[channelBody](t, handler, http.MethodPost, "/api/v1/channels", rotatedLogin.Token, map[string]any{
 		"provider_type":      "webhook",
 		"name":               "Test Webhook",
 		"enabled":            true,
@@ -171,18 +173,21 @@ func TestFreshEnvironmentHTTPFlowCoversSetupAuthSourceTemplateRouteAndIngest(t *
 		t.Fatalf("unexpected channel: %+v", channelCreated.Channel)
 	}
 
-	flowCreated := doJSON[routeFlowBody](t, handler, http.MethodPost, "/api/v1/route-flows", login.Token, map[string]any{
-		"source_id": sourceCreated.Source.ID,
-		"name":      "Orders Flow",
-		"enabled":   true,
-		"mode":      "table",
-	}, http.StatusCreated)
-	if flowCreated.Flow.SourceID != sourceCreated.Source.ID {
-		t.Fatalf("unexpected route flow: %+v", flowCreated.Flow)
+	flowList := doJSON[routeFlowListBody](t, handler, http.MethodGet, "/api/v1/route-flows", rotatedLogin.Token, nil, http.StatusOK)
+	flowCreated := routeFlowBody{}
+	for _, item := range flowList.Flows {
+		if item.SourceID == sourceCreated.Source.ID {
+			flowCreated.Flow.ID = item.ID
+			flowCreated.Flow.SourceID = item.SourceID
+			break
+		}
+	}
+	if flowCreated.Flow.ID == "" {
+		t.Fatalf("expected source creation to prepare route flow, got %+v", flowList.Flows)
 	}
 	ruleKey := "00000000-0000-0000-0000-000000018001"
 
-	savedRules := doJSON[routeRulesBody](t, handler, http.MethodPut, "/api/v1/route-flows/"+flowCreated.Flow.ID+"/rules", login.Token, map[string]any{
+	savedRules := doJSON[routeRulesBody](t, handler, http.MethodPut, "/api/v1/route-flows/"+flowCreated.Flow.ID+"/rules", rotatedLogin.Token, map[string]any{
 		"rules": []map[string]any{
 			{
 				"rule_key":       ruleKey,
@@ -218,22 +223,28 @@ func TestFreshEnvironmentHTTPFlowCoversSetupAuthSourceTemplateRouteAndIngest(t *
 		t.Fatalf("expected saved rule key %s, got %+v", ruleKey, savedRules.Rules[0])
 	}
 
-	validation := doJSON[routeValidationBody](t, handler, http.MethodPost, "/api/v1/route-flows/"+flowCreated.Flow.ID+"/validate", login.Token, nil, http.StatusOK)
+	validation := doJSON[routeValidationBody](t, handler, http.MethodPost, "/api/v1/route-flows/"+flowCreated.Flow.ID+"/validate", rotatedLogin.Token, nil, http.StatusOK)
 	if validation.Status != "valid" || validation.VersionID == "" {
 		t.Fatalf("unexpected route validation result: %+v", validation)
 	}
 
-	published := doJSON[routeVersionBody](t, handler, http.MethodPost, "/api/v1/route-flows/"+flowCreated.Flow.ID+"/publish", login.Token, nil, http.StatusOK)
+	published := doJSON[routeVersionBody](t, handler, http.MethodPost, "/api/v1/route-flows/"+flowCreated.Flow.ID+"/publish", rotatedLogin.Token, nil, http.StatusOK)
 	if published.Version.ValidationStatus != "valid" || published.Version.ID == "" {
 		t.Fatalf("unexpected published route version: %+v", published.Version)
 	}
 
-	simulated := doJSON[routeSimulationBody](t, handler, http.MethodPost, "/api/v1/route-flows/"+flowCreated.Flow.ID+"/simulate", login.Token, map[string]any{
+	simulated := doJSON[routeSimulationBody](t, handler, http.MethodPost, "/api/v1/route-flows/"+flowCreated.Flow.ID+"/simulate", rotatedLogin.Token, map[string]any{
 		"payload": map[string]any{"title": "critical"},
 	}, http.StatusOK)
 	if simulated.StopReason != "first_match_stop" || simulated.MatchedRule == nil || simulated.MatchedRule.RuleKey != ruleKey {
 		t.Fatalf("unexpected route simulation result: %+v", simulated)
 	}
+
+	logout := doJSON[okBody](t, handler, http.MethodPost, "/api/v1/auth/logout", rotatedLogin.Token, nil, http.StatusOK)
+	if !logout.OK {
+		t.Fatalf("expected logout success, got %+v", logout)
+	}
+	assertStatusCode(t, handler, http.MethodGet, "/api/v1/auth/me", rotatedLogin.Token, nil, http.StatusUnauthorized)
 
 	ingest := doJSON[ingestBody](t, handler, http.MethodPost, "/api/v1/ingest/orders", "sourcetoken001", map[string]any{
 		"title":   "critical",
@@ -243,6 +254,7 @@ func TestFreshEnvironmentHTTPFlowCoversSetupAuthSourceTemplateRouteAndIngest(t *
 		t.Fatalf("unexpected ingest response: %+v", ingest)
 	}
 
+	waitForLatestPayloadSample(t, ctx, pool, sourceCreated.Source.ID)
 	var latestPayload string
 	var latestPayloadAt *time.Time
 	if err := pool.QueryRow(ctx, `
@@ -346,6 +358,13 @@ type routeFlowBody struct {
 	} `json:"flow"`
 }
 
+type routeFlowListBody struct {
+	Flows []struct {
+		ID       string `json:"id"`
+		SourceID string `json:"source_id"`
+	} `json:"flows"`
+}
+
 type routeRulesBody struct {
 	VersionID string `json:"version_id"`
 	Rules     []struct {
@@ -366,6 +385,11 @@ type routeRulesBody struct {
 type routeValidationBody struct {
 	VersionID string `json:"version_id"`
 	Status    string `json:"status"`
+	Errors    []struct {
+		Code    string `json:"code"`
+		Message string `json:"message"`
+		Path    string `json:"path"`
+	} `json:"errors"`
 }
 
 type routeVersionBody struct {
@@ -446,6 +470,26 @@ func integrationTestConfig() config.Config {
 			APIPrefix: "/api/v1",
 		},
 	}
+}
+
+func waitForLatestPayloadSample(t *testing.T, ctx context.Context, pool *pgxpool.Pool, sourceID string) {
+	t.Helper()
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		var exists bool
+		if err := pool.QueryRow(ctx, `
+			SELECT latest_payload_sample IS NOT NULL
+			FROM inbound_sources
+			WHERE id = $1
+		`, sourceID).Scan(&exists); err != nil {
+			t.Fatalf("query latest payload visibility: %v", err)
+		}
+		if exists {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatalf("latest payload sample was not flushed for source %s", sourceID)
 }
 
 func openMigratedPool(t *testing.T) *pgxpool.Pool {

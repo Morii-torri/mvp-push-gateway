@@ -391,6 +391,81 @@ func TestDeleteRouteVersionRemovesOnlyHistoricalPublishedVersion(t *testing.T) {
 	}
 }
 
+func TestRoutePublishNotifiesRuntimeCacheInvalidation(t *testing.T) {
+	dsn := os.Getenv("MGP_TEST_DATABASE_URL")
+	if dsn == "" {
+		t.Skip("MGP_TEST_DATABASE_URL is not set")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	schemaName := createMigratedTestSchema(ctx, t, dsn)
+	defer dropTestSchema(schemaName)
+
+	poolConfig, err := pgxpool.ParseConfig(dsn)
+	if err != nil {
+		t.Fatalf("parse pool config: %v", err)
+	}
+	poolConfig.ConnConfig.RuntimeParams["search_path"] = schemaName
+
+	pool, err := pgxpool.NewWithConfig(ctx, poolConfig)
+	if err != nil {
+		t.Fatalf("open test pool: %v", err)
+	}
+	defer pool.Close()
+
+	listener, err := pool.Acquire(ctx)
+	if err != nil {
+		t.Fatalf("acquire listener connection: %v", err)
+	}
+	defer listener.Release()
+	if _, err := listener.Exec(ctx, `LISTEN `+RouteRuntimeChangeChannel); err != nil {
+		t.Fatalf("listen route runtime channel: %v", err)
+	}
+
+	repository := NewRepository(pool)
+	sourceID := "00000000-0000-0000-0000-00000000e010"
+	flowID := "00000000-0000-0000-0000-00000000e020"
+	draftID := "00000000-0000-0000-0000-00000000e030"
+	if _, err := pool.Exec(ctx, `INSERT INTO inbound_sources (id, code, name) VALUES ($1, 'notify-route', 'Notify Route')`, sourceID); err != nil {
+		t.Fatalf("insert source: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO route_flows (id, source_id, name, enabled, mode)
+		VALUES ($1, $2, 'Notify Flow', true, 'table')
+	`, flowID, sourceID); err != nil {
+		t.Fatalf("insert flow: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO route_versions (id, flow_id, version_no, validation_status, validation_errors)
+		VALUES ($1, $2, 1, 'draft', '[]'::jsonb)
+	`, draftID, flowID); err != nil {
+		t.Fatalf("insert draft: %v", err)
+	}
+
+	if _, err := repository.Publish(ctx, route.PublishParams{
+		FlowID:           flowID,
+		DraftVersionID:   draftID,
+		CompiledRules:    json.RawMessage(`{"rules":[]}`),
+		ValidationStatus: "valid",
+		ValidationErrors: json.RawMessage(`[]`),
+		PublishedAt:      time.Date(2026, 6, 5, 12, 0, 0, 0, time.UTC),
+	}); err != nil {
+		t.Fatalf("publish route: %v", err)
+	}
+
+	waitCtx, waitCancel := context.WithTimeout(ctx, time.Second)
+	defer waitCancel()
+	notification, err := listener.Conn().WaitForNotification(waitCtx)
+	if err != nil {
+		t.Fatalf("wait for route runtime notification: %v", err)
+	}
+	if notification.Channel != RouteRuntimeChangeChannel || notification.Payload != sourceID {
+		t.Fatalf("unexpected route runtime notification: channel=%q payload=%q", notification.Channel, notification.Payload)
+	}
+}
+
 type expectedRouteActionTarget struct {
 	ChannelID         string
 	TemplateVersionID string

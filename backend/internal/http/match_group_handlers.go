@@ -292,6 +292,8 @@ func matchGroupErrorStatus(err error) (int, string, string) {
 		return http.StatusBadRequest, "MGP-REQ-001", "请求参数不合法"
 	case errors.Is(err, matchgroup.ErrAlreadyExists):
 		return http.StatusConflict, "MGP-MATCH-001", "匹配组资源已存在"
+	case errors.Is(err, matchgroup.ErrInUse):
+		return http.StatusConflict, "MGP-MATCH-002", "匹配组正在被路由条件引用，不能删除"
 	case errors.Is(err, matchgroup.ErrNotFound):
 		return http.StatusNotFound, "MGP-MATCH-001", "匹配组资源不存在"
 	default:

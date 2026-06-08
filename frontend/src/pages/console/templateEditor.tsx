@@ -1402,7 +1402,7 @@ function renderTemplateExpression(expression: string, payload: JSONValue): strin
   return templateValueToText(valueAtPayloadPath(payload, pathExpression), fallback);
 }
 
-function renderTemplateTextWithPayload(templateText: string, payload: JSONValue): string {
+export function renderTemplateTextWithPayload(templateText: string, payload: JSONValue): string {
   return templateText.replace(/\{\{\s*([\s\S]*?)\s*\}\}/g, (_, expression: string) =>
     renderTemplateExpression(expression, payload),
   );
@@ -1460,7 +1460,10 @@ export function templateUserFacingPreview(draft: TemplateDraft): string {
 }
 
 export function templateReceivedPreview(draft: TemplateDraft): TemplateReceivedPreview {
-  const rendered = templateRenderedPreviewValue(draft);
+  return templateReceivedPreviewFromRenderedValue(draft, templateRenderedPreviewValue(draft));
+}
+
+export function templateReceivedPreviewFromRenderedValue(draft: TemplateDraft, rendered: JSONValue): TemplateReceivedPreview {
   const format = templatePreviewFormat(draft, rendered);
   if (!isRecord(rendered)) {
     const body = typeof rendered === 'string' ? rendered : stringifyJSON(rendered);
@@ -1570,10 +1573,16 @@ function escapePreviewHTML(value: string): string {
 
 function sanitizePreviewHTML(value: string): string {
   return value
-    .replace(/<\s*(script|style|iframe|object|embed)[\s\S]*?<\/\s*\1\s*>/gi, '')
+    .replace(/<\s*(script|style|iframe|object|embed|svg|math)[\s\S]*?<\/\s*\1\s*>/gi, '')
+    .replace(/<\s*(script|style|iframe|object|embed|svg|math)\b[^>]*\/?\s*>/gi, '')
     .replace(/\son[a-z]+\s*=\s*(".*?"|'.*?'|[^\s>]+)/gi, '')
-    .replace(/\s(href|src)\s*=\s*(['"])\s*javascript:[\s\S]*?\2/gi, ' $1="#"')
-    .replace(/\s(href|src)\s*=\s*javascript:[^\s>]+/gi, ' $1="#"');
+    .replace(/\ssrcdoc\s*=\s*(".*?"|'.*?'|[^\s>]+)/gi, '')
+    .replace(/\sxmlns(?::[a-z0-9_-]+)?\s*=\s*(".*?"|'.*?'|[^\s>]+)/gi, '')
+    .replace(
+      /\s((?:xlink:)?href|src|formaction|action)\s*=\s*(['"])\s*(javascript|vbscript|data):[\s\S]*?\2/gi,
+      ' $1="#"',
+    )
+    .replace(/\s((?:xlink:)?href|src|formaction|action)\s*=\s*(javascript|vbscript|data):[^\s>]+/gi, ' $1="#"');
 }
 
 function markdownPreviewHTML(value: string): string {
@@ -1629,7 +1638,8 @@ export function mapTemplateRow(
   return {
     id: template.id,
     name: template.name,
-    source: source ? `${source.name} / ${source.code}` : template.source_id || '-',
+    source: source?.name ?? template.source_id ?? '-',
+    sourceCode: source?.code,
     targetProviderType,
     messageType,
     messageFormat: templateListMessageFormat(targetProviderType, messageType, templateBody),
@@ -1700,7 +1710,7 @@ export function TemplateEditorForm({
             value={value.contentMode}
             options={[
               { label: '字段表单', value: 'fields' },
-              { label: '自定义 JSON', value: 'custom_json' },
+              { label: 'JSON', value: 'custom_json' },
             ]}
             onChange={(contentMode) => onChange(switchTemplateContentMode(value, contentMode as TemplateContentMode))}
           />
@@ -1710,7 +1720,11 @@ export function TemplateEditorForm({
         <Form.Item label="来源" required>
           <Select
             value={value.sourceId}
-            options={sourceRows.map((source) => ({ label: `${source.name} / ${source.code}`, value: source.id }))}
+            options={sourceRows.map((source) => ({
+              label: source.name,
+              value: source.id,
+              title: `${source.name}-【${source.code}】`,
+            }))}
             onChange={(sourceId) => onChange(templateDraftWithSourcePayload(value, sourceRows, sourceId))}
             placeholder="选择来源"
           />

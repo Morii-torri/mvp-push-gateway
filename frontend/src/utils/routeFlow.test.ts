@@ -212,6 +212,18 @@ describe('route flow helpers', () => {
     ]);
   });
 
+  it('labels route canvas send groups as unconfigured when draft targets are empty', () => {
+    const snapshot = buildInitialRouteFlow(groups[0], [
+      {
+        ...rules[1],
+        sendGroupSummary: '-',
+        targetProviders: [],
+      },
+    ]);
+
+    expect(snapshot.nodes.find((node) => node.id === 'rule-2-send-group')?.data.title).toBe('未配置发送目标');
+  });
+
   it('keeps legacy template and platform node defaults for saved snapshots', () => {
     expect(routeNodeDefaults.source.title).toBe('来源开始');
     expect(routeNodeDefaults.template.title).toBe('模板渲染');

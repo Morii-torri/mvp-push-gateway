@@ -55,6 +55,22 @@ services:
       retries: 12
       start_period: 5s
 
+  nats:
+    image: ${MGP_NATS_IMAGE:-nats:2.10-alpine}
+    restart: unless-stopped
+    command: ["-js", "-sd", "/data/jetstream"]
+    ports:
+      - "${MGP_NATS_PORT:-4222}:4222"
+      - "${MGP_NATS_MONITOR_PORT:-8222}:8222"
+    volumes:
+      - ${MGP_NATS_DATA_DIR:-./deploy/data/nats}:/data
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8222/healthz"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 5s
+
   migrate:
     <<: *backend-image
     restart: "no"
@@ -76,12 +92,15 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      nats:
+        condition: service_healthy
       migrate:
         condition: service_completed_successfully
     env_file:
       - ./deploy/env/backend.env
     environment:
       MGP_POSTGRES_DSN: postgres://${MGP_POSTGRES_USER:-mvp_push_gateway}:${MGP_POSTGRES_PASSWORD:-change-me-dev-password}@postgres:5432/${MGP_POSTGRES_DB:-mvp_push_gateway_dev}?sslmode=disable
+      MGP_NATS_URL: nats://nats:4222
     command: ["/app/mgp-server"]
     ports:
       - "${MGP_PORT:-18080}:8080"

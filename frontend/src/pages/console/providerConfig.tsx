@@ -14,7 +14,6 @@ import Tabs from 'antd/es/tabs';
 import Typography from 'antd/es/typography';
 import Segmented from 'antd/es/segmented';
 import Tag from 'antd/es/tag';
-import Alert from 'antd/es/alert';
 import { DeleteOutlined, PlusOutlined, ReloadOutlined, SyncOutlined } from '@ant-design/icons';
 
 
@@ -205,7 +204,7 @@ const providerPresets: Record<ProviderKind, ProviderPreset> = {
     tokenRequest: '-',
     tokenResponsePath: '-',
     tokenPlacement: '-',
-    sendEndpoint: '',
+    sendEndpoint: '由渠道 URL 配置决定',
     recipientMapping: 'Webhook URL 可使用 {{ identity }} 占位符',
     bodyMapping: '模板正文直接作为 JSON Body',
     qps: 50,
@@ -241,7 +240,7 @@ const providerPresets: Record<ProviderKind, ProviderPreset> = {
     tokenPlacement: 'body.token（来自接收人）',
     sendEndpoint: 'POST https://www.pushplus.plus/send',
     recipientMapping: '由路由接收人或人员平台身份 pushplus_token 提供；topic 由消息模板字段提供',
-    bodyMapping: 'adapter 根据 content/title/topic 生成 JSON 请求体',
+    bodyMapping: '按 content/title/topic 生成 JSON 请求体',
     qps: 10,
     concurrency: 4,
     timeoutMs: 5000,
@@ -258,7 +257,7 @@ const providerPresets: Record<ProviderKind, ProviderPreset> = {
     tokenPlacement: 'body.appToken',
     sendEndpoint: 'POST https://wxpusher.zjiecode.com/api/send/message',
     recipientMapping: 'UIDs / topicIds；UID 来自 wxpusher_uid 身份字段或测试输入',
-    bodyMapping: 'adapter 根据 content/summary/url 生成标准 POST JSON，contentType 固定为 2（HTML）',
+    bodyMapping: '按 content/summary/url 生成标准 POST JSON，contentType 固定为 2（HTML）',
     qps: 10,
     concurrency: 4,
     timeoutMs: 5000,
@@ -278,7 +277,7 @@ const providerPresets: Record<ProviderKind, ProviderPreset> = {
     tokenPlacement: 'URL path（由 sendKey 推导 uid）',
     sendEndpoint: 'POST https://<uid>.push.ft07.com/send/<sendkey>.send',
     recipientMapping: '由路由接收人或人员平台身份 serverchan_sendkey 提供；渠道 URL 保留官方占位符',
-    bodyMapping: 'adapter 根据 title/desp/short 生成 JSON 请求体',
+    bodyMapping: '按 title/desp/short 生成 JSON 请求体',
     qps: 5,
     concurrency: 2,
     timeoutMs: 5000,
@@ -295,9 +294,9 @@ const providerPresets: Record<ProviderKind, ProviderPreset> = {
     tokenRequest: 'server_url + auth_type + credential',
     tokenResponsePath: '-',
     tokenPlacement: 'Header.Authorization',
-    sendEndpoint: '内置 ntfy adapter',
+    sendEndpoint: 'POST {server_url}/{topic}',
     recipientMapping: '无需接收人；topic 由渠道配置决定',
-    bodyMapping: 'adapter 根据 title/body/priority/tags 生成文本请求',
+    bodyMapping: '按 title/body/priority/tags 生成文本请求',
     qps: 5,
     concurrency: 2,
     timeoutMs: 5000,
@@ -312,9 +311,9 @@ const providerPresets: Record<ProviderKind, ProviderPreset> = {
     tokenRequest: 'app_token',
     tokenResponsePath: '-',
     tokenPlacement: 'Query.token',
-    sendEndpoint: '内置 Gotify adapter',
+    sendEndpoint: 'POST {server_url}/message?token={app_token}',
     recipientMapping: '无需接收人；应用 Token 绑定目标应用',
-    bodyMapping: 'adapter 根据 title/body/priority/content_type 生成请求体',
+    bodyMapping: '按 title/body/priority/content_type 生成请求体',
     qps: 10,
     concurrency: 3,
     timeoutMs: 5000,
@@ -329,9 +328,9 @@ const providerPresets: Record<ProviderKind, ProviderPreset> = {
     tokenRequest: '-',
     tokenResponsePath: '-',
     tokenPlacement: 'body.device_key（来自接收人）',
-    sendEndpoint: '内置 Bark adapter',
+    sendEndpoint: 'POST {server_url}/push',
     recipientMapping: '由路由接收人或人员平台身份 bark_device_key 提供',
-    bodyMapping: 'adapter 根据 title/subtitle/body/markdown/url/group/sound/icon/image/level 生成请求体',
+    bodyMapping: '按 title/subtitle/body/markdown/url/group/sound/icon/image/level 生成请求体',
     qps: 5,
     concurrency: 2,
     timeoutMs: 5000,
@@ -347,9 +346,9 @@ const providerPresets: Record<ProviderKind, ProviderPreset> = {
     tokenRequest: '-',
     tokenResponsePath: '-',
     tokenPlacement: 'body.push_key（来自接收人）',
-    sendEndpoint: '内置 PushMe adapter',
+    sendEndpoint: 'POST {server_url}',
     recipientMapping: '由路由接收人或人员平台身份 pushme_push_key 提供',
-    bodyMapping: 'adapter 根据 title/content/type 生成 POST JSON 请求体',
+    bodyMapping: '按 title/content/type 生成 POST JSON 请求体',
     qps: 2,
     concurrency: 2,
     timeoutMs: 5000,
@@ -368,7 +367,7 @@ const providerPresets: Record<ProviderKind, ProviderPreset> = {
     tokenPlacement: 'SMTP AUTH',
     sendEndpoint: 'SMTP sendmail',
     recipientMapping: 'mail.to = receivers.email',
-    bodyMapping: 'adapter 根据 subject/body 生成邮件',
+    bodyMapping: '按 subject/body 生成邮件内容并通过 SMTP 发送',
     qps: 20,
     concurrency: 8,
     timeoutMs: 5000,
@@ -384,9 +383,9 @@ const providerPresets: Record<ProviderKind, ProviderPreset> = {
     tokenRequest: 'access_key_id + access_key_secret',
     tokenResponsePath: '-',
     tokenPlacement: 'SDK 签名参数',
-    sendEndpoint: '内置阿里云短信 adapter',
+    sendEndpoint: 'POST https://dysmsapi.aliyuncs.com/',
     recipientMapping: 'PhoneNumbers = receivers.mobile',
-    bodyMapping: 'adapter 根据 sign_name/template_code/template_params 生成 SendSms 请求',
+    bodyMapping: '按 sign_name/template_code/template_params 生成 SendSms 请求',
     qps: 20,
     concurrency: 8,
     timeoutMs: 5000,
@@ -401,9 +400,9 @@ const providerPresets: Record<ProviderKind, ProviderPreset> = {
     tokenRequest: 'secret_id + secret_key',
     tokenResponsePath: '-',
     tokenPlacement: 'SDK 签名参数',
-    sendEndpoint: '内置腾讯云短信 adapter',
+    sendEndpoint: 'POST https://sms.tencentcloudapi.com/',
     recipientMapping: 'PhoneNumberSet = receivers.mobile',
-    bodyMapping: 'adapter 根据 sms_sdk_app_id/sign_name/template_id/template_params 生成 SendSms 请求',
+    bodyMapping: '按 sms_sdk_app_id/sign_name/template_id/template_params 生成 SendSms 请求',
     qps: 20,
     concurrency: 8,
     timeoutMs: 5000,
@@ -418,9 +417,9 @@ const providerPresets: Record<ProviderKind, ProviderPreset> = {
     tokenRequest: 'access_key_id + secret_access_key',
     tokenResponsePath: '-',
     tokenPlacement: 'SDK 签名参数',
-    sendEndpoint: '内置百度智能云短信 adapter',
+    sendEndpoint: 'POST https://sms.bj.baidubce.com/bce/v2/message',
     recipientMapping: 'phones = receivers.mobile',
-    bodyMapping: 'adapter 根据 signature_id/template_id/template_params 生成短信下发请求',
+    bodyMapping: '按 signature_id/template_id/template_params 生成短信下发请求',
     qps: 20,
     concurrency: 8,
     timeoutMs: 5000,
@@ -435,9 +434,9 @@ const providerPresets: Record<ProviderKind, ProviderPreset> = {
     tokenRequest: '基础 Webhook 地址',
     tokenResponsePath: '-',
     tokenPlacement: '接收人 wecom_robot_key -> query.key',
-    sendEndpoint: '内置企业微信群机器人 adapter',
+    sendEndpoint: 'POST https://qyapi.weixin.qq.com/cgi-bin/webhook/send',
     recipientMapping: '由路由接收人或人员平台身份 wecom_robot_key 提供',
-    bodyMapping: 'adapter 根据 msgtype 生成 text/markdown 群机器人消息',
+    bodyMapping: '按 msgtype 生成 text/markdown 群机器人消息',
     qps: 20,
     concurrency: 8,
     timeoutMs: 3000,
@@ -453,9 +452,9 @@ const providerPresets: Record<ProviderKind, ProviderPreset> = {
     tokenRequest: 'query.corpid + query.corpsecret',
     tokenResponsePath: 'access_token',
     tokenPlacement: 'Query.access_token = ${token}',
-    sendEndpoint: '内置企业微信应用 adapter',
+    sendEndpoint: 'POST /cgi-bin/message/send',
     recipientMapping: 'touser/toparty/totag；touser 来自 receivers.wecom_userid',
-    bodyMapping: 'adapter 根据 msgtype 生成 text/markdown/textcard 应用消息',
+    bodyMapping: '按 msgtype 生成 text/markdown/textcard 应用消息',
     qps: 80,
     concurrency: 16,
     timeoutMs: 3000,
@@ -472,7 +471,7 @@ const providerPresets: Record<ProviderKind, ProviderPreset> = {
     tokenPlacement: 'query.access_token（来自接收人）',
     sendEndpoint: 'POST /robot/send?access_token={access_token}',
     recipientMapping: '机器人 access_token 来自人员平台身份 dingtalk_robot_access_token',
-    bodyMapping: 'adapter 固定生成 markdown 群机器人消息；配置 secret 时自动追加 timestamp/sign',
+    bodyMapping: '固定生成 markdown 群机器人消息；配置 secret 时自动追加 timestamp/sign',
     qps: 20,
     concurrency: 8,
     timeoutMs: 3000,
@@ -509,7 +508,7 @@ const providerPresets: Record<ProviderKind, ProviderPreset> = {
     tokenPlacement: 'Header.Authorization = Bearer ${token}',
     sendEndpoint: 'POST /im/v1/messages?receive_id_type=open_id',
     recipientMapping: 'receive_id 来自人员平台身份 feishu_open_id',
-    bodyMapping: 'adapter 固定生成 text 消息，并将 content 序列化为 JSON 字符串',
+    bodyMapping: '固定生成 text 消息，并将 content 序列化为 JSON 字符串',
     qps: 20,
     concurrency: 8,
     timeoutMs: 3000,
@@ -526,7 +525,7 @@ const providerPresets: Record<ProviderKind, ProviderPreset> = {
     tokenPlacement: 'URL path token（来自接收人）',
     sendEndpoint: 'POST /bot/v2/hook/{token}',
     recipientMapping: 'webhook token 来自人员平台身份 feishu_webhook_token',
-    bodyMapping: 'adapter 固定生成 text 群消息；启用签名密钥时自动追加 timestamp/sign',
+    bodyMapping: '固定生成 text 群消息；启用签名密钥时自动追加 timestamp/sign',
     qps: 20,
     concurrency: 8,
     timeoutMs: 3000,
@@ -1374,7 +1373,7 @@ export function providerWithCapability(value: ProviderRow, view: ProviderCapabil
     qps,
     rateLimitEnabled,
     rateLimit: providerRateLimitLabel(rateLimitEnabled, qps),
-    concurrency: 1,
+    concurrency: Math.max(1, Number(value.concurrency) || 1),
     retryAttempts,
     retryIntervalMs,
     retryPolicy: `${retryAttempts} 次`,
@@ -2020,7 +2019,7 @@ export function mapChannelRow(channel: ChannelApiRecord, capabilities: ProviderC
       name: channel.name,
       providerType: channel.provider_type,
       enabled: channel.enabled,
-      description: '来自后端推送渠道实例配置',
+      description: channel.description ?? '',
       messageTypes: ['文本'],
       recipientFields: '',
       tokenStrategy: '',
@@ -2046,7 +2045,7 @@ export function mapChannelRow(channel: ChannelApiRecord, capabilities: ProviderC
   const deadLetterPolicy = isRecord(channel.dead_letter_policy) ? channel.dead_letter_policy : {};
   return {
     ...base,
-    concurrency: 1,
+    concurrency: channel.concurrency_limit,
     qps,
     rateLimitEnabled,
     rateLimit: providerRateLimitLabel(rateLimitEnabled, qps),
@@ -2079,6 +2078,7 @@ export function channelInputFromProvider(value: ProviderRow): ChannelInput {
     provider_type: value.providerType,
     name: value.name.trim(),
     enabled: value.enabled,
+    description: value.description.trim(),
     auth_config: basicConfig.auth_config,
     token_config: basicConfig.token_config,
     send_config: basicConfig.send_config,
@@ -2086,7 +2086,7 @@ export function channelInputFromProvider(value: ProviderRow): ChannelInput {
       enabled: value.rateLimitEnabled,
       qps: value.qps,
     },
-    concurrency_limit: 1,
+    concurrency_limit: Math.max(1, Number(value.concurrency) || 1),
     timeout_ms: value.timeoutMs,
     retry_policy: {
       max_attempts: value.retryAttempts,
@@ -2095,7 +2095,7 @@ export function channelInputFromProvider(value: ProviderRow): ChannelInput {
     },
     dead_letter_policy: {
       policy: 'retry_exhausted_or_upstream_error',
-      retention_days: 7,
+      retention_days: Math.max(1, Number(value.deadLetterRetentionDays) || 7),
       replay: value.deadLetterReplay,
     },
   };
@@ -2534,6 +2534,7 @@ export function ProviderConfigForm({
         {
           key: 'more-settings',
           label: '更多设置',
+          forceRender: true,
           children: (
             <Form layout="vertical" className="two-column-form">
               <Form.Item label="主动限流" className="form-item-full">
@@ -2550,6 +2551,15 @@ export function ProviderConfigForm({
                   value={value.qps}
                   className="full-width"
                   onChange={(qps) => update({ qps: qps ?? 1, rateLimit: `每秒 ${qps ?? 1} 条` })}
+                />
+              </Form.Item>
+              <Form.Item label="渠道并发上限">
+                <InputNumber
+                  min={1}
+                  max={100}
+                  value={value.concurrency}
+                  className="full-width"
+                  onChange={(concurrency) => update({ concurrency: concurrency ?? 1 })}
                 />
               </Form.Item>
               <Form.Item label="超时设置（毫秒）">
@@ -2574,14 +2584,6 @@ export function ProviderConfigForm({
                   value={value.retryIntervalMs}
                   className="full-width"
                   onChange={(retryIntervalMs) => update({ retryIntervalMs: retryIntervalMs ?? 0, retryInterval: `${retryIntervalMs ?? 0} ms` })}
-                />
-              </Form.Item>
-              <Form.Item label="死信重放" className="form-item-full">
-                <Switch
-                  checked={value.deadLetterReplay}
-                  onChange={(deadLetterReplay) => update({ deadLetterReplay })}
-                  checkedChildren="开启"
-                  unCheckedChildren="关闭"
                 />
               </Form.Item>
             </Form>
@@ -2831,35 +2833,22 @@ export function ProviderTestPanel({
     <Form layout="vertical">
       {['wecom_app', 'dingtalk_work', 'feishu_robot'].includes(value.providerType) && (
         <Form.Item className="form-item-full">
-          <Alert
-            message={
-              <Space>
-                <span>🔑 AccessToken 状态：</span>
-                <Tag color={tokenCacheStatusMeta(value).color}>{tokenCacheStatusMeta(value).label}</Tag>
-                {value.token_refreshed_at ? (
-                  <span style={{ fontSize: '12px', color: 'rgba(0, 0, 0, 0.45)' }}>
-                    (上一次token刷新时间: {new Date(value.token_refreshed_at).toLocaleString()})
-                  </span>
-                ) : (
-                  <span style={{ fontSize: '12px', color: 'rgba(0, 0, 0, 0.45)' }}>
-                    (暂无刷新记录)
-                  </span>
-                )}
-                <Button
-                  type="text"
-                  size="small"
-                  shape="circle"
-                  icon={<ReloadOutlined spin={refreshing} />}
-                  loading={refreshing}
-                  onClick={handleRefresh}
-                  style={{ color: 'rgba(0, 0, 0, 0.45)' }}
-                />
-              </Space>
-            }
-            type="info"
-            showIcon
-            style={{ marginBottom: 16 }}
-          />
+          <div className="provider-token-status-line">
+            <Typography.Text strong>AccessToken 状态</Typography.Text>
+            <Tag color={tokenCacheStatusMeta(value).color}>{tokenCacheStatusMeta(value).label}</Tag>
+            <Typography.Text type="secondary" className="provider-token-status-line__meta">
+              {value.token_refreshed_at ? `上次刷新：${new Date(value.token_refreshed_at).toLocaleString()}` : '暂无刷新记录'}
+            </Typography.Text>
+            <Button
+              type="text"
+              size="small"
+              shape="circle"
+              icon={<ReloadOutlined spin={refreshing} />}
+              loading={refreshing}
+              aria-label="刷新 AccessToken"
+              onClick={handleRefresh}
+            />
+          </div>
         </Form.Item>
       )}
       {pushPlusTest ? (
@@ -3253,6 +3242,7 @@ export function ProviderCapabilityTabs({ provider }: { provider: ProviderRow }) 
         {
           key: 'mapping',
           label: '请求映射',
+          forceRender: true,
           children: (
             <Descriptions column={1} size="small" bordered>
               <Descriptions.Item label="发送接口">{provider.sendEndpoint}</Descriptions.Item>
@@ -3274,9 +3264,11 @@ export function ProviderCapabilityTabs({ provider }: { provider: ProviderRow }) 
         {
           key: 'dispatch',
           label: '发送模式',
+          forceRender: true,
           children: (
             <Descriptions column={1} size="small" bordered>
-              <Descriptions.Item label="执行方式">顺序发送</Descriptions.Item>
+              <Descriptions.Item label="执行方式">受控并发</Descriptions.Item>
+              <Descriptions.Item label="渠道并发上限">{provider.concurrency}</Descriptions.Item>
             </Descriptions>
           ),
         },
@@ -3288,17 +3280,6 @@ export function ProviderCapabilityTabs({ provider }: { provider: ProviderRow }) 
               <Descriptions.Item label="超时">{provider.timeoutMs} ms</Descriptions.Item>
               <Descriptions.Item label="允许重试次数">{provider.retryAttempts}</Descriptions.Item>
               <Descriptions.Item label="重试间隔（毫秒）">{provider.retryIntervalMs}</Descriptions.Item>
-            </Descriptions>
-          ),
-        },
-        {
-          key: 'dead-letter',
-          label: '死信策略',
-          children: (
-            <Descriptions column={1} size="small" bordered>
-              <Descriptions.Item label="进入条件">重试耗尽或上级错误</Descriptions.Item>
-              <Descriptions.Item label="保留天数">7</Descriptions.Item>
-              <Descriptions.Item label="死信重放">{provider.deadLetterReplay ? '开启' : '关闭'}</Descriptions.Item>
             </Descriptions>
           ),
         },

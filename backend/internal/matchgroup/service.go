@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net/netip"
 	"strings"
 	"time"
 )
@@ -13,6 +14,7 @@ var (
 	ErrNotFound      = errors.New("match group not found")
 	ErrAlreadyExists = errors.New("match group already exists")
 	ErrInvalidInput  = errors.New("invalid match group input")
+	ErrInUse         = errors.New("match group is referenced")
 )
 
 type Group struct {
@@ -60,6 +62,7 @@ type Store interface {
 	CreateGroup(ctx context.Context, params CreateGroupParams) (Group, error)
 	GetGroup(ctx context.Context, id string) (Group, error)
 	UpdateGroup(ctx context.Context, id string, params UpdateGroupParams) (Group, error)
+	GroupReferenced(ctx context.Context, id string) (bool, error)
 	DeleteGroup(ctx context.Context, id string) error
 	ListItems(ctx context.Context, groupID string) ([]Item, error)
 	CreateItem(ctx context.Context, groupID string, params CreateItemParams) (Item, error)
@@ -113,6 +116,13 @@ func (s *Service) DeleteGroup(ctx context.Context, id string) error {
 	if id == "" {
 		return ErrInvalidInput
 	}
+	referenced, err := s.store.GroupReferenced(ctx, id)
+	if err != nil {
+		return err
+	}
+	if referenced {
+		return ErrInUse
+	}
 	return s.store.DeleteGroup(ctx, id)
 }
 
@@ -129,7 +139,11 @@ func (s *Service) CreateItem(ctx context.Context, groupID string, input ItemInpu
 	if groupID == "" {
 		return Item{}, ErrInvalidInput
 	}
-	params, err := normalizeItem(input)
+	group, err := s.store.GetGroup(ctx, groupID)
+	if err != nil {
+		return Item{}, err
+	}
+	params, err := normalizeItem(input, group.GroupType)
 	if err != nil {
 		return Item{}, err
 	}
@@ -151,7 +165,11 @@ func (s *Service) UpdateItem(ctx context.Context, groupID string, itemID string,
 	if groupID == "" || itemID == "" {
 		return Item{}, ErrInvalidInput
 	}
-	params, err := normalizeItem(input)
+	group, err := s.store.GetGroup(ctx, groupID)
+	if err != nil {
+		return Item{}, err
+	}
+	params, err := normalizeItem(input, group.GroupType)
 	if err != nil {
 		return Item{}, err
 	}
@@ -190,14 +208,21 @@ func validGroupType(groupType string) bool {
 	}
 }
 
-func normalizeItem(input ItemInput) (CreateItemParams, error) {
+func normalizeItem(input ItemInput, groupType string) (CreateItemParams, error) {
 	input.Value = strings.TrimSpace(input.Value)
 	input.ValueType = strings.TrimSpace(input.ValueType)
-	if input.ValueType == "" {
-		input.ValueType = "text"
-	}
 	if input.Value == "" {
 		return CreateItemParams{}, ErrInvalidInput
+	}
+	groupType = strings.TrimSpace(groupType)
+	if groupType == "ip" {
+		valueType, err := normalizeIPItemValueType(input.Value)
+		if err != nil {
+			return CreateItemParams{}, err
+		}
+		input.ValueType = valueType
+	} else if input.ValueType == "" {
+		input.ValueType = "text"
 	}
 	metadata, err := normalizeJSON(input.Metadata)
 	if err != nil {
@@ -205,6 +230,16 @@ func normalizeItem(input ItemInput) (CreateItemParams, error) {
 	}
 	input.Metadata = metadata
 	return input, nil
+}
+
+func normalizeIPItemValueType(value string) (string, error) {
+	if _, err := netip.ParseAddr(value); err == nil {
+		return "ip", nil
+	}
+	if _, err := netip.ParsePrefix(value); err == nil {
+		return "cidr", nil
+	}
+	return "", ErrInvalidInput
 }
 
 func normalizeJSON(raw json.RawMessage) (json.RawMessage, error) {

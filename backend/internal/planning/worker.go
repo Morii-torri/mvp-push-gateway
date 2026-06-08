@@ -43,14 +43,15 @@ type RoutePlanJobPayload struct {
 }
 
 type MessageRecord struct {
-	ID        string
-	TraceID   string
-	SourceID  string
-	Headers   json.RawMessage
-	Payload   json.RawMessage
-	Status    string
-	CreatedAt time.Time
-	UpdatedAt time.Time
+	ID         string
+	TraceID    string
+	SourceID   string
+	Headers    json.RawMessage
+	Payload    json.RawMessage
+	Status     string
+	ReceivedAt time.Time
+	CreatedAt  time.Time
+	UpdatedAt  time.Time
 }
 
 type RouteVersionRef struct {
@@ -76,29 +77,67 @@ type RuleMetric struct {
 	DurationMS     int
 }
 
+type TimingStage string
+
+const (
+	TimingClaimJobs      TimingStage = "planning_claim"
+	TimingRoutePlan      TimingStage = "route_plan_lookup"
+	TimingRouteCondition TimingStage = "route_condition"
+	TimingTemplateRender TimingStage = "planning_template_render"
+	TimingComplete       TimingStage = "planning_complete"
+)
+
+type TimingRecorder interface {
+	RecordPlanningTiming(traceID string, stage TimingStage, duration time.Duration)
+}
+
+type timingRecorderContextKey struct{}
+
+func WithTimingRecorder(ctx context.Context, recorder TimingRecorder) context.Context {
+	if recorder == nil {
+		return ctx
+	}
+	return context.WithValue(ctx, timingRecorderContextKey{}, recorder)
+}
+
+func recordTiming(ctx context.Context, traceID string, stage TimingStage, duration time.Duration) {
+	recorder, ok := ctx.Value(timingRecorderContextKey{}).(TimingRecorder)
+	if !ok || recorder == nil {
+		return
+	}
+	recorder.RecordPlanningTiming(traceID, stage, duration)
+}
+
 type DeliveryAttemptPlan struct {
 	ID                string
 	MessageID         string
+	SourceID          string
 	ChannelID         string
+	ProviderType      string
 	TemplateVersionID string
 	RecipientSnapshot json.RawMessage
 	JobPayload        json.RawMessage
 	MaxAttempts       int
 	DedupeKey         string
 	DedupeTTLSeconds  int
+	InboundHeaders    json.RawMessage
+	InboundPayload    json.RawMessage
+	InboundReceivedAt time.Time
 }
 
 type CompletePlanningParams struct {
-	JobID          string
-	WorkerID       string
-	MessageID      string
-	FlowID         string
-	MatchedRuleIDs []string
-	HitRuleKey     string
-	FinishedAt     time.Time
-	DurationMS     int
-	Attempts       []DeliveryAttemptPlan
-	RuleMetrics    []RuleMetric
+	JobID             string
+	WorkerID          string
+	MessageID         string
+	TraceID           string
+	FlowID            string
+	MatchedRuleIDs    []string
+	HitRuleKey        string
+	FinishedAt        time.Time
+	DurationMS        int
+	Attempts          []DeliveryAttemptPlan
+	RuleMetrics       []RuleMetric
+	ExternalSendQueue bool
 }
 
 type FinishPlanningParams struct {
@@ -143,11 +182,16 @@ type Repository interface {
 	FinishPlanning(context.Context, FinishPlanningParams) error
 }
 
+type SendPublisher interface {
+	PublishSend(context.Context, queue.SendMessageEvent) (queue.PublishResult, error)
+}
+
 type Worker struct {
-	repo       Repository
-	workerID   string
-	now        func() time.Time
-	retryDelay time.Duration
+	repo          Repository
+	workerID      string
+	now           func() time.Time
+	retryDelay    time.Duration
+	sendPublisher SendPublisher
 
 	cacheMu    sync.RWMutex
 	routeCache map[string]RoutePlan
@@ -189,6 +233,12 @@ func WithRetryDelay(delay time.Duration) WorkerOption {
 	}
 }
 
+func WithSendPublisher(publisher SendPublisher) WorkerOption {
+	return func(w *Worker) {
+		w.sendPublisher = publisher
+	}
+}
+
 func NewWorker(repo Repository, options ...WorkerOption) *Worker {
 	worker := &Worker{
 		repo:     repo,
@@ -213,6 +263,7 @@ func (w *Worker) ProcessBatch(ctx context.Context, limit int) (int, error) {
 		limit = 1
 	}
 	now := w.now()
+	claimStartedAt := time.Now()
 	jobs, err := w.repo.ClaimJobs(ctx, queue.ClaimParams{
 		WorkerID: w.workerID,
 		Types:    []queue.JobType{queue.JobTypeRoutePlan},
@@ -222,6 +273,12 @@ func (w *Worker) ProcessBatch(ctx context.Context, limit int) (int, error) {
 	if err != nil {
 		return 0, err
 	}
+	claimDuration := time.Since(claimStartedAt)
+	for _, job := range jobs {
+		if payload, err := decodeRoutePlanPayload(job.Payload); err == nil {
+			recordTiming(ctx, payload.TraceID, TimingClaimJobs, claimDuration)
+		}
+	}
 
 	var firstErr error
 	for _, job := range jobs {
@@ -230,6 +287,61 @@ func (w *Worker) ProcessBatch(ctx context.Context, limit int) (int, error) {
 		}
 	}
 	return len(jobs), firstErr
+}
+
+func (w *Worker) ProcessRoutePlanMessage(ctx context.Context, message queue.RoutePlanMessage) error {
+	if w == nil || w.repo == nil {
+		return ErrInvalidInput
+	}
+	if len(bytes.TrimSpace(message.Event.Payload)) > 0 {
+		if err := message.Event.Validate(); err != nil {
+			return errors.Join(err, nakRoutePlanMessage(message, w.retryDelay))
+		}
+		record := MessageRecord{
+			ID:         strings.TrimSpace(message.Event.MessageID),
+			TraceID:    strings.TrimSpace(message.Event.TraceID),
+			SourceID:   strings.TrimSpace(message.Event.SourceID),
+			Headers:    append(json.RawMessage(nil), message.Event.Headers...),
+			Payload:    append(json.RawMessage(nil), message.Event.Payload...),
+			Status:     "accepted",
+			ReceivedAt: message.Event.ReceivedAt,
+			CreatedAt:  message.Event.ReceivedAt,
+			UpdatedAt:  message.Event.ReceivedAt,
+		}
+		if record.ID == "" {
+			record.ID = record.TraceID
+		}
+		if record.ReceivedAt.IsZero() {
+			record.ReceivedAt = w.now().UTC()
+			record.CreatedAt = record.ReceivedAt
+			record.UpdatedAt = record.ReceivedAt
+		}
+		job := queue.Job{
+			Type:        queue.JobTypeRoutePlan,
+			Status:      queue.JobStatusProcessing,
+			RunAt:       time.Now().UTC(),
+			MaxAttempts: 1,
+			QueueKey:    record.SourceID,
+		}
+		if err := w.processMessage(ctx, job, record, true); err != nil {
+			return errors.Join(err, nakRoutePlanMessage(message, w.retryDelay))
+		}
+		if message.Ack != nil {
+			return message.Ack()
+		}
+		return nil
+	}
+	job, err := routePlanJobFromEvent(message.Event)
+	if err != nil {
+		return errors.Join(err, nakRoutePlanMessage(message, w.retryDelay))
+	}
+	if err := w.ProcessOne(ctx, job); err != nil {
+		return errors.Join(err, nakRoutePlanMessage(message, w.retryDelay))
+	}
+	if message.Ack != nil {
+		return message.Ack()
+	}
+	return nil
 }
 
 func (w *Worker) ProcessOne(ctx context.Context, job queue.Job) error {
@@ -247,12 +359,22 @@ func (w *Worker) ProcessOne(ctx context.Context, job queue.Job) error {
 	if err != nil {
 		return w.failJob(ctx, job, ErrorCodeJob, err)
 	}
+	return w.processMessage(ctx, job, message, false, startedAt)
+}
+
+func (w *Worker) processMessage(ctx context.Context, job queue.Job, message MessageRecord, direct bool, startedAtOverride ...time.Time) error {
+	startedAt := w.now()
+	if len(startedAtOverride) > 0 && !startedAtOverride[0].IsZero() {
+		startedAt = startedAtOverride[0]
+	}
 	payloadMap, err := decodeJSONObject(message.Payload)
 	if err != nil {
 		return w.finishBusinessFailure(ctx, job, message, "", nil, ErrorCodeJob, err, startedAt, nil)
 	}
 
+	routePlanStartedAt := time.Now()
 	plan, err := w.routePlan(ctx, message.SourceID)
+	recordTiming(ctx, message.TraceID, TimingRoutePlan, time.Since(routePlanStartedAt))
 	if err != nil {
 		if errors.Is(err, ErrNoRoute) {
 			return w.finishBusinessFailure(ctx, job, message, "", nil, ErrorCodeNoRoute, err, startedAt, nil)
@@ -260,7 +382,9 @@ func (w *Worker) ProcessOne(ctx context.Context, job queue.Job) error {
 		return w.failJob(ctx, job, ErrorCodeRoute, err)
 	}
 
+	conditionStartedAt := time.Now()
 	matchedRule, metrics, err := evaluateRules(plan, payloadMap)
+	recordTiming(ctx, message.TraceID, TimingRouteCondition, time.Since(conditionStartedAt))
 	if err != nil {
 		return w.finishBusinessFailure(ctx, job, message, plan.Flow.ID, nil, ErrorCodeRoute, err, startedAt, metrics)
 	}
@@ -274,35 +398,90 @@ func (w *Worker) ProcessOne(ctx context.Context, job queue.Job) error {
 	}
 
 	finishedAt := w.now()
-	return w.repo.CompletePlanning(ctx, CompletePlanningParams{
-		JobID:          job.ID,
-		WorkerID:       w.workerID,
-		MessageID:      message.ID,
-		FlowID:         plan.Flow.ID,
-		MatchedRuleIDs: []string{matchedRule.RuleKey},
-		HitRuleKey:     matchedRule.RuleKey,
-		FinishedAt:     finishedAt,
-		DurationMS:     durationMS(startedAt, finishedAt),
-		Attempts:       attempts,
-		RuleMetrics:    metrics,
-	})
+	completeStartedAt := time.Now()
+	completeParams := CompletePlanningParams{
+		JobID:             job.ID,
+		WorkerID:          w.workerID,
+		MessageID:         message.ID,
+		TraceID:           message.TraceID,
+		FlowID:            plan.Flow.ID,
+		MatchedRuleIDs:    []string{matchedRule.RuleKey},
+		HitRuleKey:        matchedRule.RuleKey,
+		FinishedAt:        finishedAt,
+		DurationMS:        durationMS(startedAt, finishedAt),
+		Attempts:          attempts,
+		RuleMetrics:       metrics,
+		ExternalSendQueue: w.sendPublisher != nil,
+	}
+	if direct && w.sendPublisher != nil {
+		return w.publishSendEvents(ctx, message.TraceID, attempts)
+	}
+	err = w.repo.CompletePlanning(ctx, completeParams)
+	recordTiming(ctx, message.TraceID, TimingComplete, time.Since(completeStartedAt))
+	if err != nil {
+		return err
+	}
+	if w.sendPublisher != nil {
+		return w.publishSendEvents(ctx, message.TraceID, attempts)
+	}
+	return nil
 }
 
 func (w *Worker) routePlan(ctx context.Context, sourceID string) (RoutePlan, error) {
+	w.cacheMu.RLock()
+	cached, ok := w.routeCache[sourceID]
+	w.cacheMu.RUnlock()
+	if ok {
+		atomic.AddInt64(&w.cacheHits, 1)
+		return cached, nil
+	}
+
+	loaded, err := w.loadCurrentRoutePlan(ctx, sourceID)
+	if err != nil {
+		return RoutePlan{}, err
+	}
+	w.storeRoutePlan(loaded)
+	return loaded, nil
+}
+
+func (w *Worker) RefreshRoutePlan(ctx context.Context, sourceID string) error {
+	loaded, err := w.loadCurrentRoutePlan(ctx, sourceID)
+	if err != nil {
+		if errors.Is(err, ErrNoRoute) {
+			w.InvalidateRoutePlan(sourceID)
+		}
+		return err
+	}
+	w.storeRoutePlan(loaded)
+	return nil
+}
+
+func (w *Worker) InvalidateRoutePlan(sourceID string) {
+	sourceID = strings.TrimSpace(sourceID)
+	if sourceID == "" {
+		return
+	}
+	w.cacheMu.Lock()
+	delete(w.routeCache, sourceID)
+	w.cacheMu.Unlock()
+}
+
+func (w *Worker) CachedRouteSourceIDs() []string {
+	w.cacheMu.RLock()
+	defer w.cacheMu.RUnlock()
+	sourceIDs := make([]string, 0, len(w.routeCache))
+	for sourceID := range w.routeCache {
+		sourceIDs = append(sourceIDs, sourceID)
+	}
+	sort.Strings(sourceIDs)
+	return sourceIDs
+}
+
+func (w *Worker) loadCurrentRoutePlan(ctx context.Context, sourceID string) (RoutePlan, error) {
 	ref, err := w.repo.GetCurrentRouteVersionRef(ctx, sourceID)
 	if err != nil {
 		return RoutePlan{}, err
 	}
-	key := ref.SourceID + ":" + ref.VersionID
-
-	w.cacheMu.RLock()
-	cached, ok := w.routeCache[key]
-	w.cacheMu.RUnlock()
-	if ok {
-		atomic.AddInt64(&w.cacheHits, 1)
-		return w.withFreshMatchGroups(ctx, cached)
-	}
-
 	loadStartedAt := time.Now()
 	loaded, err := w.repo.LoadRoutePlan(ctx, ref.SourceID, ref.VersionID)
 	if err != nil {
@@ -310,21 +489,17 @@ func (w *Worker) routePlan(ctx context.Context, sourceID string) (RoutePlan, err
 	}
 	atomic.AddInt64(&w.cacheMisses, 1)
 	atomic.AddInt64(&w.cacheLoadTimeMS, int64(time.Since(loadStartedAt).Milliseconds()))
-	cachedPlan := loaded
-	cachedPlan.MatchGroups = nil
-	w.cacheMu.Lock()
-	w.routeCache[key] = cachedPlan
-	w.cacheMu.Unlock()
 	return loaded, nil
 }
 
-func (w *Worker) withFreshMatchGroups(ctx context.Context, plan RoutePlan) (RoutePlan, error) {
-	values, err := w.repo.LoadMatchGroupValues(ctx, plan.Rules)
-	if err != nil {
-		return RoutePlan{}, err
+func (w *Worker) storeRoutePlan(plan RoutePlan) {
+	sourceID := strings.TrimSpace(plan.Flow.SourceID)
+	if sourceID == "" {
+		return
 	}
-	plan.MatchGroups = values
-	return plan, nil
+	w.cacheMu.Lock()
+	w.routeCache[sourceID] = plan
+	w.cacheMu.Unlock()
 }
 
 func (w *Worker) CacheStats() RouteCacheStats {
@@ -348,6 +523,22 @@ func evaluateRules(plan RoutePlan, payload map[string]any) (*route.Rule, []RuleM
 	metrics := make([]RuleMetric, 0, len(rules))
 	for _, rule := range rules {
 		if !rule.Enabled {
+			continue
+		}
+		coarse, err := route.CoarseFilterConditionTree(rule.ConditionTree, scope)
+		if err != nil {
+			return nil, metrics, err
+		}
+		if coarse.Skipped {
+			metrics = append(metrics, RuleMetric{
+				SourceID:       plan.Flow.SourceID,
+				FlowID:         plan.Flow.ID,
+				RouteVersionID: plan.Version.ID,
+				RuleID:         rule.ID,
+				Evaluated:      false,
+				Matched:        false,
+				DurationMS:     0,
+			})
 			continue
 		}
 		startedAt := time.Now()
@@ -397,7 +588,9 @@ func (w *Worker) buildAttempts(ctx context.Context, message MessageRecord, rule 
 		if templateProviderType != "" && templateProviderType != string(channel.ProviderType) {
 			return nil, fmt.Errorf("template %s targets provider %s but channel %s is %s", templateVersion.ID, templateProviderType, channel.ID, channel.ProviderType)
 		}
+		templateStartedAt := time.Now()
 		body, err := renderTemplate(templateVersion, message, payload, w.now())
+		recordTiming(ctx, message.TraceID, TimingTemplateRender, time.Since(templateStartedAt))
 		if err != nil {
 			return nil, fmt.Errorf("%w: render template version %s: %w", errTemplatePlanning, templateVersion.ID, err)
 		}
@@ -418,11 +611,19 @@ func (w *Worker) buildAttempts(ctx context.Context, message MessageRecord, rule 
 		attemptID := uuid.NewString()
 		jobPayload, err := json.Marshal(delivery.SendMessageJobPayload{
 			DeliveryAttemptID: attemptID,
+			MessageID:         message.ID,
+			SourceID:          message.SourceID,
+			ChannelID:         channel.ID,
+			TemplateVersionID: templateVersion.ID,
 			DedupeKey:         dedupeKey,
 			DedupeTTLSeconds:  dedupeTTL,
 			MessageType:       templateVersion.MessageType,
+			TraceID:           message.TraceID,
 			Recipient:         recipientValue,
 			Body:              body,
+			InboundPayload:    append(json.RawMessage(nil), message.Payload...),
+			InboundHeaders:    append(json.RawMessage(nil), message.Headers...),
+			InboundReceivedAt: message.ReceivedAt,
 		})
 		if err != nil {
 			return nil, fmt.Errorf("%w: encode send message job payload: %w", errJobPlanning, err)
@@ -437,16 +638,40 @@ func (w *Worker) buildAttempts(ctx context.Context, message MessageRecord, rule 
 		attempts = append(attempts, DeliveryAttemptPlan{
 			ID:                attemptID,
 			MessageID:         message.ID,
+			SourceID:          message.SourceID,
 			ChannelID:         channel.ID,
+			ProviderType:      string(channel.ProviderType),
 			TemplateVersionID: templateVersion.ID,
 			RecipientSnapshot: recipientSnapshot,
 			JobPayload:        jobPayload,
 			MaxAttempts:       maxAttemptsFrom(channel.RetryPolicy),
 			DedupeKey:         dedupeKey,
 			DedupeTTLSeconds:  dedupeTTL,
+			InboundHeaders:    append(json.RawMessage(nil), message.Headers...),
+			InboundPayload:    append(json.RawMessage(nil), message.Payload...),
+			InboundReceivedAt: message.ReceivedAt,
 		})
 	}
 	return attempts, nil
+}
+
+func (w *Worker) publishSendEvents(ctx context.Context, traceID string, attempts []DeliveryAttemptPlan) error {
+	var err error
+	for _, attempt := range attempts {
+		if _, itemErr := w.sendPublisher.PublishSend(ctx, queue.SendMessageEvent{
+			DeliveryAttemptID: strings.TrimSpace(attempt.ID),
+			MessageID:         strings.TrimSpace(attempt.MessageID),
+			SourceID:          strings.TrimSpace(attempt.SourceID),
+			ChannelID:         strings.TrimSpace(attempt.ChannelID),
+			ProviderType:      strings.TrimSpace(attempt.ProviderType),
+			TraceID:           strings.TrimSpace(traceID),
+			MaxAttempts:       attempt.MaxAttempts,
+			Payload:           append(json.RawMessage(nil), attempt.JobPayload...),
+		}); itemErr != nil {
+			err = errors.Join(err, itemErr)
+		}
+	}
+	return err
 }
 
 func enabledActionTargets(action route.Action) []route.ActionTarget {
@@ -557,6 +782,9 @@ func (w *Worker) finishBusinessFailure(ctx context.Context, job queue.Job, messa
 }
 
 func (w *Worker) failJob(ctx context.Context, job queue.Job, code string, cause error) error {
+	if strings.TrimSpace(job.ID) == "" {
+		return cause
+	}
 	_, failErr := w.repo.FailJob(ctx, queue.FailParams{
 		JobID:        job.ID,
 		WorkerID:     w.workerID,
@@ -566,6 +794,38 @@ func (w *Worker) failJob(ctx context.Context, job queue.Job, code string, cause 
 		Now:          w.now(),
 	})
 	return errors.Join(cause, failErr)
+}
+
+func routePlanJobFromEvent(event queue.RoutePlanEvent) (queue.Job, error) {
+	if err := event.Validate(); err != nil {
+		return queue.Job{}, err
+	}
+	payload, err := json.Marshal(RoutePlanJobPayload{
+		MessageID: strings.TrimSpace(event.MessageID),
+		SourceID:  strings.TrimSpace(event.SourceID),
+		TraceID:   strings.TrimSpace(event.TraceID),
+	})
+	if err != nil {
+		return queue.Job{}, err
+	}
+	return queue.Job{
+		Type:        queue.JobTypeRoutePlan,
+		Status:      queue.JobStatusProcessing,
+		Payload:     payload,
+		RunAt:       time.Now().UTC(),
+		MaxAttempts: 1,
+		QueueKey:    strings.TrimSpace(event.SourceID),
+	}, nil
+}
+
+func nakRoutePlanMessage(message queue.RoutePlanMessage, delay time.Duration) error {
+	if message.Nak == nil {
+		return nil
+	}
+	if delay <= 0 {
+		delay = time.Minute
+	}
+	return message.Nak(delay)
 }
 
 func decodeRoutePlanPayload(raw json.RawMessage) (RoutePlanJobPayload, error) {

@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net/url"
 	"strings"
 	"time"
 )
@@ -103,8 +104,8 @@ func (s *Service) Record(ctx context.Context, input RecordInput) (Log, error) {
 	if input.Action == "" || input.ResourceType == "" {
 		return Log{}, ErrInvalidInput
 	}
-	input.RequestSnapshot = normalizeJSON(input.RequestSnapshot)
-	input.ResponseSnapshot = normalizeJSON(input.ResponseSnapshot)
+	input.RequestSnapshot = redactJSON(normalizeJSON(input.RequestSnapshot))
+	input.ResponseSnapshot = redactJSON(normalizeJSON(input.ResponseSnapshot))
 	return s.store.Record(ctx, input)
 }
 
@@ -113,4 +114,96 @@ func normalizeJSON(raw json.RawMessage) json.RawMessage {
 		return json.RawMessage(`{}`)
 	}
 	return append(json.RawMessage(nil), bytes.TrimSpace(raw)...)
+}
+
+func redactJSON(raw json.RawMessage) json.RawMessage {
+	var value any
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.UseNumber()
+	if err := decoder.Decode(&value); err != nil {
+		return raw
+	}
+	encoded, err := json.Marshal(redactValue(value, ""))
+	if err != nil {
+		return raw
+	}
+	return encoded
+}
+
+func redactValue(value any, key string) any {
+	switch current := value.(type) {
+	case map[string]any:
+		redacted := make(map[string]any, len(current))
+		for childKey, childValue := range current {
+			if redactWholeField(childKey) || redactField(childKey, childValue) {
+				redacted[childKey] = "[REDACTED]"
+				continue
+			}
+			redacted[childKey] = redactValue(childValue, childKey)
+		}
+		return redacted
+	case []any:
+		for index, childValue := range current {
+			current[index] = redactValue(childValue, key)
+		}
+		return current
+	default:
+		if redactField(key, current) {
+			return "[REDACTED]"
+		}
+		return current
+	}
+}
+
+func redactWholeField(key string) bool {
+	switch normalizeAuditKey(key) {
+	case "tokenconfig", "credentialconfig", "credentials":
+		return true
+	default:
+		return false
+	}
+}
+
+func redactField(key string, value any) bool {
+	normalizedKey := normalizeAuditKey(key)
+	switch {
+	case normalizedKey == "":
+		return false
+	case strings.Contains(normalizedKey, "password"),
+		strings.Contains(normalizedKey, "secret"),
+		strings.Contains(normalizedKey, "token"),
+		strings.Contains(normalizedKey, "credential"),
+		strings.Contains(normalizedKey, "privatekey"),
+		strings.Contains(normalizedKey, "accesskey"),
+		strings.Contains(normalizedKey, "authorization"),
+		strings.Contains(normalizedKey, "cookie"),
+		strings.Contains(normalizedKey, "signature"):
+		return true
+	}
+	text, ok := value.(string)
+	return ok && strings.Contains(normalizedKey, "url") && urlContainsSensitiveQuery(text)
+}
+
+func normalizeAuditKey(key string) string {
+	key = strings.ToLower(strings.TrimSpace(key))
+	replacer := strings.NewReplacer("_", "", "-", "", ".", "", " ", "")
+	return replacer.Replace(key)
+}
+
+func urlContainsSensitiveQuery(value string) bool {
+	parsed, err := url.Parse(value)
+	if err != nil || parsed.RawQuery == "" {
+		return false
+	}
+	for key := range parsed.Query() {
+		normalizedKey := normalizeAuditKey(key)
+		if strings.Contains(normalizedKey, "token") ||
+			strings.Contains(normalizedKey, "secret") ||
+			strings.Contains(normalizedKey, "password") ||
+			strings.Contains(normalizedKey, "key") ||
+			strings.Contains(normalizedKey, "signature") {
+			return true
+		}
+	}
+	return false
 }

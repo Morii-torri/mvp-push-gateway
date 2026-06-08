@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"strings"
 
+	"mvp-push-gateway/backend/internal/audit"
 	"mvp-push-gateway/backend/internal/auth"
 )
 
@@ -26,9 +27,10 @@ type adminResponse struct {
 }
 
 type setupAdminRequest struct {
-	Username    string `json:"username"`
-	Password    string `json:"password"`
-	DisplayName string `json:"display_name"`
+	Username        string `json:"username"`
+	Password        string `json:"password"`
+	ConfirmPassword string `json:"confirm_password"`
+	DisplayName     string `json:"display_name"`
 }
 
 type setupAdminResponse struct {
@@ -102,9 +104,10 @@ func (h *Handler) setupAdminHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	adminUser, err := h.auth.CreateFirstAdmin(r.Context(), auth.CreateFirstAdminInput{
-		Username:    request.Username,
-		Password:    request.Password,
-		DisplayName: request.DisplayName,
+		Username:        request.Username,
+		Password:        request.Password,
+		ConfirmPassword: request.ConfirmPassword,
+		DisplayName:     request.DisplayName,
 	})
 	if err != nil {
 		statusCode, code, message := authErrorStatus(err)
@@ -139,14 +142,22 @@ func (h *Handler) loginHandler(w http.ResponseWriter, r *http.Request) {
 	})
 	if err != nil {
 		statusCode, code, message := authErrorStatus(err)
+		h.recordLoginFailureAudit(r, request.Username, statusCode, code)
 		writeAPIError(w, statusCode, code, message)
 		return
 	}
 
+	expiresAt := result.ExpiresAt.UTC().Format("2006-01-02T15:04:05Z")
+	h.recordAudit(r, result.Admin, "login", "admin_session", result.Admin.ID, map[string]string{
+		"username": request.Username,
+	}, map[string]any{
+		"admin_id":   result.Admin.ID,
+		"expires_at": expiresAt,
+	})
 	writeJSON(w, http.StatusOK, loginResponse{
 		Token:     result.Token,
 		TokenType: "Bearer",
-		ExpiresAt: result.ExpiresAt.UTC().Format("2006-01-02T15:04:05Z"),
+		ExpiresAt: expiresAt,
 		Admin:     toAdminResponse(result.Admin),
 	})
 }
@@ -165,7 +176,8 @@ func (h *Handler) logoutHandler(w http.ResponseWriter, r *http.Request) {
 		writeAPIError(w, http.StatusUnauthorized, "MGP-AUTH-003", "未登录或登录已过期")
 		return
 	}
-	if _, err := h.auth.Authenticate(r.Context(), token); err != nil {
+	adminUser, err := h.auth.Authenticate(r.Context(), token)
+	if err != nil {
 		statusCode, code, message := authErrorStatus(err)
 		writeAPIError(w, statusCode, code, message)
 		return
@@ -175,7 +187,30 @@ func (h *Handler) logoutHandler(w http.ResponseWriter, r *http.Request) {
 		writeAPIError(w, statusCode, code, message)
 		return
 	}
+	h.recordAudit(r, adminUser, "logout", "admin_session", adminUser.ID, map[string]string{
+		"operation": "logout",
+	}, okResponse{OK: true})
 	writeJSON(w, http.StatusOK, okResponse{OK: true})
+}
+
+func (h *Handler) recordLoginFailureAudit(r *http.Request, username string, status int, code string) {
+	if h.audit == nil {
+		return
+	}
+	_, _ = h.audit.Record(r.Context(), audit.RecordInput{
+		ActorUsername: strings.TrimSpace(username),
+		Action:        "login_failed",
+		ResourceType:  "admin_session",
+		RequestSnapshot: mustMarshalAuditSnapshot(map[string]string{
+			"username": strings.TrimSpace(username),
+		}),
+		ResponseSnapshot: mustMarshalAuditSnapshot(map[string]any{
+			"status":     status,
+			"error_code": code,
+		}),
+		IPAddress: h.clientIP(r),
+		UserAgent: r.UserAgent(),
+	})
 }
 
 func (h *Handler) meHandler(w http.ResponseWriter, r *http.Request) {

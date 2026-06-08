@@ -36,12 +36,15 @@ type MessageSummary struct {
 	SourceName          string
 	ReceivedAt          time.Time
 	Status              string
+	InboundStatus       string
 	MatchedFlowID       string
 	MatchedFlowName     string
 	MatchedRuleIDs      []string
 	ErrorCode           string
 	ErrorMessage        string
 	OutboundStatus      string
+	FirstOutboundAt     *time.Time
+	LastOutboundAt      *time.Time
 	AttemptCount        int
 	TargetChannelIDs    []string
 	TargetChannelNames  []string
@@ -112,7 +115,14 @@ func NewService(store Store) *Service {
 
 func (s *Service) ListMessages(ctx context.Context, filter ListFilter) (ListResult, error) {
 	filter = normalizeFilter(filter)
-	return s.store.ListMessages(ctx, filter)
+	result, err := s.store.ListMessages(ctx, filter)
+	if err != nil {
+		return ListResult{}, err
+	}
+	for index := range result.Messages {
+		result.Messages[index] = normalizeSummary(result.Messages[index])
+	}
+	return result, nil
 }
 
 func (s *Service) GetMessage(ctx context.Context, id string) (MessageDetail, error) {
@@ -125,6 +135,7 @@ func (s *Service) GetMessage(ctx context.Context, id string) (MessageDetail, err
 		return MessageDetail{}, err
 	}
 	detail.Attempts = deriveAttemptSnapshots(detail.Attempts)
+	detail.MessageSummary = normalizeDetailSummary(detail.MessageSummary, detail.Attempts)
 	detail.Timeline = buildTimeline(detail)
 	return detail, nil
 }
@@ -150,10 +161,26 @@ func buildTimeline(detail MessageDetail) []TimelineEvent {
 	events := []TimelineEvent{{
 		Stage:       "inbound_received",
 		At:          detail.ReceivedAt,
-		Status:      detail.Status,
+		Status:      detail.InboundStatus,
 		Description: "入站请求已接收",
 		ErrorCode:   detail.ErrorCode,
 	}}
+	if detail.Status == "no_route" {
+		events = append(events, TimelineEvent{
+			Stage:       "route_no_match",
+			At:          detail.UpdatedAtOrReceivedAt(),
+			Status:      detail.Status,
+			Description: "路由规划未命中可执行规则",
+			ErrorCode:   detail.ErrorCode,
+		})
+	} else if len(detail.MatchedRuleIDs) > 0 {
+		events = append(events, TimelineEvent{
+			Stage:       "route_matched",
+			At:          detail.UpdatedAtOrReceivedAt(),
+			Status:      detail.InboundStatus,
+			Description: "路由规划已命中规则",
+		})
+	}
 	for _, attempt := range detail.Attempts {
 		if attempt.QueuedAt != nil {
 			events = append(events, TimelineEvent{
@@ -182,6 +209,130 @@ func buildTimeline(detail MessageDetail) []TimelineEvent {
 		}
 	}
 	return events
+}
+
+func (detail MessageDetail) UpdatedAtOrReceivedAt() time.Time {
+	if !detail.UpdatedAt.IsZero() {
+		return detail.UpdatedAt
+	}
+	return detail.ReceivedAt
+}
+
+func normalizeDetailSummary(summary MessageSummary, attempts []DeliveryAttempt) MessageSummary {
+	summary.OutboundStatus = deriveOutboundStatus(attempts)
+	summary.FirstOutboundAt, summary.LastOutboundAt = outboundTimes(attempts)
+	if len(attempts) > 0 {
+		summary.DurationMS = messageDurationMS(summary.ReceivedAt, summary.LastOutboundAt, summary.DurationMS)
+	}
+	return normalizeSummary(summary)
+}
+
+func deriveOutboundStatus(attempts []DeliveryAttempt) string {
+	if len(attempts) == 0 {
+		return ""
+	}
+	allSent := true
+	anySent := false
+	for _, attempt := range attempts {
+		if attempt.DeadLetteredAt != nil {
+			return "dead"
+		}
+		switch attempt.Status {
+		case "failed":
+			return "failed"
+		case "processing":
+			return "processing"
+		case "queued":
+			return "queued"
+		case "sent":
+			anySent = true
+		default:
+			allSent = false
+		}
+	}
+	if allSent && anySent {
+		return "sent"
+	}
+	if anySent {
+		return "partial_sent"
+	}
+	return attempts[len(attempts)-1].Status
+}
+
+func normalizeSummary(summary MessageSummary) MessageSummary {
+	inboundStatus := strings.TrimSpace(summary.InboundStatus)
+	if inboundStatus == "" {
+		inboundStatus = strings.TrimSpace(summary.Status)
+	}
+	summary.InboundStatus = inboundStatus
+	summary.Status = lifecycleStatus(inboundStatus, summary.OutboundStatus)
+	if summary.Status == "no_route" && len(summary.MatchedRuleIDs) == 0 {
+		summary.MatchedFlowID = ""
+		summary.MatchedFlowName = ""
+	}
+	return summary
+}
+
+func lifecycleStatus(inboundStatus string, outboundStatus string) string {
+	outboundStatus = strings.TrimSpace(outboundStatus)
+	if outboundStatus != "" {
+		switch outboundStatus {
+		case "queued":
+			return "queued"
+		case "processing":
+			return "processing"
+		case "sent":
+			return "sent"
+		case "partial_sent":
+			return "partial_sent"
+		case "failed":
+			return "failed"
+		case "dead":
+			return "dead"
+		case "deduped":
+			return "deduped"
+		case "skipped":
+			return "skipped"
+		}
+	}
+	switch strings.TrimSpace(inboundStatus) {
+	case "accepted", "deduped", "silenced", "planned", "partial_sent", "sent", "failed", "no_route", "skipped", "queued", "processing", "dead":
+		return strings.TrimSpace(inboundStatus)
+	default:
+		return "accepted"
+	}
+}
+
+func outboundTimes(attempts []DeliveryAttempt) (*time.Time, *time.Time) {
+	var first *time.Time
+	var last *time.Time
+	for _, attempt := range attempts {
+		for _, candidate := range []*time.Time{attempt.QueuedAt, attempt.StartedAt, attempt.FinishedAt} {
+			if candidate == nil {
+				continue
+			}
+			if first == nil || candidate.Before(*first) {
+				value := candidate.UTC()
+				first = &value
+			}
+			if last == nil || candidate.After(*last) {
+				value := candidate.UTC()
+				last = &value
+			}
+		}
+	}
+	return first, last
+}
+
+func messageDurationMS(receivedAt time.Time, lastOutboundAt *time.Time, fallback int) int {
+	if receivedAt.IsZero() || lastOutboundAt == nil {
+		return fallback
+	}
+	duration := lastOutboundAt.Sub(receivedAt)
+	if duration < 0 {
+		return fallback
+	}
+	return int(duration / time.Millisecond)
 }
 
 func deriveAttemptSnapshots(attempts []DeliveryAttempt) []DeliveryAttempt {

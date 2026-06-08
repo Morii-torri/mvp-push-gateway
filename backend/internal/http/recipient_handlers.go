@@ -66,6 +66,11 @@ type userIdentityBody struct {
 	Identity userIdentityResponse `json:"identity"`
 }
 
+type userProfileBody struct {
+	User       userResponse           `json:"user"`
+	Identities []userIdentityResponse `json:"identities"`
+}
+
 type recipientGroupsResponse struct {
 	Groups []recipientGroupResponse `json:"groups"`
 }
@@ -219,11 +224,43 @@ func (h *Handler) usersHandler(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+func (h *Handler) userProfileCreateHandler(w http.ResponseWriter, r *http.Request) {
+	if !h.requireRecipientService(w) {
+		return
+	}
+	adminUser, ok := h.authenticateRequest(w, r)
+	if !ok {
+		return
+	}
+	if r.Method != http.MethodPost {
+		methodNotAllowed(w, http.MethodPost)
+		return
+	}
+	var request recipient.UserProfileInput
+	if err := decodeJSON(r, &request); err != nil {
+		writeAPIError(w, http.StatusBadRequest, "MGP-REQ-001", "请求 JSON 不合法")
+		return
+	}
+	profile, err := h.recipients.CreateUserProfile(r.Context(), request)
+	if err != nil {
+		status, code, message := recipientErrorStatus(err)
+		writeAPIError(w, status, code, message)
+		return
+	}
+	response := toUserProfileResponse(profile)
+	h.recordAudit(r, adminUser, "create", "user_profile", profile.User.ID, request, response)
+	writeJSON(w, http.StatusCreated, response)
+}
+
 func (h *Handler) userDetailHandler(w http.ResponseWriter, r *http.Request) {
 	rest := strings.Trim(strings.TrimPrefix(r.URL.Path, h.cfg.Server.APIPrefix+"/users/"), "/")
 	parts := strings.Split(rest, "/")
 	if len(parts) == 2 && parts[1] == "identities" {
 		h.userIdentitiesHandler(w, r, parts[0])
+		return
+	}
+	if len(parts) == 2 && parts[1] == "profile" {
+		h.userProfileDetailHandler(w, r, parts[0])
 		return
 	}
 	if len(parts) != 1 || parts[0] == "" {
@@ -274,6 +311,34 @@ func (h *Handler) userDetailHandler(w http.ResponseWriter, r *http.Request) {
 	default:
 		methodNotAllowed(w, http.MethodGet+", "+http.MethodPut+", "+http.MethodDelete)
 	}
+}
+
+func (h *Handler) userProfileDetailHandler(w http.ResponseWriter, r *http.Request, userID string) {
+	if !h.requireRecipientService(w) {
+		return
+	}
+	adminUser, ok := h.authenticateRequest(w, r)
+	if !ok {
+		return
+	}
+	if r.Method != http.MethodPut {
+		methodNotAllowed(w, http.MethodPut)
+		return
+	}
+	var request recipient.UserProfileInput
+	if err := decodeJSON(r, &request); err != nil {
+		writeAPIError(w, http.StatusBadRequest, "MGP-REQ-001", "请求 JSON 不合法")
+		return
+	}
+	profile, err := h.recipients.SaveUserProfile(r.Context(), userID, request)
+	if err != nil {
+		status, code, message := recipientErrorStatus(err)
+		writeAPIError(w, status, code, message)
+		return
+	}
+	response := toUserProfileResponse(profile)
+	h.recordAudit(r, adminUser, "update", "user_profile", userID, request, response)
+	writeJSON(w, http.StatusOK, response)
 }
 
 func (h *Handler) userIdentitiesHandler(w http.ResponseWriter, r *http.Request, userID string) {
@@ -491,6 +556,17 @@ func toUserIdentityResponse(item recipient.UserIdentity) userIdentityResponse {
 	return userIdentityResponse{ID: item.ID, UserID: item.UserID, ProviderType: item.ProviderType, ChannelID: item.ChannelID, IdentityKind: item.IdentityKind, IdentityValue: item.IdentityValue, Verified: item.Verified, CreatedAt: formatTime(item.CreatedAt), UpdatedAt: formatTime(item.UpdatedAt)}
 }
 
+func toUserProfileResponse(profile recipient.UserProfile) userProfileBody {
+	response := userProfileBody{
+		User:       toUserResponse(profile.User),
+		Identities: make([]userIdentityResponse, 0, len(profile.Identities)),
+	}
+	for _, identity := range profile.Identities {
+		response.Identities = append(response.Identities, toUserIdentityResponse(identity))
+	}
+	return response
+}
+
 func toRecipientGroupResponse(item recipient.RecipientGroup) recipientGroupResponse {
 	return recipientGroupResponse{ID: item.ID, Name: item.Name, UserIDs: item.UserIDs, OrgIDs: item.OrgIDs, ExcludedUserIDs: item.ExcludedUserIDs, ExcludedOrgIDs: item.ExcludedOrgIDs, Enabled: item.Enabled, CreatedAt: formatTime(item.CreatedAt), UpdatedAt: formatTime(item.UpdatedAt)}
 }
@@ -503,6 +579,8 @@ func recipientErrorStatus(err error) (int, string, string) {
 		return http.StatusNotFound, "MGP-RCP-001", "接收人资源不存在"
 	case errors.Is(err, recipient.ErrAlreadyExists):
 		return http.StatusConflict, "MGP-RCP-001", "接收人资源已存在"
+	case errors.Is(err, recipient.ErrConflict):
+		return http.StatusConflict, "MGP-RCP-002", "接收人资源已被其他操作更新"
 	default:
 		return http.StatusInternalServerError, "MGP-RCP-999", "接收人服务内部错误"
 	}

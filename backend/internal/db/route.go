@@ -16,6 +16,8 @@ import (
 	"mvp-push-gateway/backend/internal/route"
 )
 
+const RouteRuntimeChangeChannel = "mgp_route_runtime_changed"
+
 func (r Repository) ListFlows(ctx context.Context) ([]route.Flow, error) {
 	rows, err := r.pool.Query(ctx, `
 		SELECT
@@ -130,7 +132,20 @@ func (r Repository) GetFlow(ctx context.Context, id string) (route.Flow, error) 
 }
 
 func (r Repository) UpdateFlow(ctx context.Context, id string, params route.UpdateFlowParams) (route.Flow, error) {
-	updated, err := queryRouteFlow(r.pool.QueryRow(ctx, `
+	tx, err := r.pool.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return route.Flow{}, fmt.Errorf("begin update route flow transaction: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	var previousSourceID string
+	if err := tx.QueryRow(ctx, `SELECT source_id::text FROM route_flows WHERE id = $1 FOR UPDATE`, id).Scan(&previousSourceID); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return route.Flow{}, route.ErrNotFound
+		}
+		return route.Flow{}, fmt.Errorf("lock route flow for update: %w", err)
+	}
+	updated, err := queryRouteFlow(tx.QueryRow(ctx, `
 		UPDATE route_flows
 		SET source_id = $2,
 			name = $3,
@@ -149,23 +164,47 @@ func (r Repository) UpdateFlow(ctx context.Context, id string, params route.Upda
 		}
 		return route.Flow{}, fmt.Errorf("update route flow: %w", err)
 	}
+	if err := notifyRouteRuntimeChange(ctx, tx, previousSourceID); err != nil {
+		return route.Flow{}, err
+	}
+	if updated.SourceID != previousSourceID {
+		if err := notifyRouteRuntimeChange(ctx, tx, updated.SourceID); err != nil {
+			return route.Flow{}, err
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return route.Flow{}, fmt.Errorf("commit update route flow transaction: %w", err)
+	}
 	return updated, nil
 }
 
 func (r Repository) DeleteFlow(ctx context.Context, id string) error {
-	tag, err := r.pool.Exec(ctx, `DELETE FROM route_flows WHERE id = $1`, id)
+	tx, err := r.pool.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {
+		return fmt.Errorf("begin delete route flow transaction: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	var sourceID string
+	err = tx.QueryRow(ctx, `DELETE FROM route_flows WHERE id = $1 RETURNING source_id::text`, id).Scan(&sourceID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return route.ErrNotFound
+		}
 		return fmt.Errorf("delete route flow: %w", err)
 	}
-	if tag.RowsAffected() == 0 {
-		return route.ErrNotFound
+	if err := notifyRouteRuntimeChange(ctx, tx, sourceID); err != nil {
+		return err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit delete route flow transaction: %w", err)
 	}
 	return nil
 }
 
 func (r Repository) GetDraft(ctx context.Context, flowID string) (route.Draft, error) {
 	version, err := queryRouteVersion(r.pool.QueryRow(ctx, `
-		SELECT id, flow_id, version_no, canvas_snapshot, compiled_rules, validation_status, validation_errors, published_at, created_at, updated_at
+		SELECT id, flow_id, version_no, COALESCE(draft_base_version_id::text, ''), COALESCE(draft_base_version_no, 0), canvas_snapshot, compiled_rules, validation_status, validation_errors, published_at, created_at, updated_at
 		FROM route_versions
 		WHERE flow_id = $1
 			AND published_at IS NULL
@@ -190,7 +229,7 @@ func (r Repository) ListVersions(ctx context.Context, flowID string) ([]route.Ve
 		return nil, err
 	}
 	rows, err := r.pool.Query(ctx, `
-		SELECT id, flow_id, version_no, canvas_snapshot, compiled_rules, validation_status, validation_errors, published_at, created_at, updated_at
+		SELECT id, flow_id, version_no, COALESCE(draft_base_version_id::text, ''), COALESCE(draft_base_version_no, 0), canvas_snapshot, compiled_rules, validation_status, validation_errors, published_at, created_at, updated_at
 		FROM route_versions
 		WHERE flow_id = $1
 		ORDER BY version_no DESC
@@ -216,7 +255,7 @@ func (r Repository) ListVersions(ctx context.Context, flowID string) ([]route.Ve
 
 func (r Repository) GetVersionRules(ctx context.Context, flowID string, versionID string) (route.RuleSet, error) {
 	version, err := queryRouteVersion(r.pool.QueryRow(ctx, `
-		SELECT id, flow_id, version_no, canvas_snapshot, compiled_rules, validation_status, validation_errors, published_at, created_at, updated_at
+		SELECT id, flow_id, version_no, COALESCE(draft_base_version_id::text, ''), COALESCE(draft_base_version_no, 0), canvas_snapshot, compiled_rules, validation_status, validation_errors, published_at, created_at, updated_at
 		FROM route_versions
 		WHERE flow_id = $1
 			AND id = $2
@@ -232,6 +271,142 @@ func (r Repository) GetVersionRules(ctx context.Context, flowID string, versionI
 		return route.RuleSet{}, err
 	}
 	return route.RuleSet{VersionID: version.ID, Rules: rules}, nil
+}
+
+func (r Repository) CheckoutVersion(ctx context.Context, flowID string, versionID string) (route.Draft, error) {
+	tx, err := r.pool.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return route.Draft{}, fmt.Errorf("begin checkout route version transaction: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	sourceVersion, err := queryRouteVersion(tx.QueryRow(ctx, `
+		SELECT id, flow_id, version_no, COALESCE(draft_base_version_id::text, ''), COALESCE(draft_base_version_no, 0), canvas_snapshot, compiled_rules, validation_status, validation_errors, published_at, created_at, updated_at
+		FROM route_versions
+		WHERE flow_id = $1
+			AND id = $2
+			AND published_at IS NOT NULL
+		FOR UPDATE
+	`, flowID, versionID))
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return route.Draft{}, route.ErrNotFound
+		}
+		return route.Draft{}, fmt.Errorf("get route version for checkout: %w", err)
+	}
+
+	draftVersion, err := queryRouteVersion(tx.QueryRow(ctx, `
+		SELECT id, flow_id, version_no, COALESCE(draft_base_version_id::text, ''), COALESCE(draft_base_version_no, 0), canvas_snapshot, compiled_rules, validation_status, validation_errors, published_at, created_at, updated_at
+		FROM route_versions
+		WHERE flow_id = $1
+			AND published_at IS NULL
+		ORDER BY version_no DESC
+		LIMIT 1
+		FOR UPDATE
+	`, flowID))
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return route.Draft{}, route.ErrNotFound
+		}
+		return route.Draft{}, fmt.Errorf("get route draft for checkout: %w", err)
+	}
+
+	sourceRules, err := listRulesForVersion(ctx, tx, flowID, sourceVersion.ID)
+	if err != nil {
+		return route.Draft{}, err
+	}
+	if _, err := tx.Exec(ctx, `DELETE FROM route_rules WHERE flow_id = $1 AND version_id = $2`, flowID, draftVersion.ID); err != nil {
+		return route.Draft{}, fmt.Errorf("delete existing route draft rules for checkout: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE route_versions
+		SET draft_base_version_id = $3::uuid,
+			draft_base_version_no = $4,
+			canvas_snapshot = $5,
+			compiled_rules = '{}'::jsonb,
+			validation_status = 'draft',
+			validation_errors = '[]'::jsonb,
+			updated_at = now()
+		WHERE id = $1
+			AND flow_id = $2
+			AND published_at IS NULL
+	`, draftVersion.ID, flowID, sourceVersion.ID, sourceVersion.VersionNo, defaultJSON(sourceVersion.CanvasSnapshot)); err != nil {
+		return route.Draft{}, fmt.Errorf("update route draft base for checkout: %w", err)
+	}
+
+	for _, item := range sourceRules {
+		newRuleID := uuid.NewString()
+		newActionID := uuid.NewString()
+		templateVersionID, channelIDs := routeActionCompatibilityFields(item.Action)
+		if _, err := tx.Exec(ctx, `
+			INSERT INTO route_rules (
+				id,
+				flow_id,
+				version_id,
+				rule_key,
+				sort_order,
+				name,
+				condition_tree,
+				enabled
+			)
+			VALUES ($1, $2, $3, $4::uuid, $5, $6, $7, $8)
+		`, newRuleID, flowID, draftVersion.ID, item.RuleKey, item.SortOrder, item.Name, defaultJSON(item.ConditionTree), item.Enabled); err != nil {
+			return route.Draft{}, fmt.Errorf("copy checkout rule into draft: %w", err)
+		}
+		if _, err := tx.Exec(ctx, `
+			INSERT INTO route_actions (
+				id,
+				rule_id,
+				template_version_id,
+				channel_ids,
+				recipient_strategy,
+				send_dedupe_config,
+				failure_policy
+			)
+			VALUES (
+				$1,
+				$2,
+				NULLIF($3::text, '')::uuid,
+				ARRAY(SELECT unnest($4::text[])::uuid),
+				$5,
+				$6,
+				$7
+			)
+		`, newActionID, newRuleID, templateVersionID, channelIDs,
+			defaultJSON(item.Action.RecipientStrategy),
+			defaultJSON(item.Action.SendDedupeConfig),
+			defaultJSON(item.Action.FailurePolicy),
+		); err != nil {
+			return route.Draft{}, fmt.Errorf("copy checkout action into draft: %w", err)
+		}
+		copiedTargets := make([]route.ActionTarget, 0, len(item.Action.Targets))
+		for _, target := range item.Action.Targets {
+			target.ID = ""
+			target.ActionID = newActionID
+			copiedTargets = append(copiedTargets, target)
+		}
+		if err := insertRouteActionTargets(ctx, tx, newActionID, copiedTargets); err != nil {
+			return route.Draft{}, err
+		}
+	}
+
+	checkedOut, err := queryRouteVersion(tx.QueryRow(ctx, `
+		SELECT id, flow_id, version_no, COALESCE(draft_base_version_id::text, ''), COALESCE(draft_base_version_no, 0), canvas_snapshot, compiled_rules, validation_status, validation_errors, published_at, created_at, updated_at
+		FROM route_versions
+		WHERE id = $1
+			AND flow_id = $2
+	`, draftVersion.ID, flowID))
+	if err != nil {
+		return route.Draft{}, fmt.Errorf("get checked out route draft: %w", err)
+	}
+	rules, err := listRulesForVersion(ctx, tx, flowID, checkedOut.ID)
+	if err != nil {
+		return route.Draft{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return route.Draft{}, fmt.Errorf("commit checkout route version transaction: %w", err)
+	}
+	return route.Draft{Version: checkedOut, Rules: rules}, nil
 }
 
 func (r Repository) DeleteVersion(ctx context.Context, flowID string, versionID string) error {
@@ -286,7 +461,7 @@ func (r Repository) UpdateCanvas(ctx context.Context, flowID string, snapshot js
 			LIMIT 1
 		)
 			AND flow_id = $1
-		RETURNING id, flow_id, version_no, canvas_snapshot, compiled_rules, validation_status, validation_errors, published_at, created_at, updated_at
+		RETURNING id, flow_id, version_no, COALESCE(draft_base_version_id::text, ''), COALESCE(draft_base_version_no, 0), canvas_snapshot, compiled_rules, validation_status, validation_errors, published_at, created_at, updated_at
 	`, flowID, defaultJSON(snapshot)))
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -315,7 +490,7 @@ func (r Repository) ReplaceRules(ctx context.Context, flowID string, versionID s
 	defer tx.Rollback(ctx)
 
 	if _, err := queryRouteVersion(tx.QueryRow(ctx, `
-		SELECT id, flow_id, version_no, canvas_snapshot, compiled_rules, validation_status, validation_errors, published_at, created_at, updated_at
+		SELECT id, flow_id, version_no, COALESCE(draft_base_version_id::text, ''), COALESCE(draft_base_version_no, 0), canvas_snapshot, compiled_rules, validation_status, validation_errors, published_at, created_at, updated_at
 		FROM route_versions
 		WHERE id = $1
 			AND flow_id = $2
@@ -485,11 +660,13 @@ func (r Repository) Publish(ctx context.Context, params route.PublishParams) (ro
 			validation_status = $4,
 			validation_errors = $5,
 			published_at = $6,
+			draft_base_version_id = NULL,
+			draft_base_version_no = NULL,
 			updated_at = $6
 		WHERE id = $1
 			AND flow_id = $2
 			AND published_at IS NULL
-		RETURNING id, flow_id, version_no, canvas_snapshot, compiled_rules, validation_status, validation_errors, published_at, created_at, updated_at
+		RETURNING id, flow_id, version_no, COALESCE(draft_base_version_id::text, ''), COALESCE(draft_base_version_no, 0), canvas_snapshot, compiled_rules, validation_status, validation_errors, published_at, created_at, updated_at
 	`, params.DraftVersionID, params.FlowID, defaultJSON(params.CompiledRules), params.ValidationStatus, defaultJSON(params.ValidationErrors), params.PublishedAt))
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -498,12 +675,14 @@ func (r Repository) Publish(ctx context.Context, params route.PublishParams) (ro
 		return route.Version{}, fmt.Errorf("publish route version: %w", err)
 	}
 
-	if _, err := tx.Exec(ctx, `
+	var sourceID string
+	if err := tx.QueryRow(ctx, `
 		UPDATE route_flows
 		SET current_version_id = $2,
 			updated_at = $3
 		WHERE id = $1
-	`, params.FlowID, published.ID, params.PublishedAt); err != nil {
+		RETURNING source_id::text
+	`, params.FlowID, published.ID, params.PublishedAt).Scan(&sourceID); err != nil {
 		return route.Version{}, fmt.Errorf("update current route version: %w", err)
 	}
 
@@ -519,13 +698,15 @@ func (r Repository) Publish(ctx context.Context, params route.PublishParams) (ro
 			id,
 			flow_id,
 			version_no,
+			draft_base_version_id,
+			draft_base_version_no,
 			canvas_snapshot,
 			compiled_rules,
 			validation_status,
 			validation_errors
 		)
-		VALUES ($1, $2, $3, $4, '{}'::jsonb, 'draft', '[]'::jsonb)
-	`, nextDraftID, params.FlowID, nextVersionNo, defaultJSON(published.CanvasSnapshot)); err != nil {
+		VALUES ($1, $2, $3, $4::uuid, $5, $6, '{}'::jsonb, 'draft', '[]'::jsonb)
+	`, nextDraftID, params.FlowID, nextVersionNo, published.ID, published.VersionNo, defaultJSON(published.CanvasSnapshot)); err != nil {
 		return route.Version{}, fmt.Errorf("create next route draft: %w", err)
 	}
 
@@ -585,6 +766,9 @@ func (r Repository) Publish(ctx context.Context, params route.PublishParams) (ro
 		}
 	}
 
+	if err := notifyRouteRuntimeChange(ctx, tx, sourceID); err != nil {
+		return route.Version{}, err
+	}
 	if err := tx.Commit(ctx); err != nil {
 		return route.Version{}, fmt.Errorf("commit publish route transaction: %w", err)
 	}
@@ -592,7 +776,13 @@ func (r Repository) Publish(ctx context.Context, params route.PublishParams) (ro
 }
 
 func (r Repository) ActivateVersion(ctx context.Context, flowID string, versionID string) (route.Flow, error) {
-	updated, err := queryRouteFlow(r.pool.QueryRow(ctx, `
+	tx, err := r.pool.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return route.Flow{}, fmt.Errorf("begin activate route version transaction: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	updated, err := queryRouteFlow(tx.QueryRow(ctx, `
 		UPDATE route_flows
 		SET current_version_id = $2,
 			updated_at = now()
@@ -611,6 +801,12 @@ func (r Repository) ActivateVersion(ctx context.Context, flowID string, versionI
 			return route.Flow{}, route.ErrNotFound
 		}
 		return route.Flow{}, fmt.Errorf("activate route version: %w", err)
+	}
+	if err := notifyRouteRuntimeChange(ctx, tx, updated.SourceID); err != nil {
+		return route.Flow{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return route.Flow{}, fmt.Errorf("commit activate route version transaction: %w", err)
 	}
 	return updated, nil
 }
@@ -700,6 +896,8 @@ func scanRouteVersion(row routeScanner) (route.Version, error) {
 		&item.ID,
 		&item.FlowID,
 		&item.VersionNo,
+		&item.DraftBaseVersionID,
+		&item.DraftBaseVersionNo,
 		&item.CanvasSnapshot,
 		&item.CompiledRules,
 		&item.ValidationStatus,

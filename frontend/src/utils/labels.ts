@@ -24,29 +24,23 @@ export type ProviderType =
   | 'dingtalk_work'
   | 'feishu_robot'
   | 'feishu_group';
-export type InboundStatus =
+export type MessageStatus =
   | 'accepted'
   | 'deduped'
   | 'silenced'
+  | 'no_route'
   | 'planned'
+  | 'queued'
+  | 'processing'
   | 'partial_sent'
   | 'sent'
   | 'failed'
-  | 'no_route';
-export type OutboundStatus =
-  | 'queued'
-  | 'processing'
-  | 'sent'
-  | 'failed'
-  | 'deduped'
-  | 'skipped';
+  | 'skipped'
+  | 'dead';
+export type InboundStatus = Extract<MessageStatus, 'accepted' | 'deduped' | 'silenced' | 'planned' | 'partial_sent' | 'sent' | 'failed' | 'no_route'>;
+export type OutboundStatus = Extract<MessageStatus, 'queued' | 'processing' | 'sent' | 'failed' | 'deduped' | 'skipped' | 'dead'>;
 export type JobStatus = 'queued' | 'processing' | 'done' | 'failed' | 'dead';
-export type JobType =
-  | 'route_plan'
-  | 'send_message'
-  | 'stats_aggregate'
-  | 'retention_cleanup'
-  | 'dead_letter_replay';
+export type JobType = 'route_plan' | 'send_message' | 'stats_aggregate' | 'retention_cleanup' | 'dead_letter_replay';
 export type ValidationStatus = 'valid' | 'invalid' | 'draft';
 export type AuditAction =
   | 'create'
@@ -57,8 +51,14 @@ export type AuditAction =
   | 'publish'
   | 'test'
   | 'retry'
+  | 'run'
   | 'login'
-  | 'logout';
+  | 'logout'
+  | 'login_failed'
+  | 'reject_unauthorized'
+  | 'reject_ip_not_allowed'
+  | 'reject_rate_limited'
+  | 'reject_payload_too_large';
 
 const unknownMeta: TagMeta = {
   label: '未知',
@@ -105,6 +105,21 @@ const inboundStatusMeta: Record<InboundStatus, TagMeta> = {
   no_route: { label: '未命中路由', color: 'warning' },
 };
 
+const messageStatusMeta: Record<MessageStatus, TagMeta> = {
+  accepted: { label: '已接收', color: 'processing' },
+  deduped: { label: '已去重', color: 'default' },
+  silenced: { label: '已拦截', color: 'warning' },
+  no_route: { label: '未命中路由', color: 'warning' },
+  planned: { label: '待发送', color: 'cyan' },
+  queued: { label: '待发送', color: 'default' },
+  processing: { label: '发送中', color: 'processing' },
+  partial_sent: { label: '部分成功', color: 'orange' },
+  sent: { label: '已送达', color: 'success' },
+  failed: { label: '失败', color: 'error' },
+  skipped: { label: '已跳过', color: 'warning' },
+  dead: { label: '死信', color: 'error' },
+};
+
 const outboundStatusMeta: Record<OutboundStatus, TagMeta> = {
   queued: { label: '排队中', color: 'default' },
   processing: { label: '处理中', color: 'processing' },
@@ -112,6 +127,7 @@ const outboundStatusMeta: Record<OutboundStatus, TagMeta> = {
   failed: { label: '发送失败', color: 'error' },
   deduped: { label: '发送前去重', color: 'default' },
   skipped: { label: '已跳过', color: 'warning' },
+  dead: { label: '死信', color: 'error' },
 };
 
 const jobStatusMeta: Record<JobStatus, TagMeta> = {
@@ -145,8 +161,14 @@ const auditActionLabels: Record<AuditAction, string> = {
   publish: '发布',
   test: '测试',
   retry: '重试',
+  run: '执行',
   login: '登录',
   logout: '登出',
+  login_failed: '登录失败',
+  reject_unauthorized: '入站鉴权拒绝',
+  reject_ip_not_allowed: '入站 IP 拒绝',
+  reject_rate_limited: '入站限流拒绝',
+  reject_payload_too_large: '入站超限拒绝',
 };
 
 export function getAuthModeMeta(value: AuthMode): TagMeta {
@@ -158,13 +180,15 @@ export function getProviderTypeLabel(value: ProviderType): string {
 }
 
 export function getEnabledMeta(enabled: boolean): TagMeta {
-  return enabled
-    ? { label: '启用', color: 'success' }
-    : { label: '停用', color: 'default' };
+  return enabled ? { label: '启用', color: 'success' } : { label: '停用', color: 'default' };
 }
 
 export function getInboundStatusMeta(value: InboundStatus): TagMeta {
   return inboundStatusMeta[value] ?? unknownMeta;
+}
+
+export function getMessageStatusMeta(value: MessageStatus): TagMeta {
+  return messageStatusMeta[value] ?? unknownMeta;
 }
 
 export function getOutboundStatusMeta(value: OutboundStatus): TagMeta {
@@ -195,7 +219,10 @@ export function formatHitCount(value: number): string {
 }
 
 export function templateVariable(path: string): string {
-  const normalized = path.trim().replace(/^\{\{\s*/, '').replace(/\s*\}\}$/, '');
+  const normalized = path
+    .trim()
+    .replace(/^\{\{\s*/, '')
+    .replace(/\s*\}\}$/, '');
   return `{{ ${normalized} }}`;
 }
 

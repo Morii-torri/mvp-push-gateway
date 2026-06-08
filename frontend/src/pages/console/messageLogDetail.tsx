@@ -1,4 +1,3 @@
-import Alert from 'antd/es/alert';
 import Descriptions from 'antd/es/descriptions';
 import Space from 'antd/es/space';
 import Typography from 'antd/es/typography';
@@ -10,7 +9,11 @@ import { isRecord, normalizeOutboundStatus, stringField, stringifyJSON } from '.
 
 export function MessageLogAttemptBlocks({ attempts }: { attempts: DeliveryAttemptApiRecord[] }) {
   if (!attempts.length) {
-    return <Alert type="info" showIcon message="暂无出站投递尝试" />;
+    return (
+      <div className="message-log-empty-state">
+        <Typography.Text type="secondary">暂无出站投递尝试</Typography.Text>
+      </div>
+    );
   }
 
   return (

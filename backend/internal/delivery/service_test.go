@@ -110,6 +110,88 @@ func TestWorkerProcessBatchScopesSendDedupeByChannel(t *testing.T) {
 	}
 }
 
+func TestProcessSendMessageUsesEventMetadataWithoutLoadingAttempt(t *testing.T) {
+	var sent int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&sent, 1)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	}))
+	defer server.Close()
+
+	store := newMemoryRepository()
+	store.failOnGetAttempt = true
+	store.channels["channel-direct"] = provider.Channel{
+		ID:               "channel-direct",
+		Name:             "Direct Channel",
+		ProviderType:     provider.ProviderWebhook,
+		Enabled:          true,
+		ConcurrencyLimit: 1,
+		TimeoutMS:        500,
+		SendConfig:       json.RawMessage(`{"method":"POST","url":"` + server.URL + `/send"}`),
+	}
+	store.capabilities[capabilityKey(provider.ProviderWebhook, "json")] = provider.Capability{
+		ProviderType:     provider.ProviderWebhook,
+		MessageType:      "json",
+		AllowNoRecipient: true,
+	}
+	resultPublisher := &recordingResultPublisher{}
+	worker := NewWorker(store,
+		WithResultPublisher(resultPublisher),
+		WithHTTPClientFactory(func(timeout time.Duration) *http.Client {
+			client := server.Client()
+			client.Timeout = timeout
+			return client
+		}),
+	)
+	receivedAt := time.Date(2026, 6, 8, 10, 40, 0, 0, time.UTC)
+	payload, _ := json.Marshal(SendMessageJobPayload{
+		DeliveryAttemptID: "attempt-direct",
+		MessageID:         "message-direct",
+		SourceID:          "source-1",
+		ChannelID:         "channel-direct",
+		TemplateVersionID: "template-version-direct",
+		MessageType:       "json",
+		TraceID:           "trace-direct",
+		Body:              json.RawMessage(`{"body":{"title":"direct"}}`),
+		InboundPayload:    json.RawMessage(`{"title":"direct"}`),
+		InboundHeaders:    json.RawMessage(`{"Content-Type":["application/json"]}`),
+		InboundReceivedAt: receivedAt,
+	})
+
+	err := worker.ProcessSendMessage(context.Background(), queue.SendMessage{
+		Event: queue.SendMessageEvent{
+			DeliveryAttemptID: "attempt-direct",
+			MessageID:         "message-direct",
+			SourceID:          "source-1",
+			ChannelID:         "channel-direct",
+			ProviderType:      "webhook",
+			TraceID:           "trace-direct",
+			MaxAttempts:       1,
+			Payload:           payload,
+		},
+	})
+	if err != nil {
+		t.Fatalf("process direct send event: %v", err)
+	}
+	if atomic.LoadInt32(&sent) != 1 {
+		t.Fatalf("expected one outbound request, got %d", sent)
+	}
+	if store.getAttemptCalls != 0 || store.markAttemptProcessingCalls != 0 {
+		t.Fatalf("expected direct send not to load or mark DB attempt, get=%d mark=%d", store.getAttemptCalls, store.markAttemptProcessingCalls)
+	}
+	if len(resultPublisher.events) != 1 {
+		t.Fatalf("expected one result event, got %d", len(resultPublisher.events))
+	}
+	event := resultPublisher.events[0]
+	if event.AttemptID != "attempt-direct" || event.MessageID != "message-direct" || event.SourceID != "source-1" || event.TemplateVersionID != "template-version-direct" {
+		t.Fatalf("expected result event to carry log metadata, got %+v", event)
+	}
+	if string(event.InboundPayload) != `{"title":"direct"}` || event.InboundReceivedAt.IsZero() {
+		t.Fatalf("expected result event to carry inbound payload metadata, got %+v", event)
+	}
+}
+
 func TestWorkerProcessBatchScopesSendDedupeByTemplateVersion(t *testing.T) {
 	var sent int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -186,6 +268,387 @@ func TestWorkerProcessBatchScopesSendDedupeByTemplateVersion(t *testing.T) {
 		if dedupe["effective_key"] == "same-trace-id" || !strings.Contains(fmt.Sprint(dedupe["effective_key"]), attempt.TemplateVersionID) {
 			t.Fatalf("expected effective dedupe key scoped by template version, got %+v", dedupe)
 		}
+	}
+}
+
+func TestWorkerProcessBatchBatchesSuccessfulCompletions(t *testing.T) {
+	var sent int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&sent, 1)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	}))
+	defer server.Close()
+
+	store := newMemoryRepository()
+	channel := provider.Channel{
+		ID:               "channel-batch-complete",
+		Name:             "Batch Complete Channel",
+		ProviderType:     provider.ProviderWebhook,
+		Enabled:          true,
+		ConcurrencyLimit: 10,
+		TimeoutMS:        500,
+		SendConfig:       json.RawMessage(`{"method":"POST","url":"` + server.URL + `/send"}`),
+	}
+	store.channels[channel.ID] = channel
+
+	for index := 1; index <= 3; index++ {
+		attemptID := fmt.Sprintf("attempt-batch-%d", index)
+		store.addAttempt(Attempt{ID: attemptID, MessageID: fmt.Sprintf("message-batch-%d", index), ChannelID: channel.ID, Status: StatusQueued})
+		store.addJob(newSendJob(fmt.Sprintf("job-batch-%d", index), channel.ID, 3, time.Now().Add(-time.Second), SendMessageJobPayload{
+			DeliveryAttemptID: attemptID,
+			MessageType:       "json",
+			Body:              json.RawMessage(`{"body":{"title":"ok"}}`),
+		}))
+	}
+
+	worker := NewWorker(store,
+		WithWorkerID("sender-batch"),
+		WithHTTPClientFactory(func(timeout time.Duration) *http.Client {
+			client := server.Client()
+			client.Timeout = timeout
+			return client
+		}),
+	)
+
+	processed, err := worker.ProcessBatch(context.Background(), 3)
+	if err != nil {
+		t.Fatalf("process batch: %v", err)
+	}
+	if processed != 3 {
+		t.Fatalf("expected 3 processed jobs, got %d", processed)
+	}
+	if atomic.LoadInt32(&sent) != 3 {
+		t.Fatalf("expected 3 outbound sends, got %d", sent)
+	}
+	if store.completeDeliveryCalls != 0 || store.completeDeliveryBatchCalls != 1 {
+		t.Fatalf("expected one batch completion and no single completions, single=%d batch=%d", store.completeDeliveryCalls, store.completeDeliveryBatchCalls)
+	}
+	for index := 1; index <= 3; index++ {
+		attemptID := fmt.Sprintf("attempt-batch-%d", index)
+		if got := store.attempts[attemptID].Status; got != StatusSent {
+			t.Fatalf("expected %s sent, got %s", attemptID, got)
+		}
+	}
+}
+
+func TestWorkerProcessBatchPublishesSuccessfulCompletionsToResultPublisher(t *testing.T) {
+	var sent int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&sent, 1)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	}))
+	defer server.Close()
+
+	store := newMemoryRepository()
+	channel := provider.Channel{
+		ID:               "channel-result-publisher",
+		Name:             "Result Publisher Channel",
+		ProviderType:     provider.ProviderWebhook,
+		Enabled:          true,
+		ConcurrencyLimit: 10,
+		TimeoutMS:        500,
+		SendConfig:       json.RawMessage(`{"method":"POST","url":"` + server.URL + `/send"}`),
+	}
+	store.channels[channel.ID] = channel
+
+	for index := 1; index <= 2; index++ {
+		attemptID := fmt.Sprintf("attempt-result-%d", index)
+		store.addAttempt(Attempt{ID: attemptID, MessageID: fmt.Sprintf("message-result-%d", index), ChannelID: channel.ID, Status: StatusQueued})
+		store.addJob(newSendJob(fmt.Sprintf("job-result-%d", index), channel.ID, 3, time.Now().Add(-time.Second), SendMessageJobPayload{
+			DeliveryAttemptID: attemptID,
+			MessageType:       "json",
+			TraceID:           fmt.Sprintf("trace-result-%d", index),
+			Body:              json.RawMessage(`{"body":{"title":"ok"}}`),
+		}))
+	}
+
+	publisher := &recordingResultPublisher{}
+	worker := NewWorker(store,
+		WithWorkerID("sender-result-publisher"),
+		WithResultPublisher(publisher),
+		WithHTTPClientFactory(func(timeout time.Duration) *http.Client {
+			client := server.Client()
+			client.Timeout = timeout
+			return client
+		}),
+	)
+
+	processed, err := worker.ProcessBatch(context.Background(), 2)
+	if err != nil {
+		t.Fatalf("process batch: %v", err)
+	}
+	if processed != 2 {
+		t.Fatalf("expected 2 processed jobs, got %d", processed)
+	}
+	if atomic.LoadInt32(&sent) != 2 {
+		t.Fatalf("expected 2 outbound sends, got %d", sent)
+	}
+	if store.completeDeliveryCalls != 0 || store.completeDeliveryBatchCalls != 0 {
+		t.Fatalf("expected no direct database completions when result publisher is configured, single=%d batch=%d", store.completeDeliveryCalls, store.completeDeliveryBatchCalls)
+	}
+	if len(publisher.events) != 2 {
+		t.Fatalf("expected 2 published result events, got %d", len(publisher.events))
+	}
+
+	eventsByAttempt := map[string]DeliveryResultEvent{}
+	for _, event := range publisher.events {
+		eventsByAttempt[event.AttemptID] = event
+	}
+	for index := 1; index <= 2; index++ {
+		attemptID := fmt.Sprintf("attempt-result-%d", index)
+		event, ok := eventsByAttempt[attemptID]
+		if !ok {
+			t.Fatalf("missing result event for %s in %+v", attemptID, publisher.events)
+		}
+		if event.Status != StatusSent || event.JobID != fmt.Sprintf("job-result-%d", index) || event.WorkerID != "sender-result-publisher" {
+			t.Fatalf("unexpected result event for %s: %+v", attemptID, event)
+		}
+		if event.TraceID != fmt.Sprintf("trace-result-%d", index) {
+			t.Fatalf("expected trace id to be carried into result event, got %+v", event)
+		}
+		if got := store.attempts[attemptID].Status; got != StatusProcessing {
+			t.Fatalf("expected attempt %s to remain processing until result writer persists it, got %s", attemptID, got)
+		}
+	}
+}
+
+func TestWorkerProcessSendMessageAcksAfterPublishingResultEvent(t *testing.T) {
+	var sent int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&sent, 1)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	}))
+	defer server.Close()
+
+	store := newMemoryRepository()
+	channel := provider.Channel{
+		ID:               "channel-send-event",
+		Name:             "Send Event Channel",
+		ProviderType:     provider.ProviderWebhook,
+		Enabled:          true,
+		ConcurrencyLimit: 1,
+		TimeoutMS:        500,
+		SendConfig:       json.RawMessage(`{"method":"POST","url":"` + server.URL + `/send"}`),
+	}
+	store.channels[channel.ID] = channel
+	store.addAttempt(Attempt{ID: "attempt-send-event", MessageID: "message-send-event", ChannelID: channel.ID, Status: StatusQueued})
+	payload, err := json.Marshal(SendMessageJobPayload{
+		DeliveryAttemptID: "attempt-send-event",
+		MessageType:       "json",
+		TraceID:           "trace-send-event",
+		Body:              json.RawMessage(`{"body":{"title":"ok"}}`),
+	})
+	if err != nil {
+		t.Fatalf("marshal send payload: %v", err)
+	}
+
+	publisher := &recordingResultPublisher{}
+	worker := NewWorker(store,
+		WithWorkerID("sender-send-event"),
+		WithResultPublisher(publisher),
+		WithHTTPClientFactory(func(timeout time.Duration) *http.Client {
+			client := server.Client()
+			client.Timeout = timeout
+			return client
+		}),
+	)
+	acked := false
+	nacked := false
+	err = worker.ProcessSendMessage(context.Background(), queue.SendMessage{
+		Event: queue.SendMessageEvent{
+			DeliveryAttemptID: "attempt-send-event",
+			ChannelID:         channel.ID,
+			ProviderType:      "webhook",
+			TraceID:           "trace-send-event",
+			Payload:           payload,
+		},
+		Ack: func() error {
+			acked = true
+			return nil
+		},
+		Nak: func(time.Duration) error {
+			nacked = true
+			return nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("process send message: %v", err)
+	}
+	if !acked || nacked {
+		t.Fatalf("expected successful send message to ack only, acked=%v nacked=%v", acked, nacked)
+	}
+	if atomic.LoadInt32(&sent) != 1 {
+		t.Fatalf("expected one outbound send, got %d", sent)
+	}
+	if len(publisher.events) != 1 {
+		t.Fatalf("expected one result event, got %d", len(publisher.events))
+	}
+	if publisher.events[0].AttemptID != "attempt-send-event" || publisher.events[0].JobID != "" {
+		t.Fatalf("unexpected result event: %+v", publisher.events[0])
+	}
+	if store.completeDeliveryCalls != 0 || store.completeDeliveryBatchCalls != 0 {
+		t.Fatalf("expected JetStream send path not to complete DB directly, single=%d batch=%d", store.completeDeliveryCalls, store.completeDeliveryBatchCalls)
+	}
+}
+
+func TestWorkerProcessSendMessagePublishesRetryResultAndNaks(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = w.Write([]byte(`{"ok":false}`))
+	}))
+	defer server.Close()
+
+	store := newMemoryRepository()
+	channel := provider.Channel{
+		ID:               "channel-send-retry",
+		Name:             "Send Retry Channel",
+		ProviderType:     provider.ProviderWebhook,
+		Enabled:          true,
+		ConcurrencyLimit: 1,
+		TimeoutMS:        500,
+		RetryPolicy:      json.RawMessage(`{"max_attempts":3,"delay_ms":25}`),
+		SendConfig:       json.RawMessage(`{"method":"POST","url":"` + server.URL + `/send"}`),
+	}
+	store.channels[channel.ID] = channel
+	store.addAttempt(Attempt{ID: "attempt-send-retry", MessageID: "message-send-retry", ChannelID: channel.ID, Status: StatusQueued})
+	payload, err := json.Marshal(SendMessageJobPayload{
+		DeliveryAttemptID: "attempt-send-retry",
+		MessageType:       "json",
+		TraceID:           "trace-send-retry",
+		Body:              json.RawMessage(`{"body":{"title":"retry"}}`),
+	})
+	if err != nil {
+		t.Fatalf("marshal send payload: %v", err)
+	}
+
+	publisher := &recordingResultPublisher{}
+	worker := NewWorker(store,
+		WithWorkerID("sender-send-retry"),
+		WithResultPublisher(publisher),
+		WithHTTPClientFactory(func(timeout time.Duration) *http.Client {
+			client := server.Client()
+			client.Timeout = timeout
+			return client
+		}),
+	)
+	acked := false
+	nacked := false
+	err = worker.ProcessSendMessage(context.Background(), queue.SendMessage{
+		Event: queue.SendMessageEvent{
+			DeliveryAttemptID: "attempt-send-retry",
+			ChannelID:         channel.ID,
+			ProviderType:      "webhook",
+			TraceID:           "trace-send-retry",
+			MaxAttempts:       3,
+			Payload:           payload,
+		},
+		Ack: func() error {
+			acked = true
+			return nil
+		},
+		Nak: func(time.Duration) error {
+			nacked = true
+			return nil
+		},
+	})
+	if !errors.Is(err, ErrRetryScheduled) {
+		t.Fatalf("expected retry scheduled error, got %v", err)
+	}
+	if acked || !nacked {
+		t.Fatalf("expected retryable send message to nak only, acked=%v nacked=%v", acked, nacked)
+	}
+	if len(publisher.events) != 1 {
+		t.Fatalf("expected one retry result event, got %d", len(publisher.events))
+	}
+	event := publisher.events[0]
+	if event.Action != ResultActionRetry || event.ErrorCode != "MGP-SEND-004" || event.RetryAt == nil {
+		t.Fatalf("expected retry result event, got %+v", event)
+	}
+	if store.retryDeliveryCalls != 0 || store.deadLetterDeliveryCalls != 0 {
+		t.Fatalf("expected retry result not to be written directly, retry=%d dead=%d", store.retryDeliveryCalls, store.deadLetterDeliveryCalls)
+	}
+}
+
+func TestWorkerProcessSendMessagePublishesDeadLetterResultAndAcks(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = w.Write([]byte(`{"ok":false}`))
+	}))
+	defer server.Close()
+
+	store := newMemoryRepository()
+	channel := provider.Channel{
+		ID:               "channel-send-dead",
+		Name:             "Send Dead Channel",
+		ProviderType:     provider.ProviderWebhook,
+		Enabled:          true,
+		ConcurrencyLimit: 1,
+		TimeoutMS:        500,
+		RetryPolicy:      json.RawMessage(`{"max_attempts":1}`),
+		SendConfig:       json.RawMessage(`{"method":"POST","url":"` + server.URL + `/send"}`),
+	}
+	store.channels[channel.ID] = channel
+	store.addAttempt(Attempt{ID: "attempt-send-dead", MessageID: "message-send-dead", ChannelID: channel.ID, Status: StatusQueued})
+	payload, err := json.Marshal(SendMessageJobPayload{
+		DeliveryAttemptID: "attempt-send-dead",
+		MessageType:       "json",
+		TraceID:           "trace-send-dead",
+		Body:              json.RawMessage(`{"body":{"title":"dead"}}`),
+	})
+	if err != nil {
+		t.Fatalf("marshal send payload: %v", err)
+	}
+
+	publisher := &recordingResultPublisher{}
+	worker := NewWorker(store,
+		WithWorkerID("sender-send-dead"),
+		WithResultPublisher(publisher),
+		WithHTTPClientFactory(func(timeout time.Duration) *http.Client {
+			client := server.Client()
+			client.Timeout = timeout
+			return client
+		}),
+	)
+	acked := false
+	nacked := false
+	err = worker.ProcessSendMessage(context.Background(), queue.SendMessage{
+		Event: queue.SendMessageEvent{
+			DeliveryAttemptID: "attempt-send-dead",
+			ChannelID:         channel.ID,
+			ProviderType:      "webhook",
+			TraceID:           "trace-send-dead",
+			MaxAttempts:       1,
+			Payload:           payload,
+		},
+		Ack: func() error {
+			acked = true
+			return nil
+		},
+		Nak: func(time.Duration) error {
+			nacked = true
+			return nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("process dead-letter send message: %v", err)
+	}
+	if !acked || nacked {
+		t.Fatalf("expected dead-letter send message to ack only, acked=%v nacked=%v", acked, nacked)
+	}
+	if len(publisher.events) != 1 {
+		t.Fatalf("expected one dead-letter result event, got %d", len(publisher.events))
+	}
+	event := publisher.events[0]
+	if event.Action != ResultActionDeadLetter || event.ErrorCode != "MGP-SEND-004" {
+		t.Fatalf("expected dead-letter result event, got %+v", event)
+	}
+	if store.retryDeliveryCalls != 0 || store.deadLetterDeliveryCalls != 0 {
+		t.Fatalf("expected dead-letter result not to be written directly, retry=%d dead=%d", store.retryDeliveryCalls, store.deadLetterDeliveryCalls)
 	}
 }
 
@@ -1196,14 +1659,34 @@ func capabilityKey(providerType provider.ProviderType, messageType string) strin
 }
 
 type memoryRepository struct {
-	mu           sync.Mutex
-	jobs         map[string]queue.Job
-	jobOrder     []string
-	channels     map[string]provider.Channel
-	capabilities map[string]provider.Capability
-	attempts     map[string]Attempt
-	dedupe       map[string]string
-	deadLetters  []DeadLetterRecord
+	mu                         sync.Mutex
+	jobs                       map[string]queue.Job
+	jobOrder                   []string
+	channels                   map[string]provider.Channel
+	capabilities               map[string]provider.Capability
+	attempts                   map[string]Attempt
+	dedupe                     map[string]string
+	deadLetters                []DeadLetterRecord
+	failOnGetAttempt           bool
+	getAttemptCalls            int
+	markAttemptProcessingCalls int
+	completeDeliveryCalls      int
+	completeDeliveryBatchCalls int
+	retryDeliveryCalls         int
+	deadLetterDeliveryCalls    int
+}
+
+type recordingResultPublisher struct {
+	mu     sync.Mutex
+	events []DeliveryResultEvent
+	err    error
+}
+
+func (p *recordingResultPublisher) PublishDeliveryResult(_ context.Context, event DeliveryResultEvent) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.events = append(p.events, event)
+	return p.err
 }
 
 func newMemoryRepository() *memoryRepository {
@@ -1302,6 +1785,10 @@ func (m *memoryRepository) GetProviderCapability(_ context.Context, providerType
 func (m *memoryRepository) GetAttempt(_ context.Context, attemptID string) (Attempt, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	m.getAttemptCalls++
+	if m.failOnGetAttempt {
+		return Attempt{}, errors.New("GetAttempt should not be called")
+	}
 	attempt, ok := m.attempts[attemptID]
 	if !ok {
 		return Attempt{}, errors.New("attempt not found")
@@ -1312,6 +1799,7 @@ func (m *memoryRepository) GetAttempt(_ context.Context, attemptID string) (Atte
 func (m *memoryRepository) MarkAttemptProcessing(_ context.Context, params MarkAttemptProcessingParams) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	m.markAttemptProcessingCalls++
 	attempt := m.attempts[params.AttemptID]
 	attempt.Status = StatusProcessing
 	attempt.AttemptNo = params.AttemptNo
@@ -1334,6 +1822,22 @@ func (m *memoryRepository) InsertSendDedupeKey(_ context.Context, params SendDed
 func (m *memoryRepository) CompleteDelivery(_ context.Context, params CompleteDeliveryParams) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	m.completeDeliveryCalls++
+	m.applyCompleteDelivery(params)
+	return nil
+}
+
+func (m *memoryRepository) CompleteDeliveries(_ context.Context, params []CompleteDeliveryParams) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.completeDeliveryBatchCalls++
+	for _, item := range params {
+		m.applyCompleteDelivery(item)
+	}
+	return nil
+}
+
+func (m *memoryRepository) applyCompleteDelivery(params CompleteDeliveryParams) {
 	attempt := m.attempts[params.AttemptID]
 	attempt.Status = params.Status
 	attempt.RequestSnapshot = append(json.RawMessage(nil), params.RequestSnapshot...)
@@ -1351,12 +1855,12 @@ func (m *memoryRepository) CompleteDelivery(_ context.Context, params CompleteDe
 	duration := params.DurationMS
 	job.DurationMS = &duration
 	m.jobs[params.JobID] = job
-	return nil
 }
 
 func (m *memoryRepository) RetryDelivery(_ context.Context, params RetryDeliveryParams) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	m.retryDeliveryCalls++
 	attempt := m.attempts[params.AttemptID]
 	attempt.Status = StatusFailed
 	attempt.ErrorCode = params.ErrorCode
@@ -1382,6 +1886,7 @@ func (m *memoryRepository) RetryDelivery(_ context.Context, params RetryDelivery
 func (m *memoryRepository) DeadLetterDelivery(_ context.Context, params DeadLetterDeliveryParams) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	m.deadLetterDeliveryCalls++
 	attempt := m.attempts[params.AttemptID]
 	attempt.Status = StatusFailed
 	attempt.ErrorCode = params.ErrorCode

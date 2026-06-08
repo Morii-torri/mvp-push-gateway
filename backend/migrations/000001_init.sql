@@ -28,6 +28,7 @@ CREATE TABLE delivery_channels (
     provider_type text NOT NULL
         CHECK (provider_type IN ('wecom', 'feishu', 'dingtalk', 'email', 'sms', 'self', 'webhook')),
     name text NOT NULL,
+    description text NOT NULL DEFAULT '',
     enabled boolean NOT NULL DEFAULT true,
     auth_config jsonb NOT NULL DEFAULT '{}'::jsonb,
     token_config jsonb NOT NULL DEFAULT '{}'::jsonb,
@@ -195,6 +196,8 @@ CREATE TABLE route_versions (
     id uuid PRIMARY KEY,
     flow_id uuid NOT NULL REFERENCES route_flows(id) ON DELETE CASCADE,
     version_no integer NOT NULL CHECK (version_no > 0),
+    draft_base_version_id uuid,
+    draft_base_version_no integer CHECK (draft_base_version_no IS NULL OR draft_base_version_no > 0),
     canvas_snapshot jsonb NOT NULL DEFAULT '{}'::jsonb,
     compiled_rules jsonb NOT NULL DEFAULT '{}'::jsonb,
     validation_status text NOT NULL DEFAULT 'draft'
@@ -205,6 +208,10 @@ CREATE TABLE route_versions (
     updated_at timestamptz NOT NULL DEFAULT now(),
     UNIQUE (flow_id, version_no)
 );
+
+ALTER TABLE route_versions
+    ADD CONSTRAINT fk_route_versions_draft_base
+    FOREIGN KEY (draft_base_version_id) REFERENCES route_versions(id) ON DELETE SET NULL;
 
 ALTER TABLE route_flows
     ADD CONSTRAINT fk_route_flows_current_version
@@ -411,7 +418,7 @@ CREATE TABLE audit_logs (
     actor_username text,
     action text NOT NULL,
     resource_type text NOT NULL,
-    resource_id uuid,
+    resource_id text,
     request_snapshot jsonb NOT NULL DEFAULT '{}'::jsonb,
     response_snapshot jsonb NOT NULL DEFAULT '{}'::jsonb,
     ip_address inet,

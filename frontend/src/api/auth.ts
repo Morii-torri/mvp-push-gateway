@@ -1,4 +1,4 @@
-import { apiRequest, tokenStore, type ApiFetcher } from './client';
+import { apiRequest, tokenStore, type ApiFetcher } from "./client";
 
 export type AdminUser = {
   id: string;
@@ -23,19 +23,30 @@ export type LoginResult = {
 
 export const authApi = {
   getSetupStatus(fetcher?: ApiFetcher) {
-    return apiRequest<SetupStatus>('/setup/status', { auth: false, fetcher });
+    return apiRequest<SetupStatus>("/setup/status", { auth: false, fetcher });
   },
-  setupAdmin(input: { username: string; password: string; display_name: string }, fetcher?: ApiFetcher) {
-    return apiRequest<{ admin: AdminUser }>('/setup/admin', {
-      method: 'POST',
+  setupAdmin(
+    input: {
+      username: string;
+      password: string;
+      confirm_password: string;
+      display_name: string;
+    },
+    fetcher?: ApiFetcher,
+  ) {
+    return apiRequest<{ admin: AdminUser }>("/setup/admin", {
+      method: "POST",
       body: input,
       auth: false,
       fetcher,
     });
   },
-  async login(input: { username: string; password: string }, fetcher?: ApiFetcher) {
-    const result = await apiRequest<LoginResult>('/auth/login', {
-      method: 'POST',
+  async login(
+    input: { username: string; password: string },
+    fetcher?: ApiFetcher,
+  ) {
+    const result = await apiRequest<LoginResult>("/auth/login", {
+      method: "POST",
       body: input,
       auth: false,
       fetcher,
@@ -44,11 +55,11 @@ export const authApi = {
     return result;
   },
   me(fetcher?: ApiFetcher) {
-    return apiRequest<{ admin: AdminUser }>('/auth/me', { fetcher });
+    return apiRequest<{ admin: AdminUser }>("/auth/me", { fetcher });
   },
   updateProfile(input: { display_name: string }, fetcher?: ApiFetcher) {
-    return apiRequest<{ admin: AdminUser }>('/auth/profile', {
-      method: 'PUT',
+    return apiRequest<{ admin: AdminUser }>("/auth/profile", {
+      method: "PUT",
       body: input,
       fetcher,
     });
@@ -57,15 +68,18 @@ export const authApi = {
     input: { current_password: string; new_password: string },
     fetcher?: ApiFetcher,
   ) {
-    return apiRequest<{ ok: boolean }>('/auth/change-password', {
-      method: 'POST',
+    return apiRequest<{ ok: boolean }>("/auth/change-password", {
+      method: "POST",
       body: input,
       fetcher,
     });
   },
   async logout(fetcher?: ApiFetcher) {
     try {
-      await apiRequest<{ ok: boolean }>('/auth/logout', { method: 'POST', fetcher });
+      await apiRequest<{ ok: boolean }>("/auth/logout", {
+        method: "POST",
+        fetcher,
+      });
     } finally {
       tokenStore.clear();
     }

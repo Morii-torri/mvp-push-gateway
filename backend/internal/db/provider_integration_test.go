@@ -63,10 +63,18 @@ func TestProviderCapabilitySeedIsIdempotent(t *testing.T) {
 		ProviderType:     provider.ProviderNtfy,
 		Name:             "ntfy registry smoke",
 		Enabled:          true,
+		Description:      "自建 ntfy 告警",
 		ConcurrencyLimit: 1,
 		TimeoutMS:        1000,
 	}); err != nil {
 		t.Fatalf("create ntfy channel after registry seed: %v", err)
+	}
+	channels, err := repository.ListChannels(ctx)
+	if err != nil {
+		t.Fatalf("list channels after description write: %v", err)
+	}
+	if len(channels) != 1 || channels[0].Description != "自建 ntfy 告警" {
+		t.Fatalf("expected channel description to round trip, got %+v", channels)
 	}
 	if err := repository.SeedProviderCapabilities(ctx, capabilities); err != nil {
 		t.Fatalf("second seed provider capabilities: %v", err)

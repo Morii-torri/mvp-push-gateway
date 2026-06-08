@@ -12,6 +12,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"net/url"
 	"strings"
 	"sync/atomic"
@@ -194,6 +195,39 @@ func TestListChannelsReportsExpiredPersistentTokenCache(t *testing.T) {
 	}
 }
 
+func TestCreateAndUpdateChannelPreserveTrimmedDescription(t *testing.T) {
+	store := &recordingChannelStore{}
+	service := NewService(store)
+
+	created, err := service.CreateChannel(context.Background(), CreateChannelInput{
+		ProviderType:     ProviderBark,
+		Name:             " Bark ",
+		Description:      "  值班告警主通道  ",
+		ConcurrencyLimit: 1,
+		TimeoutMS:        1000,
+	})
+	if err != nil {
+		t.Fatalf("create channel: %v", err)
+	}
+	if store.createInput.Description != "值班告警主通道" || created.Description != "值班告警主通道" {
+		t.Fatalf("expected trimmed create description to round trip, input=%q created=%q", store.createInput.Description, created.Description)
+	}
+
+	updated, err := service.UpdateChannel(context.Background(), "channel-1", UpdateChannelInput{
+		ProviderType:     ProviderBark,
+		Name:             "Bark",
+		Description:      " ",
+		ConcurrencyLimit: 1,
+		TimeoutMS:        1000,
+	})
+	if err != nil {
+		t.Fatalf("update channel: %v", err)
+	}
+	if store.updateInput.Description != "" || updated.Description != "" {
+		t.Fatalf("expected blank description to remain blank, input=%q updated=%q", store.updateInput.Description, updated.Description)
+	}
+}
+
 func TestLegacyCompatibilityProviderTypesAreUnsupported(t *testing.T) {
 	for _, providerType := range []ProviderType{"sms", "wecom", "dingtalk", "feishu", "gov_cloud", "custom_token"} {
 		if validProviderType(providerType) {
@@ -300,7 +334,7 @@ func TestServiceResolvesFeishuOpenIDByMobileWithTenantToken(t *testing.T) {
 		AuthConfig:   json.RawMessage(`{"app_id":"cli_resolve","app_secret":"secret-resolve"}`),
 		SendConfig:   json.RawMessage(`{"base_url":"` + server.URL + `/open-apis"}`),
 		TimeoutMS:    1000,
-	}})
+	}}, WithProviderHTTPClientFactory(localTestHTTPClientFactory))
 
 	result, err := service.ResolveFeishuOpenID(context.Background(), "channel-feishu-resolve", []string{"13011111111"})
 	if err != nil {
@@ -365,7 +399,7 @@ func TestServiceResolvesDingTalkUserIDByQueryWordWithAppToken(t *testing.T) {
 		AuthConfig:   json.RawMessage(`{"corp_id":"ding-corp","client_id":"ding-client","client_secret":"secret-app","token_base_url":"` + server.URL + `"}`),
 		SendConfig:   json.RawMessage(`{"base_url":"` + server.URL + `","robot_code":"ding_app"}`),
 		TimeoutMS:    1000,
-	}})
+	}}, WithProviderHTTPClientFactory(localTestHTTPClientFactory))
 
 	result, err := service.ResolveDingTalkUserID(context.Background(), "channel-dingtalk-resolve", []string{"张三"})
 	if err != nil {
@@ -412,7 +446,7 @@ func TestServiceDingTalkUserIDResolveMarksMultipleMatches(t *testing.T) {
 		AuthConfig:   json.RawMessage(`{"corp_id":"ding-corp","client_id":"ding-client","client_secret":"secret-app","token_base_url":"` + server.URL + `"}`),
 		SendConfig:   json.RawMessage(`{"base_url":"` + server.URL + `","robot_code":"ding_app"}`),
 		TimeoutMS:    1000,
-	}})
+	}}, WithProviderHTTPClientFactory(localTestHTTPClientFactory))
 
 	result, err := service.ResolveDingTalkUserID(context.Background(), "channel-dingtalk-multiple", []string{"张三"})
 	if err != nil {
@@ -423,6 +457,45 @@ func TestServiceDingTalkUserIDResolveMarksMultipleMatches(t *testing.T) {
 	}
 	if item := result.Items[0]; item.Status != "multiple" || !strings.Contains(item.Error, "检测到多个用户") {
 		t.Fatalf("unexpected multiple item: %+v", item)
+	}
+}
+
+func TestBuildRequestForTokenManagedProviderIgnoresCallerToken(t *testing.T) {
+	var tokenRequests int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		tokenRequests++
+		_, _ = w.Write([]byte(`{"errcode":0,"errmsg":"ok","access_token":"backend-token","expires_in":7200}`))
+	}))
+	defer server.Close()
+
+	service := NewService(singleChannelStore{channel: Channel{
+		ID:           "channel-wecom",
+		ProviderType: ProviderWeComApp,
+		AuthConfig:   json.RawMessage(`{"corpid":"corp-1","corpsecret":"secret-1","token_url":"` + server.URL + `/token"}`),
+		SendConfig:   json.RawMessage(`{"agentid":1000002}`),
+		TimeoutMS:    1000,
+	}}, WithProviderHTTPClientFactory(localTestHTTPClientFactory))
+
+	request, err := service.BuildRequest(context.Background(), "channel-wecom", BuildRequestInput{
+		Token:     "caller-token",
+		Recipient: "u1",
+		Body:      json.RawMessage(`{"content":"hello"}`),
+	})
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+	if tokenRequests != 1 {
+		t.Fatalf("expected backend token resolver to be called once, got %d", tokenRequests)
+	}
+	parsed, err := url.Parse(request.URL)
+	if err != nil {
+		t.Fatalf("parse request URL: %v", err)
+	}
+	if got := parsed.Query().Get("access_token"); got != "backend-token" {
+		t.Fatalf("expected backend token to be used, got %q in %s", got, request.URL)
+	}
+	if strings.Contains(request.URL, "caller-token") {
+		t.Fatalf("caller supplied token must not be used in token-managed request: %s", request.URL)
 	}
 }
 
@@ -1827,15 +1900,117 @@ func TestTestSendDryRunBuildsEmailSMTPSnapshot(t *testing.T) {
 	requireNoBodyField(t, body, "password")
 }
 
+func TestRedactBuiltRequestMasksSensitiveBodyFields(t *testing.T) {
+	redacted := RedactBuiltRequest(BuiltRequest{
+		Method: "POST",
+		URL:    "https://example.test/send?access_token=query-token",
+		Headers: map[string]string{
+			"Authorization": "Bearer header-token",
+		},
+		Query: map[string]string{
+			"access_token": "query-token",
+		},
+		Body: json.RawMessage(`{
+			"safe":"visible",
+			"token":"body-token",
+			"nested":{"password":"body-password","items":[{"secret":"body-secret"}]}
+		}`),
+	})
+
+	body := decodeRequestBody(t, redacted)
+	requireBodyField(t, body, "safe", "visible")
+	requireBodyField(t, body, "token", "***")
+	nested, ok := body["nested"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected nested object, got %+v", body["nested"])
+	}
+	if nested["password"] != "***" {
+		t.Fatalf("expected nested password to be redacted, got %+v", nested)
+	}
+	items, ok := nested["items"].([]any)
+	if !ok || len(items) != 1 {
+		t.Fatalf("expected nested items array, got %+v", nested["items"])
+	}
+	item, ok := items[0].(map[string]any)
+	if !ok || item["secret"] != "***" {
+		t.Fatalf("expected nested array secret to be redacted, got %+v", items)
+	}
+}
+
+func TestRefreshTokenUnsupportedProviderReturnsInvalidInput(t *testing.T) {
+	service := NewService(singleChannelStore{channel: Channel{
+		ID:           "channel-webhook",
+		ProviderType: ProviderWebhook,
+		Name:         "Webhook",
+	}})
+
+	_, err := service.RefreshToken(context.Background(), "channel-webhook")
+	if !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("expected unsupported refresh-token to return ErrInvalidInput, got %v", err)
+	}
+}
+
+func TestEgressPolicyBlocksLoopbackAndMetadataButAllowsPrivateInterfaceAddress(t *testing.T) {
+	for _, addr := range []string{"127.0.0.1", "::1", "169.254.169.254", "100.100.100.200"} {
+		if egressAddressAllowed(netip.MustParseAddr(addr)) {
+			t.Fatalf("expected egress address %s to be blocked", addr)
+		}
+	}
+	if !egressAddressAllowed(netip.MustParseAddr("172.16.66.30")) {
+		t.Fatal("private interface address 172.16.66.30 should be allowed")
+	}
+}
+
+func TestSendBuiltRequestRejectsLoopbackHTTP(t *testing.T) {
+	_, _, _, err := sendBuiltRequest(context.Background(), Channel{
+		ProviderType: ProviderWebhook,
+		TimeoutMS:    100,
+	}, BuiltRequest{
+		Method: "POST",
+		URL:    "http://127.0.0.1:1/webhook",
+		Body:   json.RawMessage(`{"title":"blocked"}`),
+	})
+	if !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("expected loopback HTTP send to be rejected as invalid input, got %v", err)
+	}
+}
+
+func TestSendBuiltRequestRejectsLoopbackSMTP(t *testing.T) {
+	_, _, _, err := sendBuiltRequest(context.Background(), Channel{
+		ProviderType: ProviderEmail,
+		AuthConfig:   json.RawMessage(`{"host":"127.0.0.1","username":"login@example.com","password":"app-password"}`),
+		TimeoutMS:    100,
+	}, BuiltRequest{
+		Method: "SMTP_SEND",
+		URL:    "smtp://127.0.0.1:1",
+		Body: json.RawMessage(`{
+			"from":"sender@example.com",
+			"to":["user@example.com"],
+			"subject":"blocked",
+			"body":"blocked"
+		}`),
+	})
+	if !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("expected loopback SMTP send to be rejected as invalid input, got %v", err)
+	}
+}
+
 func TestSendBuiltRequestDeliversEmailOverSMTP(t *testing.T) {
 	smtpServer := newFakeSMTPTLSServer(t)
 	defer smtpServer.Close()
 
 	originalTLSConfig := smtpTLSConfigForHost
+	originalSMTPResolve := smtpResolveEgressAddress
 	smtpTLSConfigForHost = func(host string) *tls.Config {
 		return &tls.Config{ServerName: host, InsecureSkipVerify: true}
 	}
-	t.Cleanup(func() { smtpTLSConfigForHost = originalTLSConfig })
+	smtpResolveEgressAddress = func(context.Context, smtpEndpoint) (string, error) {
+		return smtpServer.Addr(), nil
+	}
+	t.Cleanup(func() {
+		smtpTLSConfigForHost = originalTLSConfig
+		smtpResolveEgressAddress = originalSMTPResolve
+	})
 
 	channel := Channel{
 		ProviderType: ProviderEmail,
@@ -1881,10 +2056,17 @@ func TestSendBuiltRequestComposesEmailFromDisplayName(t *testing.T) {
 	defer smtpServer.Close()
 
 	originalTLSConfig := smtpTLSConfigForHost
+	originalSMTPResolve := smtpResolveEgressAddress
 	smtpTLSConfigForHost = func(host string) *tls.Config {
 		return &tls.Config{ServerName: host, InsecureSkipVerify: true}
 	}
-	t.Cleanup(func() { smtpTLSConfigForHost = originalTLSConfig })
+	smtpResolveEgressAddress = func(context.Context, smtpEndpoint) (string, error) {
+		return smtpServer.Addr(), nil
+	}
+	t.Cleanup(func() {
+		smtpTLSConfigForHost = originalTLSConfig
+		smtpResolveEgressAddress = originalSMTPResolve
+	})
 
 	channel := Channel{
 		ProviderType: ProviderEmail,
@@ -1917,10 +2099,17 @@ func TestSendBuiltRequestDeliversEmailHTMLContent(t *testing.T) {
 	defer smtpServer.Close()
 
 	originalTLSConfig := smtpTLSConfigForHost
+	originalSMTPResolve := smtpResolveEgressAddress
 	smtpTLSConfigForHost = func(host string) *tls.Config {
 		return &tls.Config{ServerName: host, InsecureSkipVerify: true}
 	}
-	t.Cleanup(func() { smtpTLSConfigForHost = originalTLSConfig })
+	smtpResolveEgressAddress = func(context.Context, smtpEndpoint) (string, error) {
+		return smtpServer.Addr(), nil
+	}
+	t.Cleanup(func() {
+		smtpTLSConfigForHost = originalTLSConfig
+		smtpResolveEgressAddress = originalSMTPResolve
+	})
 
 	channel := Channel{
 		ProviderType: ProviderEmail,
@@ -2064,6 +2253,61 @@ func (s singleChannelStore) UpdateChannel(context.Context, string, UpdateChannel
 
 func (s singleChannelStore) DeleteChannel(context.Context, string) error {
 	return ErrInvalidInput
+}
+
+type recordingChannelStore struct {
+	createInput CreateChannelParams
+	updateInput UpdateChannelParams
+}
+
+func (s *recordingChannelStore) SeedProviderCapabilities(context.Context, []Capability) error {
+	return nil
+}
+
+func (s *recordingChannelStore) ListProviderCapabilities(context.Context) ([]Capability, error) {
+	return nil, nil
+}
+
+func (s *recordingChannelStore) ListChannels(context.Context) ([]Channel, error) {
+	return nil, nil
+}
+
+func (s *recordingChannelStore) CreateChannel(_ context.Context, params CreateChannelParams) (Channel, error) {
+	s.createInput = params
+	return Channel{
+		ID:               "channel-1",
+		ProviderType:     params.ProviderType,
+		Name:             params.Name,
+		Description:      params.Description,
+		Enabled:          params.Enabled,
+		ConcurrencyLimit: params.ConcurrencyLimit,
+		TimeoutMS:        params.TimeoutMS,
+	}, nil
+}
+
+func (s *recordingChannelStore) GetChannel(context.Context, string) (Channel, error) {
+	return Channel{}, ErrNotFound
+}
+
+func (s *recordingChannelStore) UpdateChannel(_ context.Context, id string, params UpdateChannelParams) (Channel, error) {
+	s.updateInput = params
+	return Channel{
+		ID:               id,
+		ProviderType:     params.ProviderType,
+		Name:             params.Name,
+		Description:      params.Description,
+		Enabled:          params.Enabled,
+		ConcurrencyLimit: params.ConcurrencyLimit,
+		TimeoutMS:        params.TimeoutMS,
+	}, nil
+}
+
+func (s *recordingChannelStore) DeleteChannel(context.Context, string) error {
+	return nil
+}
+
+func localTestHTTPClientFactory(timeout time.Duration) *http.Client {
+	return &http.Client{Timeout: timeout}
 }
 
 func assertCapabilityHasLiveTestMetadata(t *testing.T, capability Capability) {

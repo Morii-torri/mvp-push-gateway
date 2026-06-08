@@ -60,6 +60,10 @@ describe('LineChart', () => {
 
     expect(markup).toContain('发送量');
     expect(markup).toContain('QPS');
+    expect(markup).toContain('chart-legend-item');
+    expect(markup).toContain('chart-legend-dot');
+    expect(markup).toContain('chart-legend-label');
+    expect(markup).not.toContain('ant-tag');
     expect(markup.match(/chart-line/g)?.length).toBeGreaterThanOrEqual(2);
   });
 });

@@ -58,7 +58,7 @@ func (h *Handler) auditLogsHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	response := auditLogsResponse{AuditLogs: make([]auditLogResponse, 0, len(result.Logs)), Total: result.Total, Limit: result.Limit, Offset: result.Offset}
 	for _, item := range result.Logs {
-		response.AuditLogs = append(response.AuditLogs, toAuditLogResponse(item))
+		response.AuditLogs = append(response.AuditLogs, toAuditLogListResponse(item))
 	}
 	writeJSON(w, http.StatusOK, response)
 }
@@ -102,6 +102,13 @@ func toAuditLogResponse(item audit.Log) auditLogResponse {
 		UserAgent:        item.UserAgent,
 		CreatedAt:        formatTime(item.CreatedAt),
 	}
+}
+
+func toAuditLogListResponse(item audit.Log) auditLogResponse {
+	response := toAuditLogResponse(item)
+	response.RequestSnapshot = json.RawMessage(`{}`)
+	response.ResponseSnapshot = json.RawMessage(`{}`)
+	return response
 }
 
 func auditErrorStatus(err error) (int, string, string) {

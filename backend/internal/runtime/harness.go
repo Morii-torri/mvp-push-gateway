@@ -3,6 +3,7 @@ package runtime
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync"
 	"time"
 
@@ -53,22 +54,45 @@ func (f RetentionCleanerFunc) RunRetentionCleanup(ctx context.Context, params mo
 	return f(ctx, params)
 }
 
+type RoutePlanCache interface {
+	RefreshRoutePlan(context.Context, string) error
+	InvalidateRoutePlan(string)
+}
+
+type RoutePlanCacheSnapshot interface {
+	CachedRouteSourceIDs() []string
+}
+
+type RoutePlanSourceLister interface {
+	ListCurrentRouteSourceIDs(context.Context) ([]string, error)
+}
+
+type RoutePlanChangeListener interface {
+	ListenRoutePlanChanges(context.Context, func(string)) error
+}
+
 type Config struct {
 	PlanningWorker   BatchWorker
 	DeliveryWorker   BatchWorker
 	Recovery         Recovery
 	RetentionCleaner RetentionCleaner
+	RoutePlanCache   RoutePlanCache
 
-	PlanningInterval  time.Duration
-	DeliveryInterval  time.Duration
-	RecoveryInterval  time.Duration
-	RetentionInterval time.Duration
+	RoutePlanSourceLister   RoutePlanSourceLister
+	RoutePlanChangeListener RoutePlanChangeListener
+
+	PlanningInterval         time.Duration
+	DeliveryInterval         time.Duration
+	RecoveryInterval         time.Duration
+	RetentionInterval        time.Duration
+	RoutePlanRefreshInterval time.Duration
 
 	PlanningBatchSize     int
 	DeliveryBatchSize     int
 	DeliveryBatchSizeFunc func(context.Context) int
 	RecoveryLimit         int
 	RetentionDays         int
+	RetentionDaysFunc     func(context.Context) int
 	RetentionBatch        int
 	StaleTimeoutSec       int
 	RecoveryWorkerID      string
@@ -79,10 +103,12 @@ type Config struct {
 type Harness struct {
 	config Config
 
-	mu     sync.Mutex
-	cancel context.CancelFunc
-	done   chan struct{}
-	wg     sync.WaitGroup
+	mu               sync.Mutex
+	cancel           context.CancelFunc
+	done             chan struct{}
+	wg               sync.WaitGroup
+	workerPauseMu    sync.RWMutex
+	workerPauseCount int
 }
 
 func NewHarness(config Config) *Harness {
@@ -104,12 +130,16 @@ func (h *Harness) Start(ctx context.Context) {
 
 	if h.config.PlanningWorker != nil {
 		h.startLoop(runtimeCtx, h.config.PlanningInterval, func(ctx context.Context) {
-			_, _ = h.config.PlanningWorker.ProcessBatch(ctx, h.config.PlanningBatchSize)
+			h.runWorkerIfNotPaused(ctx, func(ctx context.Context) {
+				_, _ = h.config.PlanningWorker.ProcessBatch(ctx, h.config.PlanningBatchSize)
+			})
 		})
 	}
 	if h.config.DeliveryWorker != nil {
 		h.startLoop(runtimeCtx, h.config.DeliveryInterval, func(ctx context.Context) {
-			_, _ = h.config.DeliveryWorker.ProcessBatch(ctx, h.deliveryBatchSize(ctx))
+			h.runWorkerIfNotPaused(ctx, func(ctx context.Context) {
+				_, _ = h.config.DeliveryWorker.ProcessBatch(ctx, h.deliveryBatchSize(ctx))
+			})
 		})
 	}
 	if h.config.Recovery != nil {
@@ -127,10 +157,18 @@ func (h *Harness) Start(ctx context.Context) {
 	if h.config.RetentionCleaner != nil {
 		h.startLoop(runtimeCtx, h.config.RetentionInterval, func(ctx context.Context) {
 			_, _ = h.config.RetentionCleaner.RunRetentionCleanup(ctx, monitoring.RetentionCleanupParams{
-				RetentionDays: h.config.RetentionDays,
+				RetentionDays: h.retentionDays(ctx),
 				BatchSize:     h.config.RetentionBatch,
 			})
 		})
+	}
+	if h.config.RoutePlanCache != nil && h.config.RoutePlanSourceLister != nil {
+		h.startLoop(runtimeCtx, h.config.RoutePlanRefreshInterval, func(ctx context.Context) {
+			h.refreshCurrentRoutePlans(ctx)
+		})
+	}
+	if h.config.RoutePlanCache != nil && h.config.RoutePlanChangeListener != nil {
+		h.startRoutePlanChangeListener(runtimeCtx)
 	}
 
 	done := h.done
@@ -138,6 +176,36 @@ func (h *Harness) Start(ctx context.Context) {
 		h.wg.Wait()
 		close(done)
 	}()
+}
+
+func (h *Harness) PauseWorkers() func() {
+	if h == nil {
+		return func() {}
+	}
+	h.workerPauseMu.Lock()
+	h.workerPauseCount++
+	h.workerPauseMu.Unlock()
+
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			h.workerPauseMu.Lock()
+			if h.workerPauseCount > 0 {
+				h.workerPauseCount--
+			}
+			h.workerPauseMu.Unlock()
+		})
+	}
+}
+
+func (h *Harness) runWorkerIfNotPaused(ctx context.Context, run func(context.Context)) {
+	h.workerPauseMu.RLock()
+	if h.workerPauseCount > 0 {
+		h.workerPauseMu.RUnlock()
+		return
+	}
+	defer h.workerPauseMu.RUnlock()
+	run(ctx)
 }
 
 func (h *Harness) deliveryBatchSize(ctx context.Context) int {
@@ -149,6 +217,17 @@ func (h *Harness) deliveryBatchSize(ctx context.Context) int {
 		return h.config.DeliveryBatchSize
 	}
 	return size
+}
+
+func (h *Harness) retentionDays(ctx context.Context) int {
+	if h.config.RetentionDaysFunc == nil {
+		return h.config.RetentionDays
+	}
+	days := h.config.RetentionDaysFunc(ctx)
+	if days <= 0 {
+		return h.config.RetentionDays
+	}
+	return days
 }
 
 func (h *Harness) Shutdown(ctx context.Context) error {
@@ -191,6 +270,64 @@ func (h *Harness) startLoop(ctx context.Context, interval time.Duration, run fun
 	}()
 }
 
+func (h *Harness) refreshCurrentRoutePlans(ctx context.Context) {
+	sourceIDs, err := h.config.RoutePlanSourceLister.ListCurrentRouteSourceIDs(ctx)
+	if err != nil {
+		return
+	}
+	activeSources := make(map[string]struct{}, len(sourceIDs))
+	for _, sourceID := range sourceIDs {
+		sourceID = strings.TrimSpace(sourceID)
+		if sourceID == "" {
+			continue
+		}
+		activeSources[sourceID] = struct{}{}
+		h.refreshRoutePlan(ctx, sourceID)
+	}
+	if snapshot, ok := h.config.RoutePlanCache.(RoutePlanCacheSnapshot); ok {
+		for _, sourceID := range snapshot.CachedRouteSourceIDs() {
+			if _, active := activeSources[sourceID]; !active {
+				h.config.RoutePlanCache.InvalidateRoutePlan(sourceID)
+			}
+		}
+	}
+}
+
+func (h *Harness) refreshRoutePlan(ctx context.Context, sourceID string) {
+	sourceID = strings.TrimSpace(sourceID)
+	if sourceID == "" {
+		return
+	}
+	if err := h.config.RoutePlanCache.RefreshRoutePlan(ctx, sourceID); err != nil {
+		h.config.RoutePlanCache.InvalidateRoutePlan(sourceID)
+	}
+}
+
+func (h *Harness) startRoutePlanChangeListener(ctx context.Context) {
+	h.wg.Add(1)
+	go func() {
+		defer h.wg.Done()
+		for {
+			if ctx.Err() != nil {
+				return
+			}
+			err := h.config.RoutePlanChangeListener.ListenRoutePlanChanges(ctx, func(sourceID string) {
+				h.refreshRoutePlan(ctx, sourceID)
+			})
+			if ctx.Err() != nil || errors.Is(err, context.Canceled) {
+				return
+			}
+			timer := time.NewTimer(time.Second)
+			select {
+			case <-ctx.Done():
+				timer.Stop()
+				return
+			case <-timer.C:
+			}
+		}
+	}()
+}
+
 func normalizeConfig(config Config) Config {
 	if config.PlanningInterval <= 0 {
 		config.PlanningInterval = defaultPlanningInterval
@@ -203,6 +340,9 @@ func normalizeConfig(config Config) Config {
 	}
 	if config.RetentionInterval <= 0 {
 		config.RetentionInterval = defaultRetentionInterval
+	}
+	if config.RoutePlanRefreshInterval <= 0 {
+		config.RoutePlanRefreshInterval = time.Second
 	}
 	if config.PlanningBatchSize <= 0 {
 		config.PlanningBatchSize = defaultPlanningBatchSize

@@ -201,7 +201,9 @@ Provider type registry，避免每新增一个 provider 都扩展 `delivery_chan
 | `ux_user_identities_type_default` | unique partial index | `channel_id is null` 时防止类型级默认身份重复 |
 | `ux_user_identities_channel_value` | unique partial index | `channel_id is not null` 时防止同一渠道实例身份重复 |
 
-身份值按“渠道实例优先、类型默认兜底”解析。同一人员可以为同一种 provider type 配置多个渠道实例身份，例如两个企业微信企业、两个飞书租户、不同邮件渠道或不同短信渠道下使用不同邮箱/手机号。发送规划拿到目标 `channel_id` 后，先查 `channel_id + identity_kind`，找不到再回退到 `channel_id is null` 且 `provider_type/common` 匹配的默认身份。
+身份值按“渠道实例优先、类型默认、common 默认、基础字段最终兜底”解析。同一人员可以为同一种 provider type 配置多个渠道实例身份，例如两个企业微信企业、两个飞书租户、不同邮件渠道或不同短信渠道下使用不同邮箱/手机号。发送规划拿到目标 `channel_id` 后，先查 `channel_id + provider_type + identity_kind`，找不到再回退到 `channel_id is null` 且 `provider_type` 匹配的默认身份，再回退到 `provider_type = common` 的默认身份。对 `identity_kind = email/mobile`，如果仍未找到身份，则使用 `users.attributes.email/mobile` 作为最终兜底。
+
+管理台人员详情保存使用 profile 事务接口一次性更新 `users` 与该人员的完整 `user_identities` 集合。任一身份校验失败、渠道实例与 provider type 不匹配或并发版本冲突时，用户基础资料和身份集合都不会部分提交。
 
 ## 分组与模板
 
@@ -227,6 +229,8 @@ Provider type registry，避免每新增一个 provider 都扩展 `delivery_chan
 | `excluded_user_ids` | uuid[] | 排除人员 |
 | `excluded_org_ids` | uuid[] | 排除组织 |
 | `enabled` | boolean | 是否启用 |
+
+接收人组保存时会校验 `user_ids`、`org_ids`、`excluded_user_ids`、`excluded_org_ids` 均引用已存在资源。删除用户或组织前会检查接收人组引用；仍被引用时拒绝删除，避免数组字段残留脏 ID。
 
 ### `templates` / `template_versions`
 
@@ -263,9 +267,9 @@ Provider type registry，避免每新增一个 provider 都扩展 `delivery_chan
 | `mode` | text | `canvas` / `table` |
 | `current_version_id` | uuid null | 当前发布版本 |
 
-每个来源只能存在一个启用的路由组。创建或启用时必须查询同来源是否已有启用路由组；如果存在，禁止保存并提示“路由组已存在”。执行版本由 `current_version_id` 决定，v1/v2 等版本属于同一个路由组，不需要创建多个路由组。管理台的草稿规则列表读取最新未发布版本；切换当前执行版本只改变线上执行和回滚目标，不改变草稿列表内容。
+每个来源只能存在一个启用的路由组。创建来源时管理台 API 会自动创建同来源默认路由组，删除来源时数据库外键级联删除该来源路由组。执行版本由 `current_version_id` 决定，v1/v2 等版本属于同一个路由组，不需要创建多个路由组。管理台的规则列表读取最新未发布工作副本；切换当前执行版本只改变线上执行和回滚目标，不改变工作副本。用户可以从历史发布版本检出工作副本，再在此基础上修改并发布为新版本。
 
-管理台列表中的规则数和总命中次数不是 `route_flows` 的持久字段，而是查询最新未发布草稿版本的 `route_rules` 与 `route_rule_counters` 聚合结果。这样可以避免列表规则数与进入路由组后看到的草稿规则数量不一致。
+管理台列表中的规则数和总命中次数不是 `route_flows` 的持久字段，而是查询最新未发布工作副本版本的 `route_rules` 与 `route_rule_counters` 聚合结果。这样可以避免列表规则数与进入路由组后看到的工作副本规则数量不一致。
 
 ### `route_versions`
 
@@ -276,6 +280,8 @@ Provider type registry，避免每新增一个 provider 都扩展 `delivery_chan
 | `id` | uuid pk | 版本 ID |
 | `flow_id` | uuid | 路由组 |
 | `version_no` | int | 版本号 |
+| `draft_base_version_id` | uuid null | 未发布工作副本基于的发布版本 |
+| `draft_base_version_no` | int null | 未发布工作副本基于的发布版本号 |
 | `canvas_snapshot` | jsonb | React Flow 节点和边的布局快照，不作为独立执行源 |
 | `compiled_rules` | jsonb | 后端执行模型 |
 | `validation_status` | text | 校验状态 |
@@ -293,7 +299,7 @@ Provider type registry，避免每新增一个 provider 都扩展 `delivery_chan
 
 planning worker 使用 `source_id + current_version_id` 缓存执行模型；发布新版本后通过版本变化让缓存失效。
 
-历史版本允许清理，但只能删除已发布且不是 `current_version_id` 的版本；未发布草稿版本必须保留，否则路由组将无法继续编辑草稿规则。
+历史版本允许清理，但只能删除已发布且不是 `current_version_id` 的版本；未发布工作副本版本必须保留，否则路由组将无法继续编辑规则。发布成功后，后端会复制刚发布版本为下一版工作副本，并记录 `draft_base_version_id` / `draft_base_version_no`；从历史版本检出时，这两个字段改为被检出的发布版本。
 
 ### `route_rules` / `route_actions` / `route_action_targets`
 
@@ -484,6 +490,8 @@ worker、队列和平台实例运行指标。
 | `route_rule_counters` | 策略累计命中次数 |
 
 第一版不做 RBAC 权限模型，仅保留管理员单账户。`admin_users` 只用于首次初始化管理员、登录和改密。
+
+管理员修改密码成功后，`admin_sessions.revoked_at` 会按 `admin_id` 批量写入，旧 Bearer token 立即失效。
 
 第一版不做日志脱敏和密钥加密，管理员可明文查看日志 payload、请求响应、Token、secret 和平台凭证。生产部署依赖管理台访问控制、网络边界和数据库备份保护；后续版本再引入脱敏和密钥加密。
 

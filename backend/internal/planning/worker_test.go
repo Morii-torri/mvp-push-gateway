@@ -3,9 +3,12 @@ package planning
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"strings"
 	"testing"
 	"time"
 
+	"mvp-push-gateway/backend/internal/delivery"
 	"mvp-push-gateway/backend/internal/provider"
 	"mvp-push-gateway/backend/internal/queue"
 	"mvp-push-gateway/backend/internal/route"
@@ -86,7 +89,7 @@ func TestResolveDedupeSupportsPayloadPathStrategy(t *testing.T) {
 	}
 }
 
-func TestRoutePlanCacheStatsAndFreshMatchGroups(t *testing.T) {
+func TestRoutePlanCacheUsesFullSnapshotUntilInvalidated(t *testing.T) {
 	repo := &routePlanCacheRepo{
 		ref: RouteVersionRef{SourceID: "source-1", FlowID: "flow-1", VersionID: "version-1"},
 		plan: RoutePlan{
@@ -110,20 +113,268 @@ func TestRoutePlanCacheStatsAndFreshMatchGroups(t *testing.T) {
 	if first.MatchGroups["group-1"][0] != "initial" {
 		t.Fatalf("expected initial match group values on cache miss, got %+v", first.MatchGroups)
 	}
-	repo.matchGroups = map[string][]string{"group-1": {"updated"}}
+	repo.plan.MatchGroups = map[string][]string{"group-1": {"updated"}}
 	second, err := worker.routePlan(context.Background(), "source-1")
 	if err != nil {
 		t.Fatalf("load cached route plan: %v", err)
 	}
-	if second.MatchGroups["group-1"][0] != "updated" {
-		t.Fatalf("expected refreshed match group values on cache hit, got %+v", second.MatchGroups)
+	if second.MatchGroups["group-1"][0] != "initial" {
+		t.Fatalf("expected cached full snapshot to keep initial match group values, got %+v", second.MatchGroups)
 	}
-	if repo.loadRoutePlanCalls != 1 || repo.loadMatchGroupCalls != 1 {
-		t.Fatalf("expected one route plan load and one fresh match group load, got plan=%d match_groups=%d", repo.loadRoutePlanCalls, repo.loadMatchGroupCalls)
+	if repo.currentRefCalls != 1 || repo.loadRoutePlanCalls != 1 || repo.loadMatchGroupCalls != 0 {
+		t.Fatalf("expected one version lookup, one plan load, no match group reload on hit; got ref=%d plan=%d match_groups=%d", repo.currentRefCalls, repo.loadRoutePlanCalls, repo.loadMatchGroupCalls)
 	}
 	stats := worker.CacheStats()
 	if stats.Misses != 1 || stats.Hits != 1 {
 		t.Fatalf("expected cache stats miss=1 hit=1, got %+v", stats)
+	}
+
+	worker.InvalidateRoutePlan("source-1")
+	third, err := worker.routePlan(context.Background(), "source-1")
+	if err != nil {
+		t.Fatalf("reload invalidated route plan: %v", err)
+	}
+	if third.MatchGroups["group-1"][0] != "updated" {
+		t.Fatalf("expected invalidation to reload full snapshot, got %+v", third.MatchGroups)
+	}
+	if repo.currentRefCalls != 2 || repo.loadRoutePlanCalls != 2 {
+		t.Fatalf("expected invalidation to reload ref and plan, got ref=%d plan=%d", repo.currentRefCalls, repo.loadRoutePlanCalls)
+	}
+}
+
+func TestRefreshRoutePlanReloadsCurrentVersionForSource(t *testing.T) {
+	repo := &routePlanCacheRepo{
+		ref: RouteVersionRef{SourceID: "source-1", FlowID: "flow-1", VersionID: "version-1"},
+		plan: RoutePlan{
+			Flow:        route.Flow{ID: "flow-1", SourceID: "source-1"},
+			Version:     route.Version{ID: "version-1"},
+			Rules:       []route.Rule{{RuleKey: "rule-1", ConditionTree: json.RawMessage(`{"operator":"always"}`), Enabled: true}},
+			MatchGroups: map[string][]string{},
+		},
+	}
+	worker := NewWorker(repo)
+
+	if _, err := worker.routePlan(context.Background(), "source-1"); err != nil {
+		t.Fatalf("prime route plan: %v", err)
+	}
+	repo.ref = RouteVersionRef{SourceID: "source-1", FlowID: "flow-1", VersionID: "version-2"}
+	repo.plan.Version = route.Version{ID: "version-2"}
+
+	if err := worker.RefreshRoutePlan(context.Background(), "source-1"); err != nil {
+		t.Fatalf("refresh route plan: %v", err)
+	}
+	plan, err := worker.routePlan(context.Background(), "source-1")
+	if err != nil {
+		t.Fatalf("load refreshed route plan: %v", err)
+	}
+	if plan.Version.ID != "version-2" {
+		t.Fatalf("expected refreshed cache to use version-2, got %s", plan.Version.ID)
+	}
+	if repo.currentRefCalls != 2 || repo.loadRoutePlanCalls != 2 {
+		t.Fatalf("expected refresh to reload once and following hit to avoid DB, got ref=%d plan=%d", repo.currentRefCalls, repo.loadRoutePlanCalls)
+	}
+}
+
+func TestProcessRoutePlanMessageAcksAfterSuccessfulPlanningWithoutPostgresJob(t *testing.T) {
+	repo := &routePlanMessageRepo{
+		message: MessageRecord{
+			ID:       "message-jetstream",
+			TraceID:  "trace-jetstream",
+			SourceID: "source-1",
+			Payload:  json.RawMessage(`{"title":"paid"}`),
+		},
+		plan: RoutePlan{
+			Flow:    route.Flow{ID: "flow-1", SourceID: "source-1"},
+			Version: route.Version{ID: "version-1"},
+			Rules: []route.Rule{{
+				ID:            "rule-id-1",
+				RuleKey:       "00000000-0000-0000-0000-000000000001",
+				ConditionTree: json.RawMessage(`{"operator":"always"}`),
+				Enabled:       true,
+				Action: route.Action{
+					Targets: []route.ActionTarget{{
+						ChannelID:         "channel-1",
+						TemplateVersionID: "template-version-1",
+						Enabled:           true,
+						SortOrder:         10,
+					}},
+				},
+			}},
+			MatchGroups: map[string][]string{},
+		},
+		channel: provider.Channel{
+			ID:           "channel-1",
+			ProviderType: provider.ProviderWebhook,
+			Enabled:      true,
+		},
+		capability: provider.Capability{
+			ProviderType:     provider.ProviderWebhook,
+			MessageType:      "json",
+			AllowNoRecipient: true,
+		},
+		templateVersion: msgtemplate.TemplateVersion{
+			ID:                 "template-version-1",
+			MessageType:        "json",
+			TargetProviderType: string(provider.ProviderWebhook),
+			TemplateBody:       `{"body":{"title":"{{ payload.title | default('【模版】性能测试') }}"}}`,
+		},
+	}
+	worker := NewWorker(repo, WithWorkerID("planner-jetstream"))
+	acked := false
+	nacked := false
+
+	err := worker.ProcessRoutePlanMessage(context.Background(), queue.RoutePlanMessage{
+		Event: queue.RoutePlanEvent{
+			MessageID: "message-jetstream",
+			SourceID:  "source-1",
+			TraceID:   "trace-jetstream",
+		},
+		Ack: func() error {
+			acked = true
+			return nil
+		},
+		Nak: func(time.Duration) error {
+			nacked = true
+			return nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("process route plan message: %v", err)
+	}
+	if !acked || nacked {
+		t.Fatalf("expected successful route plan message to ack only, acked=%v nacked=%v", acked, nacked)
+	}
+	if repo.completePlanningCalls != 1 {
+		t.Fatalf("expected one planning completion, got %d", repo.completePlanningCalls)
+	}
+	if repo.completed.JobID != "" {
+		t.Fatalf("expected JetStream route-plan completion not to require a PostgreSQL job id, got %q", repo.completed.JobID)
+	}
+	if len(repo.completed.Attempts) != 1 {
+		t.Fatalf("expected one delivery attempt, got %+v", repo.completed.Attempts)
+	}
+	if repo.completed.Attempts[0].ChannelID != "channel-1" || repo.completed.Attempts[0].JobPayload == nil {
+		t.Fatalf("unexpected delivery attempt plan: %+v", repo.completed.Attempts[0])
+	}
+}
+
+func TestWorkerPublishesSendEventsWhenSendPublisherConfigured(t *testing.T) {
+	repo := newRoutePlanMessageRepoForSendPublisherTest()
+	publisher := &recordingSendPublisher{}
+	worker := NewWorker(repo, WithSendPublisher(publisher))
+	job := queue.Job{
+		ID:       "job-route-plan",
+		Type:     queue.JobTypeRoutePlan,
+		Status:   queue.JobStatusProcessing,
+		LockedBy: "planning-worker",
+		Payload:  json.RawMessage(`{"message_id":"message-jetstream","source_id":"source-1","trace_id":"trace-jetstream"}`),
+	}
+
+	if err := worker.ProcessOne(context.Background(), job); err != nil {
+		t.Fatalf("process route plan job with send publisher: %v", err)
+	}
+	if !repo.completed.ExternalSendQueue {
+		t.Fatalf("expected planning completion to skip PostgreSQL send jobs when send publisher is configured")
+	}
+	if len(publisher.events) != 1 {
+		t.Fatalf("expected one send event, got %d", len(publisher.events))
+	}
+	event := publisher.events[0]
+	attempt := repo.completed.Attempts[0]
+	if event.DeliveryAttemptID != attempt.ID || event.ChannelID != "channel-1" || event.ProviderType != "webhook" || event.TraceID != "trace-jetstream" {
+		t.Fatalf("unexpected send event: %+v attempt=%+v", event, attempt)
+	}
+	var payload delivery.SendMessageJobPayload
+	if err := json.Unmarshal(event.Payload, &payload); err != nil {
+		t.Fatalf("decode send event payload: %v", err)
+	}
+	if payload.DeliveryAttemptID != attempt.ID || payload.TraceID != "trace-jetstream" {
+		t.Fatalf("expected send event payload to preserve attempt and trace ids, got %+v", payload)
+	}
+}
+
+func TestProcessRoutePlanMessageUsesEventPayloadWithoutLoadingMessageRecord(t *testing.T) {
+	repo := newRoutePlanMessageRepoForSendPublisherTest()
+	repo.failOnGetPlanningMessage = true
+	publisher := &recordingSendPublisher{}
+	worker := NewWorker(repo, WithSendPublisher(publisher))
+	receivedAt := time.Date(2026, 6, 8, 10, 30, 0, 0, time.UTC)
+
+	err := worker.ProcessRoutePlanMessage(context.Background(), queue.RoutePlanMessage{
+		Event: queue.RoutePlanEvent{
+			MessageID:  "message-direct",
+			SourceID:   "source-1",
+			TraceID:    "trace-direct",
+			Payload:    json.RawMessage(`{"title":"direct"}`),
+			Headers:    json.RawMessage(`{"Content-Type":["application/json"]}`),
+			ReceivedAt: receivedAt,
+		},
+	})
+	if err != nil {
+		t.Fatalf("process direct route plan event: %v", err)
+	}
+	if repo.getPlanningMessageCalls != 0 {
+		t.Fatalf("expected direct route plan event not to load message record, got %d calls", repo.getPlanningMessageCalls)
+	}
+	if repo.completePlanningCalls != 0 {
+		t.Fatalf("expected direct route plan event not to complete planning through PostgreSQL, got %d calls", repo.completePlanningCalls)
+	}
+	if len(publisher.events) != 1 {
+		t.Fatalf("expected one direct send event, got %d", len(publisher.events))
+	}
+	event := publisher.events[0]
+	if event.MessageID != "message-direct" || event.SourceID != "source-1" || event.TraceID != "trace-direct" {
+		t.Fatalf("expected send event to carry message identity, got %+v", event)
+	}
+	var payload delivery.SendMessageJobPayload
+	if err := json.Unmarshal(event.Payload, &payload); err != nil {
+		t.Fatalf("decode send event payload: %v", err)
+	}
+	if payload.MessageID != "message-direct" || payload.SourceID != "source-1" || string(payload.InboundPayload) != `{"title":"direct"}` || payload.InboundReceivedAt.IsZero() {
+		t.Fatalf("expected direct send payload to carry inbound metadata, got %+v", payload)
+	}
+	if !strings.Contains(string(payload.Body), "direct") {
+		t.Fatalf("expected template to render from event payload, got %s", payload.Body)
+	}
+}
+
+func TestEvaluateRulesCoarseSkipsMissingPayloadFields(t *testing.T) {
+	plan := RoutePlan{
+		Flow:    route.Flow{ID: "flow-1", SourceID: "source-1"},
+		Version: route.Version{ID: "version-1"},
+		Rules: []route.Rule{
+			{
+				ID:            "rule-1",
+				RuleKey:       "rule-1",
+				SortOrder:     1,
+				ConditionTree: json.RawMessage(`{"operator":"equals","path":"payload.severity","value":"critical"}`),
+				Enabled:       true,
+			},
+			{
+				ID:            "rule-2",
+				RuleKey:       "rule-2",
+				SortOrder:     2,
+				ConditionTree: json.RawMessage(`{"operator":"always"}`),
+				Enabled:       true,
+			},
+		},
+	}
+
+	matched, metrics, err := evaluateRules(plan, map[string]any{"title": "critical"})
+	if err != nil {
+		t.Fatalf("evaluate rules: %v", err)
+	}
+	if matched == nil || matched.RuleKey != "rule-2" {
+		t.Fatalf("expected fallback rule to match, got %+v", matched)
+	}
+	if len(metrics) != 2 {
+		t.Fatalf("expected both rules to emit metrics, got %+v", metrics)
+	}
+	if metrics[0].Evaluated || metrics[0].Matched || metrics[0].DurationMS != 0 {
+		t.Fatalf("expected first rule metric to be skipped without evaluation, got %+v", metrics[0])
+	}
+	if !metrics[1].Evaluated || !metrics[1].Matched {
+		t.Fatalf("expected second rule metric to be evaluated and matched, got %+v", metrics[1])
 	}
 }
 
@@ -131,6 +382,7 @@ type routePlanCacheRepo struct {
 	ref                 RouteVersionRef
 	plan                RoutePlan
 	matchGroups         map[string][]string
+	currentRefCalls     int
 	loadRoutePlanCalls  int
 	loadMatchGroupCalls int
 }
@@ -148,6 +400,7 @@ func (r *routePlanCacheRepo) GetPlanningMessage(context.Context, string) (Messag
 }
 
 func (r *routePlanCacheRepo) GetCurrentRouteVersionRef(context.Context, string) (RouteVersionRef, error) {
+	r.currentRefCalls++
 	return r.ref, nil
 }
 
@@ -183,4 +436,129 @@ func (r *routePlanCacheRepo) CompletePlanning(context.Context, CompletePlanningP
 
 func (r *routePlanCacheRepo) FinishPlanning(context.Context, FinishPlanningParams) error {
 	return nil
+}
+
+type routePlanMessageRepo struct {
+	message                  MessageRecord
+	plan                     RoutePlan
+	channel                  provider.Channel
+	capability               provider.Capability
+	templateVersion          msgtemplate.TemplateVersion
+	completePlanningCalls    int
+	getPlanningMessageCalls  int
+	failOnGetPlanningMessage bool
+	completed                CompletePlanningParams
+}
+
+func (r *routePlanMessageRepo) ClaimJobs(context.Context, queue.ClaimParams) ([]queue.Job, error) {
+	return nil, nil
+}
+
+func (r *routePlanMessageRepo) FailJob(context.Context, queue.FailParams) (queue.FailResult, error) {
+	return queue.FailResult{}, nil
+}
+
+func (r *routePlanMessageRepo) GetPlanningMessage(_ context.Context, id string) (MessageRecord, error) {
+	r.getPlanningMessageCalls++
+	if r.failOnGetPlanningMessage {
+		return MessageRecord{}, errors.New("GetPlanningMessage should not be called")
+	}
+	if id != r.message.ID {
+		return MessageRecord{}, ErrNotFound
+	}
+	return r.message, nil
+}
+
+func (r *routePlanMessageRepo) GetCurrentRouteVersionRef(context.Context, string) (RouteVersionRef, error) {
+	return RouteVersionRef{SourceID: r.plan.Flow.SourceID, FlowID: r.plan.Flow.ID, VersionID: r.plan.Version.ID}, nil
+}
+
+func (r *routePlanMessageRepo) LoadRoutePlan(context.Context, string, string) (RoutePlan, error) {
+	return r.plan, nil
+}
+
+func (r *routePlanMessageRepo) LoadMatchGroupValues(context.Context, []route.Rule) (map[string][]string, error) {
+	return r.plan.MatchGroups, nil
+}
+
+func (r *routePlanMessageRepo) GetTemplateVersion(context.Context, string) (msgtemplate.TemplateVersion, error) {
+	return r.templateVersion, nil
+}
+
+func (r *routePlanMessageRepo) GetChannel(context.Context, string) (provider.Channel, error) {
+	return r.channel, nil
+}
+
+func (r *routePlanMessageRepo) GetProviderCapability(context.Context, provider.ProviderType, string) (provider.Capability, error) {
+	return r.capability, nil
+}
+
+func (r *routePlanMessageRepo) ResolveSystemRecipients(context.Context, ResolveSystemRecipientsParams) ([]string, error) {
+	return nil, nil
+}
+
+func (r *routePlanMessageRepo) CompletePlanning(_ context.Context, params CompletePlanningParams) error {
+	r.completePlanningCalls++
+	r.completed = params
+	return nil
+}
+
+func (r *routePlanMessageRepo) FinishPlanning(context.Context, FinishPlanningParams) error {
+	return nil
+}
+
+func newRoutePlanMessageRepoForSendPublisherTest() *routePlanMessageRepo {
+	return &routePlanMessageRepo{
+		message: MessageRecord{
+			ID:       "message-jetstream",
+			TraceID:  "trace-jetstream",
+			SourceID: "source-1",
+			Payload:  json.RawMessage(`{"title":"paid"}`),
+		},
+		plan: RoutePlan{
+			Flow:    route.Flow{ID: "flow-1", SourceID: "source-1"},
+			Version: route.Version{ID: "version-1"},
+			Rules: []route.Rule{{
+				ID:            "rule-id-1",
+				RuleKey:       "00000000-0000-0000-0000-000000000001",
+				ConditionTree: json.RawMessage(`{"operator":"always"}`),
+				Enabled:       true,
+				Action: route.Action{
+					Targets: []route.ActionTarget{{
+						ChannelID:         "channel-1",
+						TemplateVersionID: "template-version-1",
+						Enabled:           true,
+						SortOrder:         10,
+					}},
+				},
+			}},
+			MatchGroups: map[string][]string{},
+		},
+		channel: provider.Channel{
+			ID:           "channel-1",
+			ProviderType: provider.ProviderWebhook,
+			Enabled:      true,
+		},
+		capability: provider.Capability{
+			ProviderType:     provider.ProviderWebhook,
+			MessageType:      "json",
+			AllowNoRecipient: true,
+		},
+		templateVersion: msgtemplate.TemplateVersion{
+			ID:                 "template-version-1",
+			MessageType:        "json",
+			TargetProviderType: string(provider.ProviderWebhook),
+			TemplateBody:       `{"body":{"title":"{{ payload.title | default('【模版】性能测试') }}"}}`,
+		},
+	}
+}
+
+type recordingSendPublisher struct {
+	events []queue.SendMessageEvent
+	err    error
+}
+
+func (p *recordingSendPublisher) PublishSend(_ context.Context, event queue.SendMessageEvent) (queue.PublishResult, error) {
+	p.events = append(p.events, event)
+	return queue.PublishResult{Stream: "MGP_SEND", Sequence: uint64(len(p.events))}, p.err
 }

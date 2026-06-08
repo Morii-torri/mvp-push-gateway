@@ -140,6 +140,9 @@ func (r Repository) RunRetentionCleanup(ctx context.Context, params monitoring.R
 	if status.DeletedMessageRecords, status.DeletedDeliveryAttempts, err = deleteOldMessages(ctx, tx, cutoff, params.BatchSize); err != nil {
 		return monitoring.CleanupStatus{}, err
 	}
+	if status.DeletedAuditLogs, err = deleteOldAuditLogs(ctx, tx, cutoff, params.BatchSize); err != nil {
+		return monitoring.CleanupStatus{}, err
+	}
 
 	status.LastBatchDeleted = status.DeletedJobs +
 		status.DeletedDeadLetters +
@@ -147,7 +150,8 @@ func (r Repository) RunRetentionCleanup(ctx context.Context, params monitoring.R
 		status.DeletedRouteRuleMetrics +
 		status.DeletedDedupeKeys +
 		status.DeletedMessageRecords +
-		status.DeletedDeliveryAttempts
+		status.DeletedDeliveryAttempts +
+		status.DeletedAuditLogs
 
 	if status.HasMore, err = hasRetentionRowsRemaining(ctx, tx, cutoff, now); err != nil {
 		return monitoring.CleanupStatus{}, err
@@ -485,6 +489,7 @@ func (r Repository) getCleanupStatus(ctx context.Context) (monitoring.CleanupSta
 				deleted_dedupe_keys,
 				deleted_worker_metrics,
 				deleted_route_rule_metrics,
+				deleted_audit_logs,
 				last_batch_deleted,
 				completed,
 				has_more
@@ -503,6 +508,7 @@ func (r Repository) getCleanupStatus(ctx context.Context) (monitoring.CleanupSta
 			COALESCE(latest.deleted_dedupe_keys, 0)::integer,
 			COALESCE(latest.deleted_worker_metrics, 0)::integer,
 			COALESCE(latest.deleted_route_rule_metrics, 0)::integer,
+			COALESCE(latest.deleted_audit_logs, 0)::integer,
 			COALESCE(latest.last_batch_deleted, 0)::integer,
 			totals.total_deleted,
 			COALESCE(latest.completed, false),
@@ -520,6 +526,7 @@ func (r Repository) getCleanupStatus(ctx context.Context) (monitoring.CleanupSta
 		&status.DeletedDedupeKeys,
 		&status.DeletedWorkerMetrics,
 		&status.DeletedRouteRuleMetrics,
+		&status.DeletedAuditLogs,
 		&status.LastBatchDeleted,
 		&status.TotalDeleted,
 		&status.Completed,
@@ -958,6 +965,29 @@ func deleteExpiredDedupeKeys(ctx context.Context, tx pgx.Tx, now time.Time, batc
 	return deleted, nil
 }
 
+func deleteOldAuditLogs(ctx context.Context, tx pgx.Tx, cutoff time.Time, batchSize int) (int, error) {
+	var deleted int
+	err := tx.QueryRow(ctx, `
+		WITH target_rows AS (
+			SELECT id
+			FROM audit_logs
+			WHERE created_at < $1
+			ORDER BY created_at ASC, id ASC
+			LIMIT $2
+		),
+		deleted_rows AS (
+			DELETE FROM audit_logs
+			WHERE id IN (SELECT id FROM target_rows)
+			RETURNING id
+		)
+		SELECT count(*)::integer FROM deleted_rows
+	`, cutoff, batchSize).Scan(&deleted)
+	if err != nil {
+		return 0, fmt.Errorf("delete old audit logs: %w", err)
+	}
+	return deleted, nil
+}
+
 func hasRetentionRowsRemaining(ctx context.Context, tx pgx.Tx, cutoff, now time.Time) (bool, error) {
 	var hasMore bool
 	err := tx.QueryRow(ctx, `
@@ -973,6 +1003,8 @@ func hasRetentionRowsRemaining(ctx context.Context, tx pgx.Tx, cutoff, now time.
 			SELECT 1 FROM message_records WHERE received_at < $1
 			UNION ALL
 			SELECT 1 FROM dedupe_keys WHERE expires_at < $2
+			UNION ALL
+			SELECT 1 FROM audit_logs WHERE created_at < $1
 		)
 	`, cutoff, now).Scan(&hasMore)
 	if err != nil {
@@ -986,10 +1018,11 @@ func insertCleanupRun(ctx context.Context, tx pgx.Tx, now time.Time, status moni
 		INSERT INTO retention_cleanup_runs (
 			id, started_at, retention_days, batch_size,
 			deleted_jobs, deleted_dead_letters, deleted_message_records, deleted_delivery_attempts,
-			deleted_dedupe_keys, deleted_worker_metrics, deleted_route_rule_metrics, last_batch_deleted, completed, has_more
+			deleted_dedupe_keys, deleted_worker_metrics, deleted_route_rule_metrics, deleted_audit_logs,
+			last_batch_deleted, completed, has_more
 		)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
-	`, uuid.NewString(), now, status.RetentionDays, status.BatchSize, status.DeletedJobs, status.DeletedDeadLetters, status.DeletedMessageRecords, status.DeletedDeliveryAttempts, status.DeletedDedupeKeys, status.DeletedWorkerMetrics, status.DeletedRouteRuleMetrics, status.LastBatchDeleted, status.Completed, status.HasMore)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+	`, uuid.NewString(), now, status.RetentionDays, status.BatchSize, status.DeletedJobs, status.DeletedDeadLetters, status.DeletedMessageRecords, status.DeletedDeliveryAttempts, status.DeletedDedupeKeys, status.DeletedWorkerMetrics, status.DeletedRouteRuleMetrics, status.DeletedAuditLogs, status.LastBatchDeleted, status.Completed, status.HasMore)
 	if err != nil {
 		return fmt.Errorf("insert retention cleanup run: %w", err)
 	}

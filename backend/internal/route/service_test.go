@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"reflect"
 	"testing"
 	"time"
 )
@@ -77,6 +78,58 @@ func TestSaveRulesGeneratesRuleKeyAndFirstMatchStopsSimulation(t *testing.T) {
 	}
 	if result.RuleResults[1].StopReason != "first_match_stop" {
 		t.Fatalf("expected second rule stop reason first_match_stop, got %+v", result.RuleResults[1])
+	}
+}
+
+func TestSimulateCoarseSkipsRulesWhenRequiredPayloadFieldIsMissing(t *testing.T) {
+	service := NewService(newMemoryStore())
+
+	_, err := service.SaveRules(context.Background(), "flow-1", SaveRulesInput{
+		Rules: []RuleInput{
+			{
+				RuleKey:       "rule-missing-field",
+				SortOrder:     1,
+				Name:          "缺字段规则",
+				ConditionTree: json.RawMessage(`{"operator":"equals","path":"payload.severity","value":"critical"}`),
+				Enabled:       true,
+				Action: ActionInput{
+					Targets: []ActionTargetInput{{ChannelID: "channel-1", TemplateVersionID: "template-1", Enabled: true}},
+				},
+			},
+			{
+				RuleKey:       "rule-fallback",
+				SortOrder:     2,
+				Name:          "兜底规则",
+				ConditionTree: json.RawMessage(`{"operator":"always"}`),
+				Enabled:       true,
+				Action: ActionInput{
+					Targets: []ActionTargetInput{{ChannelID: "channel-1", TemplateVersionID: "template-1", Enabled: true}},
+				},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("save rules: %v", err)
+	}
+
+	result, err := service.Simulate(context.Background(), "flow-1", SimulateInput{
+		Payload: json.RawMessage(`{"title":"critical"}`),
+	})
+	if err != nil {
+		t.Fatalf("simulate: %v", err)
+	}
+	if len(result.RuleResults) != 2 {
+		t.Fatalf("expected 2 rule results, got %d", len(result.RuleResults))
+	}
+	missing := result.RuleResults[0]
+	if !missing.CoarseSkipped || missing.Evaluated || missing.StopReason != "coarse_filter" {
+		t.Fatalf("expected first rule to be coarse skipped, got %+v", missing)
+	}
+	if missing.SkipReason != "missing_field:payload.severity" {
+		t.Fatalf("expected missing field skip reason, got %+v", missing)
+	}
+	if result.MatchedRule == nil || result.MatchedRule.RuleKey != "rule-fallback" {
+		t.Fatalf("expected fallback rule to match, got %+v", result.MatchedRule)
 	}
 }
 
@@ -154,10 +207,10 @@ func TestRouteSaveRulesConvertsLegacyActionFieldsToTargets(t *testing.T) {
 	}
 }
 
-func TestRouteSaveRulesRejectsActionWithoutTargets(t *testing.T) {
+func TestRouteSaveRulesAllowsIncompleteDraftActionTargets(t *testing.T) {
 	service := NewService(newMemoryStore())
 
-	_, err := service.SaveRules(context.Background(), "flow-1", SaveRulesInput{
+	saved, err := service.SaveRules(context.Background(), "flow-1", SaveRulesInput{
 		Rules: []RuleInput{
 			{
 				RuleKey:       "rule-a",
@@ -169,8 +222,51 @@ func TestRouteSaveRulesRejectsActionWithoutTargets(t *testing.T) {
 			},
 		},
 	})
-	if !errors.Is(err, ErrInvalidInput) {
-		t.Fatalf("expected ErrInvalidInput for action without targets, got %v", err)
+	if err != nil {
+		t.Fatalf("save incomplete draft rule: %v", err)
+	}
+	if len(saved.Rules) != 1 || len(saved.Rules[0].Action.Targets) != 0 {
+		t.Fatalf("expected incomplete draft rule to be saved without targets, got %+v", saved.Rules)
+	}
+	result, err := service.Validate(context.Background(), "flow-1")
+	if err != nil {
+		t.Fatalf("validate incomplete draft: %v", err)
+	}
+	if result.Status != "invalid" {
+		t.Fatalf("expected incomplete draft to stay invalid until targets are configured, got %+v", result)
+	}
+}
+
+func TestCheckoutVersionReplacesDraftAndRecordsBaseVersion(t *testing.T) {
+	store := newMemoryStore()
+	store.checkoutDraft = Draft{
+		Version: Version{
+			ID:                 "draft-4",
+			FlowID:             "flow-1",
+			VersionNo:          4,
+			DraftBaseVersionID: "version-2",
+			DraftBaseVersionNo: 2,
+		},
+		Rules: []Rule{{
+			ID:      "rule-copy",
+			RuleKey: "rule-a",
+			Name:    "从 v2 检出的规则",
+		}},
+	}
+	service := NewService(store)
+
+	ruleSet, err := service.CheckoutVersion(context.Background(), "flow-1", "version-2")
+	if err != nil {
+		t.Fatalf("checkout version: %v", err)
+	}
+	if store.checkoutFlowID != "flow-1" || store.checkoutVersionID != "version-2" {
+		t.Fatalf("expected checkout flow/version ids, got flow=%q version=%q", store.checkoutFlowID, store.checkoutVersionID)
+	}
+	if ruleSet.VersionID != "draft-4" || ruleSet.DraftBaseVersionID != "version-2" || ruleSet.DraftBaseVersionNo != 2 {
+		t.Fatalf("expected draft v4 based on v2, got %+v", ruleSet)
+	}
+	if len(ruleSet.Rules) != 1 || ruleSet.Rules[0].Name != "从 v2 检出的规则" {
+		t.Fatalf("expected checked out rules to be returned, got %+v", ruleSet.Rules)
 	}
 }
 
@@ -445,6 +541,35 @@ func TestPublishRejectsReferenceValidationErrors(t *testing.T) {
 	}
 }
 
+func TestRouteServiceBroadcastsRoutePlanChangeAfterExecutionConfigChanges(t *testing.T) {
+	store := newMemoryStore()
+	publisher := &recordingChangePublisher{}
+	service := NewService(store, WithChangePublisher(publisher))
+
+	if _, err := service.Publish(context.Background(), "flow-1"); err != nil {
+		t.Fatalf("publish route: %v", err)
+	}
+	if _, err := service.ActivateVersion(context.Background(), "flow-1", "version-1"); err != nil {
+		t.Fatalf("activate route version: %v", err)
+	}
+	if _, err := service.UpdateFlow(context.Background(), "flow-1", UpdateFlowInput{
+		SourceID: "source-2",
+		Name:     "Flow 1",
+		Enabled:  true,
+		Mode:     ModeTable,
+	}); err != nil {
+		t.Fatalf("update route flow: %v", err)
+	}
+	if err := service.DeleteFlow(context.Background(), "flow-1"); err != nil {
+		t.Fatalf("delete route flow: %v", err)
+	}
+
+	expected := []string{"source-1", "source-1", "source-1", "source-2", "source-2"}
+	if !reflect.DeepEqual(publisher.sourceIDs, expected) {
+		t.Fatalf("expected route change broadcasts %+v, got %+v", expected, publisher.sourceIDs)
+	}
+}
+
 func TestRulesFromCompiledPreferPublishedExecutionModel(t *testing.T) {
 	persisted := []Rule{{
 		ID:            "rule-row-id",
@@ -570,9 +695,22 @@ func validActionInput() ActionInput {
 type memoryStore struct {
 	flow            Flow
 	draft           Draft
+	checkoutDraft   Draft
 	matchGroups     map[string][]string
 	referenceErrors []ValidationError
 	publishCalls    int
+
+	checkoutFlowID    string
+	checkoutVersionID string
+}
+
+type recordingChangePublisher struct {
+	sourceIDs []string
+}
+
+func (p *recordingChangePublisher) PublishRoutePlanChange(_ context.Context, sourceID string) error {
+	p.sourceIDs = append(p.sourceIDs, sourceID)
+	return nil
 }
 
 func newMemoryStore() *memoryStore {
@@ -601,7 +739,11 @@ func (s *memoryStore) GetFlow(context.Context, string) (Flow, error) {
 	return s.flow, nil
 }
 
-func (s *memoryStore) UpdateFlow(context.Context, string, UpdateFlowParams) (Flow, error) {
+func (s *memoryStore) UpdateFlow(_ context.Context, _ string, params UpdateFlowParams) (Flow, error) {
+	s.flow.SourceID = params.SourceID
+	s.flow.Name = params.Name
+	s.flow.Enabled = params.Enabled
+	s.flow.Mode = params.Mode
 	return s.flow, nil
 }
 
@@ -622,6 +764,16 @@ func (s *memoryStore) GetVersionRules(_ context.Context, _ string, versionID str
 		return RuleSet{}, ErrNotFound
 	}
 	return RuleSet{VersionID: s.draft.Version.ID, Rules: append([]Rule(nil), s.draft.Rules...)}, nil
+}
+
+func (s *memoryStore) CheckoutVersion(_ context.Context, flowID string, versionID string) (Draft, error) {
+	s.checkoutFlowID = flowID
+	s.checkoutVersionID = versionID
+	if s.checkoutDraft.Version.ID == "" {
+		return Draft{}, ErrNotFound
+	}
+	s.draft = s.checkoutDraft
+	return s.draft, nil
 }
 
 func (s *memoryStore) DeleteVersion(context.Context, string, string) error {

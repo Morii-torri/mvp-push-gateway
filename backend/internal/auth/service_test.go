@@ -38,11 +38,29 @@ func TestCreateFirstAdminRejectsClosedSetup(t *testing.T) {
 	service := NewService(store)
 
 	_, err := service.CreateFirstAdmin(context.Background(), CreateFirstAdminInput{
-		Username: "admin",
-		Password: "valid-password-123",
+		Username:        "admin",
+		Password:        "valid-password-123",
+		ConfirmPassword: "valid-password-123",
 	})
 	if !errors.Is(err, ErrSetupClosed) {
 		t.Fatalf("expected ErrSetupClosed, got %v", err)
+	}
+}
+
+func TestCreateFirstAdminRequiresPasswordConfirmation(t *testing.T) {
+	store := &fakeStore{status: SetupStatus{Initialized: false, AdminCount: 0}}
+	service := NewService(store)
+
+	_, err := service.CreateFirstAdmin(context.Background(), CreateFirstAdminInput{
+		Username:        "admin",
+		Password:        "valid-password-123",
+		ConfirmPassword: "different-password-123",
+	})
+	if !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("expected ErrInvalidInput for mismatched password confirmation, got %v", err)
+	}
+	if store.created.PasswordHash != "" {
+		t.Fatal("expected mismatched password confirmation not to create admin")
 	}
 }
 
@@ -51,9 +69,10 @@ func TestCreateFirstAdminHashesPassword(t *testing.T) {
 	service := NewService(store)
 
 	admin, err := service.CreateFirstAdmin(context.Background(), CreateFirstAdminInput{
-		Username:    "Admin",
-		Password:    "valid-password-123",
-		DisplayName: "Administrator",
+		Username:        "Admin",
+		Password:        "valid-password-123",
+		ConfirmPassword: "valid-password-123",
+		DisplayName:     "Administrator",
 	})
 	if err != nil {
 		t.Fatalf("create first admin: %v", err)
@@ -70,6 +89,35 @@ func TestCreateFirstAdminHashesPassword(t *testing.T) {
 	}
 	if !ok {
 		t.Fatal("expected stored hash to verify")
+	}
+}
+
+func TestChangePasswordRevokesAdminSessions(t *testing.T) {
+	hash, err := HashPassword("current-password-123")
+	if err != nil {
+		t.Fatalf("hash current password: %v", err)
+	}
+	store := &fakeStore{
+		admin: StoredAdmin{
+			Admin: Admin{
+				ID:       "admin-id",
+				Username: "admin",
+				Enabled:  true,
+			},
+			PasswordHash: hash,
+		},
+	}
+	service := NewService(store)
+
+	if err := service.ChangePassword(context.Background(), ChangePasswordInput{
+		AdminID:         "admin-id",
+		CurrentPassword: "current-password-123",
+		NewPassword:     "rotated-password-456",
+	}); err != nil {
+		t.Fatalf("change password: %v", err)
+	}
+	if store.revokedAdminID != "admin-id" {
+		t.Fatalf("expected admin sessions to be revoked, got %q", store.revokedAdminID)
 	}
 }
 
@@ -110,6 +158,7 @@ type fakeStore struct {
 	admin                     StoredAdmin
 	session                   Session
 	updatedProfileDisplayName string
+	revokedAdminID            string
 }
 
 func (f *fakeStore) GetSetupStatus(context.Context) (SetupStatus, error) {
@@ -167,5 +216,10 @@ func (f *fakeStore) FindAdminBySessionTokenHash(context.Context, string, time.Ti
 }
 
 func (f *fakeStore) RevokeAdminSession(context.Context, string) error {
+	return nil
+}
+
+func (f *fakeStore) RevokeAdminSessionsByAdminID(_ context.Context, adminID string) error {
+	f.revokedAdminID = adminID
 	return nil
 }

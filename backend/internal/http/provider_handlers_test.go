@@ -94,6 +94,69 @@ func TestProviderCapabilitiesResponseIncludesCapabilityMetadata(t *testing.T) {
 	}
 }
 
+func TestChannelDescriptionRoundTripsThroughHTTPHandlers(t *testing.T) {
+	service := &capabilityProviderService{
+		channel: provider.Channel{
+			ID:               "channel-1",
+			ProviderType:     provider.ProviderBark,
+			Name:             "bark-webhook",
+			Enabled:          true,
+			Description:      "值班告警主通道",
+			ConcurrencyLimit: 1,
+			TimeoutMS:        1000,
+		},
+	}
+	handler := httpapi.NewHandler(
+		testConfig(),
+		httpapi.WithAuthService(fakeAuthService{authenticatedToken: "admin-session"}),
+		httpapi.WithProviderService(service),
+	)
+
+	getReq := httptest.NewRequest(http.MethodGet, "/api/v1/channels/channel-1", nil)
+	getReq.Header.Set("Authorization", "Bearer admin-session")
+	getRec := httptest.NewRecorder()
+	handler.ServeHTTP(getRec, getReq)
+
+	if getRec.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d body=%s", getRec.Code, getRec.Body.String())
+	}
+	var getBody struct {
+		Channel map[string]any `json:"channel"`
+	}
+	if err := json.NewDecoder(getRec.Body).Decode(&getBody); err != nil {
+		t.Fatalf("decode get response: %v", err)
+	}
+	if getBody.Channel["description"] != "值班告警主通道" {
+		t.Fatalf("expected description in get response, got %+v", getBody.Channel)
+	}
+
+	putReq := httptest.NewRequest(http.MethodPut, "/api/v1/channels/channel-1", strings.NewReader(`{
+		"provider_type":"bark",
+		"name":"bark-webhook",
+		"enabled":true,
+		"description":"",
+		"auth_config":{},
+		"token_config":{},
+		"send_config":{},
+		"rate_limit_config":{},
+		"concurrency_limit":1,
+		"timeout_ms":1000,
+		"retry_policy":{"max_attempts":1},
+		"dead_letter_policy":{}
+	}`))
+	putReq.Header.Set("Authorization", "Bearer admin-session")
+	putReq.Header.Set("Content-Type", "application/json")
+	putRec := httptest.NewRecorder()
+	handler.ServeHTTP(putRec, putReq)
+
+	if putRec.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d body=%s", putRec.Code, putRec.Body.String())
+	}
+	if service.updateInput.Description != "" {
+		t.Fatalf("expected blank description to be passed through update, got %q", service.updateInput.Description)
+	}
+}
+
 func TestFeishuResolveOpenIDEndpointDelegatesToProviderService(t *testing.T) {
 	service := &capabilityProviderService{
 		resolveResult: provider.FeishuOpenIDResolveResult{
@@ -176,8 +239,101 @@ func TestDingTalkResolveUserIDEndpointDelegatesToProviderService(t *testing.T) {
 	}
 }
 
+func TestPatchChannelEnabledPreservesRuntimeConfiguration(t *testing.T) {
+	service := &capabilityProviderService{
+		channel: provider.Channel{
+			ID:               "channel-1",
+			ProviderType:     provider.ProviderWebhook,
+			Name:             "Webhook",
+			Enabled:          true,
+			AuthConfig:       json.RawMessage(`{"token":"secret"}`),
+			SendConfig:       json.RawMessage(`{"url":"https://example.test/send"}`),
+			RateLimitConfig:  json.RawMessage(`{"enabled":true,"qps":9}`),
+			ConcurrencyLimit: 6,
+			TimeoutMS:        2500,
+			RetryPolicy:      json.RawMessage(`{"max_attempts":4,"delay_ms":800}`),
+			DeadLetterPolicy: json.RawMessage(`{"policy":"retry_exhausted_or_upstream_error","retention_days":30,"replay":false}`),
+		},
+	}
+	handler := httpapi.NewHandler(
+		testConfig(),
+		httpapi.WithAuthService(fakeAuthService{authenticatedToken: "admin-session"}),
+		httpapi.WithProviderService(service),
+	)
+
+	req := httptest.NewRequest(http.MethodPatch, "/api/v1/channels/channel-1", strings.NewReader(`{"enabled":false}`))
+	req.Header.Set("Authorization", "Bearer admin-session")
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	if service.updateChannelID != "channel-1" {
+		t.Fatalf("expected channel-1 update, got %q", service.updateChannelID)
+	}
+	input := service.updateInput
+	if input.Enabled {
+		t.Fatal("expected enabled=false in patch update")
+	}
+	if input.ConcurrencyLimit != 6 || input.TimeoutMS != 2500 {
+		t.Fatalf("expected runtime settings to be preserved, got concurrency=%d timeout=%d", input.ConcurrencyLimit, input.TimeoutMS)
+	}
+	if string(input.DeadLetterPolicy) != `{"policy":"retry_exhausted_or_upstream_error","retention_days":30,"replay":false}` {
+		t.Fatalf("expected dead letter policy to be preserved, got %s", input.DeadLetterPolicy)
+	}
+}
+
+func TestSensitiveChannelActionsWriteAuditRecords(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		path   string
+		body   string
+		action string
+	}{
+		{name: "build request", path: "/api/v1/channels/channel-1/build-request", body: `{"body":{"title":"preview"}}`, action: "build_request"},
+		{name: "test send", path: "/api/v1/channels/channel-1/test-send", body: `{"send":false,"body":{"title":"preview"}}`, action: "test_send"},
+		{name: "refresh token", path: "/api/v1/channels/channel-1/refresh-token", body: `{}`, action: "refresh_token"},
+		{name: "feishu resolve", path: "/api/v1/channels/channel-1/feishu/resolve-open-id", body: `{"mobiles":["13011111111"]}`, action: "resolve_feishu_open_id"},
+		{name: "dingtalk resolve", path: "/api/v1/channels/channel-1/dingtalk/resolve-user-id", body: `{"query_words":["张三"]}`, action: "resolve_dingtalk_user_id"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			auditService := &fakeAuditService{}
+			handler := httpapi.NewHandler(
+				testConfig(),
+				httpapi.WithAuthService(fakeAuthService{authenticatedToken: "admin-session"}),
+				httpapi.WithProviderService(&capabilityProviderService{
+					resolveResult:         provider.FeishuOpenIDResolveResult{Success: true},
+					dingTalkResolveResult: provider.DingTalkUserIDResolveResult{Success: true},
+				}),
+				httpapi.WithAuditService(auditService),
+			)
+
+			req := httptest.NewRequest(http.MethodPost, tc.path, strings.NewReader(tc.body))
+			req.Header.Set("Authorization", "Bearer admin-session")
+			req.Header.Set("Content-Type", "application/json")
+			rec := httptest.NewRecorder()
+			handler.ServeHTTP(rec, req)
+
+			if rec.Code != http.StatusOK {
+				t.Fatalf("expected status 200, got %d body=%s", rec.Code, rec.Body.String())
+			}
+			if auditService.recordCalls != 1 {
+				t.Fatalf("expected one audit record, got %d", auditService.recordCalls)
+			}
+			if auditService.recordInput.Action != tc.action || auditService.recordInput.ResourceType != "channel" || auditService.recordInput.ResourceID != "channel-1" {
+				t.Fatalf("unexpected audit record: %+v", auditService.recordInput)
+			}
+		})
+	}
+}
+
 type capabilityProviderService struct {
 	capabilities             []provider.Capability
+	channel                  provider.Channel
+	updateChannelID          string
+	updateInput              provider.UpdateChannelInput
 	resolveChannelID         string
 	resolveMobiles           []string
 	resolveResult            provider.FeishuOpenIDResolveResult
@@ -203,11 +359,21 @@ func (f *capabilityProviderService) CreateChannel(context.Context, provider.Crea
 }
 
 func (f *capabilityProviderService) GetChannel(context.Context, string) (provider.Channel, error) {
-	return provider.Channel{}, nil
+	return f.channel, nil
 }
 
-func (f *capabilityProviderService) UpdateChannel(context.Context, string, provider.UpdateChannelInput) (provider.Channel, error) {
-	return provider.Channel{}, nil
+func (f *capabilityProviderService) UpdateChannel(_ context.Context, id string, input provider.UpdateChannelInput) (provider.Channel, error) {
+	f.updateChannelID = id
+	f.updateInput = input
+	return provider.Channel{
+		ID:               id,
+		ProviderType:     input.ProviderType,
+		Name:             input.Name,
+		Enabled:          input.Enabled,
+		Description:      input.Description,
+		ConcurrencyLimit: input.ConcurrencyLimit,
+		TimeoutMS:        input.TimeoutMS,
+	}, nil
 }
 
 func (f *capabilityProviderService) DeleteChannel(context.Context, string) error {

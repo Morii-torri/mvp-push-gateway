@@ -133,7 +133,7 @@ func NewTokenManager(store TokenCacheStore, opts ...TokenManagerOption) *TokenMa
 		},
 		owner: "token-manager",
 		httpClientFactory: func(timeout time.Duration) *http.Client {
-			return &http.Client{Timeout: timeout}
+			return newEgressHTTPClient(timeout)
 		},
 	}
 	if store == nil {
@@ -594,7 +594,11 @@ func credentialValue(raw json.RawMessage, key string) string {
 	if len(bytes.TrimSpace(raw)) == 0 || json.Unmarshal(raw, &object) != nil {
 		return ""
 	}
-	return strings.TrimSpace(fmt.Sprint(object[key]))
+	value, ok := object[key]
+	if !ok || value == nil {
+		return ""
+	}
+	return strings.TrimSpace(fmt.Sprint(value))
 }
 
 func redactURL(rawURL string) string {

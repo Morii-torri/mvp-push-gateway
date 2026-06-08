@@ -34,6 +34,92 @@ func TestLoadUsesSafeDefaults(t *testing.T) {
 	if cfg.Postgres.DSN != "" {
 		t.Fatalf("expected empty default PostgreSQL DSN placeholder, got %q", cfg.Postgres.DSN)
 	}
+	if cfg.Postgres.APIPool.MaxConns != 60 {
+		t.Fatalf("expected default API pool max connections 60, got %d", cfg.Postgres.APIPool.MaxConns)
+	}
+	if cfg.Postgres.PlanningPool.MaxConns != 20 {
+		t.Fatalf("expected default planning pool max connections 20, got %d", cfg.Postgres.PlanningPool.MaxConns)
+	}
+	if cfg.Postgres.SendingPool.MaxConns != 20 {
+		t.Fatalf("expected default sending pool max connections 20, got %d", cfg.Postgres.SendingPool.MaxConns)
+	}
+	if cfg.Postgres.MaintenancePool.MaxConns != 6 {
+		t.Fatalf("expected default maintenance pool max connections 6, got %d", cfg.Postgres.MaintenancePool.MaxConns)
+	}
+}
+
+func TestLoadAllowsPostgresPoolEnvironmentOverrides(t *testing.T) {
+	t.Setenv("MGP_POSTGRES_API_MAX_CONNS", "70")
+	t.Setenv("MGP_POSTGRES_PLANNING_MAX_CONNS", "25")
+	t.Setenv("MGP_POSTGRES_SENDING_MAX_CONNS", "30")
+	t.Setenv("MGP_POSTGRES_MAINTENANCE_MAX_CONNS", "8")
+
+	cfg := config.Load()
+
+	if cfg.Postgres.APIPool.MaxConns != 70 ||
+		cfg.Postgres.PlanningPool.MaxConns != 25 ||
+		cfg.Postgres.SendingPool.MaxConns != 30 ||
+		cfg.Postgres.MaintenancePool.MaxConns != 8 {
+		t.Fatalf("expected pool max connection overrides to apply, got %+v", cfg.Postgres)
+	}
+}
+
+func TestLoadUsesJetStreamQueueDefaults(t *testing.T) {
+	t.Setenv("MGP_QUEUE_BACKEND", "")
+	t.Setenv("MGP_NATS_URL", "")
+	t.Setenv("MGP_NATS_CREDS", "")
+	t.Setenv("MGP_NATS_STREAM_REPLICAS", "")
+	t.Setenv("MGP_NATS_ROUTE_CONSUMERS", "")
+	t.Setenv("MGP_NATS_SEND_CONSUMERS", "")
+	t.Setenv("MGP_NATS_RESULT_CONSUMERS", "")
+	t.Setenv("MGP_RESULT_WRITER_BATCH_SIZE", "")
+	t.Setenv("MGP_RESULT_WRITER_FLUSH_INTERVAL_MS", "")
+
+	cfg := config.Load()
+
+	if cfg.Queue.Backend != "jetstream" {
+		t.Fatalf("expected default queue backend jetstream, got %q", cfg.Queue.Backend)
+	}
+	if cfg.Queue.NATS.URL != "nats://127.0.0.1:4222" {
+		t.Fatalf("expected default NATS URL, got %q", cfg.Queue.NATS.URL)
+	}
+	if cfg.Queue.NATS.CredsPath != "" {
+		t.Fatalf("expected empty default NATS creds path, got %q", cfg.Queue.NATS.CredsPath)
+	}
+	if cfg.Queue.NATS.StreamReplicas != 1 ||
+		cfg.Queue.NATS.RouteConsumers != 20 ||
+		cfg.Queue.NATS.SendConsumers != 20 ||
+		cfg.Queue.NATS.ResultConsumers != 10 ||
+		cfg.Queue.ResultWriter.BatchSize != 500 ||
+		cfg.Queue.ResultWriter.FlushIntervalMS != 50 {
+		t.Fatalf("expected JetStream defaults, got %+v", cfg.Queue)
+	}
+}
+
+func TestLoadAllowsJetStreamQueueEnvironmentOverrides(t *testing.T) {
+	t.Setenv("MGP_QUEUE_BACKEND", "jetstream")
+	t.Setenv("MGP_NATS_URL", "nats://nats:4222")
+	t.Setenv("MGP_NATS_CREDS", "/run/secrets/nats.creds")
+	t.Setenv("MGP_NATS_STREAM_REPLICAS", "3")
+	t.Setenv("MGP_NATS_ROUTE_CONSUMERS", "12")
+	t.Setenv("MGP_NATS_SEND_CONSUMERS", "24")
+	t.Setenv("MGP_NATS_RESULT_CONSUMERS", "6")
+	t.Setenv("MGP_RESULT_WRITER_BATCH_SIZE", "250")
+	t.Setenv("MGP_RESULT_WRITER_FLUSH_INTERVAL_MS", "25")
+
+	cfg := config.Load()
+
+	if cfg.Queue.Backend != "jetstream" ||
+		cfg.Queue.NATS.URL != "nats://nats:4222" ||
+		cfg.Queue.NATS.CredsPath != "/run/secrets/nats.creds" ||
+		cfg.Queue.NATS.StreamReplicas != 3 ||
+		cfg.Queue.NATS.RouteConsumers != 12 ||
+		cfg.Queue.NATS.SendConsumers != 24 ||
+		cfg.Queue.NATS.ResultConsumers != 6 ||
+		cfg.Queue.ResultWriter.BatchSize != 250 ||
+		cfg.Queue.ResultWriter.FlushIntervalMS != 25 {
+		t.Fatalf("expected JetStream queue overrides, got %+v", cfg.Queue)
+	}
 }
 
 func TestLoadParsesTrustedProxyEntries(t *testing.T) {

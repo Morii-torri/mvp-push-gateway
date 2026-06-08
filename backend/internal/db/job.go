@@ -83,12 +83,19 @@ func (r Repository) ClaimJobs(ctx context.Context, params queue.ClaimParams) ([]
 	}
 	jobTypes := queueJobTypes(params.Types)
 
-	tx, err := r.pool.BeginTx(ctx, pgx.TxOptions{})
+	conn, err := r.acquireConn(ctx, "", SQLTimingAcquireClaimRouteJobs)
+	if err != nil {
+		return nil, fmt.Errorf("acquire claim jobs connection: %w", err)
+	}
+	defer conn.Release()
+
+	tx, err := conn.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {
 		return nil, fmt.Errorf("begin claim jobs transaction: %w", err)
 	}
 	defer tx.Rollback(ctx)
 
+	startedAt := time.Now()
 	rows, err := tx.Query(ctx, `
 		WITH selected_jobs AS (
 			SELECT
@@ -163,6 +170,7 @@ func (r Repository) ClaimJobs(ctx context.Context, params queue.ClaimParams) ([]
 		FROM updated_jobs
 		ORDER BY claim_order
 	`, now, jobTypes, params.Limit, params.WorkerID)
+	recordSQLTiming(ctx, "", SQLTimingClaimRouteJobs, time.Since(startedAt))
 	if err != nil {
 		return nil, fmt.Errorf("claim jobs: %w", err)
 	}

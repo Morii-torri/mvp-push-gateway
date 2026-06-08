@@ -9,6 +9,7 @@ import (
 	"mvp-push-gateway/backend/internal/audit"
 	"mvp-push-gateway/backend/internal/auth"
 	"mvp-push-gateway/backend/internal/config"
+	"mvp-push-gateway/backend/internal/deadletter"
 	"mvp-push-gateway/backend/internal/matchgroup"
 	"mvp-push-gateway/backend/internal/messagelog"
 	"mvp-push-gateway/backend/internal/monitoring"
@@ -32,19 +33,26 @@ type authService interface {
 }
 
 type Handler struct {
-	cfg         config.Config
-	auth        authService
-	sources     sourceService
-	providers   providerService
-	recipients  recipientService
-	routes      routeService
-	templates   templateService
-	monitoring  monitoringService
-	stats       statisticsService
-	matchGroups matchGroupService
-	messageLogs messageLogService
-	audit       auditService
-	settings    settingsService
+	cfg          config.Config
+	auth         authService
+	sources      sourceService
+	providers    providerService
+	recipients   recipientService
+	routes       routeService
+	templates    templateService
+	monitoring   monitoringService
+	stats        statisticsService
+	planning     planningWorkerService
+	delivery     deliveryWorkerService
+	matchGroups  matchGroupService
+	messageLogs  messageLogService
+	deadLetters  deadLetterService
+	audit        auditService
+	settings     settingsService
+	workerPause  runtimeWorkerPauseController
+	perfTests    *performanceTestLimiter
+	perfRuns     *performanceTestRunStore
+	perfUpstream *performanceTestUpstreamStore
 }
 
 type Option func(*Handler)
@@ -55,6 +63,7 @@ type sourceService interface {
 	GetSource(context.Context, string) (source.Source, error)
 	UpdateSource(context.Context, string, source.UpdateSourceInput) (source.Source, error)
 	DeleteSource(context.Context, string) error
+	DeleteSourceRuntimeData(context.Context, string) error
 	Ingest(context.Context, source.IngestInput) (source.IngestResult, error)
 }
 
@@ -81,8 +90,10 @@ type recipientService interface {
 	DeleteOrgUnit(context.Context, string) error
 	ListUsers(context.Context) ([]recipient.User, error)
 	CreateUser(context.Context, recipient.UserInput) (recipient.User, error)
+	CreateUserProfile(context.Context, recipient.UserProfileInput) (recipient.UserProfile, error)
 	GetUser(context.Context, string) (recipient.User, error)
 	UpdateUser(context.Context, string, recipient.UserInput) (recipient.User, error)
+	SaveUserProfile(context.Context, string, recipient.UserProfileInput) (recipient.UserProfile, error)
 	DeleteUser(context.Context, string) error
 	ListUserIdentities(context.Context, string) ([]recipient.UserIdentity, error)
 	CreateUserIdentity(context.Context, recipient.UserIdentityInput) (recipient.UserIdentity, error)
@@ -118,6 +129,7 @@ type routeService interface {
 	DeleteFlow(context.Context, string) error
 	ListVersions(context.Context, string) ([]route.Version, error)
 	ActivateVersion(context.Context, string, string) (route.Flow, error)
+	CheckoutVersion(context.Context, string, string) (route.RuleSet, error)
 	DeleteVersion(context.Context, string, string) error
 	GetCanvas(context.Context, string) (route.CanvasState, error)
 	SaveCanvas(context.Context, string, route.SaveCanvasInput) (route.CanvasState, error)
@@ -128,6 +140,18 @@ type routeService interface {
 	Validate(context.Context, string) (route.ValidationResult, error)
 	Publish(context.Context, string, ...string) (route.Version, error)
 	Simulate(context.Context, string, route.SimulateInput) (route.SimulationResult, error)
+}
+
+type planningWorkerService interface {
+	ProcessBatch(context.Context, int) (int, error)
+}
+
+type deliveryWorkerService interface {
+	ProcessBatch(context.Context, int) (int, error)
+}
+
+type runtimeWorkerPauseController interface {
+	PauseWorkers() func()
 }
 
 type monitoringService interface {
@@ -157,6 +181,13 @@ type messageLogService interface {
 	GetMessage(context.Context, string) (messagelog.MessageDetail, error)
 }
 
+type deadLetterService interface {
+	ListDeadLetters(context.Context, deadletter.ListFilter) (deadletter.ListResult, error)
+	ReplayDeadLetters(context.Context, deadletter.BatchInput) (deadletter.BatchResult, error)
+	MarkDeadLettersHandled(context.Context, deadletter.HandleInput) (deadletter.BatchResult, error)
+	DeleteDeadLetters(context.Context, deadletter.BatchInput) (deadletter.BatchResult, error)
+}
+
 type auditService interface {
 	ListLogs(context.Context, audit.ListFilter) (audit.ListResult, error)
 	GetLog(context.Context, string) (audit.Log, error)
@@ -167,6 +198,7 @@ type settingsService interface {
 	ListSettings(context.Context) ([]settings.Setting, error)
 	UpdateSetting(context.Context, string, settings.UpdateInput) (settings.Setting, error)
 	IntSetting(context.Context, string, int) int
+	BuildPerformanceTestResult(settings.PerformanceTestInput) (settings.PerformanceTestResult, error)
 	RunPerformanceTest(context.Context, settings.PerformanceTestInput) (settings.PerformanceTestResult, error)
 }
 
@@ -206,6 +238,24 @@ func WithRouteService(service routeService) Option {
 	}
 }
 
+func WithPlanningWorker(service planningWorkerService) Option {
+	return func(h *Handler) {
+		h.planning = service
+	}
+}
+
+func WithDeliveryWorker(service deliveryWorkerService) Option {
+	return func(h *Handler) {
+		h.delivery = service
+	}
+}
+
+func WithRuntimeWorkerPauseController(controller runtimeWorkerPauseController) Option {
+	return func(h *Handler) {
+		h.workerPause = controller
+	}
+}
+
 func WithMonitoringService(service monitoringService) Option {
 	return func(h *Handler) {
 		h.monitoring = service
@@ -230,6 +280,12 @@ func WithMessageLogService(service messageLogService) Option {
 	}
 }
 
+func WithDeadLetterService(service deadLetterService) Option {
+	return func(h *Handler) {
+		h.deadLetters = service
+	}
+}
+
 func WithAuditService(service auditService) Option {
 	return func(h *Handler) {
 		h.audit = service
@@ -250,7 +306,12 @@ type healthResponse struct {
 }
 
 func NewHandler(cfg config.Config, options ...Option) http.Handler {
-	handler := &Handler{cfg: cfg}
+	handler := &Handler{
+		cfg:          cfg,
+		perfTests:    &performanceTestLimiter{},
+		perfRuns:     newPerformanceTestRunStore(),
+		perfUpstream: newPerformanceTestUpstreamStore(),
+	}
 	for _, option := range options {
 		option(handler)
 	}
@@ -273,6 +334,7 @@ func NewHandler(cfg config.Config, options ...Option) http.Handler {
 	mux.HandleFunc(cfg.Server.APIPrefix+"/org-units", handler.orgUnitsHandler)
 	mux.HandleFunc(cfg.Server.APIPrefix+"/org-units/", handler.orgUnitDetailHandler)
 	mux.HandleFunc(cfg.Server.APIPrefix+"/users", handler.usersHandler)
+	mux.HandleFunc(cfg.Server.APIPrefix+"/users/profile", handler.userProfileCreateHandler)
 	mux.HandleFunc(cfg.Server.APIPrefix+"/users/", handler.userDetailHandler)
 	mux.HandleFunc(cfg.Server.APIPrefix+"/user-identities/lookup", handler.userIdentityLookupHandler)
 	mux.HandleFunc(cfg.Server.APIPrefix+"/user-identities/", handler.userIdentityDetailHandler)
@@ -284,13 +346,19 @@ func NewHandler(cfg config.Config, options ...Option) http.Handler {
 	mux.HandleFunc(cfg.Server.APIPrefix+"/route-flows/", handler.routeFlowDetailHandler)
 	mux.HandleFunc(cfg.Server.APIPrefix+"/messages", handler.messagesHandler)
 	mux.HandleFunc(cfg.Server.APIPrefix+"/messages/", handler.messageDetailHandler)
+	mux.HandleFunc(cfg.Server.APIPrefix+"/dead-letters", handler.deadLettersHandler)
+	mux.HandleFunc(cfg.Server.APIPrefix+"/dead-letters/", handler.deadLetterActionHandler)
 	mux.HandleFunc(cfg.Server.APIPrefix+"/audit-logs", handler.auditLogsHandler)
 	mux.HandleFunc(cfg.Server.APIPrefix+"/audit-logs/", handler.auditLogDetailHandler)
 	mux.HandleFunc(cfg.Server.APIPrefix+"/settings", handler.settingsHandler)
+	mux.HandleFunc(cfg.Server.APIPrefix+"/settings/performance-test/runs", handler.settingsPerformanceTestRunsHandler)
+	mux.HandleFunc(cfg.Server.APIPrefix+"/settings/performance-test/runs/", handler.settingsPerformanceTestRunDetailHandler)
+	mux.HandleFunc(cfg.Server.APIPrefix+"/settings/performance-test/fake-upstream", handler.settingsPerformanceTestFakeUpstreamHandler)
 	mux.HandleFunc(cfg.Server.APIPrefix+"/settings/performance-test", handler.settingsPerformanceTestHandler)
 	mux.HandleFunc(cfg.Server.APIPrefix+"/settings/", handler.settingDetailHandler)
 	mux.HandleFunc(cfg.Server.APIPrefix+"/monitoring/queue", handler.queueMonitoringHandler)
 	mux.HandleFunc(cfg.Server.APIPrefix+"/monitor/queues", handler.queueMonitoringHandler)
+	mux.HandleFunc(cfg.Server.APIPrefix+"/monitor/notifications/stream", handler.notificationStreamHandler)
 	mux.HandleFunc(cfg.Server.APIPrefix+"/statistics/overview", handler.statisticsOverviewHandler)
 	mux.HandleFunc(cfg.Server.APIPrefix+"/stats/overview", handler.statisticsOverviewHandler)
 	mux.HandleFunc(cfg.Server.APIPrefix+"/maintenance/retention/cleanup", handler.retentionCleanupHandler)
@@ -424,6 +492,14 @@ func (h *Handler) requireMessageLogService(w http.ResponseWriter) bool {
 		return true
 	}
 	writeAPIError(w, http.StatusServiceUnavailable, "MGP-MSG-001", "消息日志服务未启用，请先配置数据库")
+	return false
+}
+
+func (h *Handler) requireDeadLetterService(w http.ResponseWriter) bool {
+	if h.deadLetters != nil {
+		return true
+	}
+	writeAPIError(w, http.StatusServiceUnavailable, "MGP-DEAD-001", "死信服务未启用，请先配置数据库")
 	return false
 }
 

@@ -1,17 +1,29 @@
-import { LockOutlined, UserOutlined } from '@ant-design/icons';
-import Alert from 'antd/es/alert';
-import App from 'antd/es/app';
-import Button from 'antd/es/button';
-import Form from 'antd/es/form';
-import Input from 'antd/es/input';
-import Result from 'antd/es/result';
-import Space from 'antd/es/space';
-import Spin from 'antd/es/spin';
-import Typography from 'antd/es/typography';
-import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
+import { LockOutlined, UserOutlined } from "@ant-design/icons";
+import Alert from "antd/es/alert";
+import App from "antd/es/app";
+import Button from "antd/es/button";
+import Form from "antd/es/form";
+import Input from "antd/es/input";
+import Result from "antd/es/result";
+import Space from "antd/es/space";
+import Spin from "antd/es/spin";
+import Typography from "antd/es/typography";
+import {
+  createContext,
+  useContext,
+  useEffect,
+  useMemo,
+  useState,
+  type ReactNode,
+} from "react";
 
-import { AUTH_EXPIRED_EVENT, ApiClientError, isAuthExpiredError, tokenStore } from '../api/client';
-import { authApi, type AdminUser } from '../api/auth';
+import {
+  AUTH_EXPIRED_EVENT,
+  ApiClientError,
+  isAuthExpiredError,
+  tokenStore,
+} from "../api/client";
+import { authApi, type AdminUser } from "../api/auth";
 
 type AuthContextValue = {
   admin: AdminUser;
@@ -23,46 +35,71 @@ const AuthContext = createContext<AuthContextValue | null>(null);
 export const ADMIN_PASSWORD_MIN_LENGTH = 10;
 export const ADMIN_PASSWORD_MAX_LENGTH = 128;
 export const adminPasswordRules = [
-  { required: true, message: '请输入密码' },
-  { min: ADMIN_PASSWORD_MIN_LENGTH, message: '密码不少于 10 位' },
+  { required: true, message: "请输入密码" },
+  { min: ADMIN_PASSWORD_MIN_LENGTH, message: "密码不少于 10 位" },
 ];
 export const adminPasswordInputProps = {
   minLength: ADMIN_PASSWORD_MIN_LENGTH,
   maxLength: ADMIN_PASSWORD_MAX_LENGTH,
-  placeholder: '密码不少于 10 位',
+  placeholder: "密码不少于 10 位",
 } as const;
-export function createConfirmNewPasswordRules(getFieldValue: (name: string) => unknown) {
+export function createConfirmPasswordRules(
+  getFieldValue: (name: string) => unknown,
+  sourceField = "password",
+) {
   return [
-    { required: true, message: '请再次输入新密码' },
+    { required: true, message: "请再次输入密码" },
     {
       validator: (_: unknown, value?: string) => {
-        if (!value || getFieldValue('new_password') === value) {
+        if (!value || getFieldValue(sourceField) === value) {
           return Promise.resolve();
         }
-        return Promise.reject(new Error('两次输入的新密码不一致'));
+        return Promise.reject(new Error("两次输入的密码不一致"));
       },
     },
   ];
 }
 
-type AuthMode = 'checking' | 'setup' | 'login' | 'change-password' | 'ready' | 'error';
+export function createConfirmNewPasswordRules(
+  getFieldValue: (name: string) => unknown,
+) {
+  return [
+    { required: true, message: "请再次输入新密码" },
+    {
+      validator: (_: unknown, value?: string) => {
+        if (!value || getFieldValue("new_password") === value) {
+          return Promise.resolve();
+        }
+        return Promise.reject(new Error("两次输入的新密码不一致"));
+      },
+    },
+  ];
+}
+
+type AuthMode =
+  | "checking"
+  | "setup"
+  | "login"
+  | "change-password"
+  | "ready"
+  | "error";
 
 export function AuthGate({ children }: { children: ReactNode }) {
   const { message } = App.useApp();
-  const [mode, setMode] = useState<AuthMode>('checking');
+  const [mode, setMode] = useState<AuthMode>("checking");
   const [admin, setAdmin] = useState<AdminUser | null>(null);
-  const [errorText, setErrorText] = useState('');
+  const [errorText, setErrorText] = useState("");
 
   const redirectToLogin = () => {
     setAdmin(null);
-    setErrorText('');
-    setMode('login');
+    setErrorText("");
+    setMode("login");
   };
 
   const refreshMe = async () => {
     const result = await authApi.me();
     setAdmin(result.admin);
-    setMode(result.admin.must_change_password ? 'change-password' : 'ready');
+    setMode(result.admin.must_change_password ? "change-password" : "ready");
   };
 
   useEffect(() => {
@@ -81,11 +118,11 @@ export function AuthGate({ children }: { children: ReactNode }) {
           return;
         }
         if (!setup.initialized && setup.setup_open) {
-          setMode('setup');
+          setMode("setup");
           return;
         }
         if (!tokenStore.get()) {
-          setMode('login');
+          setMode("login");
           return;
         }
         const current = await authApi.me();
@@ -93,7 +130,9 @@ export function AuthGate({ children }: { children: ReactNode }) {
           return;
         }
         setAdmin(current.admin);
-        setMode(current.admin.must_change_password ? 'change-password' : 'ready');
+        setMode(
+          current.admin.must_change_password ? "change-password" : "ready",
+        );
       } catch (error) {
         if (cancelled) {
           return;
@@ -103,7 +142,7 @@ export function AuthGate({ children }: { children: ReactNode }) {
           return;
         }
         setErrorText(errorMessage(error));
-        setMode(tokenStore.get() ? 'login' : 'error');
+        setMode(tokenStore.get() ? "login" : "error");
       }
     }
     void bootstrap();
@@ -115,8 +154,8 @@ export function AuthGate({ children }: { children: ReactNode }) {
   const logout = async () => {
     await authApi.logout().catch(() => undefined);
     setAdmin(null);
-    setMode('login');
-    message.success('已退出登录');
+    setMode("login");
+    message.success("已退出登录");
   };
 
   const contextValue = useMemo(
@@ -124,78 +163,99 @@ export function AuthGate({ children }: { children: ReactNode }) {
     [admin],
   );
 
-  if (mode === 'checking') {
+  if (mode === "checking") {
     return (
       <div className="auth-screen">
         <Space direction="vertical" align="center">
           <Spin />
-          <Typography.Text type="secondary">正在检查管理台登录状态</Typography.Text>
+          <Typography.Text type="secondary">
+            正在检查管理台登录状态
+          </Typography.Text>
         </Space>
       </div>
     );
   }
 
-  if (mode === 'setup') {
+  if (mode === "setup") {
     return (
-      <AuthPanel title="初始化管理员" subtitle="首次启动需要创建唯一管理员账号。">
+      <AuthPanel
+        title="初始化管理员"
+        subtitle="首次启动需要创建唯一管理员账号。"
+      >
         <SetupForm
           onDone={() => {
-            message.success('管理员已创建，请登录');
-            setMode('login');
+            message.success("管理员已创建，请登录");
+            setMode("login");
           }}
         />
       </AuthPanel>
     );
   }
 
-  if (mode === 'login') {
+  if (mode === "login") {
     return (
-      <AuthPanel title="管理员登录" subtitle="使用管理员账号进入 MVP Push Gateway。">
-        {errorText ? <Alert type="warning" showIcon message={errorText} /> : null}
+      <AuthPanel
+        title="管理员登录"
+        subtitle="使用管理员账号进入 MVP Push Gateway。"
+      >
+        {errorText ? (
+          <Alert type="warning" showIcon message={errorText} />
+        ) : null}
         <LoginForm
           onDone={(nextAdmin) => {
             setAdmin(nextAdmin);
-            setErrorText('');
-            setMode(nextAdmin.must_change_password ? 'change-password' : 'ready');
+            setErrorText("");
+            setMode(
+              nextAdmin.must_change_password ? "change-password" : "ready",
+            );
           }}
         />
       </AuthPanel>
     );
   }
 
-  if (mode === 'change-password') {
+  if (mode === "change-password") {
     return (
-      <AuthPanel title="修改管理员密码" subtitle="当前账号要求先修改密码后进入管理台。">
+      <AuthPanel
+        title="修改管理员密码"
+        subtitle="当前账号要求先修改密码后进入管理台。"
+      >
         <ChangePasswordForm
           onDone={async () => {
-            message.success('密码已修改');
-            await refreshMe();
+            tokenStore.clear();
+            setAdmin(null);
+            setMode("login");
+            message.success("密码已修改，请重新登录");
           }}
         />
       </AuthPanel>
     );
   }
 
-  if (mode === 'error') {
+  if (mode === "error") {
     return (
       <div className="auth-screen">
         <Result
           status="warning"
           title="无法连接后端服务"
-          subTitle={errorText || '请确认后端已启动并暴露 /api/v1。'}
-          extra={<Button onClick={() => window.location.reload()}>重新检查</Button>}
+          subTitle={errorText || "请确认后端已启动并暴露 /api/v1。"}
+          extra={
+            <Button onClick={() => window.location.reload()}>重新检查</Button>
+          }
         />
       </div>
     );
   }
 
-  return contextValue ? <AuthContext.Provider value={contextValue}>{children}</AuthContext.Provider> : null;
+  return contextValue ? (
+    <AuthContext.Provider value={contextValue}>{children}</AuthContext.Provider>
+  ) : null;
 }
 
 export function useAuth() {
   const value = useContext(AuthContext);
   if (!value) {
-    throw new Error('useAuth must be used inside AuthGate');
+    throw new Error("useAuth must be used inside AuthGate");
   }
   return value;
 }
@@ -226,17 +286,20 @@ function AuthPanel({
 
 function SetupForm({ onDone }: { onDone: () => void }) {
   const { message } = App.useApp();
+  const [form] = Form.useForm();
   const [loading, setLoading] = useState(false);
   return (
     <Form
+      form={form}
       layout="vertical"
-      initialValues={{ username: 'admin', display_name: '系统管理员' }}
+      initialValues={{ username: "admin", display_name: "系统管理员" }}
       onFinish={async (values) => {
         setLoading(true);
         try {
           await authApi.setupAdmin({
             username: values.username,
             password: values.password,
+            confirm_password: values.confirm_password,
             display_name: values.display_name,
           });
           onDone();
@@ -247,14 +310,38 @@ function SetupForm({ onDone }: { onDone: () => void }) {
         }
       }}
     >
-      <Form.Item label="用户名" name="username" rules={[{ required: true, message: '请输入用户名' }]}>
+      <Form.Item
+        label="用户名"
+        name="username"
+        rules={[{ required: true, message: "请输入用户名" }]}
+      >
         <Input prefix={<UserOutlined />} autoComplete="username" />
       </Form.Item>
-      <Form.Item label="显示名称" name="display_name" rules={[{ required: true, message: '请输入显示名称' }]}>
+      <Form.Item
+        label="显示名称"
+        name="display_name"
+        rules={[{ required: true, message: "请输入显示名称" }]}
+      >
         <Input />
       </Form.Item>
       <Form.Item label="初始密码" name="password" rules={adminPasswordRules}>
-        <Input.Password prefix={<LockOutlined />} autoComplete="new-password" {...adminPasswordInputProps} />
+        <Input.Password
+          prefix={<LockOutlined />}
+          autoComplete="new-password"
+          {...adminPasswordInputProps}
+        />
+      </Form.Item>
+      <Form.Item
+        label="确认初始密码"
+        name="confirm_password"
+        dependencies={["password"]}
+        rules={createConfirmPasswordRules(form.getFieldValue, "password")}
+      >
+        <Input.Password
+          prefix={<LockOutlined />}
+          autoComplete="new-password"
+          {...adminPasswordInputProps}
+        />
       </Form.Item>
       <Button type="primary" htmlType="submit" loading={loading} block>
         创建管理员
@@ -269,11 +356,14 @@ function LoginForm({ onDone }: { onDone: (admin: AdminUser) => void }) {
   return (
     <Form
       layout="vertical"
-      initialValues={{ username: 'admin' }}
+      initialValues={{ username: "admin" }}
       onFinish={async (values) => {
         setLoading(true);
         try {
-          const result = await authApi.login({ username: values.username, password: values.password });
+          const result = await authApi.login({
+            username: values.username,
+            password: values.password,
+          });
           onDone(result.admin);
         } catch (error) {
           showAuthError(message, error);
@@ -282,11 +372,22 @@ function LoginForm({ onDone }: { onDone: (admin: AdminUser) => void }) {
         }
       }}
     >
-      <Form.Item label="用户名" name="username" rules={[{ required: true, message: '请输入用户名' }]}>
+      <Form.Item
+        label="用户名"
+        name="username"
+        rules={[{ required: true, message: "请输入用户名" }]}
+      >
         <Input prefix={<UserOutlined />} autoComplete="username" />
       </Form.Item>
-      <Form.Item label="密码" name="password" rules={[{ required: true, message: '请输入密码' }]}>
-        <Input.Password prefix={<LockOutlined />} autoComplete="current-password" />
+      <Form.Item
+        label="密码"
+        name="password"
+        rules={[{ required: true, message: "请输入密码" }]}
+      >
+        <Input.Password
+          prefix={<LockOutlined />}
+          autoComplete="current-password"
+        />
       </Form.Item>
       <Button type="primary" htmlType="submit" loading={loading} block>
         登录
@@ -318,19 +419,29 @@ function ChangePasswordForm({ onDone }: { onDone: () => Promise<void> }) {
         }
       }}
     >
-      <Form.Item label="当前密码" name="current_password" rules={[{ required: true, message: '请输入当前密码' }]}>
+      <Form.Item
+        label="当前密码"
+        name="current_password"
+        rules={[{ required: true, message: "请输入当前密码" }]}
+      >
         <Input.Password autoComplete="current-password" />
       </Form.Item>
       <Form.Item label="新密码" name="new_password" rules={adminPasswordRules}>
-        <Input.Password autoComplete="new-password" {...adminPasswordInputProps} />
+        <Input.Password
+          autoComplete="new-password"
+          {...adminPasswordInputProps}
+        />
       </Form.Item>
       <Form.Item
         label="确认新密码"
         name="confirm_new_password"
-        dependencies={['new_password']}
+        dependencies={["new_password"]}
         rules={createConfirmNewPasswordRules(form.getFieldValue)}
       >
-        <Input.Password autoComplete="new-password" {...adminPasswordInputProps} />
+        <Input.Password
+          autoComplete="new-password"
+          {...adminPasswordInputProps}
+        />
       </Form.Item>
       <Button type="primary" htmlType="submit" loading={loading} block>
         修改密码并进入
@@ -341,7 +452,7 @@ function ChangePasswordForm({ onDone }: { onDone: () => Promise<void> }) {
 
 function errorMessage(error: unknown): string {
   if (isAuthExpiredError(error)) {
-    return '';
+    return "";
   }
   if (error instanceof ApiClientError) {
     return error.userMessage;
@@ -349,10 +460,13 @@ function errorMessage(error: unknown): string {
   if (error instanceof Error && error.message) {
     return error.message;
   }
-  return '操作失败，请稍后重试';
+  return "操作失败，请稍后重试";
 }
 
-function showAuthError(messageApi: { error: (content: string) => unknown }, error: unknown) {
+function showAuthError(
+  messageApi: { error: (content: string) => unknown },
+  error: unknown,
+) {
   const text = errorMessage(error);
   if (text) {
     messageApi.error(text);

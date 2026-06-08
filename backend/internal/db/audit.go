@@ -60,10 +60,6 @@ func (r Repository) GetLog(ctx context.Context, id string) (audit.Log, error) {
 }
 
 func (r Repository) Record(ctx context.Context, input audit.RecordInput) (audit.Log, error) {
-	resourceID := ""
-	if _, err := uuid.Parse(input.ResourceID); err == nil {
-		resourceID = input.ResourceID
-	}
 	item, err := r.queryAuditLog(ctx, `
 		INSERT INTO audit_logs (
 			id,
@@ -83,7 +79,7 @@ func (r Repository) Record(ctx context.Context, input audit.RecordInput) (audit.
 			NULLIF($3, ''),
 			$4,
 			$5,
-			NULLIF($6, '')::uuid,
+			NULLIF($6, ''),
 			$7,
 			$8,
 			NULLIF($9, '')::inet,
@@ -95,7 +91,7 @@ func (r Repository) Record(ctx context.Context, input audit.RecordInput) (audit.
 		input.ActorUsername,
 		input.Action,
 		input.ResourceType,
-		resourceID,
+		input.ResourceID,
 		defaultJSON(input.RequestSnapshot),
 		defaultJSON(input.ResponseSnapshot),
 		input.IPAddress,
@@ -144,7 +140,7 @@ func auditSelectColumns() string {
 		COALESCE(actor_username, ''),
 		action,
 		resource_type,
-		COALESCE(resource_id::text, ''),
+		COALESCE(resource_id, ''),
 		request_snapshot,
 		response_snapshot,
 		COALESCE(ip_address::text, ''),

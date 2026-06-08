@@ -4,6 +4,7 @@ import type {
   InboundStatus,
   JobStatus,
   JobType,
+  MessageStatus,
   OutboundStatus,
   ProviderType,
   ValidationStatus,
@@ -473,6 +474,7 @@ export type TemplateRecord = {
   id: string;
   name: string;
   source: string;
+  sourceCode?: string;
   messageType: string;
   messageFormat?: string;
   targetProviderType: ProviderType;
@@ -662,9 +664,12 @@ export type MessageLog = {
   traceId: string;
   source: string;
   receivedAt: string;
-  status: InboundStatus;
+  status: MessageStatus;
+  inboundStatus?: InboundStatus;
   matchedRoute: string;
   outboundStatus?: OutboundStatus;
+  firstOutboundAt?: string;
+  lastOutboundAt?: string;
   targetProvider?: string;
   duration: string;
   errorCode?: string;

@@ -5,6 +5,8 @@ import (
 	"errors"
 	"strings"
 	"time"
+
+	"mvp-push-gateway/backend/internal/queue"
 )
 
 const (
@@ -76,16 +78,18 @@ type CleanupStatus struct {
 	DeletedDedupeKeys       int        `json:"deleted_dedupe_keys"`
 	DeletedWorkerMetrics    int        `json:"deleted_worker_metrics"`
 	DeletedRouteRuleMetrics int        `json:"deleted_route_rule_metrics"`
+	DeletedAuditLogs        int        `json:"deleted_audit_logs"`
 	Completed               bool       `json:"completed"`
 	HasMore                 bool       `json:"has_more"`
 }
 
 type QueueSnapshot struct {
-	Summary        QueueSummary      `json:"summary"`
-	PlatformHealth []PlatformHealth  `json:"platform_health"`
-	Trend          []QueueTrendPoint `json:"trend"`
-	SlowRules      []SlowRule        `json:"slow_rules"`
-	CleanupStatus  CleanupStatus     `json:"cleanup_status"`
+	Summary        QueueSummary            `json:"summary"`
+	PlatformHealth []PlatformHealth        `json:"platform_health"`
+	Trend          []QueueTrendPoint       `json:"trend"`
+	SlowRules      []SlowRule              `json:"slow_rules"`
+	CleanupStatus  CleanupStatus           `json:"cleanup_status"`
+	JetStream      queue.JetStreamSnapshot `json:"jetstream"`
 }
 
 type RetentionCleanupParams struct {
@@ -103,9 +107,10 @@ type cleanupStore interface {
 }
 
 type Service struct {
-	reader  readerStore
-	cleaner cleanupStore
-	now     func() time.Time
+	reader            readerStore
+	cleaner           cleanupStore
+	jetStreamProvider queue.JetStreamStatsProvider
+	now               func() time.Time
 }
 
 type Option func(*Service)
@@ -115,6 +120,12 @@ func WithNow(now func() time.Time) Option {
 		if now != nil {
 			s.now = now
 		}
+	}
+}
+
+func WithJetStreamStatsProvider(provider queue.JetStreamStatsProvider) Option {
+	return func(s *Service) {
+		s.jetStreamProvider = provider
 	}
 }
 
@@ -139,7 +150,24 @@ func (s *Service) GetQueueMonitoringSnapshot(ctx context.Context, params QueryPa
 	if params.Now.IsZero() {
 		params.Now = s.now()
 	}
-	return s.reader.GetQueueMonitoringSnapshot(ctx, params)
+	snapshot, err := s.reader.GetQueueMonitoringSnapshot(ctx, params)
+	if err != nil {
+		return QueueSnapshot{}, err
+	}
+	if s.jetStreamProvider == nil {
+		return snapshot, nil
+	}
+	jetStreamSnapshot, err := s.jetStreamProvider.JetStreamSnapshot(ctx)
+	if err != nil {
+		snapshot.JetStream = queue.JetStreamSnapshot{
+			Enabled:   true,
+			LastError: err.Error(),
+		}
+		return snapshot, nil
+	}
+	jetStreamSnapshot.Enabled = true
+	snapshot.JetStream = jetStreamSnapshot
+	return snapshot, nil
 }
 
 func (s *Service) RunRetentionCleanup(ctx context.Context, params RetentionCleanupParams) (CleanupStatus, error) {

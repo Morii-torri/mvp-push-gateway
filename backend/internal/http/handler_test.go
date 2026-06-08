@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"mvp-push-gateway/backend/internal/auth"
 	"mvp-push-gateway/backend/internal/config"
@@ -139,6 +140,73 @@ func TestProfileEndpointUpdatesCurrentAdminDisplayName(t *testing.T) {
 	}
 }
 
+func TestAuthHandlersRecordSecurityAudit(t *testing.T) {
+	auditService := &fakeAuditService{}
+	handler := httpapi.NewHandler(
+		testConfig(),
+		httpapi.WithAuthService(fakeAuthService{
+			authenticatedToken: "admin-session",
+			loginResult: auth.LoginResult{
+				Token:     "admin-session",
+				ExpiresAt: time.Date(2026, 6, 4, 10, 0, 0, 0, time.UTC),
+				Admin: auth.Admin{
+					ID:          "00000000-0000-0000-0000-000000000001",
+					Username:    "admin",
+					DisplayName: "Admin",
+					Enabled:     true,
+				},
+			},
+		}),
+		httpapi.WithAuditService(auditService),
+	)
+
+	loginReq := httptest.NewRequest(http.MethodPost, "/api/v1/auth/login", strings.NewReader(`{"username":"admin","password":"ChangeMe2026!"}`))
+	loginRec := httptest.NewRecorder()
+	handler.ServeHTTP(loginRec, loginReq)
+	if loginRec.Code != http.StatusOK {
+		t.Fatalf("expected login status 200, got %d body=%s", loginRec.Code, loginRec.Body.String())
+	}
+	if auditService.recordCalls != 1 || auditService.recordInputs[0].Action != "login" || auditService.recordInputs[0].ResourceType != "admin_session" {
+		t.Fatalf("expected login audit record, calls=%d inputs=%+v", auditService.recordCalls, auditService.recordInputs)
+	}
+	if strings.Contains(string(auditService.recordInputs[0].RequestSnapshot), "ChangeMe2026") {
+		t.Fatalf("expected login password to be redacted, got %s", auditService.recordInputs[0].RequestSnapshot)
+	}
+
+	logoutReq := httptest.NewRequest(http.MethodPost, "/api/v1/auth/logout", nil)
+	logoutReq.Header.Set("Authorization", "Bearer admin-session")
+	logoutRec := httptest.NewRecorder()
+	handler.ServeHTTP(logoutRec, logoutReq)
+	if logoutRec.Code != http.StatusOK {
+		t.Fatalf("expected logout status 200, got %d body=%s", logoutRec.Code, logoutRec.Body.String())
+	}
+	if auditService.recordCalls != 2 || auditService.recordInputs[1].Action != "logout" {
+		t.Fatalf("expected logout audit record, calls=%d inputs=%+v", auditService.recordCalls, auditService.recordInputs)
+	}
+}
+
+func TestLoginFailureRecordsSecurityAudit(t *testing.T) {
+	auditService := &fakeAuditService{}
+	handler := httpapi.NewHandler(
+		testConfig(),
+		httpapi.WithAuthService(fakeAuthService{loginErr: auth.ErrInvalidCredentials}),
+		httpapi.WithAuditService(auditService),
+	)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/login", strings.NewReader(`{"username":"admin","password":"wrong"}`))
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("expected login failure status 401, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	if auditService.recordCalls != 1 || auditService.recordInputs[0].Action != "login_failed" {
+		t.Fatalf("expected login_failed audit record, calls=%d inputs=%+v", auditService.recordCalls, auditService.recordInputs)
+	}
+	if strings.Contains(string(auditService.recordInputs[0].RequestSnapshot), "wrong") {
+		t.Fatalf("expected failed login password to be redacted, got %s", auditService.recordInputs[0].RequestSnapshot)
+	}
+}
+
 func testConfig() config.Config {
 	return config.Config{
 		App: config.AppConfig{
@@ -154,6 +222,8 @@ func testConfig() config.Config {
 type fakeAuthService struct {
 	status             auth.SetupStatus
 	authenticatedToken string
+	loginResult        auth.LoginResult
+	loginErr           error
 }
 
 func (f fakeAuthService) GetSetupStatus(context.Context) (auth.SetupStatus, error) {
@@ -164,8 +234,23 @@ func (fakeAuthService) CreateFirstAdmin(context.Context, auth.CreateFirstAdminIn
 	return auth.Admin{}, nil
 }
 
-func (fakeAuthService) Login(context.Context, auth.LoginInput) (auth.LoginResult, error) {
-	return auth.LoginResult{}, nil
+func (f fakeAuthService) Login(context.Context, auth.LoginInput) (auth.LoginResult, error) {
+	if f.loginErr != nil {
+		return auth.LoginResult{}, f.loginErr
+	}
+	if f.loginResult.Token != "" {
+		return f.loginResult, nil
+	}
+	return auth.LoginResult{
+		Token:     "admin-session",
+		ExpiresAt: time.Date(2026, 6, 4, 10, 0, 0, 0, time.UTC),
+		Admin: auth.Admin{
+			ID:          "00000000-0000-0000-0000-000000000001",
+			Username:    "admin",
+			DisplayName: "Admin",
+			Enabled:     true,
+		},
+	}, nil
 }
 
 func (f fakeAuthService) Authenticate(_ context.Context, token string) (auth.Admin, error) {

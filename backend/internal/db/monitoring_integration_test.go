@@ -440,6 +440,71 @@ func TestRepositoryRunRetentionCleanupDeletesSmallBatchesAndPersistsLatestStatus
 	assertCountEquals(t, ctx, pool, "dedupe_keys", 0)
 }
 
+func TestRepositoryRunRetentionCleanupDeletesAuditLogs(t *testing.T) {
+	pool := openMigratedPool(t)
+	defer pool.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	repository := NewRepository(pool)
+	now := time.Date(2026, 5, 9, 13, 0, 0, 0, time.UTC)
+	cutoff := now.Add(-31 * 24 * time.Hour)
+
+	for i := 0; i < 3; i++ {
+		if _, err := pool.Exec(ctx, `
+			INSERT INTO audit_logs (
+				id, actor_username, action, resource_type, resource_id,
+				request_snapshot, response_snapshot, created_at
+			)
+			VALUES ($1, 'admin', 'update', 'system_setting', $2, '{}'::jsonb, '{}'::jsonb, $3)
+		`, testUUID(12400+i), "logs.retention_days", cutoff.Add(-time.Duration(i)*time.Hour)); err != nil {
+			t.Fatalf("insert old audit log: %v", err)
+		}
+	}
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO audit_logs (
+			id, actor_username, action, resource_type, resource_id,
+			request_snapshot, response_snapshot, created_at
+		)
+		VALUES ($1, 'admin', 'login', 'admin_session', $2, '{}'::jsonb, '{}'::jsonb, $3)
+	`, testUUID(12410), "admin-session", now.Add(-time.Hour)); err != nil {
+		t.Fatalf("insert recent audit log: %v", err)
+	}
+
+	first, err := repository.RunRetentionCleanup(ctx, monitoring.RetentionCleanupParams{
+		Now:           now,
+		RetentionDays: 30,
+		BatchSize:     2,
+	})
+	if err != nil {
+		t.Fatalf("run first retention cleanup: %v", err)
+	}
+	if first.DeletedAuditLogs != 2 || !first.HasMore {
+		t.Fatalf("expected first cleanup to delete 2 audit logs and report remaining rows, got %+v", first)
+	}
+
+	second, err := repository.RunRetentionCleanup(ctx, monitoring.RetentionCleanupParams{
+		Now:           now.Add(time.Minute),
+		RetentionDays: 30,
+		BatchSize:     2,
+	})
+	if err != nil {
+		t.Fatalf("run second retention cleanup: %v", err)
+	}
+	if second.DeletedAuditLogs != 1 || second.TotalDeleted != 3 || second.HasMore || !second.Completed {
+		t.Fatalf("expected second cleanup to finish audit log cleanup, got %+v", second)
+	}
+
+	var remaining int
+	if err := pool.QueryRow(ctx, `SELECT count(*)::integer FROM audit_logs`).Scan(&remaining); err != nil {
+		t.Fatalf("count audit logs: %v", err)
+	}
+	if remaining != 1 {
+		t.Fatalf("expected only recent audit log to remain, got %d", remaining)
+	}
+}
+
 type workerMetricRow struct {
 	ID            string
 	BucketStart   time.Time

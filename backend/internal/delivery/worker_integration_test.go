@@ -81,7 +81,7 @@ func TestWorkerProcessBatchSendsWebhookAndPersistsSnapshots(t *testing.T) {
 	if _, err := repository.EnqueueJob(ctx, queue.EnqueueParams{
 		ID:          jobID,
 		Type:        queue.JobTypeSendMessage,
-		Payload:     json.RawMessage(`{"delivery_attempt_id":"` + attemptID + `","body":{"title":"critical","content":"paid"}}`),
+		Payload:     json.RawMessage(`{"delivery_attempt_id":"` + attemptID + `","body":{"body":{"title":"critical","content":"paid"}}}`),
 		RunAt:       now,
 		MaxAttempts: 2,
 		ChannelID:   channel.ID,
@@ -94,6 +94,9 @@ func TestWorkerProcessBatchSendsWebhookAndPersistsSnapshots(t *testing.T) {
 		repository,
 		delivery.WithWorkerID("sender-integration"),
 		delivery.WithNow(func() time.Time { return now }),
+		delivery.WithHTTPClientFactory(func(timeout time.Duration) *http.Client {
+			return &http.Client{Timeout: timeout}
+		}),
 	)
 
 	processed, err := worker.ProcessBatch(ctx, 1)
@@ -111,7 +114,7 @@ func TestWorkerProcessBatchSendsWebhookAndPersistsSnapshots(t *testing.T) {
 	if gotURL != "/send" {
 		t.Fatalf("expected fake server to receive /send request, got %q", gotURL)
 	}
-	if gotBody["kind"] != "alert" || gotBody["title"] != "critical" || gotBody["content"] != "paid" {
+	if gotBody["title"] != "critical" || gotBody["content"] != "paid" {
 		t.Fatalf("unexpected sent body: %+v", gotBody)
 	}
 
@@ -138,7 +141,8 @@ func TestWorkerProcessBatchSendsWebhookAndPersistsSnapshots(t *testing.T) {
 		t.Fatalf("expected request snapshot target_context, got %+v", requestSnapshot)
 	}
 	renderedMessage, ok := requestSnapshot["rendered_message"].(map[string]any)
-	if !ok || renderedMessage["title"] != "critical" || renderedMessage["content"] != "paid" {
+	renderedBody, hasRenderedBody := renderedMessage["body"].(map[string]any)
+	if !ok || !hasRenderedBody || renderedBody["title"] != "critical" || renderedBody["content"] != "paid" {
 		t.Fatalf("expected request snapshot rendered_message, got %+v", requestSnapshot)
 	}
 	if _, ok := requestSnapshot["resolved_recipients"]; !ok {

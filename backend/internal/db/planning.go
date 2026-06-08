@@ -101,6 +101,8 @@ func (r Repository) LoadRoutePlan(ctx context.Context, sourceID string, versionI
 			id,
 			flow_id,
 			version_no,
+			COALESCE(draft_base_version_id::text, ''),
+			COALESCE(draft_base_version_no, 0),
 			canvas_snapshot,
 			compiled_rules,
 			validation_status,
@@ -195,30 +197,29 @@ func (r Repository) LoadMatchGroupValues(ctx context.Context, rules []route.Rule
 func (r Repository) GetTemplateVersion(ctx context.Context, id string) (msgtemplate.TemplateVersion, error) {
 	version, err := scanTemplateVersion(r.pool.QueryRow(ctx, `
 		SELECT
-			current_version.id,
-			current_version.template_id,
-			current_version.version_no,
-			current_version.message_type,
-			current_version.target_provider_type,
-			current_version.template_engine,
-			current_version.template_syntax_version,
-			current_version.template_body,
-			current_version.message_body_schema,
-			current_version.sample_payload,
-			current_version.compiled_preview,
-			current_version.used_variables,
-			current_version.allowed_filters,
-			current_version.validation_status,
-			current_version.validation_errors,
-			current_version.published_at,
-			current_version.created_at,
-			current_version.updated_at
+			referenced_version.id,
+			referenced_version.template_id,
+			referenced_version.version_no,
+			referenced_version.message_type,
+			referenced_version.target_provider_type,
+			referenced_version.template_engine,
+			referenced_version.template_syntax_version,
+			referenced_version.template_body,
+			referenced_version.message_body_schema,
+			referenced_version.sample_payload,
+			referenced_version.compiled_preview,
+			referenced_version.used_variables,
+			referenced_version.allowed_filters,
+			referenced_version.validation_status,
+			referenced_version.validation_errors,
+			referenced_version.published_at,
+			referenced_version.created_at,
+			referenced_version.updated_at
 		FROM template_versions AS referenced_version
 		JOIN templates AS template ON template.id = referenced_version.template_id
-		JOIN template_versions AS current_version ON current_version.id = template.current_version_id
 		WHERE referenced_version.id = $1
-			AND current_version.published_at IS NOT NULL
-			AND current_version.validation_status = 'valid'
+			AND referenced_version.published_at IS NOT NULL
+			AND referenced_version.validation_status = 'valid'
 			AND template.enabled = true
 	`, id))
 	if err != nil {
@@ -352,7 +353,7 @@ func (r Repository) ResolveSystemRecipients(ctx context.Context, params planning
 				)
 		),
 		filtered_users AS (
-			SELECT candidate_users.id
+			SELECT candidate_users.id, users.attributes
 			FROM candidate_users
 			JOIN users ON users.id = candidate_users.id
 			LEFT JOIN user_org_memberships AS membership ON membership.user_id = users.id
@@ -365,23 +366,41 @@ func (r Repository) ResolveSystemRecipients(ctx context.Context, params planning
 						AND excluded_membership.org_id IN (SELECT id FROM excluded_orgs)
 				)
 		),
-		ranked_identities AS (
+		recipient_candidates AS (
 			SELECT
+				identity.user_id,
 				identity.identity_value,
-				row_number() OVER (
-					PARTITION BY identity.user_id
-					ORDER BY CASE WHEN identity.channel_id = nullif($7, '')::uuid THEN 0 ELSE 1 END
-				) AS priority
+				CASE
+					WHEN identity.channel_id = nullif($7, '')::uuid AND identity.provider_type = $6 THEN 0
+					WHEN identity.channel_id IS NULL AND identity.provider_type = $6 THEN 1
+					WHEN identity.channel_id IS NULL AND identity.provider_type = 'common' THEN 2
+					ELSE 9
+				END AS priority
 			FROM filtered_users
 			JOIN user_identities AS identity ON identity.user_id = filtered_users.id
 			WHERE identity.identity_kind = $5
 				AND (
-					identity.channel_id = nullif($7, '')::uuid
-					OR (
-						identity.channel_id IS NULL
-						AND (identity.provider_type = $6 OR identity.provider_type = 'common')
-					)
+					(identity.channel_id = nullif($7, '')::uuid AND identity.provider_type = $6)
+					OR (identity.channel_id IS NULL AND identity.provider_type = $6)
+					OR (identity.channel_id IS NULL AND identity.provider_type = 'common')
 				)
+			UNION ALL
+			SELECT
+				filtered_users.id AS user_id,
+				btrim(filtered_users.attributes ->> $5) AS identity_value,
+				3 AS priority
+			FROM filtered_users
+			WHERE $5 IN ('email', 'mobile')
+				AND NULLIF(btrim(filtered_users.attributes ->> $5), '') IS NOT NULL
+		),
+		ranked_identities AS (
+			SELECT
+				identity_value,
+				row_number() OVER (
+					PARTITION BY user_id
+					ORDER BY priority ASC, identity_value ASC
+				) AS priority
+			FROM recipient_candidates
 		)
 		SELECT DISTINCT identity_value
 		FROM ranked_identities
@@ -408,12 +427,19 @@ func (r Repository) ResolveSystemRecipients(ctx context.Context, params planning
 }
 
 func (r Repository) CompletePlanning(ctx context.Context, params planning.CompletePlanningParams) error {
-	tx, err := r.pool.BeginTx(ctx, pgx.TxOptions{})
+	conn, err := r.acquireConn(ctx, params.TraceID, SQLTimingAcquireCompletePlanning)
+	if err != nil {
+		return fmt.Errorf("acquire complete planning connection: %w", err)
+	}
+	defer conn.Release()
+
+	tx, err := conn.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {
 		return fmt.Errorf("begin complete planning transaction: %w", err)
 	}
 	defer tx.Rollback(ctx)
 
+	startedAt := time.Now()
 	if _, err := tx.Exec(ctx, `
 		UPDATE message_records
 		SET status = 'planned',
@@ -427,8 +453,10 @@ func (r Repository) CompletePlanning(ctx context.Context, params planning.Comple
 		return fmt.Errorf("update planned message: %w", err)
 	}
 
-	for _, attempt := range params.Attempts {
-		if _, err := tx.Exec(ctx, `
+	if len(params.Attempts) > 0 {
+		batch := &pgx.Batch{}
+		for _, attempt := range params.Attempts {
+			batch.Queue(`
 			INSERT INTO delivery_attempts (
 				id,
 				message_id,
@@ -444,10 +472,9 @@ func (r Repository) CompletePlanning(ctx context.Context, params planning.Comple
 				updated_at
 			)
 			VALUES ($1, $2, $3, NULLIF($4, '')::uuid, $5, '{}'::jsonb, '{}'::jsonb, 'queued', 1, $6, $6, $6)
-		`, attempt.ID, attempt.MessageID, attempt.ChannelID, attempt.TemplateVersionID, defaultJSON(attempt.RecipientSnapshot), params.FinishedAt); err != nil {
-			return fmt.Errorf("insert delivery attempt: %w", err)
-		}
-		if _, err := tx.Exec(ctx, `
+		`, attempt.ID, attempt.MessageID, attempt.ChannelID, attempt.TemplateVersionID, defaultJSON(attempt.RecipientSnapshot), params.FinishedAt)
+			if !params.ExternalSendQueue {
+				batch.Queue(`
 			INSERT INTO jobs (
 				id,
 				type,
@@ -461,29 +488,51 @@ func (r Repository) CompletePlanning(ctx context.Context, params planning.Comple
 				processing_timeout_seconds
 			)
 			VALUES ($1, 'send_message', 'queued', $2, $3, $4, $5, 100, $6, 300)
-		`, uuid.NewString(), attempt.JobPayload, params.FinishedAt, positive(attempt.MaxAttempts, 3), attempt.ChannelID, attempt.ChannelID); err != nil {
-			return fmt.Errorf("insert send message job: %w", err)
+		`, uuid.NewString(), attempt.JobPayload, params.FinishedAt, positive(attempt.MaxAttempts, 3), attempt.ChannelID, attempt.ChannelID)
+			}
+		}
+		results := tx.SendBatch(ctx, batch)
+		for range params.Attempts {
+			if _, err := results.Exec(); err != nil {
+				_ = results.Close()
+				return fmt.Errorf("insert delivery attempt: %w", err)
+			}
+			if !params.ExternalSendQueue {
+				if _, err := results.Exec(); err != nil {
+					_ = results.Close()
+					return fmt.Errorf("insert send message job: %w", err)
+				}
+			}
+		}
+		if err := results.Close(); err != nil {
+			return fmt.Errorf("flush planning output batch: %w", err)
 		}
 	}
 
-	if strings.TrimSpace(params.HitRuleKey) != "" {
-		if err := incrementRuleCounterTx(ctx, tx, params.FlowID, params.HitRuleKey, params.FinishedAt); err != nil {
+	if r.asyncRuntimeLogs == nil {
+		if strings.TrimSpace(params.HitRuleKey) != "" {
+			if err := incrementRuleCounterTx(ctx, tx, params.FlowID, params.HitRuleKey, params.FinishedAt); err != nil {
+				return err
+			}
+		}
+		if err := recordRuleMetrics(ctx, tx, params.RuleMetrics, params.FinishedAt); err != nil {
+			return err
+		}
+		if err := recordWorkerMetric(ctx, tx, params.FinishedAt, params.DurationMS, true); err != nil {
 			return err
 		}
 	}
-	if err := recordRuleMetrics(ctx, tx, params.RuleMetrics, params.FinishedAt); err != nil {
-		return err
+	if strings.TrimSpace(params.JobID) != "" {
+		if err := completePlanningJobTx(ctx, tx, params.JobID, params.WorkerID, params.FinishedAt, params.DurationMS); err != nil {
+			return err
+		}
 	}
-	if err := recordWorkerMetric(ctx, tx, params.FinishedAt, params.DurationMS, true); err != nil {
-		return err
-	}
-	if err := completePlanningJobTx(ctx, tx, params.JobID, params.WorkerID, params.FinishedAt, params.DurationMS); err != nil {
-		return err
-	}
+	recordSQLTiming(ctx, params.TraceID, SQLTimingCompletePlanning, time.Since(startedAt))
 
 	if err := tx.Commit(ctx); err != nil {
 		return fmt.Errorf("commit complete planning transaction: %w", err)
 	}
+	r.enqueuePlanningRuntimeLogs(params.FlowID, params.HitRuleKey, params.FinishedAt, params.DurationMS, true, params.RuleMetrics)
 	return nil
 }
 
@@ -506,20 +555,38 @@ func (r Repository) FinishPlanning(ctx context.Context, params planning.FinishPl
 	`, params.MessageID, params.Status, params.FlowID, params.MatchedRuleIDs, params.ErrorCode, params.ErrorMessage, params.FinishedAt); err != nil {
 		return fmt.Errorf("update planning failure message: %w", err)
 	}
-	if err := recordRuleMetrics(ctx, tx, params.RuleMetrics, params.FinishedAt); err != nil {
-		return err
+	if r.asyncRuntimeLogs == nil {
+		if err := recordRuleMetrics(ctx, tx, params.RuleMetrics, params.FinishedAt); err != nil {
+			return err
+		}
+		if err := recordWorkerMetric(ctx, tx, params.FinishedAt, params.DurationMS, params.Status != "failed"); err != nil {
+			return err
+		}
 	}
-	if err := recordWorkerMetric(ctx, tx, params.FinishedAt, params.DurationMS, params.Status != "failed"); err != nil {
-		return err
-	}
-	if err := completePlanningJobTx(ctx, tx, params.JobID, params.WorkerID, params.FinishedAt, params.DurationMS); err != nil {
-		return err
+	if strings.TrimSpace(params.JobID) != "" {
+		if err := completePlanningJobTx(ctx, tx, params.JobID, params.WorkerID, params.FinishedAt, params.DurationMS); err != nil {
+			return err
+		}
 	}
 
 	if err := tx.Commit(ctx); err != nil {
 		return fmt.Errorf("commit finish planning transaction: %w", err)
 	}
+	r.enqueuePlanningRuntimeLogs(params.FlowID, "", params.FinishedAt, params.DurationMS, params.Status != "failed", params.RuleMetrics)
 	return nil
+}
+
+func (r Repository) enqueuePlanningRuntimeLogs(flowID string, hitRuleKey string, at time.Time, durationMS int, success bool, metrics []planning.RuleMetric) {
+	if r.asyncRuntimeLogs == nil {
+		return
+	}
+	if strings.TrimSpace(hitRuleKey) != "" {
+		_ = r.asyncRuntimeLogs.enqueueRouteRuleCounter(flowID, hitRuleKey, at)
+	}
+	for _, metric := range metrics {
+		_ = r.asyncRuntimeLogs.enqueueRuleMetric(metric, at)
+	}
+	_ = r.asyncRuntimeLogs.enqueuePlanningWorkerMetric(at, durationMS, success)
 }
 
 func completePlanningJobTx(ctx context.Context, tx pgx.Tx, jobID string, workerID string, finishedAt time.Time, durationMS int) error {

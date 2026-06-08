@@ -18,14 +18,19 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+
+	"mvp-push-gateway/backend/internal/queue"
 )
 
 const (
-	DefaultMaxPayloadBytes int64 = 5 << 20
-	defaultDedupeTTL             = 24 * time.Hour
-	maxQuietHoursWindows         = 5
-	hmacTimestampWindow          = 5 * time.Minute
-	hmacNonceTTL                 = 10 * time.Minute
+	DefaultMaxPayloadBytes            int64 = 5 << 20
+	defaultDedupeTTL                        = 24 * time.Hour
+	maxQuietHoursWindows                    = 5
+	hmacTimestampWindow                     = 5 * time.Minute
+	hmacNonceTTL                            = 10 * time.Minute
+	defaultSourceConfigCacheTTL             = 5 * time.Second
+	defaultLatestPayloadFlushInterval       = time.Second
+	latestPayloadFlushTimeout               = 5 * time.Second
 )
 
 type AuthMode string
@@ -44,17 +49,20 @@ const (
 )
 
 var (
-	ErrNotFound            = errors.New("source not found")
-	ErrAlreadyExists       = errors.New("source already exists")
-	ErrDisabled            = errors.New("source disabled")
-	ErrInvalidInput        = errors.New("invalid source input")
-	ErrUnauthorized        = errors.New("source unauthorized")
-	ErrIPNotAllowed        = errors.New("source ip not allowed")
-	ErrInvalidJSON         = errors.New("invalid json payload")
-	ErrPayloadTooLarge     = errors.New("payload too large")
-	ErrRateLimited         = errors.New("source rate limited")
-	ErrDuplicateInbound    = errors.New("duplicate inbound payload")
-	ErrInvalidDedupeConfig = errors.New("invalid inbound dedupe config")
+	ErrNotFound             = errors.New("source not found")
+	ErrAlreadyExists        = errors.New("source already exists")
+	ErrDisabled             = errors.New("source disabled")
+	ErrInvalidInput         = errors.New("invalid source input")
+	ErrUnauthorized         = errors.New("source unauthorized")
+	ErrIPNotAllowed         = errors.New("source ip not allowed")
+	ErrInvalidJSON          = errors.New("invalid json payload")
+	ErrPayloadTooLarge      = errors.New("payload too large")
+	ErrRateLimited          = errors.New("source rate limited")
+	ErrDuplicateInbound     = errors.New("duplicate inbound payload")
+	ErrInvalidDedupeConfig  = errors.New("invalid inbound dedupe config")
+	ErrDedupeStoreFailed    = errors.New("inbound dedupe store failed")
+	ErrHMACNonceStoreFailed = errors.New("hmac nonce store failed")
+	ErrQueuePublishFailed   = errors.New("source queue publish failed")
 )
 
 type Source struct {
@@ -116,6 +124,51 @@ type IngestResult struct {
 	Message string
 }
 
+type IngestTimingStage string
+
+const (
+	IngestTimingSourceLookup             IngestTimingStage = "source_lookup"
+	IngestTimingLatestPayloadUpdate      IngestTimingStage = "latest_payload"
+	IngestTimingEnqueueInbound           IngestTimingStage = "enqueue_inbound"
+	IngestTimingInsertMessageRecord      IngestTimingStage = "insert_message_record"
+	IngestTimingInsertInboundDedupeKey   IngestTimingStage = "insert_inbound_dedupe_key"
+	IngestTimingInsertRoutePlanJob       IngestTimingStage = "insert_route_plan_job"
+	IngestTimingCommitInboundTransaction IngestTimingStage = "commit_inbound"
+)
+
+type IngestTimingRecorder interface {
+	RecordIngestTiming(stage IngestTimingStage, duration time.Duration)
+}
+
+type ingestTimingRecorderContextKey struct{}
+
+func WithIngestTimingRecorder(ctx context.Context, recorder IngestTimingRecorder) context.Context {
+	if recorder == nil {
+		return ctx
+	}
+	return context.WithValue(ctx, ingestTimingRecorderContextKey{}, recorder)
+}
+
+func RecordIngestTiming(ctx context.Context, stage IngestTimingStage, duration time.Duration) {
+	recorder, ok := ctx.Value(ingestTimingRecorderContextKey{}).(IngestTimingRecorder)
+	if !ok || recorder == nil {
+		return
+	}
+	recorder.RecordIngestTiming(stage, duration)
+}
+
+type RuntimeStats struct {
+	DBPoolAcquireCount     int64
+	DBPoolWaitCount        int64
+	DBPoolWaitDurationMS   int64
+	DBPoolAcquiredConns    int32
+	DBPoolTotalConns       int32
+	PostgresMaxConnections int32
+	PostgresBlocksRead     int64
+	PostgresBlocksHit      int64
+	PostgresTempBytes      int64
+}
+
 type EnqueueInboundParams struct {
 	MessageID     string
 	TraceID       string
@@ -152,9 +205,44 @@ type Store interface {
 	GetSourceByCode(ctx context.Context, code string) (Source, error)
 	UpdateSource(ctx context.Context, id string, params UpdateSourceParams) (Source, error)
 	DeleteSource(ctx context.Context, id string) error
-	UpdateLatestPayloadSample(ctx context.Context, sourceID string, payload json.RawMessage) error
+	UpdateLatestPayloadSample(ctx context.Context, sourceID string, payload json.RawMessage, sampledAt time.Time) error
 	ReserveHMACNonce(ctx context.Context, sourceID string, nonce string, now time.Time, expiresAt time.Time) (bool, error)
 	EnqueueInbound(ctx context.Context, params EnqueueInboundParams) error
+	DeleteSourceRuntimeData(ctx context.Context, sourceID string) error
+}
+
+type runtimeStatsStore interface {
+	RuntimeStats(ctx context.Context) (RuntimeStats, error)
+}
+
+type performanceDeliveryStatusStore interface {
+	PerformanceDeliveryStatuses(ctx context.Context, traceIDs []string) (map[string]bool, error)
+	PerformanceDeliveryStatusDetails(ctx context.Context, traceIDs []string) (map[string]PerformanceDeliveryStatus, error)
+}
+
+type PerformanceDeliveryStatus struct {
+	Sent        bool
+	ReceivedAt  time.Time
+	FinishedAt  time.Time
+	PersistedAt time.Time
+}
+
+type RoutePlanPublisher interface {
+	PublishRoutePlan(context.Context, queue.RoutePlanEvent) (queue.PublishResult, error)
+}
+
+type LatestPayloadStore interface {
+	PutLatestPayloadSample(ctx context.Context, sourceID string, payload json.RawMessage, sampledAt time.Time) error
+	GetLatestPayloadSample(ctx context.Context, sourceID string) (json.RawMessage, time.Time, bool, error)
+	DeleteLatestPayloadSample(ctx context.Context, sourceID string) error
+}
+
+type InboundDedupeStore interface {
+	ReserveInboundDedupeKey(ctx context.Context, sourceID string, dedupeKey string, messageID string, expiresAt time.Time) (bool, error)
+}
+
+type HMACNonceStore interface {
+	ReserveHMACNonce(ctx context.Context, sourceID string, nonce string, now time.Time, expiresAt time.Time) (bool, error)
 }
 
 type Service struct {
@@ -164,11 +252,35 @@ type Service struct {
 	maxPayloadSize int64
 	maxPayloadFunc func(context.Context) int64
 
+	sourceCacheMu     sync.RWMutex
+	sourceCacheByCode map[string]sourceConfigCacheEntry
+	sourceCacheTTL    time.Duration
+
 	limiterMu sync.Mutex
 	limiters  map[string]*rateWindow
+
+	latestPayloadMu            sync.Mutex
+	latestPayloadPending       map[string]latestPayloadSample
+	latestPayloadTimers        map[string]*time.Timer
+	latestPayloadFlushInterval time.Duration
+
+	routePlanPublisher RoutePlanPublisher
+	latestPayloadStore LatestPayloadStore
+	inboundDedupeStore InboundDedupeStore
+	hmacNonceStore     HMACNonceStore
 }
 
 type Option func(*Service)
+
+type latestPayloadSample struct {
+	payload   json.RawMessage
+	sampledAt time.Time
+}
+
+type sourceConfigCacheEntry struct {
+	source    Source
+	expiresAt time.Time
+}
 
 func WithNow(now func() time.Time) Option {
 	return func(s *Service) {
@@ -194,13 +306,56 @@ func WithMaxPayloadSizeFunc(maxPayloadFunc func(context.Context) int64) Option {
 	}
 }
 
+func WithRoutePlanPublisher(publisher RoutePlanPublisher) Option {
+	return func(s *Service) {
+		s.routePlanPublisher = publisher
+	}
+}
+
+func WithLatestPayloadStore(store LatestPayloadStore) Option {
+	return func(s *Service) {
+		s.latestPayloadStore = store
+	}
+}
+
+func WithInboundDedupeStore(store InboundDedupeStore) Option {
+	return func(s *Service) {
+		s.inboundDedupeStore = store
+	}
+}
+
+func WithHMACNonceStore(store HMACNonceStore) Option {
+	return func(s *Service) {
+		s.hmacNonceStore = store
+	}
+}
+
+func WithSourceConfigCacheTTL(ttl time.Duration) Option {
+	return func(s *Service) {
+		s.sourceCacheTTL = ttl
+	}
+}
+
+func WithLatestPayloadFlushInterval(interval time.Duration) Option {
+	return func(s *Service) {
+		if interval >= 0 {
+			s.latestPayloadFlushInterval = interval
+		}
+	}
+}
+
 func NewService(store Store, options ...Option) *Service {
 	service := &Service{
-		store:          store,
-		now:            time.Now,
-		traceID:        uuid.NewString,
-		maxPayloadSize: DefaultMaxPayloadBytes,
-		limiters:       make(map[string]*rateWindow),
+		store:                      store,
+		now:                        time.Now,
+		traceID:                    uuid.NewString,
+		maxPayloadSize:             DefaultMaxPayloadBytes,
+		sourceCacheByCode:          make(map[string]sourceConfigCacheEntry),
+		sourceCacheTTL:             defaultSourceConfigCacheTTL,
+		limiters:                   make(map[string]*rateWindow),
+		latestPayloadPending:       make(map[string]latestPayloadSample),
+		latestPayloadTimers:        make(map[string]*time.Timer),
+		latestPayloadFlushInterval: defaultLatestPayloadFlushInterval,
 	}
 	for _, option := range options {
 		option(service)
@@ -208,11 +363,83 @@ func NewService(store Store, options ...Option) *Service {
 	return service
 }
 
+func (s *Service) RuntimeStats(ctx context.Context) (RuntimeStats, error) {
+	statsStore, ok := s.store.(runtimeStatsStore)
+	if !ok {
+		return RuntimeStats{}, nil
+	}
+	return statsStore.RuntimeStats(ctx)
+}
+
+func (s *Service) scheduleLatestPayloadSample(sourceID string, payload json.RawMessage, sampledAt time.Time) {
+	if sourceID == "" {
+		return
+	}
+	copiedPayload := append(json.RawMessage(nil), payload...)
+	s.latestPayloadMu.Lock()
+	defer s.latestPayloadMu.Unlock()
+	if s.latestPayloadPending == nil {
+		s.latestPayloadPending = make(map[string]latestPayloadSample)
+	}
+	if s.latestPayloadTimers == nil {
+		s.latestPayloadTimers = make(map[string]*time.Timer)
+	}
+	s.latestPayloadPending[sourceID] = latestPayloadSample{payload: copiedPayload, sampledAt: sampledAt}
+	if _, exists := s.latestPayloadTimers[sourceID]; exists {
+		return
+	}
+	interval := s.latestPayloadFlushInterval
+	s.latestPayloadTimers[sourceID] = time.AfterFunc(interval, func() {
+		s.flushLatestPayloadSample(sourceID)
+	})
+}
+
+func (s *Service) flushLatestPayloadSample(sourceID string) {
+	if sourceID == "" {
+		return
+	}
+	s.latestPayloadMu.Lock()
+	sample, ok := s.latestPayloadPending[sourceID]
+	delete(s.latestPayloadPending, sourceID)
+	delete(s.latestPayloadTimers, sourceID)
+	s.latestPayloadMu.Unlock()
+	if !ok {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), latestPayloadFlushTimeout)
+	defer cancel()
+	if s.latestPayloadStore != nil {
+		_ = s.latestPayloadStore.PutLatestPayloadSample(ctx, sourceID, sample.payload, sample.sampledAt)
+		return
+	}
+	_ = s.store.UpdateLatestPayloadSample(ctx, sourceID, sample.payload, sample.sampledAt)
+}
+
+func (s *Service) clearLatestPayloadSamplePending(sourceID string) {
+	if sourceID == "" {
+		return
+	}
+	s.latestPayloadMu.Lock()
+	defer s.latestPayloadMu.Unlock()
+	delete(s.latestPayloadPending, sourceID)
+	if timer, ok := s.latestPayloadTimers[sourceID]; ok {
+		timer.Stop()
+		delete(s.latestPayloadTimers, sourceID)
+	}
+}
+
 func (s *Service) ListSources(ctx context.Context) ([]Source, error) {
 	if s.store == nil {
 		return nil, ErrNotFound
 	}
-	return s.store.ListSources(ctx)
+	sources, err := s.store.ListSources(ctx)
+	if err != nil {
+		return nil, err
+	}
+	for index := range sources {
+		sources[index] = s.applyLatestPayloadSample(ctx, sources[index])
+	}
+	return sources, nil
 }
 
 func (s *Service) CreateSource(ctx context.Context, input CreateSourceInput) (Source, error) {
@@ -220,14 +447,23 @@ func (s *Service) CreateSource(ctx context.Context, input CreateSourceInput) (So
 	if err != nil {
 		return Source{}, err
 	}
-	return s.store.CreateSource(ctx, params)
+	created, err := s.store.CreateSource(ctx, params)
+	if err != nil {
+		return Source{}, err
+	}
+	s.setSourceConfigCache(created)
+	return created, nil
 }
 
 func (s *Service) GetSource(ctx context.Context, id string) (Source, error) {
 	if strings.TrimSpace(id) == "" {
 		return Source{}, ErrInvalidInput
 	}
-	return s.store.GetSource(ctx, id)
+	configuredSource, err := s.store.GetSource(ctx, id)
+	if err != nil {
+		return Source{}, err
+	}
+	return s.applyLatestPayloadSample(ctx, configuredSource), nil
 }
 
 func (s *Service) UpdateSource(ctx context.Context, id string, input UpdateSourceInput) (Source, error) {
@@ -245,14 +481,61 @@ func (s *Service) UpdateSource(ctx context.Context, id string, input UpdateSourc
 	if existing.Code != params.Code {
 		return Source{}, ErrInvalidInput
 	}
-	return s.store.UpdateSource(ctx, id, params)
+	updated, err := s.store.UpdateSource(ctx, id, params)
+	if err != nil {
+		return Source{}, err
+	}
+	s.setSourceConfigCache(updated)
+	return updated, nil
 }
 
 func (s *Service) DeleteSource(ctx context.Context, id string) error {
 	if strings.TrimSpace(id) == "" {
 		return ErrInvalidInput
 	}
-	return s.store.DeleteSource(ctx, id)
+	if err := s.store.DeleteSource(ctx, id); err != nil {
+		return err
+	}
+	s.invalidateSourceConfigCache("")
+	s.clearLatestPayloadSamplePending(id)
+	s.deleteLatestPayloadSample(ctx, id)
+	return nil
+}
+
+func (s *Service) DeleteSourceRuntimeData(ctx context.Context, sourceID string) error {
+	if strings.TrimSpace(sourceID) == "" {
+		return ErrInvalidInput
+	}
+	if err := s.store.DeleteSourceRuntimeData(ctx, sourceID); err != nil {
+		return err
+	}
+	s.clearLatestPayloadSamplePending(sourceID)
+	s.deleteLatestPayloadSample(ctx, sourceID)
+	return nil
+}
+
+func (s *Service) PerformanceDeliveryStatuses(ctx context.Context, traceIDs []string) (map[string]bool, error) {
+	store, ok := s.store.(performanceDeliveryStatusStore)
+	if !ok {
+		return map[string]bool{}, nil
+	}
+	cleaned := cleanStringSlice(traceIDs)
+	if len(cleaned) == 0 {
+		return map[string]bool{}, nil
+	}
+	return store.PerformanceDeliveryStatuses(ctx, cleaned)
+}
+
+func (s *Service) PerformanceDeliveryStatusDetails(ctx context.Context, traceIDs []string) (map[string]PerformanceDeliveryStatus, error) {
+	store, ok := s.store.(performanceDeliveryStatusStore)
+	if !ok {
+		return map[string]PerformanceDeliveryStatus{}, nil
+	}
+	cleaned := cleanStringSlice(traceIDs)
+	if len(cleaned) == 0 {
+		return map[string]PerformanceDeliveryStatus{}, nil
+	}
+	return store.PerformanceDeliveryStatusDetails(ctx, cleaned)
 }
 
 func (s *Service) Ingest(ctx context.Context, input IngestInput) (IngestResult, error) {
@@ -261,7 +544,9 @@ func (s *Service) Ingest(ctx context.Context, input IngestInput) (IngestResult, 
 		return IngestResult{}, ErrNotFound
 	}
 
-	configuredSource, err := s.store.GetSourceByCode(ctx, sourceCode)
+	startedAt := time.Now()
+	configuredSource, err := s.sourceByCode(ctx, sourceCode)
+	RecordIngestTiming(ctx, IngestTimingSourceLookup, time.Since(startedAt))
 	if err != nil {
 		return IngestResult{}, err
 	}
@@ -287,21 +572,19 @@ func (s *Service) Ingest(ctx context.Context, input IngestInput) (IngestResult, 
 		return IngestResult{}, ErrInvalidJSON
 	}
 
-	if err := s.store.UpdateLatestPayloadSample(ctx, configuredSource.ID, payload); err != nil {
-		return IngestResult{}, err
-	}
-
 	payloadHash := sha256Hex(input.Body)
 	traceID := s.traceID()
 	messageID := uuid.NewString()
 	now := s.now()
 	receivedAt := now.UTC()
+	s.scheduleLatestPayloadSample(configuredSource.ID, payload, receivedAt)
 	headers, err := json.Marshal(input.Headers)
 	if err != nil {
 		return IngestResult{}, err
 	}
 	if sourceInQuietHours(configuredSource, now) {
-		if err := s.store.EnqueueInbound(ctx, EnqueueInboundParams{
+		startedAt = time.Now()
+		err := s.store.EnqueueInbound(ctx, EnqueueInboundParams{
 			MessageID:     messageID,
 			TraceID:       traceID,
 			SourceID:      configuredSource.ID,
@@ -313,7 +596,9 @@ func (s *Service) Ingest(ctx context.Context, input IngestInput) (IngestResult, 
 			ErrorCode:     "MGP-DND-001",
 			ErrorMessage:  "消息免打扰时间段内静默",
 			SkipRoutePlan: true,
-		}); err != nil {
+		})
+		RecordIngestTiming(ctx, IngestTimingEnqueueInbound, time.Since(startedAt))
+		if err != nil {
 			return IngestResult{}, err
 		}
 		return IngestResult{
@@ -329,6 +614,7 @@ func (s *Service) Ingest(ctx context.Context, input IngestInput) (IngestResult, 
 
 	dedupeKey := ""
 	dedupeTTL := defaultDedupeTTL
+	dedupeReservedByRuntimeStore := false
 	if configuredSource.InboundDedupeEnabled {
 		key, err := inboundDedupeKey(configuredSource, payloadHash)
 		if err != nil {
@@ -336,6 +622,36 @@ func (s *Service) Ingest(ctx context.Context, input IngestInput) (IngestResult, 
 		}
 		dedupeKey = key
 		dedupeTTL = inboundDedupeTTL(configuredSource.InboundDedupeConfig)
+		if s.inboundDedupeStore != nil && s.routePlanPublisher != nil {
+			startedAt = time.Now()
+			reserved, err := s.inboundDedupeStore.ReserveInboundDedupeKey(ctx, configuredSource.ID, dedupeKey, messageID, receivedAt.Add(dedupeTTL))
+			RecordIngestTiming(ctx, IngestTimingInsertInboundDedupeKey, time.Since(startedAt))
+			if err != nil {
+				return IngestResult{}, fmt.Errorf("%w: %v", ErrDedupeStoreFailed, err)
+			}
+			if !reserved {
+				startedAt = time.Now()
+				err := s.store.EnqueueInbound(ctx, EnqueueInboundParams{
+					MessageID:     messageID,
+					TraceID:       traceID,
+					SourceID:      configuredSource.ID,
+					Headers:       headers,
+					Payload:       payload,
+					PayloadHash:   payloadHash,
+					ReceivedAt:    receivedAt,
+					Status:        "deduped",
+					ErrorCode:     "MGP-DEDUPE-001",
+					ErrorMessage:  "入站重复",
+					SkipRoutePlan: true,
+				})
+				RecordIngestTiming(ctx, IngestTimingEnqueueInbound, time.Since(startedAt))
+				if err != nil {
+					return IngestResult{}, err
+				}
+				return IngestResult{}, ErrDuplicateInbound
+			}
+			dedupeReservedByRuntimeStore = true
+		}
 	}
 
 	jobPayload, err := json.Marshal(map[string]string{
@@ -347,7 +663,28 @@ func (s *Service) Ingest(ctx context.Context, input IngestInput) (IngestResult, 
 		return IngestResult{}, err
 	}
 
-	if err := s.store.EnqueueInbound(ctx, EnqueueInboundParams{
+	startedAt = time.Now()
+	if s.routePlanPublisher != nil && (!configuredSource.InboundDedupeEnabled || dedupeReservedByRuntimeStore) {
+		if _, err := s.routePlanPublisher.PublishRoutePlan(ctx, queue.RoutePlanEvent{
+			MessageID:  messageID,
+			SourceID:   configuredSource.ID,
+			TraceID:    traceID,
+			Headers:    headers,
+			Payload:    payload,
+			ReceivedAt: receivedAt,
+		}); err != nil {
+			RecordIngestTiming(ctx, IngestTimingEnqueueInbound, time.Since(startedAt))
+			return IngestResult{}, fmt.Errorf("%w: %v", ErrQueuePublishFailed, err)
+		}
+		RecordIngestTiming(ctx, IngestTimingEnqueueInbound, time.Since(startedAt))
+		return IngestResult{
+			TraceID: traceID,
+			Status:  "accepted",
+			Message: "accepted",
+		}, nil
+	}
+
+	enqueueParams := EnqueueInboundParams{
 		MessageID:     messageID,
 		TraceID:       traceID,
 		SourceID:      configuredSource.ID,
@@ -361,8 +698,25 @@ func (s *Service) Ingest(ctx context.Context, input IngestInput) (IngestResult, 
 		Status:        "accepted",
 		JobType:       "route_plan",
 		JobPayload:    jobPayload,
-	}); err != nil {
+	}
+	if s.routePlanPublisher != nil {
+		enqueueParams.SkipRoutePlan = true
+		enqueueParams.JobType = ""
+		enqueueParams.JobPayload = nil
+	}
+	err = s.store.EnqueueInbound(ctx, enqueueParams)
+	RecordIngestTiming(ctx, IngestTimingEnqueueInbound, time.Since(startedAt))
+	if err != nil {
 		return IngestResult{}, err
+	}
+	if s.routePlanPublisher != nil {
+		if _, err := s.routePlanPublisher.PublishRoutePlan(ctx, queue.RoutePlanEvent{
+			MessageID: messageID,
+			SourceID:  configuredSource.ID,
+			TraceID:   traceID,
+		}); err != nil {
+			return IngestResult{}, fmt.Errorf("%w: %v", ErrQueuePublishFailed, err)
+		}
 	}
 
 	return IngestResult{
@@ -370,6 +724,113 @@ func (s *Service) Ingest(ctx context.Context, input IngestInput) (IngestResult, 
 		Status:  "accepted",
 		Message: "accepted",
 	}, nil
+}
+
+func (s *Service) sourceByCode(ctx context.Context, code string) (Source, error) {
+	if s == nil || s.store == nil {
+		return Source{}, ErrNotFound
+	}
+	code = strings.TrimSpace(code)
+	if code == "" {
+		return Source{}, ErrNotFound
+	}
+	ttl := s.sourceCacheTTL
+	if ttl > 0 {
+		now := time.Now()
+		s.sourceCacheMu.RLock()
+		entry, ok := s.sourceCacheByCode[code]
+		s.sourceCacheMu.RUnlock()
+		if ok && entry.expiresAt.After(now) {
+			return cloneSource(entry.source), nil
+		}
+
+		s.sourceCacheMu.Lock()
+		defer s.sourceCacheMu.Unlock()
+		entry, ok = s.sourceCacheByCode[code]
+		if ok && entry.expiresAt.After(now) {
+			return cloneSource(entry.source), nil
+		}
+		configuredSource, err := s.store.GetSourceByCode(ctx, code)
+		if err != nil {
+			return Source{}, err
+		}
+		if s.sourceCacheByCode == nil {
+			s.sourceCacheByCode = make(map[string]sourceConfigCacheEntry)
+		}
+		s.sourceCacheByCode[code] = sourceConfigCacheEntry{
+			source:    cloneSource(configuredSource),
+			expiresAt: time.Now().Add(ttl),
+		}
+		return cloneSource(configuredSource), nil
+	}
+	configuredSource, err := s.store.GetSourceByCode(ctx, code)
+	if err != nil {
+		return Source{}, err
+	}
+	return configuredSource, nil
+}
+
+func (s *Service) invalidateSourceConfigCache(code string) {
+	if s == nil {
+		return
+	}
+	code = strings.TrimSpace(code)
+	s.sourceCacheMu.Lock()
+	defer s.sourceCacheMu.Unlock()
+	if code == "" {
+		s.sourceCacheByCode = make(map[string]sourceConfigCacheEntry)
+		return
+	}
+	delete(s.sourceCacheByCode, code)
+}
+
+func (s *Service) setSourceConfigCache(configuredSource Source) {
+	if s == nil || s.sourceCacheTTL <= 0 {
+		return
+	}
+	code := strings.TrimSpace(configuredSource.Code)
+	if code == "" {
+		return
+	}
+	s.sourceCacheMu.Lock()
+	defer s.sourceCacheMu.Unlock()
+	if s.sourceCacheByCode == nil {
+		s.sourceCacheByCode = make(map[string]sourceConfigCacheEntry)
+	}
+	s.sourceCacheByCode[code] = sourceConfigCacheEntry{
+		source:    cloneSource(configuredSource),
+		expiresAt: time.Now().Add(s.sourceCacheTTL),
+	}
+}
+
+func (s *Service) applyLatestPayloadSample(ctx context.Context, configuredSource Source) Source {
+	if s == nil || s.latestPayloadStore == nil || strings.TrimSpace(configuredSource.ID) == "" {
+		return configuredSource
+	}
+	payload, sampledAt, found, err := s.latestPayloadStore.GetLatestPayloadSample(ctx, configuredSource.ID)
+	if err != nil || !found {
+		return configuredSource
+	}
+	configuredSource.LatestPayloadSample = append(json.RawMessage(nil), payload...)
+	value := sampledAt.UTC()
+	configuredSource.LatestPayloadSampleUpdatedAt = &value
+	return configuredSource
+}
+
+func (s *Service) deleteLatestPayloadSample(ctx context.Context, sourceID string) {
+	if s == nil || s.latestPayloadStore == nil || strings.TrimSpace(sourceID) == "" {
+		return
+	}
+	_ = s.latestPayloadStore.DeleteLatestPayloadSample(ctx, sourceID)
+}
+
+func cloneSource(input Source) Source {
+	input.IPAllowlist = append([]string(nil), input.IPAllowlist...)
+	input.InboundDedupeConfig = append(json.RawMessage(nil), input.InboundDedupeConfig...)
+	input.RateLimitConfig = append(json.RawMessage(nil), input.RateLimitConfig...)
+	input.QuietHoursConfig = append(json.RawMessage(nil), input.QuietHoursConfig...)
+	input.LatestPayloadSample = append(json.RawMessage(nil), input.LatestPayloadSample...)
+	return input
 }
 
 func (s *Service) maxPayloadBytes(ctx context.Context) int64 {
@@ -588,6 +1049,13 @@ func (s *Service) validHMAC(ctx context.Context, sourceID string, secret string,
 	nonce, ok := validHMACSignature(secret, method, path, headers, body, now)
 	if !ok {
 		return false, nil
+	}
+	if s.hmacNonceStore != nil {
+		reserved, err := s.hmacNonceStore.ReserveHMACNonce(ctx, sourceID, nonce, now, now.Add(hmacNonceTTL))
+		if err != nil {
+			return false, fmt.Errorf("%w: %v", ErrHMACNonceStoreFailed, err)
+		}
+		return reserved, nil
 	}
 	return s.store.ReserveHMACNonce(ctx, sourceID, nonce, now, now.Add(hmacNonceTTL))
 }

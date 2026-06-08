@@ -38,6 +38,7 @@ func (r Repository) ListMessages(ctx context.Context, filter messagelog.ListFilt
 			source.name,
 			message.received_at,
 			message.status,
+			message.status AS inbound_status,
 			COALESCE(flow.id::text, ''),
 			COALESCE(flow.name, ''),
 			COALESCE(message.matched_rule_ids::text[], ARRAY[]::text[]),
@@ -45,6 +46,7 @@ func (r Repository) ListMessages(ctx context.Context, filter messagelog.ListFilt
 			COALESCE(message.error_message, ''),
 			CASE
 				WHEN count(attempt.id) = 0 THEN ''
+				WHEN bool_or(attempt.dead_lettered_at IS NOT NULL) THEN 'dead'
 				WHEN bool_or(attempt.status = 'failed') THEN 'failed'
 				WHEN bool_or(attempt.status = 'processing') THEN 'processing'
 				WHEN bool_or(attempt.status = 'queued') THEN 'queued'
@@ -52,6 +54,8 @@ func (r Repository) ListMessages(ctx context.Context, filter messagelog.ListFilt
 				WHEN bool_or(attempt.status = 'sent') THEN 'partial_sent'
 				ELSE max(attempt.status)
 			END AS outbound_status,
+			min(COALESCE(attempt.queued_at, attempt.started_at, attempt.finished_at)) AS first_outbound_at,
+			max(COALESCE(attempt.finished_at, attempt.started_at, attempt.queued_at)) AS last_outbound_at,
 			count(attempt.id)::integer AS attempt_count,
 			COALESCE(array_remove(array_agg(DISTINCT COALESCE(channel.id::text, '')), ''), ARRAY[]::text[]),
 			COALESCE(array_remove(array_agg(DISTINCT COALESCE(channel.name, '')), ''), ARRAY[]::text[]),
@@ -92,6 +96,8 @@ func (r Repository) ListMessages(ctx context.Context, filter messagelog.ListFilt
 func (r Repository) GetMessage(ctx context.Context, id string) (messagelog.MessageDetail, error) {
 	var detail messagelog.MessageDetail
 	var summary messagelog.MessageSummary
+	var firstOutboundAt pgtype.Timestamptz
+	var lastOutboundAt pgtype.Timestamptz
 	err := r.pool.QueryRow(ctx, `
 		SELECT
 			message.id,
@@ -100,12 +106,15 @@ func (r Repository) GetMessage(ctx context.Context, id string) (messagelog.Messa
 			source.name,
 			message.received_at,
 			message.status,
+			message.status AS inbound_status,
 			COALESCE(flow.id::text, ''),
 			COALESCE(flow.name, ''),
 			COALESCE(message.matched_rule_ids::text[], ARRAY[]::text[]),
 			COALESCE(message.error_code, ''),
 			COALESCE(message.error_message, ''),
 			'' AS outbound_status,
+			NULL::timestamptz AS first_outbound_at,
+			NULL::timestamptz AS last_outbound_at,
 			0 AS attempt_count,
 			ARRAY[]::text[] AS target_channel_ids,
 			ARRAY[]::text[] AS target_channel_names,
@@ -127,12 +136,15 @@ func (r Repository) GetMessage(ctx context.Context, id string) (messagelog.Messa
 		&summary.SourceName,
 		&summary.ReceivedAt,
 		&summary.Status,
+		&summary.InboundStatus,
 		&summary.MatchedFlowID,
 		&summary.MatchedFlowName,
 		&summary.MatchedRuleIDs,
 		&summary.ErrorCode,
 		&summary.ErrorMessage,
 		&summary.OutboundStatus,
+		&firstOutboundAt,
+		&lastOutboundAt,
 		&summary.AttemptCount,
 		&summary.TargetChannelIDs,
 		&summary.TargetChannelNames,
@@ -150,6 +162,8 @@ func (r Repository) GetMessage(ctx context.Context, id string) (messagelog.Messa
 		}
 		return messagelog.MessageDetail{}, fmt.Errorf("get message log: %w", err)
 	}
+	summary.FirstOutboundAt = optionalTime(firstOutboundAt)
+	summary.LastOutboundAt = optionalTime(lastOutboundAt)
 	detail.MessageSummary = summary
 
 	attempts, err := r.listAttemptsForMessage(ctx, id)
@@ -228,7 +242,14 @@ func messageLogWhere(filter messagelog.ListFilter) (string, []any) {
 		add("message.source_id = $%d", filter.SourceID)
 	}
 	if strings.TrimSpace(filter.Status) != "" {
-		add("message.status = $%d", filter.Status)
+		status := strings.TrimSpace(filter.Status)
+		args = append(args, status)
+		index := len(args)
+		if status == "dead" {
+			clauses = append(clauses, fmt.Sprintf("(message.status = $%d OR attempt.dead_lettered_at IS NOT NULL)", index))
+		} else {
+			clauses = append(clauses, fmt.Sprintf("(message.status = $%d OR attempt.status = $%d)", index, index))
+		}
 	}
 	if strings.TrimSpace(filter.ChannelID) != "" {
 		add("attempt.channel_id = $%d", filter.ChannelID)
@@ -238,6 +259,8 @@ func messageLogWhere(filter messagelog.ListFilter) (string, []any) {
 
 func scanMessageSummary(row sourceScanner) (messagelog.MessageSummary, error) {
 	var item messagelog.MessageSummary
+	var firstOutboundAt pgtype.Timestamptz
+	var lastOutboundAt pgtype.Timestamptz
 	if err := row.Scan(
 		&item.ID,
 		&item.TraceID,
@@ -245,12 +268,15 @@ func scanMessageSummary(row sourceScanner) (messagelog.MessageSummary, error) {
 		&item.SourceName,
 		&item.ReceivedAt,
 		&item.Status,
+		&item.InboundStatus,
 		&item.MatchedFlowID,
 		&item.MatchedFlowName,
 		&item.MatchedRuleIDs,
 		&item.ErrorCode,
 		&item.ErrorMessage,
 		&item.OutboundStatus,
+		&firstOutboundAt,
+		&lastOutboundAt,
 		&item.AttemptCount,
 		&item.TargetChannelIDs,
 		&item.TargetChannelNames,
@@ -261,6 +287,8 @@ func scanMessageSummary(row sourceScanner) (messagelog.MessageSummary, error) {
 	); err != nil {
 		return messagelog.MessageSummary{}, err
 	}
+	item.FirstOutboundAt = optionalTime(firstOutboundAt)
+	item.LastOutboundAt = optionalTime(lastOutboundAt)
 	return item, nil
 }
 
@@ -322,6 +350,9 @@ func outboundStatus(attempts []messagelog.DeliveryAttempt) string {
 	allSent := true
 	anySent := false
 	for _, attempt := range attempts {
+		if attempt.DeadLetteredAt != nil {
+			return "dead"
+		}
 		switch attempt.Status {
 		case "failed":
 			return "failed"

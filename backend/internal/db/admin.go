@@ -242,3 +242,15 @@ func (r Repository) RevokeAdminSession(ctx context.Context, tokenHash string) er
 	}
 	return nil
 }
+
+func (r Repository) RevokeAdminSessionsByAdminID(ctx context.Context, adminID string) error {
+	_, err := r.pool.Exec(ctx, `
+		UPDATE admin_sessions
+		SET revoked_at = now()
+		WHERE admin_id = $1 AND revoked_at IS NULL
+	`, adminID)
+	if err != nil {
+		return fmt.Errorf("revoke admin sessions by admin id: %w", err)
+	}
+	return nil
+}

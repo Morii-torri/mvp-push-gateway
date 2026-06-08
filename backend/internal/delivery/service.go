@@ -9,6 +9,7 @@ import (
 	"io"
 	"math"
 	"net/http"
+	"net/http/httptrace"
 	"net/url"
 	"strings"
 	"sync"
@@ -34,11 +35,15 @@ const (
 	defaultRetryDelay = time.Second
 )
 
+var ErrRetryScheduled = errors.New("delivery retry scheduled")
+
 type Attempt struct {
 	ID                string
 	MessageID         string
+	SourceID          string
 	ChannelID         string
 	TemplateVersionID string
+	RecipientSnapshot json.RawMessage
 	Status            Status
 	ErrorCode         string
 	ErrorMessage      string
@@ -51,16 +56,58 @@ type Attempt struct {
 	QueuedAt          *time.Time
 	StartedAt         *time.Time
 	FinishedAt        *time.Time
+	InboundHeaders    json.RawMessage
+	InboundPayload    json.RawMessage
+	InboundReceivedAt time.Time
 }
 
 type SendMessageJobPayload struct {
 	DeliveryAttemptID string          `json:"delivery_attempt_id"`
+	MessageID         string          `json:"message_id,omitempty"`
+	SourceID          string          `json:"source_id,omitempty"`
+	ChannelID         string          `json:"channel_id,omitempty"`
+	TemplateVersionID string          `json:"template_version_id,omitempty"`
+	RecipientSnapshot json.RawMessage `json:"recipient_snapshot,omitempty"`
 	DedupeKey         string          `json:"dedupe_key"`
 	DedupeTTLSeconds  int             `json:"dedupe_ttl_seconds"`
 	MessageType       string          `json:"message_type"`
+	TraceID           string          `json:"trace_id,omitempty"`
 	Token             string          `json:"token"`
 	Recipient         any             `json:"recipient"`
 	Body              json.RawMessage `json:"body"`
+	InboundHeaders    json.RawMessage `json:"inbound_headers,omitempty"`
+	InboundPayload    json.RawMessage `json:"inbound_payload,omitempty"`
+	InboundReceivedAt time.Time       `json:"inbound_received_at,omitempty"`
+}
+
+type TimingStage string
+
+const (
+	TimingClaimJobs    TimingStage = "delivery_claim"
+	TimingDispatchHTTP TimingStage = "delivery_dispatch"
+	TimingSendHTTP     TimingStage = "delivery_send"
+	TimingComplete     TimingStage = "delivery_complete"
+)
+
+type TimingRecorder interface {
+	RecordDeliveryTiming(traceID string, stage TimingStage, duration time.Duration)
+}
+
+type timingRecorderContextKey struct{}
+
+func WithTimingRecorder(ctx context.Context, recorder TimingRecorder) context.Context {
+	if recorder == nil {
+		return ctx
+	}
+	return context.WithValue(ctx, timingRecorderContextKey{}, recorder)
+}
+
+func recordTiming(ctx context.Context, traceID string, stage TimingStage, duration time.Duration) {
+	recorder, ok := ctx.Value(timingRecorderContextKey{}).(TimingRecorder)
+	if !ok || recorder == nil {
+		return
+	}
+	recorder.RecordDeliveryTiming(traceID, stage, duration)
 }
 
 type DeadLetterRecord struct {
@@ -84,42 +131,69 @@ type SendDedupeParams struct {
 }
 
 type CompleteDeliveryParams struct {
-	JobID            string
-	WorkerID         string
-	AttemptID        string
-	AttemptNo        int
-	Status           Status
-	RequestSnapshot  json.RawMessage
-	ResponseSnapshot json.RawMessage
-	DurationMS       int
-	FinishedAt       time.Time
+	JobID             string
+	WorkerID          string
+	AttemptID         string
+	MessageID         string
+	SourceID          string
+	ChannelID         string
+	TemplateVersionID string
+	RecipientSnapshot json.RawMessage
+	TraceID           string
+	AttemptNo         int
+	Status            Status
+	RequestSnapshot   json.RawMessage
+	ResponseSnapshot  json.RawMessage
+	DurationMS        int
+	FinishedAt        time.Time
+	InboundHeaders    json.RawMessage
+	InboundPayload    json.RawMessage
+	InboundReceivedAt time.Time
 }
 
 type RetryDeliveryParams struct {
-	JobID            string
-	WorkerID         string
-	AttemptID        string
-	AttemptNo        int
-	ErrorCode        string
-	ErrorMessage     string
-	RequestSnapshot  json.RawMessage
-	ResponseSnapshot json.RawMessage
-	DurationMS       int
-	RetryAt          time.Time
-	FinishedAt       time.Time
+	JobID             string
+	WorkerID          string
+	AttemptID         string
+	MessageID         string
+	SourceID          string
+	ChannelID         string
+	TemplateVersionID string
+	RecipientSnapshot json.RawMessage
+	TraceID           string
+	AttemptNo         int
+	ErrorCode         string
+	ErrorMessage      string
+	RequestSnapshot   json.RawMessage
+	ResponseSnapshot  json.RawMessage
+	DurationMS        int
+	RetryAt           time.Time
+	FinishedAt        time.Time
+	InboundHeaders    json.RawMessage
+	InboundPayload    json.RawMessage
+	InboundReceivedAt time.Time
 }
 
 type DeadLetterDeliveryParams struct {
-	JobID            string
-	WorkerID         string
-	AttemptID        string
-	AttemptNo        int
-	ErrorCode        string
-	ErrorMessage     string
-	RequestSnapshot  json.RawMessage
-	ResponseSnapshot json.RawMessage
-	DurationMS       int
-	FinishedAt       time.Time
+	JobID             string
+	WorkerID          string
+	AttemptID         string
+	ChannelID         string
+	MessageID         string
+	SourceID          string
+	TemplateVersionID string
+	RecipientSnapshot json.RawMessage
+	TraceID           string
+	AttemptNo         int
+	ErrorCode         string
+	ErrorMessage      string
+	RequestSnapshot   json.RawMessage
+	ResponseSnapshot  json.RawMessage
+	DurationMS        int
+	FinishedAt        time.Time
+	InboundHeaders    json.RawMessage
+	InboundPayload    json.RawMessage
+	InboundReceivedAt time.Time
 }
 
 type Repository interface {
@@ -134,12 +208,54 @@ type Repository interface {
 	DeadLetterDelivery(context.Context, DeadLetterDeliveryParams) error
 }
 
+type BatchCompleteRepository interface {
+	CompleteDeliveries(context.Context, []CompleteDeliveryParams) error
+}
+
+type completeDeliveryCollectorKey struct{}
+
+type completeDeliveryCollector struct {
+	mu    sync.Mutex
+	items []CompleteDeliveryParams
+}
+
+func withCompleteDeliveryCollector(ctx context.Context, collector *completeDeliveryCollector) context.Context {
+	if collector == nil {
+		return ctx
+	}
+	return context.WithValue(ctx, completeDeliveryCollectorKey{}, collector)
+}
+
+func completeDeliveryCollectorFromContext(ctx context.Context) *completeDeliveryCollector {
+	collector, _ := ctx.Value(completeDeliveryCollectorKey{}).(*completeDeliveryCollector)
+	return collector
+}
+
+func (c *completeDeliveryCollector) add(params CompleteDeliveryParams) {
+	if c == nil {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.items = append(c.items, params)
+}
+
+func (c *completeDeliveryCollector) snapshot() []CompleteDeliveryParams {
+	if c == nil {
+		return nil
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return append([]CompleteDeliveryParams(nil), c.items...)
+}
+
 type Worker struct {
 	repo              Repository
 	workerID          string
 	now               func() time.Time
 	httpClientFactory func(time.Duration) *http.Client
 	buildRequest      func(provider.Channel, provider.BuildDeliveryRequestInput) (provider.BuiltRequest, error)
+	resultPublisher   ResultPublisher
 
 	mu         sync.Mutex
 	semaphores map[string]chan struct{}
@@ -171,6 +287,12 @@ func WithHTTPClientFactory(factory func(time.Duration) *http.Client) WorkerOptio
 		if factory != nil {
 			w.httpClientFactory = factory
 		}
+	}
+}
+
+func WithResultPublisher(publisher ResultPublisher) WorkerOption {
+	return func(w *Worker) {
+		w.resultPublisher = publisher
 	}
 }
 
@@ -209,6 +331,7 @@ func (w *Worker) ProcessBatch(ctx context.Context, limit int) (int, error) {
 		limit = 1
 	}
 	now := w.now()
+	claimStartedAt := time.Now()
 	jobs, err := w.repo.ClaimSendJobs(ctx, queue.ClaimParams{
 		WorkerID: w.workerID,
 		Types:    []queue.JobType{queue.JobTypeSendMessage},
@@ -218,10 +341,18 @@ func (w *Worker) ProcessBatch(ctx context.Context, limit int) (int, error) {
 	if err != nil {
 		return 0, err
 	}
+	claimDuration := time.Since(claimStartedAt)
+	for _, job := range jobs {
+		if payload, err := decodePayload(job.Payload); err == nil {
+			recordTiming(ctx, payload.TraceID, TimingClaimJobs, claimDuration)
+		}
+	}
 	if len(jobs) == 0 {
 		return 0, nil
 	}
 
+	collector := &completeDeliveryCollector{}
+	batchCtx := withCompleteDeliveryCollector(ctx, collector)
 	var wg sync.WaitGroup
 	var firstErr error
 	var errMu sync.Mutex
@@ -230,7 +361,7 @@ func (w *Worker) ProcessBatch(ctx context.Context, limit int) (int, error) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			if err := w.ProcessOne(ctx, job); err != nil {
+			if err := w.ProcessOne(batchCtx, job); err != nil {
 				errMu.Lock()
 				if firstErr == nil {
 					firstErr = err
@@ -240,7 +371,58 @@ func (w *Worker) ProcessBatch(ctx context.Context, limit int) (int, error) {
 		}()
 	}
 	wg.Wait()
+	if err := w.flushCompleteDeliveryCollector(ctx, collector); err != nil {
+		if firstErr == nil {
+			firstErr = err
+		}
+	}
 	return len(jobs), firstErr
+}
+
+func (w *Worker) ProcessSendMessage(ctx context.Context, message queue.SendMessage) error {
+	if w == nil || w.repo == nil {
+		return errors.New("delivery worker is not configured")
+	}
+	job, err := sendJobFromEvent(message.Event, message.DeliveryCount)
+	if err != nil {
+		return errors.Join(err, nakSendMessage(message, defaultRetryDelay))
+	}
+	if err := w.ProcessOne(ctx, job); err != nil {
+		return errors.Join(err, nakSendMessage(message, defaultRetryDelay))
+	}
+	if message.Ack != nil {
+		return message.Ack()
+	}
+	return nil
+}
+
+func (w *Worker) flushCompleteDeliveryCollector(ctx context.Context, collector *completeDeliveryCollector) error {
+	params := collector.snapshot()
+	if len(params) == 0 {
+		return nil
+	}
+	completeStartedAt := time.Now()
+	var err error
+	if w.resultPublisher != nil {
+		for _, item := range params {
+			if itemErr := w.resultPublisher.PublishDeliveryResult(ctx, NewDeliveryResultEvent(item)); itemErr != nil {
+				err = errors.Join(err, itemErr)
+			}
+		}
+	} else if batchRepo, ok := w.repo.(BatchCompleteRepository); ok {
+		err = batchRepo.CompleteDeliveries(ctx, params)
+	} else {
+		for _, item := range params {
+			if itemErr := w.repo.CompleteDelivery(ctx, item); itemErr != nil {
+				err = errors.Join(err, itemErr)
+			}
+		}
+	}
+	duration := time.Since(completeStartedAt)
+	for _, item := range params {
+		recordTiming(ctx, item.TraceID, TimingComplete, duration)
+	}
+	return err
 }
 
 func (w *Worker) ProcessOne(ctx context.Context, job queue.Job) error {
@@ -252,9 +434,13 @@ func (w *Worker) ProcessOne(ctx context.Context, job queue.Job) error {
 		return errors.New("delivery attempt id is required")
 	}
 
-	attempt, err := w.repo.GetAttempt(ctx, payload.DeliveryAttemptID)
-	if err != nil {
-		return fmt.Errorf("load attempt %s: %w", payload.DeliveryAttemptID, err)
+	attempt, directAttempt := attemptFromDirectPayload(payload)
+	if !directAttempt {
+		var err error
+		attempt, err = w.repo.GetAttempt(ctx, payload.DeliveryAttemptID)
+		if err != nil {
+			return fmt.Errorf("load attempt %s: %w", payload.DeliveryAttemptID, err)
+		}
 	}
 
 	channelID := strings.TrimSpace(job.ChannelID)
@@ -289,12 +475,14 @@ func (w *Worker) ProcessOne(ctx context.Context, job queue.Job) error {
 	if attemptNo <= 0 {
 		attemptNo = 1
 	}
-	if err := w.repo.MarkAttemptProcessing(ctx, MarkAttemptProcessingParams{
-		AttemptID: attempt.ID,
-		AttemptNo: attemptNo,
-		StartedAt: startedAt,
-	}); err != nil {
-		return fmt.Errorf("mark attempt processing: %w", err)
+	if !directAttempt {
+		if err := w.repo.MarkAttemptProcessing(ctx, MarkAttemptProcessingParams{
+			AttemptID: attempt.ID,
+			AttemptNo: attemptNo,
+			StartedAt: startedAt,
+		}); err != nil {
+			return fmt.Errorf("mark attempt processing: %w", err)
+		}
 	}
 
 	targetContext := provider.DeliveryTargetContext{
@@ -354,10 +542,11 @@ func (w *Worker) ProcessOne(ctx context.Context, job queue.Job) error {
 			if err != nil {
 				return err
 			}
-			return w.repo.CompleteDelivery(ctx, CompleteDeliveryParams{
+			return w.completeDelivery(ctx, CompleteDeliveryParams{
 				JobID:            job.ID,
 				WorkerID:         w.workerID,
 				AttemptID:        attempt.ID,
+				TraceID:          payload.TraceID,
 				AttemptNo:        attemptNo,
 				Status:           StatusDeduped,
 				RequestSnapshot:  requestRaw,
@@ -415,7 +604,9 @@ func (w *Worker) ProcessOne(ctx context.Context, job queue.Job) error {
 	requestSnapshot["final_request"] = redactedBuiltRequestSnapshot(builtRequest, nil)
 	requestSnapshot["send"] = redactedBuiltRequestSnapshot(builtRequest, payload.Recipient)
 
-	statusCode, responseHeaders, responseBody, sendErr := w.send(ctx, channel, builtRequest)
+	sendStartedAt := time.Now()
+	statusCode, responseHeaders, responseBody, sendErr := w.send(ctx, channel, builtRequest, payload.TraceID, sendStartedAt)
+	recordTiming(ctx, payload.TraceID, TimingSendHTTP, time.Since(sendStartedAt))
 	if sendErr == nil && tokenBehavior.Resolver != nil && shouldRefreshToken(responseBody, capability, capabilitySource, tokenBehavior.Resolver.RefreshCodes) {
 		_ = w.tokenManager.Invalidate(ctx, resolvedTokenCacheKey, "upstream token refresh code")
 		resolution, tokenErr := w.tokenManager.ResolveWithResolver(ctx, provider.TokenResolveInput{
@@ -447,7 +638,9 @@ func (w *Worker) ProcessOne(ctx context.Context, job queue.Job) error {
 		}
 		requestSnapshot["final_request"] = redactedBuiltRequestSnapshot(builtRequest, nil)
 		requestSnapshot["send"] = redactedBuiltRequestSnapshot(builtRequest, payload.Recipient)
-		statusCode, responseHeaders, responseBody, sendErr = w.send(ctx, channel, builtRequest)
+		sendStartedAt = time.Now()
+		statusCode, responseHeaders, responseBody, sendErr = w.send(ctx, channel, builtRequest, payload.TraceID, sendStartedAt)
+		recordTiming(ctx, payload.TraceID, TimingSendHTTP, time.Since(sendStartedAt))
 		responseSnapshot["token_refreshed"] = true
 	}
 	upstreamResponse := map[string]any{
@@ -488,17 +681,64 @@ func (w *Worker) ProcessOne(ctx context.Context, job queue.Job) error {
 	if err != nil {
 		return err
 	}
-	return w.repo.CompleteDelivery(ctx, CompleteDeliveryParams{
-		JobID:            job.ID,
-		WorkerID:         w.workerID,
-		AttemptID:        attempt.ID,
-		AttemptNo:        attemptNo,
-		Status:           StatusSent,
-		RequestSnapshot:  requestRaw,
-		ResponseSnapshot: responseRaw,
-		DurationMS:       durationMS(startedAt, w.now()),
-		FinishedAt:       w.now(),
+	completeStartedAt := time.Now()
+	err = w.completeDelivery(ctx, CompleteDeliveryParams{
+		JobID:             job.ID,
+		WorkerID:          w.workerID,
+		AttemptID:         attempt.ID,
+		MessageID:         attempt.MessageID,
+		SourceID:          attempt.SourceID,
+		ChannelID:         attempt.ChannelID,
+		TemplateVersionID: attempt.TemplateVersionID,
+		RecipientSnapshot: attempt.RecipientSnapshot,
+		TraceID:           payload.TraceID,
+		AttemptNo:         attemptNo,
+		Status:            StatusSent,
+		RequestSnapshot:   requestRaw,
+		ResponseSnapshot:  responseRaw,
+		DurationMS:        durationMS(startedAt, w.now()),
+		FinishedAt:        w.now(),
+		InboundHeaders:    attempt.InboundHeaders,
+		InboundPayload:    attempt.InboundPayload,
+		InboundReceivedAt: attempt.InboundReceivedAt,
 	})
+	if completeDeliveryCollectorFromContext(ctx) == nil {
+		recordTiming(ctx, payload.TraceID, TimingComplete, time.Since(completeStartedAt))
+	}
+	return err
+}
+
+func (w *Worker) completeDelivery(ctx context.Context, params CompleteDeliveryParams) error {
+	if collector := completeDeliveryCollectorFromContext(ctx); collector != nil {
+		collector.add(params)
+		return nil
+	}
+	if w.resultPublisher != nil {
+		return w.resultPublisher.PublishDeliveryResult(ctx, NewDeliveryResultEvent(params))
+	}
+	return w.repo.CompleteDelivery(ctx, params)
+}
+
+func attemptFromDirectPayload(payload SendMessageJobPayload) (Attempt, bool) {
+	attemptID := strings.TrimSpace(payload.DeliveryAttemptID)
+	messageID := strings.TrimSpace(payload.MessageID)
+	channelID := strings.TrimSpace(payload.ChannelID)
+	templateVersionID := strings.TrimSpace(payload.TemplateVersionID)
+	if attemptID == "" || messageID == "" || channelID == "" || templateVersionID == "" {
+		return Attempt{}, false
+	}
+	return Attempt{
+		ID:                attemptID,
+		MessageID:         messageID,
+		SourceID:          strings.TrimSpace(payload.SourceID),
+		ChannelID:         channelID,
+		TemplateVersionID: templateVersionID,
+		RecipientSnapshot: append(json.RawMessage(nil), payload.RecipientSnapshot...),
+		Status:            StatusProcessing,
+		InboundHeaders:    append(json.RawMessage(nil), payload.InboundHeaders...),
+		InboundPayload:    append(json.RawMessage(nil), payload.InboundPayload...),
+		InboundReceivedAt: payload.InboundReceivedAt,
+	}, true
 }
 
 func (w *Worker) loadCapability(ctx context.Context, providerType provider.ProviderType, messageType string) (provider.Capability, string, error) {
@@ -568,33 +808,60 @@ func (w *Worker) failAttempt(
 	}
 
 	if !classification.Retryable || attemptNo >= maxAttempts {
-		return w.repo.DeadLetterDelivery(ctx, DeadLetterDeliveryParams{
-			JobID:            job.ID,
-			WorkerID:         w.workerID,
-			AttemptID:        attempt.ID,
-			AttemptNo:        attemptNo,
-			ErrorCode:        errorCode,
-			ErrorMessage:     errorMessage,
-			RequestSnapshot:  requestRaw,
-			ResponseSnapshot: responseRaw,
-			DurationMS:       duration,
-			FinishedAt:       finishedAt,
-		})
+		params := DeadLetterDeliveryParams{
+			JobID:             job.ID,
+			WorkerID:          w.workerID,
+			AttemptID:         attempt.ID,
+			ChannelID:         attempt.ChannelID,
+			MessageID:         attempt.MessageID,
+			SourceID:          attempt.SourceID,
+			TemplateVersionID: attempt.TemplateVersionID,
+			RecipientSnapshot: attempt.RecipientSnapshot,
+			AttemptNo:         attemptNo,
+			ErrorCode:         errorCode,
+			ErrorMessage:      errorMessage,
+			RequestSnapshot:   requestRaw,
+			ResponseSnapshot:  responseRaw,
+			DurationMS:        duration,
+			FinishedAt:        finishedAt,
+			InboundHeaders:    attempt.InboundHeaders,
+			InboundPayload:    attempt.InboundPayload,
+			InboundReceivedAt: attempt.InboundReceivedAt,
+		}
+		if w.resultPublisher != nil {
+			return w.resultPublisher.PublishDeliveryResult(ctx, NewDeadLetterDeliveryResultEvent(params))
+		}
+		return w.repo.DeadLetterDelivery(ctx, params)
 	}
 
-	return w.repo.RetryDelivery(ctx, RetryDeliveryParams{
-		JobID:            job.ID,
-		WorkerID:         w.workerID,
-		AttemptID:        attempt.ID,
-		AttemptNo:        attemptNo,
-		ErrorCode:        errorCode,
-		ErrorMessage:     errorMessage,
-		RequestSnapshot:  requestRaw,
-		ResponseSnapshot: responseRaw,
-		DurationMS:       duration,
-		RetryAt:          finishedAt.Add(retryPolicy.Delay()),
-		FinishedAt:       finishedAt,
-	})
+	params := RetryDeliveryParams{
+		JobID:             job.ID,
+		WorkerID:          w.workerID,
+		AttemptID:         attempt.ID,
+		MessageID:         attempt.MessageID,
+		SourceID:          attempt.SourceID,
+		ChannelID:         attempt.ChannelID,
+		TemplateVersionID: attempt.TemplateVersionID,
+		RecipientSnapshot: attempt.RecipientSnapshot,
+		AttemptNo:         attemptNo,
+		ErrorCode:         errorCode,
+		ErrorMessage:      errorMessage,
+		RequestSnapshot:   requestRaw,
+		ResponseSnapshot:  responseRaw,
+		DurationMS:        duration,
+		RetryAt:           finishedAt.Add(retryPolicy.Delay()),
+		FinishedAt:        finishedAt,
+		InboundHeaders:    attempt.InboundHeaders,
+		InboundPayload:    attempt.InboundPayload,
+		InboundReceivedAt: attempt.InboundReceivedAt,
+	}
+	if w.resultPublisher != nil {
+		if err := w.resultPublisher.PublishDeliveryResult(ctx, NewRetryDeliveryResultEvent(params)); err != nil {
+			return err
+		}
+		return ErrRetryScheduled
+	}
+	return w.repo.RetryDelivery(ctx, params)
 }
 
 type failureClassification struct {
@@ -605,7 +872,7 @@ func retryableFailure() failureClassification {
 	return failureClassification{Retryable: true}
 }
 
-func (w *Worker) send(ctx context.Context, channel provider.Channel, built provider.BuiltRequest) (int, map[string][]string, []byte, error) {
+func (w *Worker) send(ctx context.Context, channel provider.Channel, built provider.BuiltRequest, traceID string, sendStartedAt time.Time) (int, map[string][]string, []byte, error) {
 	body := built.Body
 	if len(bytes.TrimSpace(body)) == 0 {
 		body = json.RawMessage(`{}`)
@@ -620,19 +887,35 @@ func (w *Worker) send(ctx context.Context, channel provider.Channel, built provi
 	if req.Header.Get("Content-Type") == "" {
 		req.Header.Set("Content-Type", "application/json")
 	}
-	return w.doRequest(channel.TimeoutMS, req)
+	return w.doRequest(channel.TimeoutMS, req, traceID, sendStartedAt)
 }
 
-func (w *Worker) doRequest(timeoutMS int, req *http.Request) (int, map[string][]string, []byte, error) {
+func (w *Worker) doRequest(timeoutMS int, req *http.Request, traceID string, sendStartedAt time.Time) (int, map[string][]string, []byte, error) {
 	timeout := time.Duration(timeoutMS) * time.Millisecond
 	if timeout <= 0 {
 		timeout = 5 * time.Second
+	}
+	var dispatchOnce sync.Once
+	recordDispatch := func() {
+		if strings.TrimSpace(traceID) == "" || sendStartedAt.IsZero() {
+			return
+		}
+		recordTiming(req.Context(), traceID, TimingDispatchHTTP, time.Since(sendStartedAt))
+	}
+	if strings.TrimSpace(traceID) != "" && !sendStartedAt.IsZero() {
+		trace := &httptrace.ClientTrace{
+			WroteRequest: func(httptrace.WroteRequestInfo) {
+				dispatchOnce.Do(recordDispatch)
+			},
+		}
+		req = req.WithContext(httptrace.WithClientTrace(req.Context(), trace))
 	}
 	client := w.httpClientFactory(timeout)
 	resp, err := client.Do(req)
 	if err != nil {
 		return 0, nil, nil, err
 	}
+	dispatchOnce.Do(recordDispatch)
 	defer resp.Body.Close()
 
 	body, readErr := io.ReadAll(resp.Body)
@@ -683,6 +966,48 @@ func decodePayload(raw json.RawMessage) (SendMessageJobPayload, error) {
 		return SendMessageJobPayload{}, fmt.Errorf("decode send job payload: %w", err)
 	}
 	return payload, nil
+}
+
+func sendJobFromEvent(event queue.SendMessageEvent, deliveryCount int) (queue.Job, error) {
+	if err := event.Validate(); err != nil {
+		return queue.Job{}, err
+	}
+	payload := append(json.RawMessage(nil), event.Payload...)
+	if len(bytes.TrimSpace(payload)) == 0 {
+		payload, _ = json.Marshal(SendMessageJobPayload{
+			DeliveryAttemptID: strings.TrimSpace(event.DeliveryAttemptID),
+			MessageID:         strings.TrimSpace(event.MessageID),
+			SourceID:          strings.TrimSpace(event.SourceID),
+			ChannelID:         strings.TrimSpace(event.ChannelID),
+			TraceID:           strings.TrimSpace(event.TraceID),
+		})
+	}
+	return queue.Job{
+		Type:        queue.JobTypeSendMessage,
+		Status:      queue.JobStatusProcessing,
+		Payload:     payload,
+		ChannelID:   strings.TrimSpace(event.ChannelID),
+		Attempts:    positiveInt(deliveryCount, 1),
+		MaxAttempts: positiveInt(event.MaxAttempts, 1),
+		QueueKey:    strings.TrimSpace(event.ChannelID),
+	}, nil
+}
+
+func positiveInt(value int, fallback int) int {
+	if value > 0 {
+		return value
+	}
+	return fallback
+}
+
+func nakSendMessage(message queue.SendMessage, delay time.Duration) error {
+	if message.Nak == nil {
+		return nil
+	}
+	if delay <= 0 {
+		delay = defaultRetryDelay
+	}
+	return message.Nak(delay)
 }
 
 type tokenResolverConfig = provider.TokenResolverConfig

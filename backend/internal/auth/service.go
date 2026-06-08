@@ -27,6 +27,7 @@ type Store interface {
 	CreateAdminSession(ctx context.Context, params CreateSessionParams) error
 	FindAdminBySessionTokenHash(ctx context.Context, tokenHash string, now time.Time) (Session, error)
 	RevokeAdminSession(ctx context.Context, tokenHash string) error
+	RevokeAdminSessionsByAdminID(ctx context.Context, adminID string) error
 }
 
 type Service struct {
@@ -67,9 +68,10 @@ type SessionMeta struct {
 }
 
 type CreateFirstAdminInput struct {
-	Username    string
-	Password    string
-	DisplayName string
+	Username        string
+	Password        string
+	ConfirmPassword string
+	DisplayName     string
 }
 
 type CreateFirstAdminParams struct {
@@ -253,7 +255,10 @@ func (s Service) ChangePassword(ctx context.Context, input ChangePasswordInput) 
 	if err != nil {
 		return err
 	}
-	return s.store.UpdateAdminPassword(ctx, input.AdminID, passwordHash, false)
+	if err := s.store.UpdateAdminPassword(ctx, input.AdminID, passwordHash, false); err != nil {
+		return err
+	}
+	return s.store.RevokeAdminSessionsByAdminID(ctx, input.AdminID)
 }
 
 func (s Service) UpdateProfile(ctx context.Context, input UpdateProfileInput) (Admin, error) {
@@ -272,6 +277,9 @@ func normalizeCreateAdminInput(input CreateFirstAdminInput) (string, string, err
 	}
 	if err := validatePassword(input.Password); err != nil {
 		return "", "", err
+	}
+	if input.Password != input.ConfirmPassword {
+		return "", "", ErrInvalidInput
 	}
 
 	displayName := strings.TrimSpace(input.DisplayName)

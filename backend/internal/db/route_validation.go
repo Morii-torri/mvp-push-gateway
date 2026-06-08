@@ -295,13 +295,12 @@ func (r Repository) loadRouteValidationTemplates(ctx context.Context, ids []stri
 			referenced_version.id::text,
 			template.enabled,
 			COALESCE(template.current_version_id::text, ''),
-			COALESCE(current_version.message_type, ''),
-			COALESCE(current_version.target_provider_type, ''),
-			COALESCE(current_version.validation_status, ''),
-			current_version.published_at
+			referenced_version.message_type,
+			referenced_version.target_provider_type,
+			referenced_version.validation_status,
+			referenced_version.published_at
 		FROM template_versions AS referenced_version
 		JOIN templates AS template ON template.id = referenced_version.template_id
-		LEFT JOIN template_versions AS current_version ON current_version.id = template.current_version_id
 		WHERE referenced_version.id = ANY($1::uuid[])
 	`, ids)
 	if err != nil {

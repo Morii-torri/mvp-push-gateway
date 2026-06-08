@@ -49,9 +49,10 @@ func TestRepositoryFirstRunSetupLifecycle(t *testing.T) {
 	}
 
 	adminUser, err := service.CreateFirstAdmin(ctx, auth.CreateFirstAdminInput{
-		Username:    "Admin",
-		Password:    "valid-password-123",
-		DisplayName: "系统管理员",
+		Username:        "Admin",
+		Password:        "valid-password-123",
+		ConfirmPassword: "valid-password-123",
+		DisplayName:     "系统管理员",
 	})
 	if err != nil {
 		t.Fatalf("create first admin: %v", err)
@@ -69,8 +70,9 @@ func TestRepositoryFirstRunSetupLifecycle(t *testing.T) {
 	}
 
 	_, err = service.CreateFirstAdmin(ctx, auth.CreateFirstAdminInput{
-		Username: "another-admin",
-		Password: "valid-password-456",
+		Username:        "another-admin",
+		Password:        "valid-password-456",
+		ConfirmPassword: "valid-password-456",
 	})
 	if !errors.Is(err, auth.ErrSetupClosed) {
 		t.Fatalf("expected second setup attempt to be blocked, got %v", err)

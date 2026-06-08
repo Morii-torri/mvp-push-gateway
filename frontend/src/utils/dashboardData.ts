@@ -92,6 +92,7 @@ export type QueueMonitoringApiResponse = {
     batch_size: number;
     last_batch_deleted: number;
     total_deleted: number;
+    deleted_audit_logs?: number;
     deleted_dedupe_keys: number;
     completed: boolean;
     has_more: boolean;
@@ -157,6 +158,7 @@ export type QueueMonitoringViewModel = {
   metrics: QueueMetric[];
   trendPoints: number[];
   trendLabels: string[];
+  trendSeries: TrendSeries[];
   platformHealth: PlatformHealth[];
   slowRules: SlowRule[];
   cleanupRows: CleanupRow[];
@@ -194,13 +196,34 @@ export function defaultQueueMonitoringViewModel(): QueueMonitoringViewModel {
     ],
     trendPoints: zeroTrendPoints(),
     trendLabels: zeroTrendLabels(),
+    trendSeries: defaultQueueTrendSeries(),
     platformHealth: [],
     slowRules: [],
     cleanupRows: [
-      { key: 'retention', name: '日志保留期', value: '30 天', status: '默认策略' },
-      { key: 'batch', name: '最近批次删除', value: '0', status: '单批上限 200' },
-      { key: 'state', name: '清理状态', value: '未执行', status: '待下一次执行' },
-      { key: 'deleted', name: '累计删除总数', value: '0', status: '当前批次后无剩余' },
+      {
+        key: 'retention',
+        name: '日志保留期',
+        value: '30 天',
+        status: '默认策略',
+      },
+      {
+        key: 'batch',
+        name: '最近批次删除',
+        value: '0',
+        status: '单批上限 200',
+      },
+      {
+        key: 'state',
+        name: '清理状态',
+        value: '未执行',
+        status: '待下一次执行',
+      },
+      {
+        key: 'deleted',
+        name: '累计删除总数',
+        value: '0',
+        status: '当前批次后无剩余',
+      },
     ],
   };
 }
@@ -213,7 +236,14 @@ export function buildOverviewViewModel(data: OverviewApiResponse, window: Dashbo
       metricCard('sent', '总发送量', `${formatInteger(data.summary.total_sent)} 条`, `${windowCopy(window)}窗口`, 'flat', 'blue'),
       metricCard('successful', '成功发送量', `${formatInteger(data.summary.successful)} 条`, `${windowCopy(window)}成功总量`, 'flat', 'green'),
       metricCard('failed', '失败发送量', `${formatInteger(data.summary.failed)} 条`, `${windowCopy(window)}失败总量`, 'up', 'red'),
-      metricCard('success', '成功率', `${formatPercent(data.summary.success_rate)}`, `${windowCopy(window)}成功 ${formatInteger(data.summary.successful)} 条`, 'up', 'green'),
+      metricCard(
+        'success',
+        '成功率',
+        `${formatPercent(data.summary.success_rate)}`,
+        `${windowCopy(window)}成功 ${formatInteger(data.summary.successful)} 条`,
+        'up',
+        'green',
+      ),
       metricCard('ops', '平均 OPS', `${formatDecimal(data.summary.average_qps)}`, `按${windowCopy(window)}平均计算`, 'flat', 'purple'),
     ],
     trendPoints: trendSeries[0]?.points ?? [],
@@ -248,21 +278,64 @@ export function buildOverviewViewModel(data: OverviewApiResponse, window: Dashbo
   };
 }
 
-export function buildQueueMonitoringViewModel(
-  data: QueueMonitoringApiResponse,
-  window: DashboardWindow = '24h',
-): QueueMonitoringViewModel {
+export function buildQueueMonitoringViewModel(data: QueueMonitoringApiResponse, window: DashboardWindow = '24h'): QueueMonitoringViewModel {
+  const trendSeries = queueTrendSeries(data);
   return {
     metrics: [
-      metricCard('plan', '路由规划积压', formatInteger(data.summary.route_plan_pending), '待规划任务数', data.summary.route_plan_pending > 0 ? 'up' : 'flat', 'blue', 'route_plan'),
-      metricCard('send', '出站发送积压', formatInteger(data.summary.send_message_pending), '待发送任务数', data.summary.send_message_pending > 0 ? 'up' : 'flat', 'green', 'send_message'),
-      metricCard('oldest', '最老任务等待', formatDurationSeconds(data.summary.oldest_job_wait_seconds), '跨队列最老等待时间', data.summary.oldest_job_wait_seconds > 0 ? 'up' : 'flat', 'orange'),
-      metricCard('planning', '路由规划平均耗时', formatMilliseconds(data.summary.planning_avg_duration_ms), `P95 ${formatMilliseconds(data.summary.planning_p95_duration_ms)}`, 'flat', 'purple'),
-      metricCard('success', '平台成功率', formatPercent(100 - data.summary.platform_failure_rate), `失败率 ${formatPercent(data.summary.platform_failure_rate)}`, data.summary.platform_failure_rate > 0 ? 'down' : 'flat', 'green'),
-      metricCard('dead', '死信数量', formatInteger(data.summary.dead_letter_count), `限流 ${formatInteger(data.summary.rate_limited_count)} 次`, data.summary.dead_letter_count > 0 ? 'up' : 'flat', 'red'),
+      metricCard(
+        'plan',
+        '路由规划积压',
+        formatInteger(data.summary.route_plan_pending),
+        '待规划任务数',
+        data.summary.route_plan_pending > 0 ? 'up' : 'flat',
+        'blue',
+        'route_plan',
+      ),
+      metricCard(
+        'send',
+        '出站发送积压',
+        formatInteger(data.summary.send_message_pending),
+        '待发送任务数',
+        data.summary.send_message_pending > 0 ? 'up' : 'flat',
+        'green',
+        'send_message',
+      ),
+      metricCard(
+        'oldest',
+        '最老任务等待',
+        formatDurationSeconds(data.summary.oldest_job_wait_seconds),
+        '跨队列最老等待时间',
+        data.summary.oldest_job_wait_seconds > 0 ? 'up' : 'flat',
+        'orange',
+      ),
+      metricCard(
+        'planning',
+        '路由规划平均耗时',
+        formatMilliseconds(data.summary.planning_avg_duration_ms),
+        `P95 ${formatMilliseconds(data.summary.planning_p95_duration_ms)}`,
+        'flat',
+        'purple',
+      ),
+      metricCard(
+        'success',
+        '平台成功率',
+        formatPercent(100 - data.summary.platform_failure_rate),
+        `失败率 ${formatPercent(data.summary.platform_failure_rate)}`,
+        data.summary.platform_failure_rate > 0 ? 'down' : 'flat',
+        'green',
+      ),
+      metricCard(
+        'dead',
+        '死信数量',
+        formatInteger(data.summary.dead_letter_count),
+        `限流 ${formatInteger(data.summary.rate_limited_count)} 次`,
+        data.summary.dead_letter_count > 0 ? 'up' : 'flat',
+        'red',
+      ),
     ],
     trendPoints: queueTrendPoints(data),
     trendLabels: trendBucketLabels(data.trend ?? [], window),
+    trendSeries,
     platformHealth: data.platform_health.map((item) => ({
       id: item.channel_id,
       name: item.name,
@@ -294,17 +367,13 @@ export function buildQueueMonitoringViewModel(
         key: 'batch',
         name: '最近批次删除',
         value: formatInteger(data.cleanup_status.last_batch_deleted),
-        status: `单批上限 ${formatInteger(data.cleanup_status.batch_size)}，去重键 ${formatInteger(data.cleanup_status.deleted_dedupe_keys)}`,
+        status: `单批上限 ${formatInteger(data.cleanup_status.batch_size)}，去重键 ${formatInteger(data.cleanup_status.deleted_dedupe_keys)}，审计 ${formatInteger(data.cleanup_status.deleted_audit_logs ?? 0)}`,
       },
       {
         key: 'state',
         name: '清理状态',
         value: data.cleanup_status.last_run_at ? formatTime(data.cleanup_status.last_run_at) : '未执行',
-        status: data.cleanup_status.completed
-          ? '已完成'
-          : data.cleanup_status.has_more
-            ? '未完成，仍有剩余'
-            : '待下一次执行',
+        status: data.cleanup_status.completed ? '已完成' : data.cleanup_status.has_more ? '未完成，仍有剩余' : '待下一次执行',
       },
       {
         key: 'deleted',
@@ -354,16 +423,79 @@ function zeroTrendLabels(): string[] {
 
 function queueTrendPoints(data: QueueMonitoringApiResponse): number[] {
   const trend = data.trend ?? [];
-  return trend.map((item) =>
-    Math.max(0, Math.round(item.route_plan_processed + item.send_message_processed + item.dead_letters)),
-  );
+  return trend.map((item) => Math.max(0, Math.round(item.route_plan_processed + item.send_message_processed + item.dead_letters)));
+}
+
+function defaultQueueTrendSeries(): TrendSeries[] {
+  return [
+    {
+      key: 'route_plan',
+      label: '路由规划处理量',
+      color: '#1677ff',
+      points: zeroTrendPoints(),
+    },
+    {
+      key: 'send_message',
+      label: '出站发送处理量',
+      color: '#22c55e',
+      points: zeroTrendPoints(),
+    },
+    {
+      key: 'dead_letters',
+      label: '死信数量',
+      color: '#ef4444',
+      points: zeroTrendPoints(),
+    },
+  ];
+}
+
+function queueTrendSeries(data: QueueMonitoringApiResponse): TrendSeries[] {
+  const trend = data.trend ?? [];
+  if (trend.length === 0) {
+    return defaultQueueTrendSeries();
+  }
+  return [
+    {
+      key: 'route_plan',
+      label: '路由规划处理量',
+      color: '#1677ff',
+      points: trend.map((item) => normalizeTrendPoint(item.route_plan_processed)),
+    },
+    {
+      key: 'send_message',
+      label: '出站发送处理量',
+      color: '#22c55e',
+      points: trend.map((item) => normalizeTrendPoint(item.send_message_processed)),
+    },
+    {
+      key: 'dead_letters',
+      label: '死信数量',
+      color: '#ef4444',
+      points: trend.map((item) => normalizeTrendPoint(item.dead_letters)),
+    },
+  ];
 }
 
 function defaultOverviewTrendSeries(): TrendSeries[] {
   return [
-    { key: 'sent', label: '发送量', color: '#1677ff', points: zeroTrendPoints() },
-    { key: 'successful', label: '成功量', color: '#22c55e', points: zeroTrendPoints() },
-    { key: 'failed', label: '失败量', color: '#ef4444', points: zeroTrendPoints() },
+    {
+      key: 'sent',
+      label: '发送量',
+      color: '#1677ff',
+      points: zeroTrendPoints(),
+    },
+    {
+      key: 'successful',
+      label: '成功量',
+      color: '#22c55e',
+      points: zeroTrendPoints(),
+    },
+    {
+      key: 'failed',
+      label: '失败量',
+      color: '#ef4444',
+      points: zeroTrendPoints(),
+    },
     { key: 'qps', label: 'QPS', color: '#7c3aed', points: zeroTrendPoints() },
   ];
 }
@@ -373,15 +505,30 @@ function overviewTrendSeries(data: OverviewApiResponse): TrendSeries[] {
     return defaultOverviewTrendSeries();
   }
   return [
-    { key: 'sent', label: '发送量', color: '#1677ff', points: data.trend.map((item) => normalizeTrendPoint(item.sent)) },
+    {
+      key: 'sent',
+      label: '发送量',
+      color: '#1677ff',
+      points: data.trend.map((item) => normalizeTrendPoint(item.sent)),
+    },
     {
       key: 'successful',
       label: '成功量',
       color: '#22c55e',
       points: data.trend.map((item) => normalizeTrendPoint(item.successful)),
     },
-    { key: 'failed', label: '失败量', color: '#ef4444', points: data.trend.map((item) => normalizeTrendPoint(item.failed)) },
-    { key: 'qps', label: 'QPS', color: '#7c3aed', points: data.trend.map((item) => normalizeTrendPoint(item.qps)) },
+    {
+      key: 'failed',
+      label: '失败量',
+      color: '#ef4444',
+      points: data.trend.map((item) => normalizeTrendPoint(item.failed)),
+    },
+    {
+      key: 'qps',
+      label: 'QPS',
+      color: '#7c3aed',
+      points: data.trend.map((item) => normalizeTrendPoint(item.qps)),
+    },
   ];
 }
 

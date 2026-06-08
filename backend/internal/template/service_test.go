@@ -42,13 +42,13 @@ func TestPreviewUsesGlobalFallbackForMissingPayloadField(t *testing.T) {
 	result, err := NewService(nil).Preview(VersionInput{
 		MessageType:        "text",
 		TargetProviderType: "wecom_app",
-		TemplateBody:       `标题：{{ payload.title }} IP：{{ payload.alert.ip }}`,
+		TemplateBody:       `{"msgtype":"text","content":"标题：{{ payload.title }} IP：{{ payload.alert.ip }}"}`,
 		SamplePayload:      json.RawMessage(`{"title":"告警"}`),
 	})
 	if err != nil {
 		t.Fatalf("preview template with missing payload field: %v result=%+v", err, result)
 	}
-	if result.Status != "valid" || result.Preview != "标题：告警 IP：-" {
+	if result.Status != "valid" || result.Preview != `{"msgtype":"text","content":"标题：告警 IP：-"}` {
 		t.Fatalf("expected global fallback preview, got %+v", result)
 	}
 }
@@ -57,13 +57,13 @@ func TestPreviewRendersValidTemplate(t *testing.T) {
 	result, err := NewService(nil).Preview(VersionInput{
 		MessageType:        "text",
 		TargetProviderType: "wecom_app",
-		TemplateBody:       `标题：{{ payload.title }}`,
+		TemplateBody:       `{"msgtype":"text","content":"标题：{{ payload.title }}"}`,
 		SamplePayload:      json.RawMessage(`{"title":"告警"}`),
 	})
 	if err != nil {
 		t.Fatalf("preview valid template: %v", err)
 	}
-	if result.Status != "valid" || result.Preview != "标题：告警" {
+	if result.Status != "valid" || result.Preview != `{"msgtype":"text","content":"标题：告警"}` {
 		t.Fatalf("unexpected preview result: %+v", result)
 	}
 }
@@ -84,13 +84,13 @@ func TestTemplatePreviewAllowsDefaultFilterFunctionSyntax(t *testing.T) {
 	result, err := NewService(nil).Preview(VersionInput{
 		MessageType:        "text",
 		TargetProviderType: "wecom_app",
-		TemplateBody:       `{{ payload.summary | default('通知') }}`,
+		TemplateBody:       `{"msgtype":"text","content":"{{ payload.summary | default('通知') }}"}`,
 		SamplePayload:      json.RawMessage(`{}`),
 	})
 	if err != nil {
 		t.Fatalf("preview template with default filter: %v result=%+v", err, result)
 	}
-	if result.Status != "valid" || result.Preview != "通知" {
+	if result.Status != "valid" || result.Preview != `{"msgtype":"text","content":"通知"}` {
 		t.Fatalf("expected default filter preview, got %+v", result)
 	}
 }
@@ -121,6 +121,74 @@ func TestTemplateValidateUsesProviderDefaultSchemaRequiredFields(t *testing.T) {
 	assertValidationError(t, result.Errors, "MGP-TPL-REQUIRED", "msgtype")
 }
 
+func TestTemplateValidateRejectsRenderedNonJSONBody(t *testing.T) {
+	result := NewService(nil).Validate(VersionInput{
+		MessageType:        "json",
+		TargetProviderType: "webhook",
+		TemplateBody:       `plain {{ payload.title }}`,
+		SamplePayload:      json.RawMessage(`{"title":"告警"}`),
+	})
+	if result.Status != "invalid" {
+		t.Fatalf("expected rendered non-json template to be invalid, got %+v", result)
+	}
+	assertValidationError(t, result.Errors, "MGP-TPL-JSON", "template_body")
+}
+
+func TestTemplateValidateUsesRenderedJSONForSchemaChecks(t *testing.T) {
+	result := NewService(nil).Validate(VersionInput{
+		MessageType:        "json",
+		TargetProviderType: "webhook",
+		TemplateBody:       `{"body":"{{ payload.title }}"}`,
+		SamplePayload:      json.RawMessage(`{"title":"告警"}`),
+	})
+	if result.Status != "invalid" {
+		t.Fatalf("expected rendered schema type mismatch to be invalid, got %+v", result)
+	}
+	assertValidationError(t, result.Errors, "MGP-TPL-SCHEMA", "body")
+}
+
+func TestPerformanceWebhookTemplateValidatesRenderedBodyObject(t *testing.T) {
+	result := NewService(nil).Validate(VersionInput{
+		MessageType:        "json",
+		TargetProviderType: "webhook",
+		TemplateBody:       `{"body":{"title":"{{ payload.title | default('【模版】性能测试') }}","content":"{{ payload.content | default('【模版】性能测试消息') }}","route_key":"{{ payload.route_key }}","timestamp":"{{ payload.timestamp }}"}}`,
+		MessageBodySchema:  json.RawMessage(`{"type":"object","required":["body"],"properties":{"body":{"type":"object"}}}`),
+		SamplePayload:      json.RawMessage(`{"timestamp":"2026-06-05T00:00:00+08:00","route_key":"a","title":"性能测试","content":"这是一条性能测试消息，随机消息-000000000000"}`),
+	})
+	if result.Status != "valid" {
+		t.Fatalf("expected performance webhook template to validate, got %+v", result)
+	}
+	if result.Preview != `{"body":{"title":"性能测试","content":"这是一条性能测试消息，随机消息-000000000000","route_key":"a","timestamp":"2026-06-05T00:00:00+08:00"}}` {
+		t.Fatalf("unexpected performance template preview: %+v", result)
+	}
+}
+
+func TestTemplateValidateRejectsUnsupportedFilter(t *testing.T) {
+	result := NewService(nil).Validate(VersionInput{
+		MessageType:        "text",
+		TargetProviderType: "wecom_app",
+		TemplateBody:       `{"msgtype":"text","content":"{{ payload.title | upper }}"}`,
+		SamplePayload:      json.RawMessage(`{"title":"告警"}`),
+	})
+	if result.Status != "invalid" {
+		t.Fatalf("expected unsupported filter to be invalid, got %+v", result)
+	}
+	assertValidationError(t, result.Errors, "MGP-TPL-FILTER", "upper")
+}
+
+func TestTemplateValidateRejectsUnsupportedTag(t *testing.T) {
+	result := NewService(nil).Validate(VersionInput{
+		MessageType:        "text",
+		TargetProviderType: "wecom_app",
+		TemplateBody:       `{"msgtype":"text","content":"{% include \"secret.tpl\" %}"}`,
+		SamplePayload:      json.RawMessage(`{"title":"告警"}`),
+	})
+	if result.Status != "invalid" {
+		t.Fatalf("expected unsupported tag to be invalid, got %+v", result)
+	}
+	assertValidationError(t, result.Errors, "MGP-TPL-TAG", "include")
+}
+
 func TestPublishValidProviderAwareJSONTemplate(t *testing.T) {
 	store := &recordingTemplateStore{}
 	version, err := NewService(store).Publish(context.Background(), "template-1", VersionInput{
@@ -137,6 +205,9 @@ func TestPublishValidProviderAwareJSONTemplate(t *testing.T) {
 	}
 	if string(store.publishParams.CompiledPreview) != `{"rendered":"{\"msgtype\":\"text\",\"content\":\"通知\"}"}` {
 		t.Fatalf("unexpected compiled preview: %s", store.publishParams.CompiledPreview)
+	}
+	if len(store.publishParams.AllowedFilters) != 1 || store.publishParams.AllowedFilters[0] != "default" {
+		t.Fatalf("expected default filter to be persisted, got %+v", store.publishParams.AllowedFilters)
 	}
 }
 
@@ -231,5 +302,6 @@ func (s *recordingTemplateStore) PublishTemplateVersion(_ context.Context, templ
 		ValidationStatus:   params.ValidationStatus,
 		CompiledPreview:    params.CompiledPreview,
 		UsedVariables:      params.UsedVariables,
+		AllowedFilters:     params.AllowedFilters,
 	}, nil
 }
