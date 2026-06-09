@@ -8,6 +8,7 @@ import (
 
 	"mvp-push-gateway/backend/internal/auth"
 	"mvp-push-gateway/backend/internal/provider"
+	"mvp-push-gateway/backend/internal/safedata"
 )
 
 type providerCapabilitiesResponse struct {
@@ -155,8 +156,12 @@ func (h *Handler) channelsHandler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		response := channelsResponse{Channels: make([]channelResponse, 0, len(channels))}
+		reveal := revealSecrets(r)
 		for _, channel := range channels {
-			response.Channels = append(response.Channels, toChannelResponse(channel))
+			response.Channels = append(response.Channels, toChannelResponse(channel, reveal))
+		}
+		if reveal {
+			h.recordSecretRevealAudit(r, adminUser, "channel", "*", []string{"auth_config", "token_config"})
 		}
 		writeJSON(w, http.StatusOK, response)
 	case http.MethodPost:
@@ -171,7 +176,7 @@ func (h *Handler) channelsHandler(w http.ResponseWriter, r *http.Request) {
 			writeAPIError(w, status, code, message)
 			return
 		}
-		response := channelResponseBody{Channel: toChannelResponse(created)}
+		response := channelResponseBody{Channel: toChannelResponse(created, false)}
 		h.recordAudit(r, adminUser, "create", "channel", created.ID, request, response)
 		writeJSON(w, http.StatusCreated, response)
 	default:
@@ -228,20 +233,32 @@ func (h *Handler) channelDetailHandler(w http.ResponseWriter, r *http.Request) {
 			writeAPIError(w, status, code, message)
 			return
 		}
-		writeJSON(w, http.StatusOK, channelResponseBody{Channel: toChannelResponse(channel)})
+		if revealSecrets(r) {
+			h.recordSecretRevealAudit(r, adminUser, "channel", channelID, revealedChannelFields(channel))
+		}
+		writeJSON(w, http.StatusOK, channelResponseBody{Channel: toChannelResponse(channel, revealSecrets(r))})
 	case http.MethodPut:
 		var request channelRequest
 		if err := decodeJSON(r, &request); err != nil {
 			writeAPIError(w, http.StatusBadRequest, "MGP-REQ-001", "请求 JSON 不合法")
 			return
 		}
-		updated, err := h.providers.UpdateChannel(r.Context(), channelID, request.toInput())
+		current, err := h.providers.GetChannel(r.Context(), channelID)
 		if err != nil {
 			status, code, message := providerErrorStatus(err)
 			writeAPIError(w, status, code, message)
 			return
 		}
-		response := channelResponseBody{Channel: toChannelResponse(updated)}
+		input := request.toInput()
+		input.AuthConfig = preserveRedactedCredentialPlaceholders(input.AuthConfig, current.AuthConfig)
+		input.TokenConfig = preserveRedactedCredentialPlaceholders(input.TokenConfig, current.TokenConfig)
+		updated, err := h.providers.UpdateChannel(r.Context(), channelID, input)
+		if err != nil {
+			status, code, message := providerErrorStatus(err)
+			writeAPIError(w, status, code, message)
+			return
+		}
+		response := channelResponseBody{Channel: toChannelResponse(updated, false)}
 		h.recordAudit(r, adminUser, "update", "channel", channelID, request, response)
 		writeJSON(w, http.StatusOK, response)
 	case http.MethodPatch:
@@ -279,7 +296,7 @@ func (h *Handler) channelDetailHandler(w http.ResponseWriter, r *http.Request) {
 			writeAPIError(w, status, code, message)
 			return
 		}
-		response := channelResponseBody{Channel: toChannelResponse(updated)}
+		response := channelResponseBody{Channel: toChannelResponse(updated, false)}
 		h.recordAudit(r, adminUser, "update_status", "channel", channelID, request, response)
 		writeJSON(w, http.StatusOK, response)
 	case http.MethodDelete:
@@ -490,15 +507,15 @@ func toCapabilityResponse(capability provider.Capability) capabilityResponse {
 	}
 }
 
-func toChannelResponse(channel provider.Channel) channelResponse {
+func toChannelResponse(channel provider.Channel, reveal bool) channelResponse {
 	return channelResponse{
 		ID:               channel.ID,
 		ProviderType:     channel.ProviderType,
 		Name:             channel.Name,
 		Enabled:          channel.Enabled,
 		Description:      channel.Description,
-		AuthConfig:       defaultRawJSON(channel.AuthConfig),
-		TokenConfig:      defaultRawJSON(channel.TokenConfig),
+		AuthConfig:       credentialConfigResponse(channel.AuthConfig, reveal),
+		TokenConfig:      credentialConfigResponse(channel.TokenConfig, reveal),
 		SendConfig:       defaultRawJSON(channel.SendConfig),
 		RateLimitConfig:  defaultRawJSON(channel.RateLimitConfig),
 		ConcurrencyLimit: channel.ConcurrencyLimit,
@@ -512,6 +529,114 @@ func toChannelResponse(channel provider.Channel) channelResponse {
 		TokenRefreshedAt: channel.TokenRefreshedAt,
 		TokenExpiresAt:   channel.TokenExpiresAt,
 	}
+}
+
+func revealedChannelFields(channel provider.Channel) []string {
+	fields := []string{}
+	if len(strings.TrimSpace(string(channel.AuthConfig))) > 0 && string(defaultRawJSON(channel.AuthConfig)) != "{}" {
+		fields = append(fields, "auth_config")
+	}
+	if len(strings.TrimSpace(string(channel.TokenConfig))) > 0 && string(defaultRawJSON(channel.TokenConfig)) != "{}" {
+		fields = append(fields, "token_config")
+	}
+	return fields
+}
+
+func credentialConfigResponse(raw json.RawMessage, reveal bool) json.RawMessage {
+	raw = defaultRawJSON(raw)
+	if reveal {
+		return raw
+	}
+	value, ok := decodeJSONValue(raw)
+	if !ok {
+		return raw
+	}
+	encoded, err := json.Marshal(redactCredentialValue(value, ""))
+	if err != nil {
+		return raw
+	}
+	return encoded
+}
+
+func redactCredentialValue(value any, key string) any {
+	if safedata.IsSensitiveKey(key) {
+		return safedata.RedactedValue
+	}
+	switch typed := value.(type) {
+	case map[string]any:
+		result := make(map[string]any, len(typed))
+		for childKey, childValue := range typed {
+			result[childKey] = redactCredentialValue(childValue, childKey)
+		}
+		return result
+	case []any:
+		result := make([]any, 0, len(typed))
+		for _, childValue := range typed {
+			result = append(result, redactCredentialValue(childValue, key))
+		}
+		return result
+	default:
+		return value
+	}
+}
+
+func preserveRedactedCredentialPlaceholders(requestRaw json.RawMessage, currentRaw json.RawMessage) json.RawMessage {
+	requestValue, ok := decodeJSONValue(defaultRawJSON(requestRaw))
+	if !ok {
+		return requestRaw
+	}
+	currentValue, ok := decodeJSONValue(defaultRawJSON(currentRaw))
+	if !ok {
+		return requestRaw
+	}
+	merged := restoreRedactedValue(requestValue, currentValue, "")
+	encoded, err := json.Marshal(merged)
+	if err != nil {
+		return requestRaw
+	}
+	return encoded
+}
+
+func restoreRedactedValue(requestValue any, currentValue any, key string) any {
+	if safedata.IsSensitiveKey(key) {
+		if value, ok := requestValue.(string); ok && value == safedata.RedactedValue {
+			return currentValue
+		}
+	}
+	switch requestTyped := requestValue.(type) {
+	case map[string]any:
+		currentMap, _ := currentValue.(map[string]any)
+		result := make(map[string]any, len(requestTyped))
+		for childKey, childRequestValue := range requestTyped {
+			var childCurrentValue any
+			if currentMap != nil {
+				childCurrentValue = currentMap[childKey]
+			}
+			result[childKey] = restoreRedactedValue(childRequestValue, childCurrentValue, childKey)
+		}
+		return result
+	case []any:
+		currentSlice, _ := currentValue.([]any)
+		result := make([]any, 0, len(requestTyped))
+		for index, childRequestValue := range requestTyped {
+			var childCurrentValue any
+			if index < len(currentSlice) {
+				childCurrentValue = currentSlice[index]
+			}
+			result = append(result, restoreRedactedValue(childRequestValue, childCurrentValue, key))
+		}
+		return result
+	default:
+		return requestValue
+	}
+}
+
+func decodeJSONValue(raw json.RawMessage) (any, bool) {
+	var value any
+	if err := json.Unmarshal(raw, &value); err != nil {
+		return nil, false
+	}
+	return value, true
 }
 
 func providerErrorStatus(err error) (int, string, string) {

@@ -18,6 +18,7 @@ import (
 	"mvp-push-gateway/backend/internal/perftiming"
 	"mvp-push-gateway/backend/internal/provider"
 	"mvp-push-gateway/backend/internal/queue"
+	"mvp-push-gateway/backend/internal/safedata"
 )
 
 type Status string
@@ -36,7 +37,10 @@ const (
 	defaultRetryDelay = time.Second
 )
 
-const maxUpstreamResponseBodyBytes = 64 * 1024
+const (
+	maxUpstreamResponseBodyBytes = 64 * 1024
+	maxDeliverySnapshotBytes     = 16 * 1024
+)
 
 var ErrRetryScheduled = errors.New("delivery retry scheduled")
 
@@ -1943,7 +1947,7 @@ func marshalSnapshot(snapshot map[string]any) (json.RawMessage, error) {
 	if err != nil {
 		return nil, err
 	}
-	return raw, nil
+	return safedata.MinimizeJSON(raw, maxDeliverySnapshotBytes), nil
 }
 
 func durationMS(start time.Time, end time.Time) int {

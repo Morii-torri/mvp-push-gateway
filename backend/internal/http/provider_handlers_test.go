@@ -48,7 +48,7 @@ func TestProviderCapabilitiesResponseIncludesCapabilityMetadata(t *testing.T) {
 	)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/provider-capabilities", nil)
-	req.Header.Set("Authorization", "Bearer admin-session")
+	setAdminSessionCookie(req, "admin-session")
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 
@@ -113,7 +113,7 @@ func TestChannelDescriptionRoundTripsThroughHTTPHandlers(t *testing.T) {
 	)
 
 	getReq := httptest.NewRequest(http.MethodGet, "/api/v1/channels/channel-1", nil)
-	getReq.Header.Set("Authorization", "Bearer admin-session")
+	setAdminSessionCookie(getReq, "admin-session")
 	getRec := httptest.NewRecorder()
 	handler.ServeHTTP(getRec, getReq)
 
@@ -144,7 +144,7 @@ func TestChannelDescriptionRoundTripsThroughHTTPHandlers(t *testing.T) {
 		"retry_policy":{"max_attempts":1},
 		"dead_letter_policy":{}
 	}`))
-	putReq.Header.Set("Authorization", "Bearer admin-session")
+	setAdminSessionCookie(putReq, "admin-session")
 	putReq.Header.Set("Content-Type", "application/json")
 	putRec := httptest.NewRecorder()
 	handler.ServeHTTP(putRec, putReq)
@@ -154,6 +154,146 @@ func TestChannelDescriptionRoundTripsThroughHTTPHandlers(t *testing.T) {
 	}
 	if service.updateInput.Description != "" {
 		t.Fatalf("expected blank description to be passed through update, got %q", service.updateInput.Description)
+	}
+}
+
+func TestChannelCredentialsAreWriteOnlyUnlessRevealRequested(t *testing.T) {
+	service := &capabilityProviderService{
+		channel: provider.Channel{
+			ID:           "channel-1",
+			ProviderType: provider.ProviderWeComApp,
+			Name:         "WeCom App",
+			Enabled:      true,
+			AuthConfig:   json.RawMessage(`{"corpid":"corp-1","corpsecret":"secret-1"}`),
+			TokenConfig:  json.RawMessage(`{"access_token":"token-1","expires_in":7200}`),
+		},
+	}
+	handler := httpapi.NewHandler(
+		testConfig(),
+		httpapi.WithAuthService(fakeAuthService{authenticatedToken: "admin-session"}),
+		httpapi.WithProviderService(service),
+	)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/channels/channel-1", nil)
+	setAdminSessionCookie(req, "admin-session")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	if strings.Contains(rec.Body.String(), "secret-1") || strings.Contains(rec.Body.String(), "token-1") {
+		t.Fatalf("default channel response leaked credentials: %s", rec.Body.String())
+	}
+	var body struct {
+		Channel struct {
+			AuthConfig  map[string]any `json:"auth_config"`
+			TokenConfig map[string]any `json:"token_config"`
+		} `json:"channel"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
+		t.Fatalf("decode channel response: %v", err)
+	}
+	if body.Channel.AuthConfig["corpid"] != "corp-1" || body.Channel.AuthConfig["corpsecret"] != "***" {
+		t.Fatalf("expected auth_config to preserve non-secret fields and redact secrets, got %+v", body.Channel.AuthConfig)
+	}
+	if body.Channel.TokenConfig["access_token"] != "***" || body.Channel.TokenConfig["expires_in"] != float64(7200) {
+		t.Fatalf("expected token_config to redact tokens only, got %+v", body.Channel.TokenConfig)
+	}
+
+	revealReq := httptest.NewRequest(http.MethodGet, "/api/v1/channels/channel-1?reveal_secrets=true", nil)
+	setAdminSessionCookie(revealReq, "admin-session")
+	revealRec := httptest.NewRecorder()
+	handler.ServeHTTP(revealRec, revealReq)
+	if revealRec.Code != http.StatusOK {
+		t.Fatalf("expected reveal status 200, got %d body=%s", revealRec.Code, revealRec.Body.String())
+	}
+	if !strings.Contains(revealRec.Body.String(), "secret-1") || !strings.Contains(revealRec.Body.String(), "token-1") {
+		t.Fatalf("expected reveal channel response to include credentials, got %s", revealRec.Body.String())
+	}
+}
+
+func TestChannelSecretRevealRecordsAuditWithoutSecrets(t *testing.T) {
+	service := &capabilityProviderService{
+		channel: provider.Channel{
+			ID:           "channel-1",
+			ProviderType: provider.ProviderWeComApp,
+			Name:         "WeCom App",
+			Enabled:      true,
+			AuthConfig:   json.RawMessage(`{"corpid":"corp-1","corpsecret":"secret-1"}`),
+			TokenConfig:  json.RawMessage(`{"access_token":"token-1"}`),
+		},
+	}
+	auditService := &fakeAuditService{}
+	handler := httpapi.NewHandler(
+		testConfig(),
+		httpapi.WithAuthService(fakeAuthService{authenticatedToken: "admin-session"}),
+		httpapi.WithProviderService(service),
+		httpapi.WithAuditService(auditService),
+	)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/channels/channel-1?reveal_secrets=true", nil)
+	setAdminSessionCookie(req, "admin-session")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected reveal channel detail status 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	if auditService.recordCalls != 1 {
+		t.Fatalf("expected one reveal audit record, got %d", auditService.recordCalls)
+	}
+	if auditService.recordInput.Action != "reveal_secrets" || auditService.recordInput.ResourceType != "channel" || auditService.recordInput.ResourceID != "channel-1" {
+		t.Fatalf("unexpected reveal audit input: %+v", auditService.recordInput)
+	}
+	if strings.Contains(string(auditService.recordInput.RequestSnapshot), "secret-1") ||
+		strings.Contains(string(auditService.recordInput.ResponseSnapshot), "token-1") {
+		t.Fatalf("reveal audit leaked credentials: request=%s response=%s", auditService.recordInput.RequestSnapshot, auditService.recordInput.ResponseSnapshot)
+	}
+}
+
+func TestChannelUpdatePreservesRedactedCredentialPlaceholders(t *testing.T) {
+	service := &capabilityProviderService{
+		channel: provider.Channel{
+			ID:           "channel-1",
+			ProviderType: provider.ProviderWeComApp,
+			Name:         "WeCom App",
+			Enabled:      true,
+			AuthConfig:   json.RawMessage(`{"corpid":"corp-1","corpsecret":"secret-1"}`),
+			TokenConfig:  json.RawMessage(`{"access_token":"token-1","expires_in":7200}`),
+		},
+	}
+	handler := httpapi.NewHandler(
+		testConfig(),
+		httpapi.WithAuthService(fakeAuthService{authenticatedToken: "admin-session"}),
+		httpapi.WithProviderService(service),
+	)
+
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/channels/channel-1", strings.NewReader(`{
+		"provider_type":"wecom_app",
+		"name":"WeCom App",
+		"enabled":true,
+		"description":"updated",
+		"auth_config":{"corpid":"corp-2","corpsecret":"***"},
+		"token_config":{"access_token":"***","expires_in":3600},
+		"send_config":{},
+		"rate_limit_config":{},
+		"concurrency_limit":1,
+		"timeout_ms":1000,
+		"retry_policy":{},
+		"dead_letter_policy":{}
+	}`))
+	setAdminSessionCookie(req, "admin-session")
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(string(service.updateInput.AuthConfig), `"corpsecret":"secret-1"`) || !strings.Contains(string(service.updateInput.TokenConfig), `"access_token":"token-1"`) {
+		t.Fatalf("expected redacted placeholders to preserve current secrets, got auth=%s token=%s", service.updateInput.AuthConfig, service.updateInput.TokenConfig)
+	}
+	if !strings.Contains(string(service.updateInput.AuthConfig), `"corpid":"corp-2"`) || !strings.Contains(string(service.updateInput.TokenConfig), `"expires_in":3600`) {
+		t.Fatalf("expected non-secret updates to be preserved, got auth=%s token=%s", service.updateInput.AuthConfig, service.updateInput.TokenConfig)
 	}
 }
 
@@ -175,7 +315,7 @@ func TestFeishuResolveOpenIDEndpointDelegatesToProviderService(t *testing.T) {
 	)
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/channels/channel-feishu/feishu/resolve-open-id", strings.NewReader(`{"mobiles":["13011111111"]}`))
-	req.Header.Set("Authorization", "Bearer admin-session")
+	setAdminSessionCookie(req, "admin-session")
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
@@ -216,7 +356,7 @@ func TestDingTalkResolveUserIDEndpointDelegatesToProviderService(t *testing.T) {
 	)
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/channels/channel-dingtalk/dingtalk/resolve-user-id", strings.NewReader(`{"query_words":["张三"]}`))
-	req.Header.Set("Authorization", "Bearer admin-session")
+	setAdminSessionCookie(req, "admin-session")
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
@@ -262,7 +402,7 @@ func TestPatchChannelEnabledPreservesRuntimeConfiguration(t *testing.T) {
 	)
 
 	req := httptest.NewRequest(http.MethodPatch, "/api/v1/channels/channel-1", strings.NewReader(`{"enabled":false}`))
-	req.Header.Set("Authorization", "Bearer admin-session")
+	setAdminSessionCookie(req, "admin-session")
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
@@ -311,7 +451,7 @@ func TestSensitiveChannelActionsWriteAuditRecords(t *testing.T) {
 			)
 
 			req := httptest.NewRequest(http.MethodPost, tc.path, strings.NewReader(tc.body))
-			req.Header.Set("Authorization", "Bearer admin-session")
+			setAdminSessionCookie(req, "admin-session")
 			req.Header.Set("Content-Type", "application/json")
 			rec := httptest.NewRecorder()
 			handler.ServeHTTP(rec, req)

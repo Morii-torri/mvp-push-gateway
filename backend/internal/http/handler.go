@@ -33,26 +33,26 @@ type authService interface {
 }
 
 type Handler struct {
-	cfg          config.Config
-	auth         authService
-	sources      sourceService
-	providers    providerService
-	recipients   recipientService
-	routes       routeService
-	templates    templateService
-	monitoring   monitoringService
-	stats        statisticsService
-	planning     planningWorkerService
-	delivery     deliveryWorkerService
-	matchGroups  matchGroupService
-	messageLogs  messageLogService
-	deadLetters  deadLetterService
-	audit        auditService
-	settings     settingsService
-	workerPause  runtimeWorkerPauseController
-	perfTests    *performanceTestLimiter
-	perfRuns     *performanceTestRunStore
-	perfUpstream *performanceTestUpstreamStore
+	cfg           config.Config
+	auth          authService
+	sources       sourceService
+	providers     providerService
+	recipients    recipientService
+	routes        routeService
+	templates     templateService
+	monitoring    monitoringService
+	stats         statisticsService
+	planning      planningWorkerService
+	delivery      deliveryWorkerService
+	matchGroups   matchGroupService
+	messageLogs   messageLogService
+	deadLetters   deadLetterService
+	audit         auditService
+	settings      settingsService
+	workerPause   runtimeWorkerPauseController
+	perfRuns      *performanceTestRunStore
+	perfUpstream  *performanceTestUpstreamStore
+	loginFailures *loginFailureLimiter
 }
 
 type Option func(*Handler)
@@ -307,10 +307,10 @@ type healthResponse struct {
 
 func NewHandler(cfg config.Config, options ...Option) http.Handler {
 	handler := &Handler{
-		cfg:          cfg,
-		perfTests:    &performanceTestLimiter{},
-		perfRuns:     newPerformanceTestRunStore(),
-		perfUpstream: newPerformanceTestUpstreamStore(),
+		cfg:           cfg,
+		perfRuns:      newPerformanceTestRunStore(),
+		perfUpstream:  newPerformanceTestUpstreamStore(),
+		loginFailures: newLoginFailureLimiter(),
 	}
 	for _, option := range options {
 		option(handler)
@@ -529,6 +529,8 @@ func authErrorStatus(err error) (int, string, string) {
 		return http.StatusUnauthorized, "MGP-AUTH-002", "用户名或密码错误"
 	case errors.Is(err, auth.ErrUnauthorized):
 		return http.StatusUnauthorized, "MGP-AUTH-003", "未登录或登录已过期"
+	case errors.Is(err, auth.ErrRateLimited):
+		return http.StatusTooManyRequests, "MGP-AUTH-004", "登录失败次数过多，请稍后重试"
 	default:
 		return http.StatusInternalServerError, "MGP-AUTH-999", "认证服务内部错误"
 	}

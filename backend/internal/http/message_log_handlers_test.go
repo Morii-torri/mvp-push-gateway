@@ -73,7 +73,7 @@ func TestMessageLogDetailReturnsDerivedAttemptSnapshots(t *testing.T) {
 	)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/messages/message-1", nil)
-	req.Header.Set("Authorization", "Bearer admin-session")
+	setAdminSessionCookie(req, "admin-session")
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 

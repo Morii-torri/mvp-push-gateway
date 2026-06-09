@@ -162,6 +162,20 @@ describe("console api wrappers", () => {
     );
   });
 
+  it("requests source credentials only for explicit reveal workflows", async () => {
+    tokenStore.set("admin-token");
+    const fetchMock = vi.fn(
+      async (_input: RequestInfo | URL, _init?: RequestInit) =>
+        json({ source: { id: "source-1", auth_token: "token-1" } }),
+    );
+
+    await consoleApi.getSource("source-1", { revealSecrets: true }, fetchMock);
+
+    expect(fetchMock.mock.calls.map(([input]) => String(input))).toEqual([
+      "/api/v1/sources/source-1?reveal_secrets=true",
+    ]);
+  });
+
   it("patches only channel enabled state for provider toggles", async () => {
     tokenStore.set("admin-token");
     const fetchMock = vi.fn(

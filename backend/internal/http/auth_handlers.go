@@ -1,16 +1,42 @@
 package httpapi
 
 import (
+	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"io"
 	"net"
 	"net/http"
 	"strings"
+	"sync"
+	"time"
 
 	"mvp-push-gateway/backend/internal/audit"
 	"mvp-push-gateway/backend/internal/auth"
 )
+
+const (
+	loginFailureLimit  = 5
+	loginFailureWindow = 5 * time.Minute
+
+	adminSessionCookieName = "mgp_admin_session"
+	csrfTokenCookieName    = "mgp_csrf_token"
+	csrfTokenHeaderName    = "X-MGP-CSRF-Token"
+)
+
+type loginFailureLimiter struct {
+	mu       sync.Mutex
+	attempts map[string]loginFailureState
+}
+
+type loginFailureState struct {
+	count   int
+	started time.Time
+}
+
+func newLoginFailureLimiter() *loginFailureLimiter {
+	return &loginFailureLimiter{attempts: map[string]loginFailureState{}}
+}
 
 type setupStatusResponse struct {
 	Initialized bool `json:"initialized"`
@@ -43,8 +69,8 @@ type loginRequest struct {
 }
 
 type loginResponse struct {
-	Token     string        `json:"token"`
-	TokenType string        `json:"token_type"`
+	Token     string        `json:"token,omitempty"`
+	TokenType string        `json:"token_type,omitempty"`
 	ExpiresAt string        `json:"expires_at"`
 	Admin     adminResponse `json:"admin"`
 }
@@ -132,22 +158,41 @@ func (h *Handler) loginHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	loginIP := h.clientIP(r)
+	if h.loginFailures != nil && !h.loginFailures.allow(request.Username, loginIP, time.Now()) {
+		h.recordLoginFailureAudit(r, request.Username, http.StatusTooManyRequests, "MGP-AUTH-004")
+		writeAPIError(w, http.StatusTooManyRequests, "MGP-AUTH-004", "登录失败次数过多，请稍后重试")
+		return
+	}
+
 	result, err := h.auth.Login(r.Context(), auth.LoginInput{
 		Username: request.Username,
 		Password: request.Password,
 		Meta: auth.SessionMeta{
 			UserAgent: r.UserAgent(),
-			IPAddress: clientIP(r),
+			IPAddress: loginIP,
 		},
 	})
 	if err != nil {
 		statusCode, code, message := authErrorStatus(err)
+		if h.loginFailures != nil && errors.Is(err, auth.ErrInvalidCredentials) {
+			h.loginFailures.recordFailure(request.Username, loginIP, time.Now())
+		}
 		h.recordLoginFailureAudit(r, request.Username, statusCode, code)
 		writeAPIError(w, statusCode, code, message)
 		return
 	}
+	if h.loginFailures != nil {
+		h.loginFailures.reset(request.Username, loginIP)
+	}
 
 	expiresAt := result.ExpiresAt.UTC().Format("2006-01-02T15:04:05Z")
+	csrfToken, err := auth.NewSessionToken()
+	if err != nil {
+		writeAPIError(w, http.StatusInternalServerError, "MGP-AUTH-999", "认证服务内部错误")
+		return
+	}
+	h.setAuthCookies(w, result.Token, csrfToken, result.ExpiresAt)
 	h.recordAudit(r, result.Admin, "login", "admin_session", result.Admin.ID, map[string]string{
 		"username": request.Username,
 	}, map[string]any{
@@ -155,8 +200,6 @@ func (h *Handler) loginHandler(w http.ResponseWriter, r *http.Request) {
 		"expires_at": expiresAt,
 	})
 	writeJSON(w, http.StatusOK, loginResponse{
-		Token:     result.Token,
-		TokenType: "Bearer",
 		ExpiresAt: expiresAt,
 		Admin:     toAdminResponse(result.Admin),
 	})
@@ -171,22 +214,27 @@ func (h *Handler) logoutHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	token, err := bearerToken(r)
+	requestToken, err := authTokenFromRequest(r)
 	if err != nil {
 		writeAPIError(w, http.StatusUnauthorized, "MGP-AUTH-003", "未登录或登录已过期")
 		return
 	}
-	adminUser, err := h.auth.Authenticate(r.Context(), token)
+	if requestToken.FromCookie && !validCSRFCookieHeader(r) {
+		writeAPIError(w, http.StatusForbidden, "MGP-AUTH-005", "CSRF 校验失败")
+		return
+	}
+	adminUser, err := h.auth.Authenticate(r.Context(), requestToken.Value)
 	if err != nil {
 		statusCode, code, message := authErrorStatus(err)
 		writeAPIError(w, statusCode, code, message)
 		return
 	}
-	if err := h.auth.Logout(r.Context(), token); err != nil {
+	if err := h.auth.Logout(r.Context(), requestToken.Value); err != nil {
 		statusCode, code, message := authErrorStatus(err)
 		writeAPIError(w, statusCode, code, message)
 		return
 	}
+	h.clearAuthCookies(w)
 	h.recordAudit(r, adminUser, "logout", "admin_session", adminUser.ID, map[string]string{
 		"operation": "logout",
 	}, okResponse{OK: true})
@@ -211,6 +259,62 @@ func (h *Handler) recordLoginFailureAudit(r *http.Request, username string, stat
 		IPAddress: h.clientIP(r),
 		UserAgent: r.UserAgent(),
 	})
+}
+
+func (l *loginFailureLimiter) allow(username string, ip string, now time.Time) bool {
+	if l == nil {
+		return true
+	}
+	key := loginFailureKey(username, ip)
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	state, ok := l.attempts[key]
+	if !ok {
+		return true
+	}
+	if now.Sub(state.started) >= loginFailureWindow {
+		delete(l.attempts, key)
+		return true
+	}
+	return state.count < loginFailureLimit
+}
+
+func (l *loginFailureLimiter) recordFailure(username string, ip string, now time.Time) {
+	if l == nil {
+		return
+	}
+	key := loginFailureKey(username, ip)
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	state, ok := l.attempts[key]
+	if !ok || now.Sub(state.started) >= loginFailureWindow {
+		l.attempts[key] = loginFailureState{count: 1, started: now}
+		return
+	}
+	state.count++
+	l.attempts[key] = state
+}
+
+func (l *loginFailureLimiter) reset(username string, ip string) {
+	if l == nil {
+		return
+	}
+	key := loginFailureKey(username, ip)
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	delete(l.attempts, key)
+}
+
+func loginFailureKey(username string, ip string) string {
+	username = strings.ToLower(strings.TrimSpace(username))
+	if username == "" {
+		username = "-"
+	}
+	ip = strings.TrimSpace(ip)
+	if ip == "" {
+		ip = "-"
+	}
+	return username + "\x00" + ip
 }
 
 func (h *Handler) meHandler(w http.ResponseWriter, r *http.Request) {
@@ -278,6 +382,7 @@ func (h *Handler) changePasswordHandler(w http.ResponseWriter, r *http.Request) 
 		writeAPIError(w, statusCode, code, message)
 		return
 	}
+	h.clearAuthCookies(w)
 	writeJSON(w, http.StatusOK, okResponse{OK: true})
 }
 
@@ -285,18 +390,39 @@ func (h *Handler) authenticateRequest(w http.ResponseWriter, r *http.Request) (a
 	if !h.requireAuthService(w) {
 		return auth.Admin{}, false
 	}
-	token, err := bearerToken(r)
+	requestToken, err := authTokenFromRequest(r)
 	if err != nil {
 		writeAPIError(w, http.StatusUnauthorized, "MGP-AUTH-003", "未登录或登录已过期")
 		return auth.Admin{}, false
 	}
-	adminUser, err := h.auth.Authenticate(r.Context(), token)
+	if requestToken.FromCookie && csrfRequired(r) && !validCSRFCookieHeader(r) {
+		writeAPIError(w, http.StatusForbidden, "MGP-AUTH-005", "CSRF 校验失败")
+		return auth.Admin{}, false
+	}
+	adminUser, err := h.auth.Authenticate(r.Context(), requestToken.Value)
 	if err != nil {
 		statusCode, code, message := authErrorStatus(err)
 		writeAPIError(w, statusCode, code, message)
 		return auth.Admin{}, false
 	}
 	return adminUser, true
+}
+
+type requestAuthToken struct {
+	Value      string
+	FromCookie bool
+}
+
+func authTokenFromRequest(r *http.Request) (requestAuthToken, error) {
+	cookie, err := r.Cookie(adminSessionCookieName)
+	if err != nil {
+		return requestAuthToken{}, auth.ErrUnauthorized
+	}
+	token := strings.TrimSpace(cookie.Value)
+	if token == "" {
+		return requestAuthToken{}, auth.ErrUnauthorized
+	}
+	return requestAuthToken{Value: token, FromCookie: true}, nil
 }
 
 func decodeJSON(r *http.Request, destination any) error {
@@ -312,20 +438,65 @@ func decodeJSON(r *http.Request, destination any) error {
 	return nil
 }
 
-func bearerToken(r *http.Request) (string, error) {
-	value := strings.TrimSpace(r.Header.Get("Authorization"))
-	if value == "" {
-		return "", auth.ErrUnauthorized
+func csrfRequired(r *http.Request) bool {
+	switch r.Method {
+	case http.MethodGet, http.MethodHead, http.MethodOptions:
+		return false
+	default:
+		return true
 	}
-	prefix := "Bearer "
-	if !strings.HasPrefix(value, prefix) {
-		return "", auth.ErrUnauthorized
+}
+
+func validCSRFCookieHeader(r *http.Request) bool {
+	cookie, err := r.Cookie(csrfTokenCookieName)
+	if err != nil {
+		return false
 	}
-	token := strings.TrimSpace(strings.TrimPrefix(value, prefix))
-	if token == "" {
-		return "", auth.ErrUnauthorized
+	cookieValue := strings.TrimSpace(cookie.Value)
+	headerValue := strings.TrimSpace(r.Header.Get(csrfTokenHeaderName))
+	if cookieValue == "" || headerValue == "" {
+		return false
 	}
-	return token, nil
+	return subtle.ConstantTimeCompare([]byte(cookieValue), []byte(headerValue)) == 1
+}
+
+func (h *Handler) setAuthCookies(w http.ResponseWriter, sessionToken string, csrfToken string, expiresAt time.Time) {
+	secure := strings.EqualFold(h.cfg.App.Environment, "production")
+	http.SetCookie(w, &http.Cookie{
+		Name:     adminSessionCookieName,
+		Value:    sessionToken,
+		Path:     "/",
+		Expires:  expiresAt,
+		HttpOnly: true,
+		Secure:   secure,
+		SameSite: http.SameSiteLaxMode,
+	})
+	http.SetCookie(w, &http.Cookie{
+		Name:     csrfTokenCookieName,
+		Value:    csrfToken,
+		Path:     "/",
+		Expires:  expiresAt,
+		HttpOnly: false,
+		Secure:   secure,
+		SameSite: http.SameSiteLaxMode,
+	})
+}
+
+func (h *Handler) clearAuthCookies(w http.ResponseWriter) {
+	secure := strings.EqualFold(h.cfg.App.Environment, "production")
+	expiredAt := time.Unix(0, 0).UTC()
+	for _, name := range []string{adminSessionCookieName, csrfTokenCookieName} {
+		http.SetCookie(w, &http.Cookie{
+			Name:     name,
+			Value:    "",
+			Path:     "/",
+			Expires:  expiredAt,
+			MaxAge:   -1,
+			HttpOnly: name == adminSessionCookieName,
+			Secure:   secure,
+			SameSite: http.SameSiteLaxMode,
+		})
+	}
 }
 
 func clientIP(r *http.Request) string {

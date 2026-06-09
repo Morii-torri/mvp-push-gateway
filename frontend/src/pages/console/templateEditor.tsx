@@ -3,6 +3,7 @@ import Form from 'antd/es/form';
 import Input from 'antd/es/input';
 import Segmented from 'antd/es/segmented';
 import Select from 'antd/es/select';
+import DOMPurify, { type Config as DOMPurifyConfig } from 'dompurify';
 import { marked } from 'marked';
 
 import type {
@@ -1571,18 +1572,17 @@ function escapePreviewHTML(value: string): string {
     .replace(/'/g, '&#39;');
 }
 
+const previewHTMLSanitizeConfig: DOMPurifyConfig = {
+  USE_PROFILES: { html: true },
+  ADD_TAGS: ['input'],
+  ADD_ATTR: ['checked', 'class', 'disabled', 'type'],
+  FORBID_TAGS: ['style', 'iframe', 'object', 'embed', 'svg', 'math'],
+  FORBID_ATTR: ['style', 'srcdoc'],
+  ALLOW_DATA_ATTR: false,
+};
+
 function sanitizePreviewHTML(value: string): string {
-  return value
-    .replace(/<\s*(script|style|iframe|object|embed|svg|math)[\s\S]*?<\/\s*\1\s*>/gi, '')
-    .replace(/<\s*(script|style|iframe|object|embed|svg|math)\b[^>]*\/?\s*>/gi, '')
-    .replace(/\son[a-z]+\s*=\s*(".*?"|'.*?'|[^\s>]+)/gi, '')
-    .replace(/\ssrcdoc\s*=\s*(".*?"|'.*?'|[^\s>]+)/gi, '')
-    .replace(/\sxmlns(?::[a-z0-9_-]+)?\s*=\s*(".*?"|'.*?'|[^\s>]+)/gi, '')
-    .replace(
-      /\s((?:xlink:)?href|src|formaction|action)\s*=\s*(['"])\s*(javascript|vbscript|data):[\s\S]*?\2/gi,
-      ' $1="#"',
-    )
-    .replace(/\s((?:xlink:)?href|src|formaction|action)\s*=\s*(javascript|vbscript|data):[^\s>]+/gi, ' $1="#"');
+  return DOMPurify.sanitize(value, previewHTMLSanitizeConfig);
 }
 
 function markdownPreviewHTML(value: string): string {

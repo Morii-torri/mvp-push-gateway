@@ -24,6 +24,9 @@ const (
 	MaxRuntimeDeliveryConcurrency    = 100000
 	PerformanceWorkerModeSystem      = "system"
 	PerformanceWorkerModeConcurrency = "concurrency"
+	maxPerformanceMessageCount       = 100000
+	maxPerformanceConcurrency        = MaxRuntimeDeliveryConcurrency
+	maxPerformanceConcurrencyLevels  = 80
 )
 
 var (
@@ -414,6 +417,9 @@ func normalizeMessageCount(value int) int {
 	if value <= 0 {
 		return 200
 	}
+	if value > maxPerformanceMessageCount {
+		return maxPerformanceMessageCount
+	}
 	return value
 }
 
@@ -641,12 +647,7 @@ func PerformanceConcurrencyCandidates(input PerformanceTestInput) []int {
 		return candidates
 	}
 	if input.MaxConcurrency > 0 {
-		maxConcurrency := input.MaxConcurrency
-		candidates := make([]int, 0, maxConcurrency)
-		for value := 1; value <= maxConcurrency; value++ {
-			candidates = append(candidates, value)
-		}
-		return candidates
+		return intRange(1, normalizePerformanceConcurrency(input.MaxConcurrency))
 	}
 	return normalizeConcurrencyCandidates(input.ConcurrencyCandidates)
 }
@@ -664,6 +665,11 @@ func normalizeConcurrencyStartEnd(start int, end int) []int {
 	if start > end {
 		start, end = end, start
 	}
+	start = normalizePerformanceConcurrency(start)
+	end = normalizePerformanceConcurrency(end)
+	if start > end {
+		start, end = end, start
+	}
 	return intRange(start, end)
 }
 
@@ -677,6 +683,7 @@ func normalizeConcurrencyCandidates(values []int) []int {
 		if value <= 0 {
 			continue
 		}
+		value = normalizePerformanceConcurrency(value)
 		if !seen[value] {
 			seen[value] = true
 			candidates = append(candidates, value)
@@ -699,7 +706,7 @@ func parseConcurrencyRange(value string) []int {
 		if single <= 0 {
 			return nil
 		}
-		return intRange(1, single)
+		return intRange(1, normalizePerformanceConcurrency(single))
 	}
 	parts := strings.Split(value, "-")
 	if len(parts) != 2 {
@@ -719,6 +726,11 @@ func parseConcurrencyRange(value string) []int {
 	if start > end {
 		start, end = end, start
 	}
+	start = normalizePerformanceConcurrency(start)
+	end = normalizePerformanceConcurrency(end)
+	if start > end {
+		start, end = end, start
+	}
 	return intRange(start, end)
 }
 
@@ -726,11 +738,59 @@ func intRange(start int, end int) []int {
 	if start <= 0 || end <= 0 || start > end {
 		return nil
 	}
-	values := make([]int, 0, end-start+1)
+	start = normalizePerformanceConcurrency(start)
+	end = normalizePerformanceConcurrency(end)
+	if start > end {
+		start, end = end, start
+	}
+	count := end - start + 1
+	if count > maxPerformanceConcurrencyLevels {
+		return sampledIntRange(start, end, maxPerformanceConcurrencyLevels)
+	}
+	values := make([]int, 0, count)
 	for value := start; value <= end; value++ {
 		values = append(values, value)
 	}
 	return values
+}
+
+func sampledIntRange(start int, end int, limit int) []int {
+	if limit <= 0 {
+		return nil
+	}
+	if limit == 1 || start == end {
+		return []int{end}
+	}
+	values := make([]int, 0, limit)
+	seen := map[int]bool{}
+	span := end - start
+	for index := 0; index < limit; index++ {
+		value := start + int(math.Round(float64(span)*float64(index)/float64(limit-1)))
+		if value < start {
+			value = start
+		}
+		if value > end {
+			value = end
+		}
+		if !seen[value] {
+			seen[value] = true
+			values = append(values, value)
+		}
+	}
+	if values[len(values)-1] != end {
+		values = append(values, end)
+	}
+	return values
+}
+
+func normalizePerformanceConcurrency(value int) int {
+	if value <= 0 {
+		return 0
+	}
+	if value > maxPerformanceConcurrency {
+		return maxPerformanceConcurrency
+	}
+	return value
 }
 
 func recommendConcurrencyFromMetrics(p99MS float64, successRate float64, candidates []int) int {

@@ -2,8 +2,11 @@ package db
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -194,6 +197,52 @@ func (r Repository) CreateAdminSession(ctx context.Context, params auth.CreateSe
 	return nil
 }
 
+func (r Repository) ReserveLoginAttempt(ctx context.Context, params auth.LoginAttemptParams) (bool, error) {
+	if params.Limit <= 0 {
+		return false, auth.ErrInvalidInput
+	}
+	if params.Window <= 0 {
+		return false, auth.ErrInvalidInput
+	}
+	now := params.Now
+	if now.IsZero() {
+		now = time.Now()
+	}
+	cutoff := now.Add(-params.Window)
+	keyHash := adminLoginAttemptKeyHash(params.Username, params.IPAddress)
+	var attemptCount int
+	err := r.pool.QueryRow(ctx, `
+		INSERT INTO admin_login_attempts (attempt_key_hash, attempt_count, window_started_at, updated_at)
+		VALUES ($1, 1, $2, $2)
+		ON CONFLICT (attempt_key_hash) DO UPDATE
+		SET attempt_count = CASE
+				WHEN admin_login_attempts.window_started_at <= $3 THEN 1
+				ELSE admin_login_attempts.attempt_count + 1
+			END,
+			window_started_at = CASE
+				WHEN admin_login_attempts.window_started_at <= $3 THEN $2
+				ELSE admin_login_attempts.window_started_at
+			END,
+			updated_at = $2
+		RETURNING attempt_count
+	`, keyHash, now, cutoff).Scan(&attemptCount)
+	if err != nil {
+		return false, fmt.Errorf("reserve admin login attempt: %w", err)
+	}
+	return attemptCount <= params.Limit, nil
+}
+
+func (r Repository) ClearLoginAttempts(ctx context.Context, username string, ipAddress string) error {
+	_, err := r.pool.Exec(ctx, `
+		DELETE FROM admin_login_attempts
+		WHERE attempt_key_hash = $1
+	`, adminLoginAttemptKeyHash(username, ipAddress))
+	if err != nil {
+		return fmt.Errorf("clear admin login attempts: %w", err)
+	}
+	return nil
+}
+
 func (r Repository) FindAdminBySessionTokenHash(ctx context.Context, tokenHash string, now time.Time) (auth.Session, error) {
 	session := auth.Session{}
 	err := r.pool.QueryRow(ctx, `
@@ -253,4 +302,11 @@ func (r Repository) RevokeAdminSessionsByAdminID(ctx context.Context, adminID st
 		return fmt.Errorf("revoke admin sessions by admin id: %w", err)
 	}
 	return nil
+}
+
+func adminLoginAttemptKeyHash(username string, ipAddress string) string {
+	normalizedUsername := strings.ToLower(strings.TrimSpace(username))
+	normalizedIP := strings.TrimSpace(ipAddress)
+	sum := sha256.Sum256([]byte(normalizedUsername + "\x00" + normalizedIP))
+	return hex.EncodeToString(sum[:])
 }

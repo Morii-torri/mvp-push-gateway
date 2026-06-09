@@ -35,7 +35,7 @@ func TestTemplateValidationHandlersReturnTemplateValidationErrors(t *testing.T) 
 				"template_body":"{\"touser\":\"{{ payload.user }}\",\"content\":\"{{ payload.title }}\"}",
 				"sample_payload":{"user":"zhangsan","title":"告警"}
 			}`))
-			req.Header.Set("Authorization", "Bearer admin-session")
+			setAdminSessionCookie(req, "admin-session")
 			rec := httptest.NewRecorder()
 			handler.ServeHTTP(rec, req)
 
@@ -70,7 +70,7 @@ func TestTemplatePublishHandlerPublishesProviderAwareTemplate(t *testing.T) {
 		"template_body":"{\"msgtype\":\"text\",\"content\":\"{{ payload.summary | default('通知') }}\"}",
 		"sample_payload":{}
 	}`))
-	req.Header.Set("Authorization", "Bearer admin-session")
+	setAdminSessionCookie(req, "admin-session")
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 
@@ -139,7 +139,7 @@ func TestTemplatesHandlerIncludesCurrentVersionMetadata(t *testing.T) {
 	)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/templates", nil)
-	req.Header.Set("Authorization", "Bearer admin-session")
+	setAdminSessionCookie(req, "admin-session")
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 
@@ -195,7 +195,7 @@ func TestTemplateVersionHandlersListAndRestoreHistoricalVersions(t *testing.T) {
 	)
 
 	listReq := httptest.NewRequest(http.MethodGet, "/api/v1/templates/template-1/versions", nil)
-	listReq.Header.Set("Authorization", "Bearer admin-session")
+	setAdminSessionCookie(listReq, "admin-session")
 	listRec := httptest.NewRecorder()
 	handler.ServeHTTP(listRec, listReq)
 
@@ -217,7 +217,7 @@ func TestTemplateVersionHandlersListAndRestoreHistoricalVersions(t *testing.T) {
 	}
 
 	restoreReq := httptest.NewRequest(http.MethodPost, "/api/v1/templates/template-1/versions/version-2/restore", nil)
-	restoreReq.Header.Set("Authorization", "Bearer admin-session")
+	setAdminSessionCookie(restoreReq, "admin-session")
 	restoreRec := httptest.NewRecorder()
 	handler.ServeHTTP(restoreRec, restoreReq)
 

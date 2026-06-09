@@ -1,3 +1,5 @@
+// @vitest-environment jsdom
+
 import { App } from "antd";
 import { ReactFlowProvider } from "@xyflow/react";
 import type { ReactElement } from "react";
@@ -5158,6 +5160,20 @@ describe("critical console pages", () => {
     expect(templateVersionInputFromDraft(textDraft).message_type).toBe("json");
   });
 
+  it("sanitizes entity-obfuscated javascript URLs in HTML previews", () => {
+    const draft = createTemplateDraft([], [], "pushplus", "html");
+    draft.fieldValues.content = {
+      expression: '<a href="java&#x73;cript:alert(1)">open</a>',
+      defaultValue: "",
+    };
+
+    const preview = templateReceivedPreview(draft);
+
+    expect(preview.html).toContain("open");
+    expect(preview.html).not.toContain("java&#x73;cript");
+    expect(preview.html).not.toContain("alert(1)");
+  });
+
   it("does not stringify the SMTP email payload as body when email body is empty", () => {
     const draft = createTemplateDraft(
       [
@@ -6287,11 +6303,11 @@ describe("critical console pages", () => {
   });
 
   it("summarizes performance confirmation ranges before running", () => {
-    expect(performanceConcurrencyConfirmation("10000", "100001")).toEqual({
-      start: 10000,
-      end: 100001,
-      levelCount: 90002,
-      estimatedMessageCount: 4950155001,
+    expect(performanceConcurrencyConfirmation("5000", "5001")).toEqual({
+      start: 5000,
+      end: 5001,
+      levelCount: 2,
+      estimatedMessageCount: 10001,
     });
     expect(performanceConcurrencyConfirmation("16", "1")).toEqual({
       start: 1,

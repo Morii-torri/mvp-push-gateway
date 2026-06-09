@@ -26,7 +26,7 @@ func ptrTime(value string) *time.Time {
 	return &parsed
 }
 
-func TestSourceCRUDRequiresAdminBearerAuthentication(t *testing.T) {
+func TestSourceCRUDRequiresAdminSessionAuthentication(t *testing.T) {
 	sourceService := &fakeSourceService{
 		listResult: []source.Source{{
 			ID:       "source-1",
@@ -46,18 +46,18 @@ func TestSourceCRUDRequiresAdminBearerAuthentication(t *testing.T) {
 	unauthenticatedRec := httptest.NewRecorder()
 	handler.ServeHTTP(unauthenticatedRec, unauthenticated)
 	if unauthenticatedRec.Code != http.StatusUnauthorized {
-		t.Fatalf("expected source list without admin bearer to return 401, got %d", unauthenticatedRec.Code)
+		t.Fatalf("expected source list without admin session to return 401, got %d", unauthenticatedRec.Code)
 	}
 	if sourceService.listCalls != 0 {
 		t.Fatalf("expected source service not to be called without admin auth, got %d calls", sourceService.listCalls)
 	}
 
 	authenticated := httptest.NewRequest(http.MethodGet, "/api/v1/sources", nil)
-	authenticated.Header.Set("Authorization", "Bearer admin-session")
+	setAdminSessionCookie(authenticated, "admin-session")
 	authenticatedRec := httptest.NewRecorder()
 	handler.ServeHTTP(authenticatedRec, authenticated)
 	if authenticatedRec.Code != http.StatusOK {
-		t.Fatalf("expected source list with admin bearer to return 200, got %d", authenticatedRec.Code)
+		t.Fatalf("expected source list with admin session to return 200, got %d", authenticatedRec.Code)
 	}
 	if sourceService.listCalls != 1 {
 		t.Fatalf("expected one source list call, got %d", sourceService.listCalls)
@@ -83,7 +83,7 @@ func TestSourceListOmitsLargeLatestPayloadSample(t *testing.T) {
 	)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/sources", nil)
-	req.Header.Set("Authorization", "Bearer admin-session")
+	setAdminSessionCookie(req, "admin-session")
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 
@@ -104,6 +104,104 @@ func TestSourceListOmitsLargeLatestPayloadSample(t *testing.T) {
 	}
 	if _, ok := body.Sources[0]["latest_payload_sample_updated_at"]; !ok {
 		t.Fatalf("expected source list to keep latest payload timestamp, got %+v", body.Sources[0])
+	}
+}
+
+func TestSourceResponsesAreWriteOnlyUnlessRevealRequested(t *testing.T) {
+	sourceService := &fakeSourceService{
+		getResult: source.Source{
+			ID:         "source-1",
+			Code:       "orders",
+			Name:       "Orders",
+			Enabled:    true,
+			AuthMode:   source.AuthModeTokenAndHMAC,
+			AuthToken:  "sourceToken",
+			HMACSecret: "hmacSecret",
+		},
+	}
+	handler := httpapi.NewHandler(
+		testConfig(),
+		httpapi.WithAuthService(fakeAuthService{authenticatedToken: "admin-session"}),
+		httpapi.WithSourceService(sourceService),
+	)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/sources/source-1", nil)
+	setAdminSessionCookie(req, "admin-session")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected source detail status 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	var body struct {
+		Source map[string]any `json:"source"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
+		t.Fatalf("decode source response: %v", err)
+	}
+	if body.Source["auth_token"] != "" || body.Source["hmac_secret"] != "" {
+		t.Fatalf("expected default source response to hide credentials, got %+v", body.Source)
+	}
+	if body.Source["auth_token_set"] != true || body.Source["hmac_secret_set"] != true {
+		t.Fatalf("expected source response to expose credential presence flags, got %+v", body.Source)
+	}
+	if strings.Contains(rec.Body.String(), "sourceToken") || strings.Contains(rec.Body.String(), "hmacSecret") {
+		t.Fatalf("default source response leaked credentials: %s", rec.Body.String())
+	}
+
+	revealReq := httptest.NewRequest(http.MethodGet, "/api/v1/sources/source-1?reveal_secrets=true", nil)
+	setAdminSessionCookie(revealReq, "admin-session")
+	revealRec := httptest.NewRecorder()
+	handler.ServeHTTP(revealRec, revealReq)
+	if revealRec.Code != http.StatusOK {
+		t.Fatalf("expected reveal source detail status 200, got %d body=%s", revealRec.Code, revealRec.Body.String())
+	}
+	var revealBody struct {
+		Source map[string]any `json:"source"`
+	}
+	if err := json.NewDecoder(revealRec.Body).Decode(&revealBody); err != nil {
+		t.Fatalf("decode reveal source response: %v", err)
+	}
+	if revealBody.Source["auth_token"] != "sourceToken" || revealBody.Source["hmac_secret"] != "hmacSecret" {
+		t.Fatalf("expected reveal response to include credentials, got %+v", revealBody.Source)
+	}
+}
+
+func TestSourceSecretRevealRecordsAuditWithoutSecrets(t *testing.T) {
+	sourceService := &fakeSourceService{
+		getResult: source.Source{
+			ID:         "source-1",
+			Code:       "orders",
+			Name:       "Orders",
+			Enabled:    true,
+			AuthMode:   source.AuthModeTokenAndHMAC,
+			AuthToken:  "sourceToken",
+			HMACSecret: "hmacSecret",
+		},
+	}
+	auditService := &fakeAuditService{}
+	handler := httpapi.NewHandler(
+		testConfig(),
+		httpapi.WithAuthService(fakeAuthService{authenticatedToken: "admin-session"}),
+		httpapi.WithSourceService(sourceService),
+		httpapi.WithAuditService(auditService),
+	)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/sources/source-1?reveal_secrets=true", nil)
+	setAdminSessionCookie(req, "admin-session")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected reveal source detail status 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	if auditService.recordCalls != 1 {
+		t.Fatalf("expected one reveal audit record, got %d", auditService.recordCalls)
+	}
+	if auditService.recordInput.Action != "reveal_secrets" || auditService.recordInput.ResourceType != "source" || auditService.recordInput.ResourceID != "source-1" {
+		t.Fatalf("unexpected reveal audit input: %+v", auditService.recordInput)
+	}
+	if strings.Contains(string(auditService.recordInput.RequestSnapshot), "sourceToken") ||
+		strings.Contains(string(auditService.recordInput.ResponseSnapshot), "hmacSecret") {
+		t.Fatalf("reveal audit leaked credentials: request=%s response=%s", auditService.recordInput.RequestSnapshot, auditService.recordInput.ResponseSnapshot)
 	}
 }
 
@@ -144,7 +242,7 @@ func TestSourceCRUDRoutesUseAdminAuthentication(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			req := httptest.NewRequest(tc.method, tc.path, strings.NewReader(tc.body))
-			req.Header.Set("Authorization", "Bearer admin-session")
+			setAdminSessionCookie(req, "admin-session")
 			rec := httptest.NewRecorder()
 			handler.ServeHTTP(rec, req)
 
@@ -180,7 +278,7 @@ func TestSourceCreateAutoCreatesDefaultRouteFlow(t *testing.T) {
 		"auth_mode":"token",
 		"auth_token":"sourceToken"
 	}`))
-	req.Header.Set("Authorization", "Bearer admin-session")
+	setAdminSessionCookie(req, "admin-session")
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 
@@ -211,7 +309,7 @@ func TestSourcePUTDoesNotPassLatestPayloadFieldsToServiceInput(t *testing.T) {
 		"latest_payload_sample":{"title":"should-not-pass"},
 		"latest_payload_sample_updated_at":"2026-05-08T10:30:00Z"
 	}`))
-	req.Header.Set("Authorization", "Bearer admin-session")
+	setAdminSessionCookie(req, "admin-session")
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 
@@ -500,7 +598,7 @@ func TestSourceCRUDErrorCodesAvoidLegacySourceCodes(t *testing.T) {
 	)
 
 	create := httptest.NewRequest(http.MethodPost, "/api/v1/sources", strings.NewReader(`{"code":"orders","name":"Orders"}`))
-	create.Header.Set("Authorization", "Bearer admin-session")
+	setAdminSessionCookie(create, "admin-session")
 	createRec := httptest.NewRecorder()
 	handler.ServeHTTP(createRec, create)
 	if createRec.Code != http.StatusConflict {
@@ -511,7 +609,7 @@ func TestSourceCRUDErrorCodesAvoidLegacySourceCodes(t *testing.T) {
 	}
 
 	get := httptest.NewRequest(http.MethodGet, "/api/v1/sources/source-1", nil)
-	get.Header.Set("Authorization", "Bearer admin-session")
+	setAdminSessionCookie(get, "admin-session")
 	getRec := httptest.NewRecorder()
 	handler.ServeHTTP(getRec, get)
 	if getRec.Code != http.StatusNotFound {

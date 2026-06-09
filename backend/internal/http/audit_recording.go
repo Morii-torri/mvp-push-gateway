@@ -30,6 +30,24 @@ func (h *Handler) recordAudit(r *http.Request, adminUser auth.Admin, action stri
 	})
 }
 
+func (h *Handler) recordSecretRevealAudit(r *http.Request, adminUser auth.Admin, resourceType string, resourceID string, fields []string) {
+	h.recordAudit(
+		r,
+		adminUser,
+		"reveal_secrets",
+		resourceType,
+		resourceID,
+		map[string]any{
+			"reveal_secrets": true,
+			"fields":         fields,
+		},
+		map[string]any{
+			"revealed":    true,
+			"field_count": len(fields),
+		},
+	)
+}
+
 func (h *Handler) recordSourceRejectAudit(r *http.Request, sourceCode string, err error, status int, code string) {
 	if h.audit == nil {
 		return

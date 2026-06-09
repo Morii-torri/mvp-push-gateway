@@ -70,7 +70,7 @@ func TestNotificationStreamEndpointWritesSSESnapshot(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create stream request: %v", err)
 	}
-	req.Header.Set("Authorization", "Bearer admin-session")
+	setAdminSessionCookie(req, "admin-session")
 	resp, err := server.Client().Do(req)
 	if err != nil {
 		t.Fatalf("open notification stream: %v", err)
@@ -129,7 +129,7 @@ func TestQueueMonitoringEndpointReturnsCleanupStatus(t *testing.T) {
 	)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/monitor/queues", nil)
-	req.Header.Set("Authorization", "Bearer admin-session")
+	setAdminSessionCookie(req, "admin-session")
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 
@@ -179,7 +179,7 @@ func TestQueueMonitoringEndpointReturnsJetStreamStats(t *testing.T) {
 	)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/monitor/queues", nil)
-	req.Header.Set("Authorization", "Bearer admin-session")
+	setAdminSessionCookie(req, "admin-session")
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 
@@ -223,7 +223,7 @@ func TestMonitoringEndpointsPassWindowQueryToServices(t *testing.T) {
 	)
 
 	queueReq := httptest.NewRequest(http.MethodGet, "/api/v1/monitor/queues?window=1h", nil)
-	queueReq.Header.Set("Authorization", "Bearer admin-session")
+	setAdminSessionCookie(queueReq, "admin-session")
 	queueRec := httptest.NewRecorder()
 	handler.ServeHTTP(queueRec, queueReq)
 	if queueRec.Code != http.StatusOK {
@@ -234,7 +234,7 @@ func TestMonitoringEndpointsPassWindowQueryToServices(t *testing.T) {
 	}
 
 	overviewReq := httptest.NewRequest(http.MethodGet, "/api/v1/stats/overview?window=7d", nil)
-	overviewReq.Header.Set("Authorization", "Bearer admin-session")
+	setAdminSessionCookie(overviewReq, "admin-session")
 	overviewRec := httptest.NewRecorder()
 	handler.ServeHTTP(overviewRec, overviewReq)
 	if overviewRec.Code != http.StatusOK {
@@ -266,7 +266,7 @@ func TestOverviewStatisticsEndpointReturnsStableDashboardShape(t *testing.T) {
 	)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/stats/overview", nil)
-	req.Header.Set("Authorization", "Bearer admin-session")
+	setAdminSessionCookie(req, "admin-session")
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 
@@ -308,7 +308,7 @@ func TestRetentionCleanupEndpointRunsSingleBatch(t *testing.T) {
 	)
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/maintenance/retention/cleanup", strings.NewReader(`{"retention_days":30,"batch_size":150}`))
-	req.Header.Set("Authorization", "Bearer admin-session")
+	setAdminSessionCookie(req, "admin-session")
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 
@@ -341,7 +341,7 @@ func TestRetentionCleanupHandlerRecordsAudit(t *testing.T) {
 	)
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/maintenance/retention/cleanup", strings.NewReader(`{"retention_days":45,"batch_size":150}`))
-	req.Header.Set("Authorization", "Bearer admin-session")
+	setAdminSessionCookie(req, "admin-session")
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 

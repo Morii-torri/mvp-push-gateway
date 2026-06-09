@@ -92,6 +92,76 @@ func TestCreateFirstAdminHashesPassword(t *testing.T) {
 	}
 }
 
+func TestLoginUsesStoreBackedRateLimitBeforePasswordVerification(t *testing.T) {
+	store := &fakeStore{loginReserveBlocked: true}
+	service := NewService(store)
+
+	_, err := service.Login(context.Background(), LoginInput{
+		Username: "admin",
+		Password: "valid-password-123",
+		Meta:     SessionMeta{IPAddress: "203.0.113.10"},
+	})
+	if !errors.Is(err, ErrRateLimited) {
+		t.Fatalf("expected ErrRateLimited, got %v", err)
+	}
+	if store.reserveLoginAttemptCalls != 1 {
+		t.Fatalf("expected one persistent rate limit reservation, got %d", store.reserveLoginAttemptCalls)
+	}
+	if store.findAdminByUsernameCalls != 0 {
+		t.Fatalf("expected rate limit to stop before password lookup, got %d lookups", store.findAdminByUsernameCalls)
+	}
+}
+
+func TestLoginClearsStoreBackedRateLimitOnSuccess(t *testing.T) {
+	hash, err := HashPassword("valid-password-123")
+	if err != nil {
+		t.Fatalf("hash password: %v", err)
+	}
+	store := &fakeStore{
+		admin: StoredAdmin{
+			Admin: Admin{
+				ID:       "admin-id",
+				Username: "admin",
+				Enabled:  true,
+			},
+			PasswordHash: hash,
+		},
+	}
+	service := NewService(store)
+
+	_, err = service.Login(context.Background(), LoginInput{
+		Username: "admin",
+		Password: "valid-password-123",
+		Meta:     SessionMeta{IPAddress: "203.0.113.10"},
+	})
+	if err != nil {
+		t.Fatalf("login: %v", err)
+	}
+	if store.clearLoginAttemptCalls != 1 {
+		t.Fatalf("expected successful login to clear persistent rate limit state, got %d", store.clearLoginAttemptCalls)
+	}
+}
+
+func TestLoginForMissingUserPerformsPasswordVerificationWork(t *testing.T) {
+	store := &fakeStore{}
+	service := NewService(store)
+
+	startedAt := time.Now()
+	_, err := service.Login(context.Background(), LoginInput{
+		Username: "missing-admin",
+		Password: "wrong-password-123",
+		Meta:     SessionMeta{IPAddress: "203.0.113.10"},
+	})
+	elapsed := time.Since(startedAt)
+
+	if !errors.Is(err, ErrInvalidCredentials) {
+		t.Fatalf("expected ErrInvalidCredentials, got %v", err)
+	}
+	if elapsed < 10*time.Millisecond {
+		t.Fatalf("expected missing-user login to perform password verification work, finished in %s", elapsed)
+	}
+}
+
 func TestChangePasswordRevokesAdminSessions(t *testing.T) {
 	hash, err := HashPassword("current-password-123")
 	if err != nil {
@@ -159,6 +229,10 @@ type fakeStore struct {
 	session                   Session
 	updatedProfileDisplayName string
 	revokedAdminID            string
+	loginReserveBlocked       bool
+	reserveLoginAttemptCalls  int
+	clearLoginAttemptCalls    int
+	findAdminByUsernameCalls  int
 }
 
 func (f *fakeStore) GetSetupStatus(context.Context) (SetupStatus, error) {
@@ -177,10 +251,21 @@ func (f *fakeStore) CreateFirstAdmin(_ context.Context, params CreateFirstAdminP
 }
 
 func (f *fakeStore) FindAdminByUsername(context.Context, string) (StoredAdmin, error) {
+	f.findAdminByUsernameCalls++
 	if f.admin.ID == "" {
 		return StoredAdmin{}, ErrNotFound
 	}
 	return f.admin, nil
+}
+
+func (f *fakeStore) ReserveLoginAttempt(context.Context, LoginAttemptParams) (bool, error) {
+	f.reserveLoginAttemptCalls++
+	return !f.loginReserveBlocked, nil
+}
+
+func (f *fakeStore) ClearLoginAttempts(context.Context, string, string) error {
+	f.clearLoginAttemptCalls++
+	return nil
 }
 
 func (f *fakeStore) FindAdminByID(context.Context, string) (StoredAdmin, error) {

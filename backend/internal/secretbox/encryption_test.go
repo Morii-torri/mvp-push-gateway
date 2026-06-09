@@ -19,6 +19,12 @@ func TestCipherEncryptStringUsesAuthenticatedEnvelope(t *testing.T) {
 	if !IsEncryptedString(encrypted) {
 		t.Fatalf("expected encrypted envelope, got %q", encrypted)
 	}
+	if keyID, ok := EnvelopeKeyID(encrypted); !ok || keyID != "primary" {
+		t.Fatalf("expected envelope key id primary, got key=%q ok=%v", keyID, ok)
+	}
+	if cipher.KeyID() != "primary" {
+		t.Fatalf("expected cipher key id primary, got %q", cipher.KeyID())
+	}
 	if strings.Contains(encrypted, "access-token-1") {
 		t.Fatalf("encrypted envelope leaked plaintext token: %q", encrypted)
 	}

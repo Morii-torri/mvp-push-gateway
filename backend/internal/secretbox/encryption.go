@@ -65,6 +65,25 @@ func IsEncryptedString(value string) bool {
 	return strings.HasPrefix(strings.TrimSpace(value), envelopePrefix)
 }
 
+func EnvelopeKeyID(value string) (string, bool) {
+	value = strings.TrimSpace(value)
+	if !IsEncryptedString(value) {
+		return "", false
+	}
+	parts := strings.Split(value, ":")
+	if len(parts) != 5 || parts[0] != "enc" || parts[1] != "v1" || parts[2] == "" {
+		return "", false
+	}
+	return parts[2], true
+}
+
+func (c *Cipher) KeyID() string {
+	if c == nil {
+		return ""
+	}
+	return c.keyID
+}
+
 func (c *Cipher) EncryptString(plaintext string, associatedData string) (string, error) {
 	if c == nil || c.aead == nil {
 		return "", ErrMissingCipherKey

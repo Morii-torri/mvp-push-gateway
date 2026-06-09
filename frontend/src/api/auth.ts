@@ -1,4 +1,4 @@
-import { apiRequest, tokenStore, type ApiFetcher } from "./client";
+import { apiRequest, type ApiFetcher } from "./client";
 
 export type AdminUser = {
   id: string;
@@ -15,8 +15,8 @@ export type SetupStatus = {
 };
 
 export type LoginResult = {
-  token: string;
-  token_type: string;
+  token?: string;
+  token_type?: string;
   expires_at: string;
   admin: AdminUser;
 };
@@ -45,14 +45,12 @@ export const authApi = {
     input: { username: string; password: string },
     fetcher?: ApiFetcher,
   ) {
-    const result = await apiRequest<LoginResult>("/auth/login", {
+    return apiRequest<LoginResult>("/auth/login", {
       method: "POST",
       body: input,
       auth: false,
       fetcher,
     });
-    tokenStore.set(result.token);
-    return result;
   },
   me(fetcher?: ApiFetcher) {
     return apiRequest<{ admin: AdminUser }>("/auth/me", { fetcher });
@@ -75,13 +73,9 @@ export const authApi = {
     });
   },
   async logout(fetcher?: ApiFetcher) {
-    try {
-      await apiRequest<{ ok: boolean }>("/auth/logout", {
-        method: "POST",
-        fetcher,
-      });
-    } finally {
-      tokenStore.clear();
-    }
+    await apiRequest<{ ok: boolean }>("/auth/logout", {
+      method: "POST",
+      fetcher,
+    });
   },
 };

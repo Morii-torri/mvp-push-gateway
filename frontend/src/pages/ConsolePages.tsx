@@ -2477,23 +2477,51 @@ function performanceIntegerInput(value: string, fallback: number) {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
 }
 
+const PERFORMANCE_MAX_CONCURRENCY = 100000;
+const PERFORMANCE_MAX_CONCURRENCY_LEVELS = 80;
+
 export function performanceConcurrencyConfirmation(
   startValue: string,
   endValue: string,
 ) {
-  let start = performanceIntegerInput(startValue, 1);
-  let end = performanceIntegerInput(endValue, start);
+  let start = performanceConcurrencyInput(startValue, 1);
+  let end = performanceConcurrencyInput(endValue, start);
   if (start > end) {
     [start, end] = [end, start];
   }
-  const levelCount = end - start + 1;
-  const estimatedMessageCount = ((start + end) * levelCount) / 2;
+  const candidates = performanceConcurrencyCandidates(start, end);
+  const levelCount = candidates.length;
+  const estimatedMessageCount = candidates.reduce((total, value) => total + value, 0);
   return {
-    start,
-    end,
+    start: candidates[0] ?? start,
+    end: candidates[candidates.length - 1] ?? end,
     levelCount,
     estimatedMessageCount,
   };
+}
+
+function performanceConcurrencyInput(value: string, fallback: number) {
+  return Math.min(performanceIntegerInput(value, fallback), PERFORMANCE_MAX_CONCURRENCY);
+}
+
+function performanceConcurrencyCandidates(start: number, end: number) {
+  const count = end - start + 1;
+  if (count <= PERFORMANCE_MAX_CONCURRENCY_LEVELS) {
+    return Array.from({ length: count }, (_, index) => start + index);
+  }
+  const seen = new Set<number>();
+  const values: number[] = [];
+  for (let index = 0; index < PERFORMANCE_MAX_CONCURRENCY_LEVELS; index += 1) {
+    const value = Math.round(start + ((end - start) * index) / (PERFORMANCE_MAX_CONCURRENCY_LEVELS - 1));
+    if (!seen.has(value)) {
+      seen.add(value);
+      values.push(value);
+    }
+  }
+  if (values[values.length - 1] !== end) {
+    values.push(end);
+  }
+  return values;
 }
 
 function defaultPerformanceDiagnostics(): PerformanceRuntimeDiagnostics {
@@ -4067,10 +4095,19 @@ export function SourcesPage({ lastUpdated, onRefresh }: ConsolePageProps) {
       showError(message, error);
     }
   };
-  const openInboundTest = (record: SourceRow) => {
+  const openInboundTest = async (record: SourceRow) => {
     setInboundTestSource(record);
     setInboundPayloadText(stringifyJSON(defaultInboundTestPayload(record)));
     setInboundTestResult(null);
+    try {
+      const result = await consoleApi.getSource(
+        record.id,
+        { revealSecrets: true },
+      );
+      setInboundTestSource(mapSourceRow(result.source));
+    } catch (error) {
+      showError(message, error);
+    }
   };
   const openPayloadView = async (record: SourceRow) => {
     setPayloadViewSource(record);
@@ -4167,7 +4204,10 @@ export function SourcesPage({ lastUpdated, onRefresh }: ConsolePageProps) {
   };
   const copySourceAccessGuide = async (source: SourceApiRecord) => {
     try {
-      const guide = await buildSourceAccessGuide(source);
+      const result = await consoleApi.getSource(source.id, {
+        revealSecrets: true,
+      });
+      const guide = await buildSourceAccessGuide(result.source);
       await copyTextToClipboard(guide);
       message.success("入站接入说明已复制");
     } catch (error) {

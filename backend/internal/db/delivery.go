@@ -495,7 +495,7 @@ func ensureExternalDeliveryLog(ctx context.Context, tx pgx.Tx, params delivery.C
 	if queuedAt.IsZero() {
 		queuedAt = receivedAt
 	}
-	payload := defaultJSON(params.InboundPayload)
+	payload := storedMessagePayload(params.InboundPayload)
 	headers := defaultJSON(params.InboundHeaders)
 	if _, err := tx.Exec(ctx, `
 		INSERT INTO message_records (

@@ -12,8 +12,11 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"
 
+	"mvp-push-gateway/backend/internal/safedata"
 	"mvp-push-gateway/backend/internal/source"
 )
+
+const maxStoredLatestPayloadSampleBytes = 16 * 1024
 
 func (r Repository) ListSources(ctx context.Context) ([]source.Source, error) {
 	rows, err := r.pool.Query(ctx, `
@@ -395,6 +398,7 @@ func (r Repository) PerformanceDeliveryStatusDetails(ctx context.Context, traceI
 }
 
 func (r Repository) UpdateLatestPayloadSample(ctx context.Context, sourceID string, payload json.RawMessage, sampledAt time.Time) error {
+	payload = safedata.MinimizeJSON(payload, maxStoredLatestPayloadSampleBytes)
 	tag, err := r.pool.Exec(ctx, `
 		UPDATE inbound_sources
 		SET latest_payload_sample = $2,

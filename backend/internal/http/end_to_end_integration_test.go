@@ -82,42 +82,44 @@ func TestFreshEnvironmentHTTPFlowCoversSetupAuthSourceTemplateRouteAndIngest(t *
 		"confirm_password": "valid-password-456",
 	}, http.StatusConflict)
 
-	login := doJSON[loginBody](t, handler, http.MethodPost, "/api/v1/auth/login", "", map[string]any{
+	login, loginRec := doJSONWithResponse[loginBody](t, handler, http.MethodPost, "/api/v1/auth/login", "", map[string]any{
 		"username": "admin",
 		"password": "valid-password-123",
 	}, http.StatusOK)
-	if login.Token == "" || login.TokenType != "Bearer" {
+	if login.Token != "" || login.TokenType != "" {
 		t.Fatalf("unexpected login result: %+v", login)
 	}
+	sessionToken := adminSessionTokenFromResponse(t, loginRec)
 
-	me := doJSON[meBody](t, handler, http.MethodGet, "/api/v1/auth/me", login.Token, nil, http.StatusOK)
+	me := doJSON[meBody](t, handler, http.MethodGet, "/api/v1/auth/me", sessionToken, nil, http.StatusOK)
 	if me.Admin.ID != adminCreated.Admin.ID || me.Admin.Username != "admin" {
 		t.Fatalf("unexpected /auth/me response: %+v", me.Admin)
 	}
 
-	changePassword := doJSON[okBody](t, handler, http.MethodPost, "/api/v1/auth/change-password", login.Token, map[string]any{
+	changePassword := doJSON[okBody](t, handler, http.MethodPost, "/api/v1/auth/change-password", sessionToken, map[string]any{
 		"current_password": "valid-password-123",
 		"new_password":     "rotated-password-456",
 	}, http.StatusOK)
 	if !changePassword.OK {
 		t.Fatalf("expected password change success, got %+v", changePassword)
 	}
-	assertStatusCode(t, handler, http.MethodGet, "/api/v1/auth/me", login.Token, nil, http.StatusUnauthorized)
+	assertStatusCode(t, handler, http.MethodGet, "/api/v1/auth/me", sessionToken, nil, http.StatusUnauthorized)
 
 	assertStatusCode(t, handler, http.MethodPost, "/api/v1/auth/login", "", map[string]any{
 		"username": "admin",
 		"password": "valid-password-123",
 	}, http.StatusUnauthorized)
 
-	rotatedLogin := doJSON[loginBody](t, handler, http.MethodPost, "/api/v1/auth/login", "", map[string]any{
+	rotatedLogin, rotatedLoginRec := doJSONWithResponse[loginBody](t, handler, http.MethodPost, "/api/v1/auth/login", "", map[string]any{
 		"username": "admin",
 		"password": "rotated-password-456",
 	}, http.StatusOK)
-	if rotatedLogin.Token == "" {
-		t.Fatal("expected rotated password login token")
+	if rotatedLogin.Token != "" || rotatedLogin.TokenType != "" {
+		t.Fatalf("expected rotated password login to keep bearer token out of JSON, got %+v", rotatedLogin)
 	}
+	rotatedSessionToken := adminSessionTokenFromResponse(t, rotatedLoginRec)
 
-	sourceCreated := doJSON[sourceCreateBody](t, handler, http.MethodPost, "/api/v1/sources", rotatedLogin.Token, map[string]any{
+	sourceCreated := doJSON[sourceCreateBody](t, handler, http.MethodPost, "/api/v1/sources", rotatedSessionToken, map[string]any{
 		"code":                    "orders",
 		"name":                    "Orders",
 		"auth_mode":               "token",
@@ -134,7 +136,7 @@ func TestFreshEnvironmentHTTPFlowCoversSetupAuthSourceTemplateRouteAndIngest(t *
 		t.Fatalf("expected no latest payload sample before ingest, got %s", sourceCreated.Source.LatestPayloadSample)
 	}
 
-	templateCreated := doJSON[templateBody](t, handler, http.MethodPost, "/api/v1/templates", rotatedLogin.Token, map[string]any{
+	templateCreated := doJSON[templateBody](t, handler, http.MethodPost, "/api/v1/templates", rotatedSessionToken, map[string]any{
 		"name":        "Alert Template",
 		"description": "Title renderer",
 		"source_id":   sourceCreated.Source.ID,
@@ -144,7 +146,7 @@ func TestFreshEnvironmentHTTPFlowCoversSetupAuthSourceTemplateRouteAndIngest(t *
 		t.Fatalf("unexpected template source: %+v", templateCreated.Template)
 	}
 
-	templateVersion := doJSON[templateVersionBody](t, handler, http.MethodPost, "/api/v1/templates/"+templateCreated.Template.ID+"/publish", rotatedLogin.Token, map[string]any{
+	templateVersion := doJSON[templateVersionBody](t, handler, http.MethodPost, "/api/v1/templates/"+templateCreated.Template.ID+"/publish", rotatedSessionToken, map[string]any{
 		"message_type":         "json",
 		"target_provider_type": "webhook",
 		"template_body":        `{"body":{"title":"{{ payload.title }}"}}`,
@@ -158,7 +160,7 @@ func TestFreshEnvironmentHTTPFlowCoversSetupAuthSourceTemplateRouteAndIngest(t *
 		t.Fatalf("expected payload.title variable capture, got %+v", templateVersion.Version.UsedVariables)
 	}
 
-	channelCreated := doJSON[channelBody](t, handler, http.MethodPost, "/api/v1/channels", rotatedLogin.Token, map[string]any{
+	channelCreated := doJSON[channelBody](t, handler, http.MethodPost, "/api/v1/channels", rotatedSessionToken, map[string]any{
 		"provider_type":      "webhook",
 		"name":               "Test Webhook",
 		"enabled":            true,
@@ -173,7 +175,7 @@ func TestFreshEnvironmentHTTPFlowCoversSetupAuthSourceTemplateRouteAndIngest(t *
 		t.Fatalf("unexpected channel: %+v", channelCreated.Channel)
 	}
 
-	flowList := doJSON[routeFlowListBody](t, handler, http.MethodGet, "/api/v1/route-flows", rotatedLogin.Token, nil, http.StatusOK)
+	flowList := doJSON[routeFlowListBody](t, handler, http.MethodGet, "/api/v1/route-flows", rotatedSessionToken, nil, http.StatusOK)
 	flowCreated := routeFlowBody{}
 	for _, item := range flowList.Flows {
 		if item.SourceID == sourceCreated.Source.ID {
@@ -187,7 +189,7 @@ func TestFreshEnvironmentHTTPFlowCoversSetupAuthSourceTemplateRouteAndIngest(t *
 	}
 	ruleKey := "00000000-0000-0000-0000-000000018001"
 
-	savedRules := doJSON[routeRulesBody](t, handler, http.MethodPut, "/api/v1/route-flows/"+flowCreated.Flow.ID+"/rules", rotatedLogin.Token, map[string]any{
+	savedRules := doJSON[routeRulesBody](t, handler, http.MethodPut, "/api/v1/route-flows/"+flowCreated.Flow.ID+"/rules", rotatedSessionToken, map[string]any{
 		"rules": []map[string]any{
 			{
 				"rule_key":       ruleKey,
@@ -223,28 +225,28 @@ func TestFreshEnvironmentHTTPFlowCoversSetupAuthSourceTemplateRouteAndIngest(t *
 		t.Fatalf("expected saved rule key %s, got %+v", ruleKey, savedRules.Rules[0])
 	}
 
-	validation := doJSON[routeValidationBody](t, handler, http.MethodPost, "/api/v1/route-flows/"+flowCreated.Flow.ID+"/validate", rotatedLogin.Token, nil, http.StatusOK)
+	validation := doJSON[routeValidationBody](t, handler, http.MethodPost, "/api/v1/route-flows/"+flowCreated.Flow.ID+"/validate", rotatedSessionToken, nil, http.StatusOK)
 	if validation.Status != "valid" || validation.VersionID == "" {
 		t.Fatalf("unexpected route validation result: %+v", validation)
 	}
 
-	published := doJSON[routeVersionBody](t, handler, http.MethodPost, "/api/v1/route-flows/"+flowCreated.Flow.ID+"/publish", rotatedLogin.Token, nil, http.StatusOK)
+	published := doJSON[routeVersionBody](t, handler, http.MethodPost, "/api/v1/route-flows/"+flowCreated.Flow.ID+"/publish", rotatedSessionToken, nil, http.StatusOK)
 	if published.Version.ValidationStatus != "valid" || published.Version.ID == "" {
 		t.Fatalf("unexpected published route version: %+v", published.Version)
 	}
 
-	simulated := doJSON[routeSimulationBody](t, handler, http.MethodPost, "/api/v1/route-flows/"+flowCreated.Flow.ID+"/simulate", rotatedLogin.Token, map[string]any{
+	simulated := doJSON[routeSimulationBody](t, handler, http.MethodPost, "/api/v1/route-flows/"+flowCreated.Flow.ID+"/simulate", rotatedSessionToken, map[string]any{
 		"payload": map[string]any{"title": "critical"},
 	}, http.StatusOK)
 	if simulated.StopReason != "first_match_stop" || simulated.MatchedRule == nil || simulated.MatchedRule.RuleKey != ruleKey {
 		t.Fatalf("unexpected route simulation result: %+v", simulated)
 	}
 
-	logout := doJSON[okBody](t, handler, http.MethodPost, "/api/v1/auth/logout", rotatedLogin.Token, nil, http.StatusOK)
+	logout := doJSON[okBody](t, handler, http.MethodPost, "/api/v1/auth/logout", rotatedSessionToken, nil, http.StatusOK)
 	if !logout.OK {
 		t.Fatalf("expected logout success, got %+v", logout)
 	}
-	assertStatusCode(t, handler, http.MethodGet, "/api/v1/auth/me", rotatedLogin.Token, nil, http.StatusUnauthorized)
+	assertStatusCode(t, handler, http.MethodGet, "/api/v1/auth/me", rotatedSessionToken, nil, http.StatusUnauthorized)
 
 	ingest := doJSON[ingestBody](t, handler, http.MethodPost, "/api/v1/ingest/orders", "sourcetoken001", map[string]any{
 		"title":   "critical",
@@ -413,6 +415,12 @@ type ingestBody struct {
 
 func doJSON[T any](t *testing.T, handler http.Handler, method string, path string, bearerToken string, requestBody any, expectedStatus int) T {
 	t.Helper()
+	body, _ := doJSONWithResponse[T](t, handler, method, path, bearerToken, requestBody, expectedStatus)
+	return body
+}
+
+func doJSONWithResponse[T any](t *testing.T, handler http.Handler, method string, path string, bearerToken string, requestBody any, expectedStatus int) (T, *httptest.ResponseRecorder) {
+	t.Helper()
 
 	req := newJSONRequest(t, method, path, bearerToken, requestBody)
 	rec := httptest.NewRecorder()
@@ -425,13 +433,24 @@ func doJSON[T any](t *testing.T, handler http.Handler, method string, path strin
 	if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
 		t.Fatalf("decode %s %s response: %v body=%s", method, path, err, rec.Body.String())
 	}
-	return body
+	return body, rec
 }
 
-func assertStatusCode(t *testing.T, handler http.Handler, method string, path string, bearerToken string, requestBody any, expectedStatus int) {
+func adminSessionTokenFromResponse(t *testing.T, rec *httptest.ResponseRecorder) string {
+	t.Helper()
+	for _, cookie := range rec.Result().Cookies() {
+		if cookie.Name == "mgp_admin_session" && cookie.Value != "" && cookie.HttpOnly {
+			return cookie.Value
+		}
+	}
+	t.Fatalf("expected login response to set HttpOnly admin session cookie, got %+v", rec.Result().Cookies())
+	return ""
+}
+
+func assertStatusCode(t *testing.T, handler http.Handler, method string, path string, sessionOrSourceToken string, requestBody any, expectedStatus int) {
 	t.Helper()
 
-	req := newJSONRequest(t, method, path, bearerToken, requestBody)
+	req := newJSONRequest(t, method, path, sessionOrSourceToken, requestBody)
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 	if rec.Code != expectedStatus {
@@ -439,7 +458,7 @@ func assertStatusCode(t *testing.T, handler http.Handler, method string, path st
 	}
 }
 
-func newJSONRequest(t *testing.T, method string, path string, bearerToken string, requestBody any) *http.Request {
+func newJSONRequest(t *testing.T, method string, path string, sessionOrSourceToken string, requestBody any) *http.Request {
 	t.Helper()
 
 	var body bytes.Buffer
@@ -454,8 +473,12 @@ func newJSONRequest(t *testing.T, method string, path string, bearerToken string
 	if requestBody != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
-	if bearerToken != "" {
-		req.Header.Set("Authorization", "Bearer "+bearerToken)
+	if sessionOrSourceToken != "" {
+		if strings.HasPrefix(path, "/api/v1/ingest/") {
+			req.Header.Set("Authorization", "Bearer "+sessionOrSourceToken)
+		} else {
+			setAdminSessionCookie(req, sessionOrSourceToken)
+		}
 	}
 	return req
 }

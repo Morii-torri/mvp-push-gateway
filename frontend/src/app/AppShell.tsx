@@ -48,7 +48,7 @@ import {
   type OverviewApiResponse,
   type QueueMonitoringApiResponse,
 } from "../utils/dashboardData";
-import { AUTH_EXPIRED_EVENT, normalizeApiPath, tokenStore } from "../api/client";
+import { AUTH_EXPIRED_EVENT, normalizeApiPath } from "../api/client";
 import {
   AuthGate,
   adminPasswordInputProps,
@@ -460,19 +460,15 @@ function ConsoleChrome() {
         const headers: Record<string, string> = {
           Accept: "text/event-stream",
         };
-        const token = tokenStore.get();
-        if (token) {
-          headers.Authorization = `Bearer ${token}`;
-        }
         const response = await fetch(
           normalizeApiPath("/monitor/notifications/stream"),
           {
+            credentials: "same-origin",
             headers,
             signal: controller.signal,
           },
         );
         if (response.status === 401) {
-          tokenStore.clear();
           window.dispatchEvent(new Event(AUTH_EXPIRED_EVENT));
           return;
         }
@@ -664,7 +660,6 @@ function ConsoleChrome() {
       });
       setPasswordOpen(false);
       passwordForm.resetFields();
-      tokenStore.clear();
       window.dispatchEvent(new Event(AUTH_EXPIRED_EVENT));
       message.success("密码已修改，请重新登录");
     } catch (error) {

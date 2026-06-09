@@ -1,6 +1,7 @@
 package queue
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -13,7 +14,11 @@ import (
 	"time"
 
 	"github.com/nats-io/nats.go"
+
+	"mvp-push-gateway/backend/internal/safedata"
 )
+
+const maxLatestPayloadKVBytes = 16 * 1024
 
 type natsKeyValueCache struct {
 	mu     sync.Mutex
@@ -44,10 +49,7 @@ func (p *NATSPublisher) PutLatestPayloadSample(ctx context.Context, sourceID str
 	if err != nil {
 		return err
 	}
-	value, err := json.Marshal(latestPayloadKVValue{
-		Payload:   append(json.RawMessage(nil), payload...),
-		SampledAt: sampledAt.UTC(),
-	})
+	value, err := marshalLatestPayloadKVValue(payload, sampledAt)
 	if err != nil {
 		return err
 	}
@@ -87,6 +89,13 @@ func (p *NATSPublisher) PutLatestPayloadSample(ctx context.Context, sourceID str
 	return fmt.Errorf("latest payload kv update conflict for source %s", sourceID)
 }
 
+func marshalLatestPayloadKVValue(payload json.RawMessage, sampledAt time.Time) ([]byte, error) {
+	return json.Marshal(latestPayloadKVValue{
+		Payload:   safedata.MinimizeJSON(payload, maxLatestPayloadKVBytes),
+		SampledAt: sampledAt.UTC(),
+	})
+}
+
 func (p *NATSPublisher) GetLatestPayloadSample(ctx context.Context, sourceID string) (json.RawMessage, time.Time, bool, error) {
 	sourceID = strings.TrimSpace(sourceID)
 	if sourceID == "" {
@@ -108,6 +117,49 @@ func (p *NATSPublisher) GetLatestPayloadSample(ctx context.Context, sourceID str
 		return nil, time.Time{}, false, err
 	}
 	return append(json.RawMessage(nil), value.Payload...), value.SampledAt.UTC(), true, nil
+}
+
+func (p *NATSPublisher) BackfillLatestPayloadSamples(ctx context.Context) (int, error) {
+	kv, err := p.latestPayloadKV(ctx)
+	if err != nil {
+		return 0, err
+	}
+	keys, err := kv.Keys()
+	if err != nil {
+		if errors.Is(err, nats.ErrNoKeysFound) {
+			return 0, nil
+		}
+		return 0, err
+	}
+	updated := 0
+	for _, key := range keys {
+		if err := ctx.Err(); err != nil {
+			return updated, err
+		}
+		entry, err := kv.Get(key)
+		if err != nil {
+			if errors.Is(err, nats.ErrKeyNotFound) {
+				continue
+			}
+			return updated, err
+		}
+		current, err := decodeLatestPayloadKVValue(entry.Value())
+		if err != nil {
+			return updated, err
+		}
+		next, err := marshalLatestPayloadKVValue(current.Payload, current.SampledAt)
+		if err != nil {
+			return updated, err
+		}
+		if bytes.Equal(bytes.TrimSpace(entry.Value()), bytes.TrimSpace(next)) {
+			continue
+		}
+		if _, err := kv.Update(key, next, entry.Revision()); err != nil {
+			return updated, err
+		}
+		updated++
+	}
+	return updated, nil
 }
 
 func (p *NATSPublisher) DeleteLatestPayloadSample(ctx context.Context, sourceID string) error {

@@ -2,6 +2,8 @@ package queue
 
 import (
 	"context"
+	"encoding/json"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -37,6 +39,23 @@ func TestNormalizeNATSOptionsUsesDurableQueueDefaults(t *testing.T) {
 	}
 	if options.HMACNonceKVPrefix != "MGP_HMAC_NONCE" {
 		t.Fatalf("expected default hmac nonce kv prefix, got %q", options.HMACNonceKVPrefix)
+	}
+}
+
+func TestLatestPayloadKVValueIsMinimizedBeforeStorage(t *testing.T) {
+	value, err := marshalLatestPayloadKVValue(json.RawMessage(`{"title":"paid","access_token":"token-1","user":{"email":"person@example.com","name":"Alice"}}`), time.Date(2026, 6, 8, 10, 0, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatalf("marshal latest payload kv value: %v", err)
+	}
+	if strings.Contains(string(value), "token-1") || strings.Contains(string(value), "person@example.com") {
+		t.Fatalf("latest payload kv value leaked sensitive values: %s", value)
+	}
+	decoded, err := decodeLatestPayloadKVValue(value)
+	if err != nil {
+		t.Fatalf("decode latest payload kv value: %v", err)
+	}
+	if !strings.Contains(string(decoded.Payload), `"title":"paid"`) || !strings.Contains(string(decoded.Payload), `"name":"Alice"`) {
+		t.Fatalf("latest payload kv payload should keep non-sensitive context, got %s", decoded.Payload)
 	}
 }
 

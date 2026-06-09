@@ -27,7 +27,9 @@ type sourceResponse struct {
 	Enabled                      bool             `json:"enabled"`
 	AuthMode                     source.AuthMode  `json:"auth_mode"`
 	AuthToken                    string           `json:"auth_token"`
+	AuthTokenSet                 bool             `json:"auth_token_set"`
 	HMACSecret                   string           `json:"hmac_secret"`
+	HMACSecretSet                bool             `json:"hmac_secret_set"`
 	IPAllowlist                  []string         `json:"ip_allowlist"`
 	CompatMode                   string           `json:"compat_mode"`
 	InboundDedupeEnabled         bool             `json:"inbound_dedupe_enabled"`
@@ -89,8 +91,12 @@ func (h *Handler) sourcesHandler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		responses := make([]sourceResponse, 0, len(sources))
+		reveal := revealSecrets(r)
 		for _, configuredSource := range sources {
-			responses = append(responses, toSourceListResponse(configuredSource))
+			responses = append(responses, toSourceListResponse(configuredSource, reveal))
+		}
+		if reveal {
+			h.recordSecretRevealAudit(r, adminUser, "source", "*", []string{"auth_token", "hmac_secret"})
 		}
 		writeJSON(w, http.StatusOK, sourceListResponse{Sources: responses})
 	case http.MethodPost:
@@ -117,7 +123,7 @@ func (h *Handler) sourcesHandler(w http.ResponseWriter, r *http.Request) {
 			writeAPIError(w, status, code, message)
 			return
 		}
-		response := sourceCreateResponse{Source: toSourceResponse(created)}
+		response := sourceCreateResponse{Source: toSourceResponse(created, false)}
 		h.recordAudit(r, adminUser, "create", "source", created.ID, input, response)
 		if autoCreated {
 			h.recordAudit(r, adminUser, "create", "route_flow", autoFlow.ID, map[string]string{"source_id": created.ID, "reason": "auto_create_with_source"}, routeFlowDetailResponse{Flow: toRouteFlowResponse(autoFlow)})
@@ -152,7 +158,10 @@ func (h *Handler) sourceDetailHandler(w http.ResponseWriter, r *http.Request) {
 			writeAPIError(w, status, code, message)
 			return
 		}
-		writeJSON(w, http.StatusOK, sourceGetResponse{Source: toSourceResponse(configuredSource)})
+		if revealSecrets(r) {
+			h.recordSecretRevealAudit(r, adminUser, "source", id, revealedSourceFields(configuredSource))
+		}
+		writeJSON(w, http.StatusOK, sourceGetResponse{Source: toSourceResponse(configuredSource, revealSecrets(r))})
 	case http.MethodPut:
 		var request sourceRequest
 		if err := decodeJSON(r, &request); err != nil {
@@ -170,7 +179,7 @@ func (h *Handler) sourceDetailHandler(w http.ResponseWriter, r *http.Request) {
 			writeAPIError(w, status, code, message)
 			return
 		}
-		response := sourceGetResponse{Source: toSourceResponse(updated)}
+		response := sourceGetResponse{Source: toSourceResponse(updated, false)}
 		h.recordAudit(r, adminUser, "update", "source", id, input, response)
 		writeJSON(w, http.StatusOK, response)
 	case http.MethodDelete:
@@ -289,20 +298,41 @@ func (r sourceRequest) toUpdateInput() (source.UpdateSourceInput, error) {
 	return r.toCreateInput()
 }
 
-func toSourceResponse(configuredSource source.Source) sourceResponse {
-	return toSourceResponseWithPayload(configuredSource, true)
+func revealSecrets(r *http.Request) bool {
+	return strings.EqualFold(strings.TrimSpace(r.URL.Query().Get("reveal_secrets")), "true")
 }
 
-func toSourceListResponse(configuredSource source.Source) sourceResponse {
-	return toSourceResponseWithPayload(configuredSource, false)
+func revealedSourceFields(configuredSource source.Source) []string {
+	fields := []string{}
+	if strings.TrimSpace(configuredSource.AuthToken) != "" {
+		fields = append(fields, "auth_token")
+	}
+	if strings.TrimSpace(configuredSource.HMACSecret) != "" {
+		fields = append(fields, "hmac_secret")
+	}
+	return fields
 }
 
-func toSourceResponseWithPayload(configuredSource source.Source, includePayload bool) sourceResponse {
+func toSourceResponse(configuredSource source.Source, reveal bool) sourceResponse {
+	return toSourceResponseWithPayload(configuredSource, true, reveal)
+}
+
+func toSourceListResponse(configuredSource source.Source, reveal bool) sourceResponse {
+	return toSourceResponseWithPayload(configuredSource, false, reveal)
+}
+
+func toSourceResponseWithPayload(configuredSource source.Source, includePayload bool, reveal bool) sourceResponse {
 	latestUpdatedAt := formatOptionalTime(configuredSource.LatestPayloadSampleUpdatedAt)
 	var latestPayloadSample *json.RawMessage
 	if includePayload {
 		payload := nullableRawJSON(configuredSource.LatestPayloadSample)
 		latestPayloadSample = &payload
+	}
+	authToken := ""
+	hmacSecret := ""
+	if reveal {
+		authToken = configuredSource.AuthToken
+		hmacSecret = configuredSource.HMACSecret
 	}
 	return sourceResponse{
 		ID:                           configuredSource.ID,
@@ -310,8 +340,10 @@ func toSourceResponseWithPayload(configuredSource source.Source, includePayload 
 		Name:                         configuredSource.Name,
 		Enabled:                      configuredSource.Enabled,
 		AuthMode:                     configuredSource.AuthMode,
-		AuthToken:                    configuredSource.AuthToken,
-		HMACSecret:                   configuredSource.HMACSecret,
+		AuthToken:                    authToken,
+		AuthTokenSet:                 strings.TrimSpace(configuredSource.AuthToken) != "",
+		HMACSecret:                   hmacSecret,
+		HMACSecretSet:                strings.TrimSpace(configuredSource.HMACSecret) != "",
 		IPAllowlist:                  configuredSource.IPAllowlist,
 		CompatMode:                   configuredSource.CompatMode,
 		InboundDedupeEnabled:         configuredSource.InboundDedupeEnabled,

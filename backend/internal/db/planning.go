@@ -458,9 +458,10 @@ func (r Repository) CompletePlanning(ctx context.Context, params planning.Comple
 			matched_rule_ids = ARRAY(SELECT unnest($3::text[])::uuid),
 			error_code = NULL,
 			error_message = NULL,
+			payload = $5,
 			updated_at = $4
 		WHERE id = $1
-	`, params.MessageID, params.FlowID, params.MatchedRuleIDs, params.FinishedAt); err != nil {
+	`, params.MessageID, params.FlowID, params.MatchedRuleIDs, params.FinishedAt, storedMessagePayload(params.InboundPayload)); err != nil {
 		return fmt.Errorf("update planned message: %w", err)
 	}
 
@@ -571,9 +572,10 @@ func (r Repository) FinishPlanning(ctx context.Context, params planning.FinishPl
 			matched_rule_ids = ARRAY(SELECT unnest($4::text[])::uuid),
 			error_code = NULLIF($5, ''),
 			error_message = $6,
+			payload = $8,
 			updated_at = $7
 		WHERE id = $1
-	`, params.MessageID, params.Status, params.FlowID, params.MatchedRuleIDs, params.ErrorCode, params.ErrorMessage, params.FinishedAt); err != nil {
+	`, params.MessageID, params.Status, params.FlowID, params.MatchedRuleIDs, params.ErrorCode, params.ErrorMessage, params.FinishedAt, storedMessagePayload(params.Payload)); err != nil {
 		return fmt.Errorf("update planning failure message: %w", err)
 	}
 	if r.asyncRuntimeLogs == nil {
@@ -616,7 +618,7 @@ func ensurePlanningMessageRecordTx(ctx context.Context, tx pgx.Tx, params planni
 	if receivedAt.IsZero() {
 		receivedAt = time.Now().UTC()
 	}
-	payload := defaultJSON(params.Payload)
+	payload := storedMessagePayload(params.Payload)
 	headers := defaultJSON(params.Headers)
 	if _, err := tx.Exec(ctx, `
 		INSERT INTO message_records (

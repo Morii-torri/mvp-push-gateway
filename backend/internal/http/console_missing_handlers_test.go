@@ -72,7 +72,7 @@ func TestMatchGroupHandlersSupportGroupAndItemCRUD(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			req := httptest.NewRequest(tc.method, tc.path, strings.NewReader(tc.body))
-			req.Header.Set("Authorization", "Bearer admin-session")
+			setAdminSessionCookie(req, "admin-session")
 			rec := httptest.NewRecorder()
 			handler.ServeHTTP(rec, req)
 			if rec.Code != tc.expectedStatus {
@@ -140,7 +140,7 @@ func TestMessageLogHandlersReturnListAndDetailWithAttempts(t *testing.T) {
 	)
 
 	listReq := httptest.NewRequest(http.MethodGet, "/api/v1/messages?trace_id=trace-1", nil)
-	listReq.Header.Set("Authorization", "Bearer admin-session")
+	setAdminSessionCookie(listReq, "admin-session")
 	listRec := httptest.NewRecorder()
 	handler.ServeHTTP(listRec, listReq)
 	if listRec.Code != http.StatusOK {
@@ -161,7 +161,7 @@ func TestMessageLogHandlersReturnListAndDetailWithAttempts(t *testing.T) {
 	}
 
 	detailReq := httptest.NewRequest(http.MethodGet, "/api/v1/messages/message-1", nil)
-	detailReq.Header.Set("Authorization", "Bearer admin-session")
+	setAdminSessionCookie(detailReq, "admin-session")
 	detailRec := httptest.NewRecorder()
 	handler.ServeHTTP(detailRec, detailReq)
 	if detailRec.Code != http.StatusOK {
@@ -253,7 +253,7 @@ func TestAuditAndSettingsHandlersSupportListDetailAndUpdate(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			req := httptest.NewRequest(tc.method, tc.path, strings.NewReader(tc.body))
-			req.Header.Set("Authorization", "Bearer admin-session")
+			setAdminSessionCookie(req, "admin-session")
 			rec := httptest.NewRecorder()
 			handler.ServeHTTP(rec, req)
 			if rec.Code != tc.expectedStatus {
@@ -297,7 +297,7 @@ func TestChannelTestSendBuildsOrSendsScopedRequest(t *testing.T) {
 		"recipient": "user-1",
 		"body": {"title":"paid"}
 	}`))
-	req.Header.Set("Authorization", "Bearer admin-session")
+	setAdminSessionCookie(req, "admin-session")
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
@@ -318,7 +318,7 @@ func TestSourceMutationWritesAuditRecord(t *testing.T) {
 	)
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/sources", strings.NewReader(`{"code":"orders","name":"Orders","auth_mode":"token","auth_token":"sourceToken"}`))
-	req.Header.Set("Authorization", "Bearer admin-session")
+	setAdminSessionCookie(req, "admin-session")
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 	if rec.Code != http.StatusCreated {

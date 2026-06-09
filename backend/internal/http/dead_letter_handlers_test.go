@@ -43,7 +43,7 @@ func TestDeadLetterHandlersListAndBatchActions(t *testing.T) {
 	)
 
 	listReq := httptest.NewRequest(http.MethodGet, "/api/v1/dead-letters", nil)
-	listReq.Header.Set("Authorization", "Bearer admin-session")
+	setAdminSessionCookie(listReq, "admin-session")
 	listRec := httptest.NewRecorder()
 	handler.ServeHTTP(listRec, listReq)
 	if listRec.Code != http.StatusOK {
@@ -64,7 +64,7 @@ func TestDeadLetterHandlersListAndBatchActions(t *testing.T) {
 	}
 
 	replayReq := deadLetterJSONRequest(t, http.MethodPost, "/api/v1/dead-letters/batch-replay", map[string]any{"ids": []string{"dead-1"}})
-	replayReq.Header.Set("Authorization", "Bearer admin-session")
+	setAdminSessionCookie(replayReq, "admin-session")
 	replayRec := httptest.NewRecorder()
 	handler.ServeHTTP(replayRec, replayReq)
 	if replayRec.Code != http.StatusOK {
@@ -75,7 +75,7 @@ func TestDeadLetterHandlersListAndBatchActions(t *testing.T) {
 	}
 
 	handleReq := deadLetterJSONRequest(t, http.MethodPost, "/api/v1/dead-letters/batch-handle", map[string]any{"ids": []string{"dead-1"}, "reason": "manual"})
-	handleReq.Header.Set("Authorization", "Bearer admin-session")
+	setAdminSessionCookie(handleReq, "admin-session")
 	handleRec := httptest.NewRecorder()
 	handler.ServeHTTP(handleRec, handleReq)
 	if handleRec.Code != http.StatusOK {
@@ -86,7 +86,7 @@ func TestDeadLetterHandlersListAndBatchActions(t *testing.T) {
 	}
 
 	deleteReq := deadLetterJSONRequest(t, http.MethodPost, "/api/v1/dead-letters/batch-delete", map[string]any{"ids": []string{"dead-1"}})
-	deleteReq.Header.Set("Authorization", "Bearer admin-session")
+	setAdminSessionCookie(deleteReq, "admin-session")
 	deleteRec := httptest.NewRecorder()
 	handler.ServeHTTP(deleteRec, deleteReq)
 	if deleteRec.Code != http.StatusOK {

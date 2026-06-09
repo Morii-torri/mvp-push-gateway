@@ -13,9 +13,14 @@ var (
 	ErrInvalidInput       = errors.New("invalid input")
 	ErrInvalidCredentials = errors.New("invalid credentials")
 	ErrUnauthorized       = errors.New("unauthorized")
+	ErrRateLimited        = errors.New("rate limited")
 )
 
-const defaultSessionTTL = 24 * time.Hour
+const (
+	defaultSessionTTL         = 24 * time.Hour
+	defaultLoginAttemptLimit  = 5
+	defaultLoginAttemptWindow = 5 * time.Minute
+)
 
 type Store interface {
 	GetSetupStatus(ctx context.Context) (SetupStatus, error)
@@ -28,6 +33,11 @@ type Store interface {
 	FindAdminBySessionTokenHash(ctx context.Context, tokenHash string, now time.Time) (Session, error)
 	RevokeAdminSession(ctx context.Context, tokenHash string) error
 	RevokeAdminSessionsByAdminID(ctx context.Context, adminID string) error
+}
+
+type LoginAttemptStore interface {
+	ReserveLoginAttempt(ctx context.Context, params LoginAttemptParams) (bool, error)
+	ClearLoginAttempts(ctx context.Context, username string, ipAddress string) error
 }
 
 type Service struct {
@@ -85,6 +95,14 @@ type LoginInput struct {
 	Username string
 	Password string
 	Meta     SessionMeta
+}
+
+type LoginAttemptParams struct {
+	Username  string
+	IPAddress string
+	Now       time.Time
+	Window    time.Duration
+	Limit     int
 }
 
 type LoginResult struct {
@@ -165,14 +183,33 @@ func (s Service) Login(ctx context.Context, input LoginInput) (LoginResult, erro
 		return LoginResult{}, ErrInvalidCredentials
 	}
 
+	now := s.now()
+	if attemptStore, ok := s.store.(LoginAttemptStore); ok {
+		allowed, err := attemptStore.ReserveLoginAttempt(ctx, LoginAttemptParams{
+			Username:  username,
+			IPAddress: strings.TrimSpace(input.Meta.IPAddress),
+			Now:       now,
+			Window:    defaultLoginAttemptWindow,
+			Limit:     defaultLoginAttemptLimit,
+		})
+		if err != nil {
+			return LoginResult{}, err
+		}
+		if !allowed {
+			return LoginResult{}, ErrRateLimited
+		}
+	}
+
 	admin, err := s.store.FindAdminByUsername(ctx, username)
 	if err != nil {
 		if errors.Is(err, ErrNotFound) {
+			verifyInvalidLoginPassword(input.Password)
 			return LoginResult{}, ErrInvalidCredentials
 		}
 		return LoginResult{}, err
 	}
 	if !admin.Enabled {
+		verifyInvalidLoginPassword(input.Password)
 		return LoginResult{}, ErrInvalidCredentials
 	}
 
@@ -185,7 +222,7 @@ func (s Service) Login(ctx context.Context, input LoginInput) (LoginResult, erro
 	if err != nil {
 		return LoginResult{}, err
 	}
-	expiresAt := s.now().Add(s.sessionTTL)
+	expiresAt := now.Add(s.sessionTTL)
 	if err := s.store.CreateAdminSession(ctx, CreateSessionParams{
 		AdminID:   admin.ID,
 		TokenHash: HashSessionToken(token),
@@ -194,6 +231,11 @@ func (s Service) Login(ctx context.Context, input LoginInput) (LoginResult, erro
 		IPAddress: input.Meta.IPAddress,
 	}); err != nil {
 		return LoginResult{}, err
+	}
+	if attemptStore, ok := s.store.(LoginAttemptStore); ok {
+		if err := attemptStore.ClearLoginAttempts(ctx, username, strings.TrimSpace(input.Meta.IPAddress)); err != nil {
+			return LoginResult{}, err
+		}
 	}
 
 	return LoginResult{

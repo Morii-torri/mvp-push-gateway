@@ -20,6 +20,7 @@ import (
 	"github.com/google/uuid"
 
 	"mvp-push-gateway/backend/internal/queue"
+	"mvp-push-gateway/backend/internal/safedata"
 )
 
 const (
@@ -31,6 +32,7 @@ const (
 	defaultSourceConfigCacheTTL             = 5 * time.Second
 	defaultLatestPayloadFlushInterval       = time.Second
 	latestPayloadFlushTimeout               = 5 * time.Second
+	maxLatestPayloadSampleBytes             = 16 * 1024
 )
 
 type AuthMode string
@@ -376,7 +378,7 @@ func (s *Service) scheduleLatestPayloadSample(sourceID string, payload json.RawM
 	if sourceID == "" {
 		return
 	}
-	copiedPayload := append(json.RawMessage(nil), payload...)
+	copiedPayload := safedata.MinimizeJSON(payload, maxLatestPayloadSampleBytes)
 	s.latestPayloadMu.Lock()
 	defer s.latestPayloadMu.Unlock()
 	if s.latestPayloadPending == nil {
@@ -482,6 +484,7 @@ func (s *Service) UpdateSource(ctx context.Context, id string, input UpdateSourc
 	if existing.Code != params.Code {
 		return Source{}, ErrInvalidInput
 	}
+	params = preserveWriteOnlyCredentials(params, existing)
 	updated, err := s.store.UpdateSource(ctx, id, params)
 	if err != nil {
 		return Source{}, err
@@ -590,7 +593,7 @@ func (s *Service) Ingest(ctx context.Context, input IngestInput) (IngestResult, 
 			TraceID:       traceID,
 			SourceID:      configuredSource.ID,
 			Headers:       headers,
-			Payload:       payload,
+			Payload:       safedata.MinimizeJSON(payload, maxLatestPayloadSampleBytes),
 			PayloadHash:   payloadHash,
 			ReceivedAt:    receivedAt,
 			Status:        "silenced",
@@ -637,7 +640,7 @@ func (s *Service) Ingest(ctx context.Context, input IngestInput) (IngestResult, 
 					TraceID:       traceID,
 					SourceID:      configuredSource.ID,
 					Headers:       headers,
-					Payload:       payload,
+					Payload:       safedata.MinimizeJSON(payload, maxLatestPayloadSampleBytes),
 					PayloadHash:   payloadHash,
 					ReceivedAt:    receivedAt,
 					Status:        "deduped",
@@ -907,6 +910,32 @@ func validAuthMode(authMode AuthMode) bool {
 	default:
 		return false
 	}
+}
+
+func preserveWriteOnlyCredentials(params UpdateSourceParams, existing Source) UpdateSourceParams {
+	if authModeUsesToken(params.AuthMode) {
+		if strings.TrimSpace(params.AuthToken) == "" {
+			params.AuthToken = existing.AuthToken
+		}
+	} else {
+		params.AuthToken = ""
+	}
+	if authModeUsesHMAC(params.AuthMode) {
+		if strings.TrimSpace(params.HMACSecret) == "" {
+			params.HMACSecret = existing.HMACSecret
+		}
+	} else {
+		params.HMACSecret = ""
+	}
+	return params
+}
+
+func authModeUsesToken(authMode AuthMode) bool {
+	return authMode == AuthModeToken || authMode == AuthModeTokenAndHMAC
+}
+
+func authModeUsesHMAC(authMode AuthMode) bool {
+	return authMode == AuthModeHMAC || authMode == AuthModeTokenAndHMAC
 }
 
 func isAlphanumeric(value string) bool {

@@ -119,7 +119,7 @@ func TestProfileEndpointUpdatesCurrentAdminDisplayName(t *testing.T) {
 	}))
 
 	req := httptest.NewRequest(http.MethodPut, "/api/v1/auth/profile", strings.NewReader(`{"display_name":"管理员"}`))
-	req.Header.Set("Authorization", "Bearer admin-session")
+	setAdminSessionCookie(req, "admin-session")
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 
@@ -137,6 +137,87 @@ func TestProfileEndpointUpdatesCurrentAdminDisplayName(t *testing.T) {
 	}
 	if body.Admin.DisplayName != "管理员" {
 		t.Fatalf("expected updated display name, got %q", body.Admin.DisplayName)
+	}
+}
+
+func TestLoginSetsHttpOnlySessionCookieAndDoesNotReturnBearerToken(t *testing.T) {
+	handler := httpapi.NewHandler(
+		testConfig(),
+		httpapi.WithAuthService(fakeAuthService{
+			loginResult: auth.LoginResult{
+				Token:     "admin-session",
+				ExpiresAt: time.Date(2026, 6, 4, 10, 0, 0, 0, time.UTC),
+				Admin: auth.Admin{
+					ID:       "00000000-0000-0000-0000-000000000001",
+					Username: "admin",
+					Enabled:  true,
+				},
+			},
+		}),
+	)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/login", strings.NewReader(`{"username":"admin","password":"ChangeMe2026!"}`))
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected login status 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	cookies := rec.Result().Cookies()
+	sessionCookie := cookieByName(cookies, "mgp_admin_session")
+	if sessionCookie == nil || sessionCookie.Value == "" || !sessionCookie.HttpOnly || sessionCookie.SameSite != http.SameSiteLaxMode {
+		t.Fatalf("expected HttpOnly SameSite session cookie, got %+v all=%+v", sessionCookie, cookies)
+	}
+	csrfCookie := cookieByName(cookies, "mgp_csrf_token")
+	if csrfCookie == nil || csrfCookie.Value == "" || csrfCookie.HttpOnly || csrfCookie.SameSite != http.SameSiteLaxMode {
+		t.Fatalf("expected readable SameSite CSRF cookie, got %+v all=%+v", csrfCookie, cookies)
+	}
+	var body map[string]any
+	if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
+		t.Fatalf("decode login response: %v", err)
+	}
+	if token, ok := body["token"].(string); ok && token != "" {
+		t.Fatalf("expected login response not to expose bearer token, got %q", token)
+	}
+}
+
+func TestCookieAuthenticatedMutationRequiresCSRFHeader(t *testing.T) {
+	handler := httpapi.NewHandler(testConfig(), httpapi.WithAuthService(fakeAuthService{
+		authenticatedToken: "admin-session",
+	}))
+
+	missing := httptest.NewRequest(http.MethodPut, "/api/v1/auth/profile", strings.NewReader(`{"display_name":"管理员"}`))
+	missing.AddCookie(&http.Cookie{Name: "mgp_admin_session", Value: "admin-session"})
+	missing.AddCookie(&http.Cookie{Name: "mgp_csrf_token", Value: "csrf-token"})
+	missingRec := httptest.NewRecorder()
+	handler.ServeHTTP(missingRec, missing)
+	if missingRec.Code != http.StatusForbidden {
+		t.Fatalf("expected cookie mutation without CSRF to return 403, got %d body=%s", missingRec.Code, missingRec.Body.String())
+	}
+
+	allowed := httptest.NewRequest(http.MethodPut, "/api/v1/auth/profile", strings.NewReader(`{"display_name":"管理员"}`))
+	allowed.AddCookie(&http.Cookie{Name: "mgp_admin_session", Value: "admin-session"})
+	allowed.AddCookie(&http.Cookie{Name: "mgp_csrf_token", Value: "csrf-token"})
+	allowed.Header.Set("X-MGP-CSRF-Token", "csrf-token")
+	allowedRec := httptest.NewRecorder()
+	handler.ServeHTTP(allowedRec, allowed)
+	if allowedRec.Code != http.StatusOK {
+		t.Fatalf("expected cookie mutation with CSRF to return 200, got %d body=%s", allowedRec.Code, allowedRec.Body.String())
+	}
+}
+
+func TestAdminBearerHeaderAuthenticationIsRejected(t *testing.T) {
+	handler := httpapi.NewHandler(testConfig(), httpapi.WithAuthService(fakeAuthService{
+		authenticatedToken: "admin-session",
+	}))
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/auth/me", nil)
+	req.Header.Set("Authorization", "Bearer admin-session")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("expected admin bearer header auth to return 401, got %d body=%s", rec.Code, rec.Body.String())
 	}
 }
 
@@ -174,7 +255,7 @@ func TestAuthHandlersRecordSecurityAudit(t *testing.T) {
 	}
 
 	logoutReq := httptest.NewRequest(http.MethodPost, "/api/v1/auth/logout", nil)
-	logoutReq.Header.Set("Authorization", "Bearer admin-session")
+	setAdminSessionCookie(logoutReq, "admin-session")
 	logoutRec := httptest.NewRecorder()
 	handler.ServeHTTP(logoutRec, logoutReq)
 	if logoutRec.Code != http.StatusOK {
@@ -205,6 +286,108 @@ func TestLoginFailureRecordsSecurityAudit(t *testing.T) {
 	if strings.Contains(string(auditService.recordInputs[0].RequestSnapshot), "wrong") {
 		t.Fatalf("expected failed login password to be redacted, got %s", auditService.recordInputs[0].RequestSnapshot)
 	}
+}
+
+func TestLoginFailureDoesNotRevealUsernameByErrorCode(t *testing.T) {
+	for _, username := range []string{"admin", "missing-admin"} {
+		handler := httpapi.NewHandler(
+			testConfig(),
+			httpapi.WithAuthService(fakeAuthService{loginErr: auth.ErrInvalidCredentials}),
+		)
+
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/login", strings.NewReader(`{"username":"`+username+`","password":"wrong"}`))
+		req.RemoteAddr = "203.0.113.10:1234"
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusUnauthorized {
+			t.Fatalf("expected %s login failure to return 401, got %d body=%s", username, rec.Code, rec.Body.String())
+		}
+		if got := authErrorCode(t, rec); got != "MGP-AUTH-002" {
+			t.Fatalf("expected %s login failure code MGP-AUTH-002, got %q", username, got)
+		}
+	}
+}
+
+func TestLoginRateLimitDoesNotRevealUsernameByErrorCode(t *testing.T) {
+	handler := httpapi.NewHandler(
+		testConfig(),
+		httpapi.WithAuthService(fakeAuthService{loginErr: auth.ErrInvalidCredentials}),
+	)
+
+	for _, username := range []string{"admin", "missing-admin"} {
+		var rec *httptest.ResponseRecorder
+		for index := 0; index < 6; index++ {
+			req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/login", strings.NewReader(`{"username":"`+username+`","password":"wrong"}`))
+			req.RemoteAddr = "203.0.113.10:1234"
+			rec = httptest.NewRecorder()
+			handler.ServeHTTP(rec, req)
+		}
+		if rec.Code != http.StatusTooManyRequests {
+			t.Fatalf("expected %s repeated failures to return 429, got %d body=%s", username, rec.Code, rec.Body.String())
+		}
+		if got := authErrorCode(t, rec); got != "MGP-AUTH-004" {
+			t.Fatalf("expected %s rate limit code MGP-AUTH-004, got %q", username, got)
+		}
+	}
+}
+
+func TestLoginFailuresAreRateLimited(t *testing.T) {
+	handler := httpapi.NewHandler(
+		testConfig(),
+		httpapi.WithAuthService(fakeAuthService{loginErr: auth.ErrInvalidCredentials}),
+	)
+
+	var rec *httptest.ResponseRecorder
+	for index := 0; index < 6; index++ {
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/login", strings.NewReader(`{"username":"admin","password":"wrong"}`))
+		req.RemoteAddr = "203.0.113.10:1234"
+		rec = httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+	}
+
+	if rec.Code != http.StatusTooManyRequests {
+		t.Fatalf("expected repeated login failures to return 429, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	var body struct {
+		Error struct {
+			Code string `json:"code"`
+		} `json:"error"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
+		t.Fatalf("decode rate limit response: %v", err)
+	}
+	if body.Error.Code != "MGP-AUTH-004" {
+		t.Fatalf("expected login rate limit code MGP-AUTH-004, got %q", body.Error.Code)
+	}
+}
+
+func authErrorCode(t *testing.T, rec *httptest.ResponseRecorder) string {
+	t.Helper()
+	var body struct {
+		Error struct {
+			Code string `json:"code"`
+		} `json:"error"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
+		t.Fatalf("decode auth error response: %v", err)
+	}
+	return body.Error.Code
+}
+
+func cookieByName(cookies []*http.Cookie, name string) *http.Cookie {
+	for _, cookie := range cookies {
+		if cookie.Name == name {
+			return cookie
+		}
+	}
+	return nil
+}
+
+func setAdminSessionCookie(req *http.Request, token string) {
+	req.AddCookie(&http.Cookie{Name: "mgp_admin_session", Value: token})
+	req.AddCookie(&http.Cookie{Name: "mgp_csrf_token", Value: "test-csrf-token"})
+	req.Header.Set("X-MGP-CSRF-Token", "test-csrf-token")
 }
 
 func testConfig() config.Config {

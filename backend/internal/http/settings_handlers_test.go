@@ -35,7 +35,7 @@ func TestSettingsPerformanceTestLeavesRuleKeyForRouteServiceGenerator(t *testing
 	)
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/settings/performance-test", strings.NewReader(`{"message_count":10}`))
-	req.Header.Set("Authorization", "Bearer admin-session")
+	setAdminSessionCookie(req, "admin-session")
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 
@@ -72,7 +72,7 @@ func TestSettingsPerformanceTestCleansGeneratedResourcesAfterSuccess(t *testing.
 	)
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/settings/performance-test", strings.NewReader(`{"message_count":10}`))
-	req.Header.Set("Authorization", "Bearer admin-session")
+	setAdminSessionCookie(req, "admin-session")
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 
@@ -108,7 +108,7 @@ func TestSettingsPerformanceTestRunsPlanningWorkerAndIngestSamples(t *testing.T)
 	)
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/settings/performance-test", strings.NewReader(`{"message_count":6,"source_count":2,"payload_variant_count":3,"max_concurrency":5}`))
-	req.Header.Set("Authorization", "Bearer admin-session")
+	setAdminSessionCookie(req, "admin-session")
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 
@@ -172,7 +172,7 @@ func TestSettingsPerformanceTestPausesRuntimeWorkersWhileDraining(t *testing.T) 
 	)
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/settings/performance-test", strings.NewReader(`{"source_count":1,"payload_variant_count":1,"concurrency_start":2,"concurrency_end":2}`))
-	req.Header.Set("Authorization", "Bearer admin-session")
+	setAdminSessionCookie(req, "admin-session")
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 
@@ -244,7 +244,7 @@ func TestSettingsPerformanceTestRunsEveryConcurrencyLevelWithRuntimeDiagnostics(
 	)
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/settings/performance-test", strings.NewReader(`{"message_count":2,"source_count":1,"payload_variant_count":2,"concurrency_start":1,"concurrency_end":3}`))
-	req.Header.Set("Authorization", "Bearer admin-session")
+	setAdminSessionCookie(req, "admin-session")
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 
@@ -317,7 +317,7 @@ func TestSettingsPerformanceTestUsesSystemWorkerPoolByDefault(t *testing.T) {
 	)
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/settings/performance-test", strings.NewReader(`{"source_count":1,"payload_variant_count":1,"concurrency_start":50,"concurrency_end":50}`))
-	req.Header.Set("Authorization", "Bearer admin-session")
+	setAdminSessionCookie(req, "admin-session")
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 
@@ -359,7 +359,7 @@ func TestSettingsPerformanceTestCanFollowTestConcurrencyForWorkers(t *testing.T)
 	)
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/settings/performance-test", strings.NewReader(`{"source_count":1,"payload_variant_count":1,"concurrency_start":50,"concurrency_end":50,"worker_mode":"concurrency"}`))
-	req.Header.Set("Authorization", "Bearer admin-session")
+	setAdminSessionCookie(req, "admin-session")
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 
@@ -398,7 +398,7 @@ func TestSettingsPerformanceTestCapsDeliveryDrainWorkersByBatchDemand(t *testing
 	)
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/settings/performance-test", strings.NewReader(`{"source_count":1,"payload_variant_count":1,"concurrency_start":500,"concurrency_end":500}`))
-	req.Header.Set("Authorization", "Bearer admin-session")
+	setAdminSessionCookie(req, "admin-session")
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 
@@ -430,7 +430,7 @@ func TestSettingsPerformanceTestRunCanBePolledUntilComplete(t *testing.T) {
 	)
 
 	startReq := httptest.NewRequest(http.MethodPost, "/api/v1/settings/performance-test/runs", strings.NewReader(`{"message_count":1,"source_count":1,"payload_variant_count":1,"concurrency_start":1,"concurrency_end":2}`))
-	startReq.Header.Set("Authorization", "Bearer admin-session")
+	setAdminSessionCookie(startReq, "admin-session")
 	startRec := httptest.NewRecorder()
 	handler.ServeHTTP(startRec, startReq)
 
@@ -463,7 +463,7 @@ func TestSettingsPerformanceTestRunCanBePolledUntilComplete(t *testing.T) {
 	}
 	for attempts := 0; attempts < 20; attempts++ {
 		pollReq := httptest.NewRequest(http.MethodGet, "/api/v1/settings/performance-test/runs/"+startBody.Run.ID, nil)
-		pollReq.Header.Set("Authorization", "Bearer admin-session")
+		setAdminSessionCookie(pollReq, "admin-session")
 		pollRec := httptest.NewRecorder()
 		handler.ServeHTTP(pollRec, pollReq)
 		if pollRec.Code != http.StatusOK {
@@ -512,7 +512,7 @@ func TestSettingsPerformanceTestRunCanBeCancelled(t *testing.T) {
 	)
 
 	startReq := httptest.NewRequest(http.MethodPost, "/api/v1/settings/performance-test/runs", strings.NewReader(`{"source_count":1,"payload_variant_count":1,"concurrency_start":2,"concurrency_end":2}`))
-	startReq.Header.Set("Authorization", "Bearer admin-session")
+	setAdminSessionCookie(startReq, "admin-session")
 	startRec := httptest.NewRecorder()
 	handler.ServeHTTP(startRec, startReq)
 
@@ -534,7 +534,7 @@ func TestSettingsPerformanceTestRunCanBeCancelled(t *testing.T) {
 	}
 
 	runningReq := httptest.NewRequest(http.MethodGet, "/api/v1/settings/performance-test/runs/"+startBody.Run.ID, nil)
-	runningReq.Header.Set("Authorization", "Bearer admin-session")
+	setAdminSessionCookie(runningReq, "admin-session")
 	runningRec := httptest.NewRecorder()
 	handler.ServeHTTP(runningRec, runningReq)
 	if runningRec.Code != http.StatusOK {
@@ -557,7 +557,7 @@ func TestSettingsPerformanceTestRunCanBeCancelled(t *testing.T) {
 	}
 
 	cancelReq := httptest.NewRequest(http.MethodPost, "/api/v1/settings/performance-test/runs/"+startBody.Run.ID+"/cancel", nil)
-	cancelReq.Header.Set("Authorization", "Bearer admin-session")
+	setAdminSessionCookie(cancelReq, "admin-session")
 	cancelRec := httptest.NewRecorder()
 	handler.ServeHTTP(cancelRec, cancelReq)
 	if cancelRec.Code != http.StatusOK {
@@ -581,7 +581,7 @@ func TestSettingsPerformanceTestRunCanBeCancelled(t *testing.T) {
 	time.Sleep(20 * time.Millisecond)
 
 	pollReq := httptest.NewRequest(http.MethodGet, "/api/v1/settings/performance-test/runs/"+startBody.Run.ID, nil)
-	pollReq.Header.Set("Authorization", "Bearer admin-session")
+	setAdminSessionCookie(pollReq, "admin-session")
 	pollRec := httptest.NewRecorder()
 	handler.ServeHTTP(pollRec, pollReq)
 	if pollRec.Code != http.StatusOK {
@@ -624,7 +624,7 @@ func TestSettingsPerformanceTestUsesDeliveryStatusAfterWorkerDrainError(t *testi
 	)
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/settings/performance-test", strings.NewReader(`{"source_count":1,"payload_variant_count":1,"concurrency_start":1,"concurrency_end":1}`))
-	req.Header.Set("Authorization", "Bearer admin-session")
+	setAdminSessionCookie(req, "admin-session")
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 
@@ -672,7 +672,7 @@ func TestSettingsPerformanceTestStartsDeliveryDrainAfterPlanningDrain(t *testing
 	)
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/settings/performance-test", strings.NewReader(`{"source_count":1,"payload_variant_count":1,"concurrency_start":1,"concurrency_end":1}`))
-	req.Header.Set("Authorization", "Bearer admin-session")
+	setAdminSessionCookie(req, "admin-session")
 	rec := httptest.NewRecorder()
 	done := make(chan struct{})
 	go func() {
@@ -728,7 +728,7 @@ func TestSettingsPerformanceTestDoesNotWaitForOwnDrainCountWhenRuntimeWorkersDel
 	)
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/settings/performance-test", strings.NewReader(`{"source_count":1,"payload_variant_count":1,"concurrency_start":1,"concurrency_end":1}`))
-	req.Header.Set("Authorization", "Bearer admin-session")
+	setAdminSessionCookie(req, "admin-session")
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 
@@ -773,7 +773,7 @@ func TestSettingsPerformanceTestDoesNotDrainPostgresWorkersInJetStreamMode(t *te
 	)
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/settings/performance-test", strings.NewReader(`{"source_count":1,"payload_variant_count":1,"concurrency_start":1,"concurrency_end":1}`))
-	req.Header.Set("Authorization", "Bearer admin-session")
+	setAdminSessionCookie(req, "admin-session")
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 
@@ -813,7 +813,7 @@ func TestSettingsPerformanceTestCleansPreviousFixedArtifactsBeforeRun(t *testing
 	)
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/settings/performance-test", strings.NewReader(`{"message_count":1}`))
-	req.Header.Set("Authorization", "Bearer admin-session")
+	setAdminSessionCookie(req, "admin-session")
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 
@@ -850,7 +850,7 @@ func TestSettingsPerformanceTestBuildsFixedBenchmarkResources(t *testing.T) {
 	)
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/settings/performance-test", strings.NewReader(`{"message_count":5,"source_count":5,"payload_variant_count":5,"auth_mode":"token_and_hmac"}`))
-	req.Header.Set("Authorization", "Bearer admin-session")
+	setAdminSessionCookie(req, "admin-session")
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 
@@ -931,7 +931,7 @@ func TestSettingsPerformanceTestBuildsFixedBenchmarkResources(t *testing.T) {
 	}
 }
 
-func TestSettingsPerformanceTestRateLimitsRepeatedRuns(t *testing.T) {
+func TestSettingsPerformanceTestAllowsRepeatedAdminRuns(t *testing.T) {
 	settingsService := &fakeSettingsService{}
 	handler := httpapi.NewHandler(
 		testConfig(),
@@ -944,7 +944,7 @@ func TestSettingsPerformanceTestRateLimitsRepeatedRuns(t *testing.T) {
 	)
 
 	firstReq := httptest.NewRequest(http.MethodPost, "/api/v1/settings/performance-test", strings.NewReader(`{"message_count":10}`))
-	firstReq.Header.Set("Authorization", "Bearer admin-session")
+	setAdminSessionCookie(firstReq, "admin-session")
 	firstRec := httptest.NewRecorder()
 	handler.ServeHTTP(firstRec, firstReq)
 	if firstRec.Code != http.StatusOK {
@@ -952,17 +952,34 @@ func TestSettingsPerformanceTestRateLimitsRepeatedRuns(t *testing.T) {
 	}
 
 	secondReq := httptest.NewRequest(http.MethodPost, "/api/v1/settings/performance-test", strings.NewReader(`{"message_count":10}`))
-	secondReq.Header.Set("Authorization", "Bearer admin-session")
+	setAdminSessionCookie(secondReq, "admin-session")
 	secondRec := httptest.NewRecorder()
 	handler.ServeHTTP(secondRec, secondReq)
-	if secondRec.Code != http.StatusTooManyRequests {
-		t.Fatalf("expected repeated performance test to return 429, got %d body=%s", secondRec.Code, secondRec.Body.String())
+	if secondRec.Code != http.StatusOK {
+		t.Fatalf("expected repeated admin performance test to return 200, got %d body=%s", secondRec.Code, secondRec.Body.String())
 	}
-	if got := responseErrorCode(t, secondRec); got != "MGP-SETTINGS-002" {
-		t.Fatalf("expected MGP-SETTINGS-002, got %q", got)
+	if settingsService.performanceTestCalls != 2 {
+		t.Fatalf("expected repeated admin run to reach performance service twice, got %d calls", settingsService.performanceTestCalls)
 	}
-	if settingsService.performanceTestCalls != 1 {
-		t.Fatalf("expected repeated run not to reach performance service, got %d calls", settingsService.performanceTestCalls)
+}
+
+func TestSettingsPerformanceTestFakeUpstreamRequiresLoopbackClient(t *testing.T) {
+	handler := httpapi.NewHandler(testConfig())
+
+	remoteReq := httptest.NewRequest(http.MethodPost, "/api/v1/settings/performance-test/fake-upstream", strings.NewReader(`{"sample_id":"perf-sample-000001"}`))
+	remoteReq.RemoteAddr = "203.0.113.10:1234"
+	remoteRec := httptest.NewRecorder()
+	handler.ServeHTTP(remoteRec, remoteReq)
+	if remoteRec.Code != http.StatusForbidden {
+		t.Fatalf("expected remote fake upstream call to return 403, got %d body=%s", remoteRec.Code, remoteRec.Body.String())
+	}
+
+	loopbackReq := httptest.NewRequest(http.MethodPost, "/api/v1/settings/performance-test/fake-upstream", strings.NewReader(`{"sample_id":"perf-sample-000001"}`))
+	loopbackReq.RemoteAddr = "127.0.0.1:1234"
+	loopbackRec := httptest.NewRecorder()
+	handler.ServeHTTP(loopbackRec, loopbackReq)
+	if loopbackRec.Code != http.StatusOK {
+		t.Fatalf("expected loopback fake upstream call to return 200, got %d body=%s", loopbackRec.Code, loopbackRec.Body.String())
 	}
 }
 
@@ -983,7 +1000,7 @@ func TestSettingsPerformanceTestCleansGeneratedResourcesWhenRuleSaveFails(t *tes
 	)
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/settings/performance-test", strings.NewReader(`{"message_count":10}`))
-	req.Header.Set("Authorization", "Bearer admin-session")
+	setAdminSessionCookie(req, "admin-session")
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 
@@ -1023,7 +1040,7 @@ func TestSettingsPerformanceTestCleansGeneratedResourcesWhenRunnerFails(t *testi
 	)
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/settings/performance-test", strings.NewReader(`{"message_count":10}`))
-	req.Header.Set("Authorization", "Bearer admin-session")
+	setAdminSessionCookie(req, "admin-session")
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 

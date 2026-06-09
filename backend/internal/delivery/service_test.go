@@ -867,6 +867,30 @@ func TestWorkerLimitsUpstreamResponseSnapshotBody(t *testing.T) {
 	}
 }
 
+func TestMarshalSnapshotRedactsSensitiveValuesAndBoundsSize(t *testing.T) {
+	raw, err := marshalSnapshot(map[string]any{
+		"target_context": map[string]any{"message_id": "message-1"},
+		"rendered_message": map[string]any{
+			"title":        "hello",
+			"access_token": "payload-token",
+			"content":      strings.Repeat("x", maxDeliverySnapshotBytes),
+		},
+		"resolved_recipients": []any{map[string]any{"email": "person@example.com", "name": "Alice"}},
+	})
+	if err != nil {
+		t.Fatalf("marshal snapshot: %v", err)
+	}
+	if strings.Contains(string(raw), "payload-token") || strings.Contains(string(raw), "person@example.com") {
+		t.Fatalf("snapshot leaked sensitive values: %s", raw)
+	}
+	if len(raw) > maxDeliverySnapshotBytes+512 {
+		t.Fatalf("expected snapshot to stay near configured bound, got %d bytes", len(raw))
+	}
+	if !strings.Contains(string(raw), `"title":"hello"`) || !strings.Contains(string(raw), `"name":"Alice"`) {
+		t.Fatalf("snapshot should keep non-sensitive context, got %s", raw)
+	}
+}
+
 func TestWorkerUsesCapabilityTokenPlacementWhenChannelHasNoExplicitPlacement(t *testing.T) {
 	var tokenQuery string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

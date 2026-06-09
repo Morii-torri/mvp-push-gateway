@@ -14,7 +14,7 @@ import (
 	"mvp-push-gateway/backend/internal/route"
 )
 
-func TestRouteFlowCRUDRequiresAdminBearerAuthentication(t *testing.T) {
+func TestRouteFlowCRUDRequiresAdminSessionAuthentication(t *testing.T) {
 	routeService := &fakeRouteService{
 		listResult: []route.Flow{{
 			ID:            "flow-1",
@@ -43,7 +43,7 @@ func TestRouteFlowCRUDRequiresAdminBearerAuthentication(t *testing.T) {
 	}
 
 	authenticated := httptest.NewRequest(http.MethodGet, "/api/v1/route-flows", nil)
-	authenticated.Header.Set("Authorization", "Bearer admin-session")
+	setAdminSessionCookie(authenticated, "admin-session")
 	authenticatedRec := httptest.NewRecorder()
 	handler.ServeHTTP(authenticatedRec, authenticated)
 	if authenticatedRec.Code != http.StatusOK {
@@ -74,7 +74,7 @@ func TestDuplicateEnabledRouteFlowReturnsPublishedErrorCode(t *testing.T) {
 	)
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/route-flows", strings.NewReader(`{"source_id":"source-1","name":"Orders","enabled":true,"mode":"table"}`))
-	req.Header.Set("Authorization", "Bearer admin-session")
+	setAdminSessionCookie(req, "admin-session")
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 
@@ -110,7 +110,7 @@ func TestSimulateReturnsMatchedRuleAndStopReason(t *testing.T) {
 	)
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/route-flows/flow-1/simulate", strings.NewReader(`{"payload":{"title":"critical"}}`))
-	req.Header.Set("Authorization", "Bearer admin-session")
+	setAdminSessionCookie(req, "admin-session")
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 
@@ -190,7 +190,7 @@ func TestRouteRulesAcceptsAndReturnsActionTargets(t *testing.T) {
 			}
 		}]
 	}`))
-	req.Header.Set("Authorization", "Bearer admin-session")
+	setAdminSessionCookie(req, "admin-session")
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 
@@ -212,7 +212,7 @@ func TestRouteRulesAcceptsAndReturnsActionTargets(t *testing.T) {
 	assertRouteRuleTargetResponse(t, savedBody)
 
 	getReq := httptest.NewRequest(http.MethodGet, "/api/v1/route-flows/flow-1/rules", nil)
-	getReq.Header.Set("Authorization", "Bearer admin-session")
+	setAdminSessionCookie(getReq, "admin-session")
 	getRec := httptest.NewRecorder()
 	handler.ServeHTTP(getRec, getReq)
 	if getRec.Code != http.StatusOK {
@@ -249,7 +249,7 @@ func TestRouteRulesAcceptsLegacyActionFields(t *testing.T) {
 			}
 		}]
 	}`))
-	req.Header.Set("Authorization", "Bearer admin-session")
+	setAdminSessionCookie(req, "admin-session")
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 
@@ -335,7 +335,7 @@ func TestRouteVersionRulesReturnsReadOnlyHistoricalRules(t *testing.T) {
 	)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/route-flows/flow-1/versions/version-1/rules", nil)
-	req.Header.Set("Authorization", "Bearer admin-session")
+	setAdminSessionCookie(req, "admin-session")
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 
@@ -381,7 +381,7 @@ func TestRouteVersionCheckoutCopiesHistoricalVersionIntoWorkingDraft(t *testing.
 	)
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/route-flows/flow-1/versions/version-2/checkout", nil)
-	req.Header.Set("Authorization", "Bearer admin-session")
+	setAdminSessionCookie(req, "admin-session")
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 
@@ -419,7 +419,7 @@ func TestDeleteRouteVersionRemovesHistoricalVersion(t *testing.T) {
 	)
 
 	req := httptest.NewRequest(http.MethodDelete, "/api/v1/route-flows/flow-1/versions/version-2", nil)
-	req.Header.Set("Authorization", "Bearer admin-session")
+	setAdminSessionCookie(req, "admin-session")
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 

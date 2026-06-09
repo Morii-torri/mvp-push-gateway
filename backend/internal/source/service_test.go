@@ -142,6 +142,45 @@ func TestIngestRedactsSensitiveHeadersBeforeLogging(t *testing.T) {
 	}
 }
 
+func TestIngestMinimizesLatestPayloadSample(t *testing.T) {
+	store := newMemoryStore(Source{
+		ID:        "source-1",
+		Code:      "orders",
+		Name:      "Orders",
+		Enabled:   true,
+		AuthMode:  AuthModeToken,
+		AuthToken: "sourceToken",
+	})
+	service := NewService(
+		store,
+		WithTraceIDGenerator(func() string { return "trace-minimize-latest" }),
+		WithLatestPayloadFlushInterval(10*time.Millisecond),
+	)
+
+	headers := http.Header{}
+	headers.Set("Authorization", "Bearer sourceToken")
+	_, err := service.Ingest(context.Background(), IngestInput{
+		SourceCode: "orders",
+		Method:     http.MethodPost,
+		Path:       "/api/v1/ingest/orders",
+		Headers:    headers,
+		RemoteAddr: "127.0.0.1:4321",
+		Body:       []byte(`{"title":"paid","access_token":"payload-token","nested":{"email":"person@example.com","content":"ok"}}`),
+	})
+	if err != nil {
+		t.Fatalf("ingest with sensitive payload: %v", err)
+	}
+	waitForLatestPayloadUpdates(t, store, 1)
+
+	latest := store.latestPayloadString()
+	if strings.Contains(latest, "payload-token") || strings.Contains(latest, "person@example.com") {
+		t.Fatalf("latest payload sample leaked sensitive values: %s", latest)
+	}
+	if !strings.Contains(latest, `"title":"paid"`) || !strings.Contains(latest, `"content":"ok"`) {
+		t.Fatalf("latest payload sample should preserve non-sensitive context, got %s", latest)
+	}
+}
+
 func TestIngestPublishesRoutePlanEventWhenPublisherConfigured(t *testing.T) {
 	store := newMemoryStore(Source{
 		ID:                   "source-1",
@@ -1424,6 +1463,33 @@ func TestUpdateSourceAllowsExistingCode(t *testing.T) {
 	}
 	if store.updateCalls != 1 {
 		t.Fatalf("expected one update call, got %d", store.updateCalls)
+	}
+}
+
+func TestUpdateSourcePreservesWriteOnlyCredentialsWhenOmitted(t *testing.T) {
+	store := newMemoryStore(Source{
+		ID:         "source-1",
+		Code:       "orders",
+		Name:       "Orders",
+		Enabled:    true,
+		AuthMode:   AuthModeTokenAndHMAC,
+		AuthToken:  "sourceToken",
+		HMACSecret: "hmacSecret",
+	})
+	service := NewService(store)
+
+	updated, err := service.UpdateSource(context.Background(), "source-1", UpdateSourceInput{
+		Code:      "orders",
+		Name:      "Orders API",
+		Enabled:   true,
+		AuthMode:  AuthModeTokenAndHMAC,
+		AuthToken: "",
+	})
+	if err != nil {
+		t.Fatalf("update source with omitted write-only credentials: %v", err)
+	}
+	if updated.AuthToken != "sourceToken" || updated.HMACSecret != "hmacSecret" {
+		t.Fatalf("expected omitted write-only credentials to be preserved, got auth=%q hmac=%q", updated.AuthToken, updated.HMACSecret)
 	}
 }
 

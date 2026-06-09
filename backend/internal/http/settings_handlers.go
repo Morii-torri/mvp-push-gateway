@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"runtime"
 	"strings"
@@ -68,18 +69,12 @@ type settingResponse struct {
 }
 
 const (
-	performanceTestMinInterval      = 30 * time.Second
 	performanceTestPlanningWorkers  = 20
 	performanceTestDeliveryWorkers  = 20
 	performanceTestWorkerBatchSize  = 64
 	performanceTestWorkerIdleSleep  = 5 * time.Millisecond
 	performanceTestWorkerDrainLimit = 2 * time.Minute
 )
-
-type performanceTestLimiter struct {
-	mu      sync.Mutex
-	lastRun time.Time
-}
 
 type performanceTestRunStore struct {
 	mu   sync.Mutex
@@ -233,28 +228,6 @@ func (s *performanceTestRunStore) get(id string) (performanceTestRunState, bool)
 	return state, ok
 }
 
-func (l *performanceTestLimiter) allow(now time.Time) bool {
-	if l == nil {
-		return true
-	}
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	if !l.lastRun.IsZero() && now.Sub(l.lastRun) < performanceTestMinInterval {
-		return false
-	}
-	l.lastRun = now
-	return true
-}
-
-func (l *performanceTestLimiter) reset() {
-	if l == nil {
-		return
-	}
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	l.lastRun = time.Time{}
-}
-
 func (h *Handler) settingsPerformanceTestHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		methodNotAllowed(w, http.MethodPost)
@@ -273,10 +246,6 @@ func (h *Handler) settingsPerformanceTestHandler(w http.ResponseWriter, r *http.
 			writeAPIError(w, http.StatusBadRequest, "MGP-REQ-001", "请求 JSON 不合法")
 			return
 		}
-	}
-	if !h.perfTests.allow(time.Now()) {
-		writeAPIError(w, http.StatusTooManyRequests, "MGP-SETTINGS-002", "性能测试请求过于频繁，请稍后重试")
-		return
 	}
 	result, err := h.executePerformanceTest(r.Context(), request, nil)
 	if err != nil {
@@ -306,10 +275,6 @@ func (h *Handler) settingsPerformanceTestRunsHandler(w http.ResponseWriter, r *h
 			writeAPIError(w, http.StatusBadRequest, "MGP-REQ-001", "请求 JSON 不合法")
 			return
 		}
-	}
-	if !h.perfTests.allow(time.Now()) {
-		writeAPIError(w, http.StatusTooManyRequests, "MGP-SETTINGS-002", "性能测试请求过于频繁，请稍后重试")
-		return
 	}
 	candidates := settings.PerformanceConcurrencyCandidates(request)
 	run := h.perfRuns.create(len(candidates))
@@ -366,15 +331,16 @@ func (h *Handler) settingsPerformanceTestRunCancelHandler(w http.ResponseWriter,
 		writeAPIError(w, http.StatusNotFound, "MGP-SETTINGS-004", "性能测试任务不存在")
 		return
 	}
-	if run.status == "cancelled" {
-		h.perfTests.reset()
-	}
 	writeJSON(w, http.StatusOK, performanceTestRunBody{Run: performanceTestRunResponseFromState(run)})
 }
 
 func (h *Handler) settingsPerformanceTestFakeUpstreamHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		methodNotAllowed(w, http.MethodPost)
+		return
+	}
+	if !isLoopbackRemoteAddr(r.RemoteAddr) {
+		writeAPIError(w, http.StatusForbidden, "MGP-SETTINGS-005", "性能测试回调仅允许本机访问")
 		return
 	}
 	if r.Body != nil && h.perfUpstream != nil {
@@ -384,6 +350,15 @@ func (h *Handler) settingsPerformanceTestFakeUpstreamHandler(w http.ResponseWrit
 		}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+func isLoopbackRemoteAddr(remoteAddr string) bool {
+	host, _, err := net.SplitHostPort(strings.TrimSpace(remoteAddr))
+	if err != nil {
+		host = strings.TrimSpace(remoteAddr)
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
 func (h *Handler) executePerformanceTestRun(runID string, request settings.PerformanceTestInput) {

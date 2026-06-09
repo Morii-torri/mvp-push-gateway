@@ -41,6 +41,20 @@
 - 路由画布模式使用弹窗编辑，传统模式继续保留侧边抽屉；结束节点不可编辑且精简显示。
 - 本地后端开发脚本 `scripts/dev-backend.sh` 启动前会重新编译 `/tmp/mgp-server-current`，避免继续运行旧二进制。
 
+## 2026-06-09 安全改造基线
+
+- 本轮安全改造优先级是“先保护敏感数据，再排查可利用漏洞”；不要回退这些安全边界。
+- 敏感字段已引入字段级加密能力：来源 `auth_token` / `hmac_secret`、渠道 `auth_config` / `token_config`、provider token cache `access_token`。相关能力位于 `backend/internal/secretbox`、DB backfill/rotate 命令和 `scripts/install-secret-encryption-key.sh`、`scripts/encrypt-existing-secrets.sh`、`scripts/rotate-secret-encryption-key.sh`。
+- 既有明文数据已执行过回填加密；日志/审计/payload 裁剪也已执行过回填脚本，包括 message payload、latest payload、delivery snapshot、audit request/response、NATS latest payload KV。
+- 来源和渠道凭据 API 默认 write-only；只有显式 `reveal_secrets=true` 才按需 reveal，并记录审计。前端不要默认持有或展示 token/secret。
+- 后台登录已使用 HttpOnly `mgp_admin_session` cookie + 可读 `mgp_csrf_token` 双提交 CSRF；登录 JSON 不再返回 bearer token，前端不再存储 `mgp_admin_token`。
+- 后台管理员 Bearer Header 兼容入口已移除；管理接口只接受 cookie 会话。来源接入仍使用 `Authorization: Bearer <source_token>`，这是独立的下游来源认证路径。
+- 登录失败对存在/不存在用户返回同一错误码；锁定同样返回统一 `MGP-AUTH-004`。服务层对不存在/禁用用户也执行 dummy Argon2 校验，避免明显计时侧信道。
+- 性能测试接口仍要求管理员权限；滥用保护按开发用途调整为极高上限，不再保留 30 秒重复运行限制。fake upstream 回调仅允许 loopback 来源。
+- 模板 HTML/Markdown 预览已用 DOMPurify 替代手写 sanitizer；测试覆盖实体编码绕过的 `javascript:` URL。预览进入 `dangerouslySetInnerHTML` 前必须走 `templateEditor.tsx` 的 sanitizer。
+- SSRF 相关出站保护已有 HTTP/SMTP egress policy 测试覆盖，阻止 loopback/metadata 地址。
+- 当前可接受剩余风险：后台 Bearer 已移除；后续如需加强登录喷洒防护，可新增纯 IP 维度高阈值限流。
+
 ## 2026-06-02 当前实现基线
 
 - 路由策略术语统一为“路由组”，不再使用“路由大组”；路由组详情页返回按钮文案为“返回”。

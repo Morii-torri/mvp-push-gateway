@@ -50,7 +50,7 @@ func TestUserProfileEndpointSavesUserAndIdentitiesInOneCall(t *testing.T) {
 		"identities":[{"id":"identity-1","provider_type":"email","identity_kind":"email","identity_value":"zhangsan@example.com","verified":true}],
 		"expected_updated_at":"2026-06-04T10:00:00Z"
 	}`))
-	req.Header.Set("Authorization", "Bearer admin-session")
+	setAdminSessionCookie(req, "admin-session")
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 

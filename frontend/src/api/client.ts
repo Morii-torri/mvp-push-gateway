@@ -1,6 +1,8 @@
 export const API_BASE_PATH = '/api/v1';
 export const ADMIN_TOKEN_KEY = 'mgp_admin_token';
 export const AUTH_EXPIRED_EVENT = 'mgp-auth-expired';
+const CSRF_COOKIE_NAME = 'mgp_csrf_token';
+const CSRF_HEADER_NAME = 'X-MGP-CSRF-Token';
 
 export type ApiFetcher = typeof fetch;
 
@@ -35,15 +37,10 @@ export class ApiClientError extends Error {
 
 export const tokenStore = {
   get(): string | null {
-    if (typeof window === 'undefined') {
-      return null;
-    }
-    return window.localStorage.getItem(ADMIN_TOKEN_KEY);
+    return null;
   },
-  set(token: string) {
-    if (typeof window !== 'undefined') {
-      window.localStorage.setItem(ADMIN_TOKEN_KEY, token);
-    }
+  set(_token: string) {
+    this.clear();
   },
   clear() {
     if (typeof window !== 'undefined') {
@@ -53,9 +50,12 @@ export const tokenStore = {
 };
 
 export async function apiRequest<T>(path: string, options: ApiRequestOptions = {}): Promise<T> {
+  tokenStore.clear();
+
   const { body, auth = true, fetcher = fetch, headers: inputHeaders, ...init } = options;
   const headers = normalizeHeaders(inputHeaders);
   headers.Accept = 'application/json';
+  const method = init.method ?? (body === undefined ? 'GET' : 'POST');
 
   let requestBody: BodyInit | undefined;
   if (body !== undefined) {
@@ -63,16 +63,17 @@ export async function apiRequest<T>(path: string, options: ApiRequestOptions = {
     requestBody = JSON.stringify(body);
   }
 
-  if (auth) {
-    const token = tokenStore.get();
-    if (token) {
-      headers.Authorization = `Bearer ${token}`;
+  if (auth && csrfRequired(method)) {
+    const csrfToken = cookieValue(CSRF_COOKIE_NAME);
+    if (csrfToken) {
+      headers[CSRF_HEADER_NAME] = csrfToken;
     }
   }
 
   const response = await fetcher(normalizeApiPath(path), {
     ...init,
-    method: init.method ?? (body === undefined ? 'GET' : 'POST'),
+    method,
+    credentials: init.credentials ?? 'same-origin',
     headers,
     body: requestBody,
   });
@@ -108,6 +109,24 @@ function normalizeHeaders(inputHeaders: HeadersInit | undefined): Record<string,
     return Object.fromEntries(inputHeaders);
   }
   return { ...inputHeaders };
+}
+
+function csrfRequired(method: string): boolean {
+  return !['GET', 'HEAD', 'OPTIONS'].includes(method.toUpperCase());
+}
+
+function cookieValue(name: string): string {
+  if (typeof document === 'undefined') {
+    return '';
+  }
+  const prefix = `${encodeURIComponent(name)}=`;
+  for (const part of document.cookie.split(';')) {
+    const trimmed = part.trim();
+    if (trimmed.startsWith(prefix)) {
+      return decodeURIComponent(trimmed.slice(prefix.length));
+    }
+  }
+  return '';
 }
 
 export function normalizeApiPath(path: string): string {

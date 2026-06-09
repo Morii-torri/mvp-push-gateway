@@ -19,6 +19,10 @@ beforeEach(() => {
     value: { localStorage: storage, dispatchEvent: dispatchEventMock },
     configurable: true,
   });
+  Object.defineProperty(globalThis, 'document', {
+    value: { cookie: '' },
+    configurable: true,
+  });
 });
 
 afterEach(() => {
@@ -27,8 +31,8 @@ afterEach(() => {
 });
 
 describe('api client', () => {
-  it('uses /api/v1 and sends the saved admin bearer token', async () => {
-    tokenStore.set('admin-token');
+  it('uses /api/v1 and same-origin credentials without sending localStorage bearer tokens', async () => {
+    storage.setItem(ADMIN_TOKEN_KEY, 'admin-token');
     const fetchMock = vi.fn(async () =>
       new Response(JSON.stringify({ sources: [] }), {
         status: 200,
@@ -39,12 +43,55 @@ describe('api client', () => {
     await apiRequest('/sources', { fetcher: fetchMock });
 
     expect(API_BASE_PATH).toBe('/api/v1');
-    expect(storage.getItem(ADMIN_TOKEN_KEY)).toBe('admin-token');
     expect(fetchMock).toHaveBeenCalledWith(
       '/api/v1/sources',
       expect.objectContaining({
-        headers: expect.objectContaining({
+        credentials: 'same-origin',
+        headers: expect.not.objectContaining({
           Authorization: 'Bearer admin-token',
+        }),
+      }),
+    );
+    expect(storage.getItem(ADMIN_TOKEN_KEY)).toBeNull();
+  });
+
+  it('clears legacy localStorage bearer token before requests', async () => {
+    storage.setItem(ADMIN_TOKEN_KEY, 'legacy-admin-token');
+    const fetchMock = vi.fn(async () =>
+      new Response(JSON.stringify({ ok: true }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    );
+
+    await apiRequest('/auth/me', { fetcher: fetchMock });
+
+    expect(storage.getItem(ADMIN_TOKEN_KEY)).toBeNull();
+  });
+
+  it('sends csrf header from readable csrf cookie on authenticated mutations', async () => {
+    Object.defineProperty(globalThis.document, 'cookie', {
+      value: 'mgp_csrf_token=csrf-token',
+      configurable: true,
+    });
+    const fetchMock = vi.fn(async () =>
+      new Response(JSON.stringify({ ok: true }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    );
+
+    await apiRequest('/auth/profile', {
+      method: 'PUT',
+      body: { display_name: '管理员' },
+      fetcher: fetchMock,
+    });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/v1/auth/profile',
+      expect.objectContaining({
+        headers: expect.objectContaining({
+          'X-MGP-CSRF-Token': 'csrf-token',
         }),
       }),
     );

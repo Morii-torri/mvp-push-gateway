@@ -17,6 +17,9 @@ const (
 	argonParallelism = 1
 	argonSaltLength  = 16
 	argonKeyLength   = 32
+
+	// Fixed dummy hash keeps unknown/disabled-user login paths on the same Argon2 work factor.
+	invalidLoginPasswordHash = "$argon2id$v=19$m=65536,t=3,p=1$MDAwMDAwMDAwMDAwMDAwMA$MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDA"
 )
 
 func HashPassword(password string) (string, error) {
@@ -42,6 +45,10 @@ func VerifyPassword(password string, encodedHash string) (bool, error) {
 		return true, nil
 	}
 	return false, nil
+}
+
+func verifyInvalidLoginPassword(password string) {
+	_, _ = VerifyPassword(password, invalidLoginPasswordHash)
 }
 
 type passwordParams struct {

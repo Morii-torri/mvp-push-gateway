@@ -522,6 +522,35 @@ func TestPerformanceMessageCountForConcurrencyEqualsConcurrency(t *testing.T) {
 	}
 }
 
+func TestPerformanceTestInputAllowsHighConcurrencyDevelopmentRuns(t *testing.T) {
+	const expectedMaxConcurrency = 100000
+	const expectedMaxConcurrencyLevels = 80
+	const expectedMaxMessageCount = 100000
+
+	candidates := PerformanceConcurrencyCandidates(PerformanceTestInput{
+		ConcurrencyStart: 5000,
+		ConcurrencyEnd:   5001,
+	})
+	if len(candidates) != 2 || candidates[0] != 5000 || candidates[1] != 5001 {
+		t.Fatalf("expected 5000+ concurrency range to be preserved, got %+v", candidates)
+	}
+
+	candidates = PerformanceConcurrencyCandidates(PerformanceTestInput{
+		MaxConcurrency: expectedMaxConcurrency,
+	})
+	if len(candidates) > expectedMaxConcurrencyLevels {
+		t.Fatalf("expected max concurrency candidate count to be capped at %d, got %d", expectedMaxConcurrencyLevels, len(candidates))
+	}
+	if candidates[len(candidates)-1] != expectedMaxConcurrency {
+		t.Fatalf("expected capped max concurrency %d, got %+v", expectedMaxConcurrency, candidates)
+	}
+
+	count := PerformanceMessageCountForConcurrency(PerformanceTestInput{MessageCount: 100000}, 100000)
+	if count != expectedMaxMessageCount {
+		t.Fatalf("expected explicit message count to be capped at %d, got %d", expectedMaxMessageCount, count)
+	}
+}
+
 func TestRunPerformanceTestAutoSizesMessageCountFromBenchmarkShape(t *testing.T) {
 	store := newMemorySettingsStore()
 	service := NewService(store)

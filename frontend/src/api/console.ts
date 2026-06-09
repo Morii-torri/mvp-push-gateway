@@ -15,7 +15,9 @@ export type SourceApiRecord = {
   enabled: boolean;
   auth_mode: "token" | "hmac" | "token_and_hmac" | "none";
   auth_token: string;
+  auth_token_set?: boolean;
   hmac_secret: string;
+  hmac_secret_set?: boolean;
   ip_allowlist: string[];
   compat_mode: string;
   inbound_dedupe_enabled: boolean;
@@ -557,6 +559,10 @@ export type DeadLetterBatchSelection =
       channelId?: string;
     };
 
+export type RevealSecretsOptions = {
+  revealSecrets?: boolean;
+};
+
 export type AuditLogApiRecord = {
   id: string;
   actor_admin_id: string;
@@ -723,14 +729,38 @@ function deadLetterBatchBody(selection: DeadLetterBatchSelection) {
   };
 }
 
+function resolveRevealOptions(
+  optionsOrFetcher?: RevealSecretsOptions | ApiFetcher,
+  fetcher?: ApiFetcher,
+) {
+  if (typeof optionsOrFetcher === "function") {
+    return { revealSecrets: false, resolvedFetcher: optionsOrFetcher };
+  }
+  return {
+    revealSecrets: optionsOrFetcher?.revealSecrets === true,
+    resolvedFetcher: fetcher,
+  };
+}
+
 export const consoleApi = {
   listSources(fetcher?: ApiFetcher) {
     return apiRequest<{ sources: SourceApiRecord[] }>("/sources", { fetcher });
   },
-  getSource(id: string, fetcher?: ApiFetcher) {
-    return apiRequest<{ source: SourceApiRecord }>(`/sources/${id}`, {
+  getSource(
+    id: string,
+    optionsOrFetcher?: RevealSecretsOptions | ApiFetcher,
+    fetcher?: ApiFetcher,
+  ) {
+    const { revealSecrets, resolvedFetcher } = resolveRevealOptions(
+      optionsOrFetcher,
       fetcher,
-    });
+    );
+    return apiRequest<{ source: SourceApiRecord }>(
+      `/sources/${id}${revealSecrets ? "?reveal_secrets=true" : ""}`,
+      {
+        fetcher: resolvedFetcher,
+      },
+    );
   },
   createSource(input: SourceInput, fetcher?: ApiFetcher) {
     return apiRequest<{ source: SourceApiRecord }>("/sources", {

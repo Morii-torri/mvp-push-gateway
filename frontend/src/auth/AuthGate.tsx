@@ -21,7 +21,6 @@ import {
   AUTH_EXPIRED_EVENT,
   ApiClientError,
   isAuthExpiredError,
-  tokenStore,
 } from "../api/client";
 import { authApi, type AdminUser } from "../api/auth";
 
@@ -121,10 +120,6 @@ export function AuthGate({ children }: { children: ReactNode }) {
           setMode("setup");
           return;
         }
-        if (!tokenStore.get()) {
-          setMode("login");
-          return;
-        }
         const current = await authApi.me();
         if (cancelled) {
           return;
@@ -142,7 +137,7 @@ export function AuthGate({ children }: { children: ReactNode }) {
           return;
         }
         setErrorText(errorMessage(error));
-        setMode(tokenStore.get() ? "login" : "error");
+        setMode("error");
       }
     }
     void bootstrap();
@@ -222,7 +217,6 @@ export function AuthGate({ children }: { children: ReactNode }) {
       >
         <ChangePasswordForm
           onDone={async () => {
-            tokenStore.clear();
             setAdmin(null);
             setMode("login");
             message.success("密码已修改，请重新登录");
