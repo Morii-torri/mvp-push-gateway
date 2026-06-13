@@ -60,7 +60,13 @@ func (r Repository) ListMessages(ctx context.Context, filter messagelog.ListFilt
 			COALESCE(array_remove(array_agg(DISTINCT COALESCE(channel.id::text, '')), ''), ARRAY[]::text[]),
 			COALESCE(array_remove(array_agg(DISTINCT COALESCE(channel.name, '')), ''), ARRAY[]::text[]),
 			COALESCE(array_remove(array_agg(DISTINCT COALESCE(channel.provider_type, '')), ''), ARRAY[]::text[]),
-			COALESCE((EXTRACT(EPOCH FROM (COALESCE(max(attempt.finished_at), max(attempt.started_at), message.updated_at) - message.received_at)) * 1000)::integer, 0),
+			CASE
+				WHEN count(attempt.id) = 0 AND message.status = 'accepted' THEN 0::bigint
+				ELSE COALESCE(
+					(GREATEST(EXTRACT(EPOCH FROM (COALESCE(max(attempt.finished_at), max(attempt.started_at), message.updated_at) - message.received_at)) * 1000, 0))::bigint,
+					0
+				)
+			END AS duration_ms,
 			message.created_at,
 			message.updated_at
 		FROM message_records AS message
@@ -98,6 +104,7 @@ func (r Repository) GetMessage(ctx context.Context, id string) (messagelog.Messa
 	var summary messagelog.MessageSummary
 	var firstOutboundAt pgtype.Timestamptz
 	var lastOutboundAt pgtype.Timestamptz
+	var durationMS int64
 	err := r.pool.QueryRow(ctx, `
 		SELECT
 			message.id,
@@ -119,7 +126,13 @@ func (r Repository) GetMessage(ctx context.Context, id string) (messagelog.Messa
 			ARRAY[]::text[] AS target_channel_ids,
 			ARRAY[]::text[] AS target_channel_names,
 			ARRAY[]::text[] AS target_provider_types,
-			COALESCE((EXTRACT(EPOCH FROM (message.updated_at - message.received_at)) * 1000)::integer, 0),
+			CASE
+				WHEN message.status = 'accepted' THEN 0::bigint
+				ELSE COALESCE(
+					(GREATEST(EXTRACT(EPOCH FROM (message.updated_at - message.received_at)) * 1000, 0))::bigint,
+					0
+				)
+			END AS duration_ms,
 			message.created_at,
 			message.updated_at,
 			message.headers,
@@ -149,7 +162,7 @@ func (r Repository) GetMessage(ctx context.Context, id string) (messagelog.Messa
 		&summary.TargetChannelIDs,
 		&summary.TargetChannelNames,
 		&summary.TargetProviderTypes,
-		&summary.DurationMS,
+		&durationMS,
 		&summary.CreatedAt,
 		&summary.UpdatedAt,
 		&detail.Headers,
@@ -164,6 +177,7 @@ func (r Repository) GetMessage(ctx context.Context, id string) (messagelog.Messa
 	}
 	summary.FirstOutboundAt = optionalTime(firstOutboundAt)
 	summary.LastOutboundAt = optionalTime(lastOutboundAt)
+	summary.DurationMS = durationMSFromDB(durationMS)
 	detail.MessageSummary = summary
 
 	attempts, err := r.listAttemptsForMessage(ctx, id)
@@ -261,6 +275,7 @@ func scanMessageSummary(row sourceScanner) (messagelog.MessageSummary, error) {
 	var item messagelog.MessageSummary
 	var firstOutboundAt pgtype.Timestamptz
 	var lastOutboundAt pgtype.Timestamptz
+	var durationMS int64
 	if err := row.Scan(
 		&item.ID,
 		&item.TraceID,
@@ -281,7 +296,7 @@ func scanMessageSummary(row sourceScanner) (messagelog.MessageSummary, error) {
 		&item.TargetChannelIDs,
 		&item.TargetChannelNames,
 		&item.TargetProviderTypes,
-		&item.DurationMS,
+		&durationMS,
 		&item.CreatedAt,
 		&item.UpdatedAt,
 	); err != nil {
@@ -289,6 +304,7 @@ func scanMessageSummary(row sourceScanner) (messagelog.MessageSummary, error) {
 	}
 	item.FirstOutboundAt = optionalTime(firstOutboundAt)
 	item.LastOutboundAt = optionalTime(lastOutboundAt)
+	item.DurationMS = durationMSFromDB(durationMS)
 	return item, nil
 }
 
@@ -341,6 +357,17 @@ func optionalTime(value pgtype.Timestamptz) *time.Time {
 	}
 	t := value.Time.UTC()
 	return &t
+}
+
+func durationMSFromDB(value int64) int {
+	if value <= 0 {
+		return 0
+	}
+	maxInt := int64(^uint(0) >> 1)
+	if value > maxInt {
+		return int(maxInt)
+	}
+	return int(value)
 }
 
 func outboundStatus(attempts []messagelog.DeliveryAttempt) string {

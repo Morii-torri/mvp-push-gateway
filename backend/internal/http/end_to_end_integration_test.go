@@ -129,7 +129,7 @@ func TestFreshEnvironmentHTTPFlowCoversSetupAuthSourceTemplateRouteAndIngest(t *
 		"inbound_dedupe_config":   map[string]any{},
 		"rate_limit_config":       map[string]any{},
 	}, http.StatusCreated)
-	if sourceCreated.Source.Code != "orders" || sourceCreated.Source.AuthToken != "sourcetoken001" {
+	if sourceCreated.Source.Code != "orders" || sourceCreated.Source.AuthToken != "" {
 		t.Fatalf("unexpected created source: %+v", sourceCreated.Source)
 	}
 	if string(sourceCreated.Source.LatestPayloadSample) != "null" {

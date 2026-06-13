@@ -65,8 +65,7 @@ func backfillMessagePayloads(ctx context.Context, tx pgx.Tx, stats *SensitiveLog
 	for _, update := range updates {
 		if _, err := tx.Exec(ctx, `
 			UPDATE message_records
-			SET payload = $2,
-				updated_at = now()
+			SET payload = $2
 			WHERE id = $1::uuid
 		`, update.id, update.values[0]); err != nil {
 			return fmt.Errorf("update message %s payload: %w", update.id, err)

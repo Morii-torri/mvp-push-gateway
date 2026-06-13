@@ -4,6 +4,8 @@ import (
 	"context"
 	"testing"
 	"time"
+
+	"mvp-push-gateway/backend/internal/messagelog"
 )
 
 func TestRepositoryGetMessageScansDetailSummaryColumns(t *testing.T) {
@@ -81,5 +83,76 @@ func TestRepositoryGetMessageScansDetailSummaryColumns(t *testing.T) {
 	}
 	if detail.Attempts[0].QueuedAt == nil || !detail.Attempts[0].QueuedAt.Equal(queuedAt) {
 		t.Fatalf("expected queued_at %s, got %+v", queuedAt, detail.Attempts[0].QueuedAt)
+	}
+}
+
+func TestRepositoryListMessagesHandlesLongOpenDurations(t *testing.T) {
+	pool := openMigratedPool(t)
+	defer pool.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	repository := NewRepository(pool)
+	sourceID := testUUID(24011)
+	acceptedMessageID := testUUID(24012)
+	noRouteMessageID := testUUID(24013)
+	receivedAt := time.Date(2026, 5, 1, 9, 30, 0, 0, time.UTC)
+	updatedAt := receivedAt.Add(30 * 24 * time.Hour)
+
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO inbound_sources (id, code, name, auth_mode)
+		VALUES ($1, 'long-open-message-source', '长耗时消息来源', 'none')
+	`, sourceID); err != nil {
+		t.Fatalf("insert source: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO message_records (
+			id, trace_id, source_id, received_at, headers, payload, payload_hash, status, created_at, updated_at
+		)
+		VALUES ($1, 'trace-long-open-duration', $2, $3, '{}'::jsonb, '{}'::jsonb, 'hash-long-open-duration', 'accepted', $3, $4)
+	`, acceptedMessageID, sourceID, receivedAt, updatedAt); err != nil {
+		t.Fatalf("insert accepted message record: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO message_records (
+			id, trace_id, source_id, received_at, headers, payload, payload_hash, status, error_code, created_at, updated_at
+		)
+		VALUES ($1, 'trace-long-final-duration', $2, $3, '{}'::jsonb, '{}'::jsonb, 'hash-long-final-duration', 'no_route', 'MGP-ROUTE-001', $3, $4)
+	`, noRouteMessageID, sourceID, receivedAt, updatedAt); err != nil {
+		t.Fatalf("insert no-route message record: %v", err)
+	}
+
+	result, err := repository.ListMessages(ctx, messagelog.ListFilter{Limit: 50})
+	if err != nil {
+		t.Fatalf("list messages with long open duration: %v", err)
+	}
+	if len(result.Messages) != 2 {
+		t.Fatalf("expected two messages, got %+v", result.Messages)
+	}
+	summaries := map[string]messagelog.MessageSummary{}
+	for _, item := range result.Messages {
+		summaries[item.ID] = item
+	}
+	if summaries[acceptedMessageID].DurationMS != 0 {
+		t.Fatalf("expected open accepted message duration to ignore maintenance updated_at, got %d", summaries[acceptedMessageID].DurationMS)
+	}
+	if summaries[noRouteMessageID].DurationMS <= 2147483647 {
+		t.Fatalf("expected final message duration to exceed postgres int4 range, got %d", summaries[noRouteMessageID].DurationMS)
+	}
+
+	acceptedDetail, err := repository.GetMessage(ctx, acceptedMessageID)
+	if err != nil {
+		t.Fatalf("get accepted message detail with long maintenance updated_at: %v", err)
+	}
+	if acceptedDetail.DurationMS != 0 {
+		t.Fatalf("expected accepted detail duration to ignore maintenance updated_at, got %d", acceptedDetail.DurationMS)
+	}
+	noRouteDetail, err := repository.GetMessage(ctx, noRouteMessageID)
+	if err != nil {
+		t.Fatalf("get final message detail with long duration: %v", err)
+	}
+	if noRouteDetail.DurationMS <= 2147483647 {
+		t.Fatalf("expected final detail duration to exceed postgres int4 range, got %d", noRouteDetail.DurationMS)
 	}
 }
