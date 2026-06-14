@@ -4,8 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"time"
+
+	"mvp-push-gateway/backend/internal/queue"
 )
 
 var (
@@ -16,6 +19,7 @@ var (
 type Job struct {
 	ID             string
 	JobID          string
+	TraceID        string
 	Type           string
 	Payload        json.RawMessage
 	ChannelID      string
@@ -34,6 +38,7 @@ type Job struct {
 type ListFilter struct {
 	Status    string
 	ChannelID string
+	Keyword   string
 	Limit     int
 	Offset    int
 }
@@ -67,24 +72,51 @@ type BatchResult struct {
 	IDs       []string `json:"ids"`
 }
 
+type ExternalReplayEvent struct {
+	ID    string
+	Event queue.SendMessageEvent
+}
+
 type Store interface {
 	ListDeadLetters(context.Context, ListFilter) (ListResult, error)
-	ReplayDeadLetters(context.Context, BatchInput) (BatchResult, error)
 	MarkDeadLettersHandled(context.Context, HandleInput) (BatchResult, error)
 	DeleteDeadLetters(context.Context, BatchInput) (BatchResult, error)
 }
 
-type Service struct {
-	store Store
+type ExternalReplayStore interface {
+	ListExternalReplayEvents(context.Context, BatchInput) ([]ExternalReplayEvent, error)
+	MarkExternalDeadLettersReplayed(context.Context, []string, time.Time) (BatchResult, error)
 }
 
-func NewService(store Store) *Service {
-	return &Service{store: store}
+type SendPublisher interface {
+	PublishSend(context.Context, queue.SendMessageEvent) (queue.PublishResult, error)
+}
+
+type Option func(*Service)
+
+type Service struct {
+	store         Store
+	sendPublisher SendPublisher
+}
+
+func WithSendPublisher(publisher SendPublisher) Option {
+	return func(s *Service) {
+		s.sendPublisher = publisher
+	}
+}
+
+func NewService(store Store, options ...Option) *Service {
+	service := &Service{store: store}
+	for _, option := range options {
+		option(service)
+	}
+	return service
 }
 
 func (s *Service) ListDeadLetters(ctx context.Context, filter ListFilter) (ListResult, error) {
 	filter.Status = normalizeStatus(filter.Status)
 	filter.ChannelID = strings.TrimSpace(filter.ChannelID)
+	filter.Keyword = strings.TrimSpace(filter.Keyword)
 	if filter.Limit <= 0 {
 		filter.Limit = 50
 	}
@@ -105,7 +137,38 @@ func (s *Service) ReplayDeadLetters(ctx context.Context, input BatchInput) (Batc
 	if input.Now.IsZero() {
 		input.Now = time.Now().UTC()
 	}
-	return s.store.ReplayDeadLetters(ctx, input)
+	return s.replayExternalDeadLetters(ctx, input)
+}
+
+func (s *Service) replayExternalDeadLetters(ctx context.Context, input BatchInput) (BatchResult, error) {
+	if s.sendPublisher == nil || input.Status == "replayed" || input.Status == "handled" {
+		return BatchResult{}, nil
+	}
+	store, ok := s.store.(ExternalReplayStore)
+	if !ok {
+		return BatchResult{}, nil
+	}
+	events, err := store.ListExternalReplayEvents(ctx, input)
+	if err != nil {
+		return BatchResult{}, err
+	}
+	publishedIDs := make([]string, 0, len(events))
+	for _, item := range events {
+		if strings.TrimSpace(item.ID) == "" {
+			continue
+		}
+		if _, err := s.sendPublisher.PublishSend(ctx, item.Event); err != nil {
+			if len(publishedIDs) > 0 {
+				_, _ = store.MarkExternalDeadLettersReplayed(ctx, publishedIDs, input.Now)
+			}
+			return BatchResult{}, fmt.Errorf("publish external dead-letter replay: %w", err)
+		}
+		publishedIDs = append(publishedIDs, item.ID)
+	}
+	if len(publishedIDs) == 0 {
+		return BatchResult{}, nil
+	}
+	return store.MarkExternalDeadLettersReplayed(ctx, publishedIDs, input.Now)
 }
 
 func (s *Service) MarkDeadLettersHandled(ctx context.Context, input HandleInput) (BatchResult, error) {

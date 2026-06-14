@@ -512,6 +512,7 @@ export type DeliveryAttemptApiRecord = {
 export type DeadLetterApiRecord = {
   id: string;
   job_id: string;
+  trace_id: string;
   type: string;
   payload: JSONValue;
   channel_id: string;
@@ -532,6 +533,7 @@ export type DeadLetterListQuery = {
   offset?: number;
   status?: string;
   channelId?: string;
+  keyword?: string;
 };
 
 export type MessageLogListQueryApi = {
@@ -1393,6 +1395,9 @@ export const consoleApi = {
     }
     if (options?.channelId) {
       params.set("channel_id", options.channelId);
+    }
+    if (options?.keyword) {
+      params.set("keyword", options.keyword);
     }
     const query = params.toString();
     return apiRequest<{

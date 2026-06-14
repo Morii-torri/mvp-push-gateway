@@ -99,6 +99,34 @@ func TestTokenResolverCacheKeyTreatsNilAndEmptyHeadersTheSame(t *testing.T) {
 	}
 }
 
+func TestDecodeCapabilityResolverDerivesFeishuTokenURLFromChannelBaseURL(t *testing.T) {
+	capability := findCapability(t, ProviderFeishuRobot, "text")
+	channel := Channel{
+		ID:           "channel-feishu-simulator",
+		ProviderType: ProviderFeishuRobot,
+		AuthConfig:   json.RawMessage(`{"app_id":"steady-feishu-app","app_secret":"steady-feishu-secret"}`),
+		SendConfig:   json.RawMessage(`{"base_url":"http://192.168.1.41:19090/open-apis"}`),
+	}
+
+	resolver, strategy, err := DecodeCapabilityResolver(capability.TokenStrategy, channel)
+	if err != nil {
+		t.Fatalf("decode token resolver: %v", err)
+	}
+	if strategy != "tenant_access_token" || resolver == nil {
+		t.Fatalf("expected tenant access token resolver, strategy=%q resolver=%+v", strategy, resolver)
+	}
+	if got, want := resolver.Request.URL, "http://192.168.1.41:19090/open-apis/auth/v3/tenant_access_token/internal"; got != want {
+		t.Fatalf("expected token URL derived from channel base_url, got %q want %q", got, want)
+	}
+	var body map[string]string
+	if err := json.Unmarshal(resolver.Request.Body, &body); err != nil {
+		t.Fatalf("decode resolver body: %v", err)
+	}
+	if body["app_id"] != "steady-feishu-app" || body["app_secret"] != "steady-feishu-secret" {
+		t.Fatalf("resolver body did not preserve credentials: %#v", body)
+	}
+}
+
 type memoryTokenCacheStore struct {
 	mu      sync.Mutex
 	entries map[string]TokenCacheEntry

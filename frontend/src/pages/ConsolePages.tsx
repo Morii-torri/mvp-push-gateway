@@ -2177,7 +2177,7 @@ export type DeadLetterStatusFilter = "pending" | "replayed" | "handled" | "all";
 
 type DeadLetterRow = {
   id: string;
-  jobId: string;
+  traceId: string;
   type: string;
   channelName: string;
   providerType: string;
@@ -2193,7 +2193,7 @@ type DeadLetterRow = {
 function mapDeadLetter(row: DeadLetterApiRecord): DeadLetterRow {
   return {
     id: row.id,
-    jobId: row.job_id,
+    traceId: row.trace_id || "-",
     type: row.type,
     channelName: row.channel_name || row.channel_id || "-",
     providerType: row.provider_type,
@@ -10600,6 +10600,14 @@ function timelineStageLabel(stage: string) {
       return "入站请求已接收";
     case "inbound_validated":
       return "入站校验完成";
+    case "route_planning_started":
+      return "路由规划开始";
+    case "route_condition_evaluated":
+      return "规则判断完成";
+    case "route_template_rendered":
+      return "模板渲染完成";
+    case "route_send_event_built":
+      return "出站事件已生成";
     case "route_planned":
       return "路由规划完成";
     case "route_no_match":
@@ -12507,7 +12515,11 @@ export function MessageLogDetailContent({
         numberField(record.duration_ms),
       );
       return {
-        children: `${formatTimelineTime(stringField(record.at))} - ${description}${duration}`,
+        children: (
+          <span className="message-log-timeline-text">
+            {`${formatTimelineTime(stringField(record.at))} - ${description}${duration}`}
+          </span>
+        ),
       };
     });
 
@@ -12860,7 +12872,8 @@ export function MessageLogsPage({ lastUpdated, onRefresh }: ConsolePageProps) {
 
       <Drawer
         title="消息日志详情"
-        width={620}
+        width="min(860px, calc(100vw - 48px))"
+        rootClassName="message-log-detail-drawer"
         open={Boolean(selected)}
         onClose={() => setSelected(null)}
         destroyOnHidden
@@ -12885,6 +12898,8 @@ export function DeadLettersPage({ lastUpdated, onRefresh }: ConsolePageProps) {
   const [allSelected, setAllSelected] = useState(false);
   const [statusFilter, setStatusFilter] =
     useState<DeadLetterStatusFilter>("pending");
+  const [keywordDraft, setKeywordDraft] = useState("");
+  const [keyword, setKeyword] = useState("");
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize, setPageSize] = useState(50);
   const [loadState, setLoadState] = useState<ApiLoadState>(emptyLoadState);
@@ -12906,6 +12921,7 @@ export function DeadLettersPage({ lastUpdated, onRefresh }: ConsolePageProps) {
             limit: pageSize,
             offset,
             status: statusFilter,
+            keyword,
           }),
           consoleApi.listSettings(),
         ]);
@@ -12928,7 +12944,7 @@ export function DeadLettersPage({ lastUpdated, onRefresh }: ConsolePageProps) {
         setLoadState({ loading: false, error: userFacingError(error) });
       }
     },
-    [currentPage, pageSize, statusFilter],
+    [currentPage, keyword, pageSize, statusFilter],
   );
 
   useEffect(() => {
@@ -12963,7 +12979,7 @@ export function DeadLettersPage({ lastUpdated, onRefresh }: ConsolePageProps) {
   const selectedCount = allSelected ? total : selectedIds.length;
   const hasSelection = selectedCount > 0;
   const canReplaySelection = allSelected
-    ? statusFilter === "pending" || statusFilter === "all"
+    ? statusFilter === "pending"
     : selectedRows.some((row) => row.status === "pending");
   const canDeleteSelection = allSelected
     ? statusFilter !== "pending"
@@ -13046,11 +13062,11 @@ export function DeadLettersPage({ lastUpdated, onRefresh }: ConsolePageProps) {
   const columns = withSortableColumns<DeadLetterRow>(
     [
       {
-        title: "Job ID",
-        dataIndex: "jobId",
-        width: 210,
+        title: "Trace ID",
+        dataIndex: "traceId",
+        width: 220,
         render: (value: string) => (
-          <CopyableIdentifier value={value || "-"} maxWidth={190} />
+          <CopyableIdentifier value={value || "-"} maxWidth={200} />
         ),
       },
       { title: "推送渠道", dataIndex: "channelName", width: 160 },
@@ -13075,7 +13091,7 @@ export function DeadLettersPage({ lastUpdated, onRefresh }: ConsolePageProps) {
     ],
     deadLetterSort.state,
     [
-      "jobId",
+      "traceId",
       "channelName",
       "type",
       "errorCode",
@@ -13135,6 +13151,25 @@ export function DeadLettersPage({ lastUpdated, onRefresh }: ConsolePageProps) {
         scrollY={560}
         extra={
           <Space wrap>
+            <Input.Search
+              allowClear
+              placeholder="搜索 Trace ID / 错误 / 渠道"
+              value={keywordDraft}
+              onChange={(event) => {
+                const value = event.target.value;
+                setKeywordDraft(value);
+                if (value === "") {
+                  setKeyword("");
+                  setCurrentPage(1);
+                }
+              }}
+              onSearch={(value) => {
+                setKeyword(value.trim());
+                setKeywordDraft(value);
+                setCurrentPage(1);
+              }}
+              style={{ width: 280 }}
+            />
             <Typography.Text type="secondary">列表范围</Typography.Text>
             <Segmented
               value={statusFilter}
@@ -13249,7 +13284,13 @@ export function deadLetterBatchSelectionForAction({
   status?: DeadLetterStatusFilter;
 }): DeadLetterBatchSelection {
   if (allSelected) {
-    return status ? { all: true, status } : { all: true };
+    if (action === "delete") {
+      return status ? { all: true, status } : { all: true };
+    }
+    if (!status || status === "pending") {
+      return status ? { all: true, status } : { all: true };
+    }
+    return [];
   }
   return ids;
 }

@@ -176,6 +176,51 @@ func TestRefreshRoutePlanReloadsCurrentVersionForSource(t *testing.T) {
 	}
 }
 
+func TestStoreRoutePlanSortsRulesAndPreparesConditions(t *testing.T) {
+	worker := NewWorker(&routePlanCacheRepo{})
+	worker.storeRoutePlan(RoutePlan{
+		Flow:    route.Flow{ID: "flow-1", SourceID: "source-1"},
+		Version: route.Version{ID: "version-1"},
+		Rules: []route.Rule{
+			{
+				ID:            "rule-late",
+				RuleKey:       "rule-late",
+				SortOrder:     20,
+				ConditionTree: json.RawMessage(`{"operator":"always"}`),
+				Enabled:       true,
+			},
+			{
+				ID:            "rule-first",
+				RuleKey:       "rule-first",
+				SortOrder:     10,
+				ConditionTree: json.RawMessage(`{"operator":"equals","path":"payload.level","value":"critical"}`),
+				Enabled:       true,
+			},
+		},
+	})
+
+	plan, err := worker.routePlan(context.Background(), "source-1")
+	if err != nil {
+		t.Fatalf("load cached plan: %v", err)
+	}
+	if len(plan.Rules) != 2 || plan.Rules[0].RuleKey != "rule-first" || plan.Rules[1].RuleKey != "rule-late" {
+		t.Fatalf("expected rules to be sorted once in cache snapshot, got %+v", plan.Rules)
+	}
+	if len(plan.PreparedRules) != 2 {
+		t.Fatalf("expected cached route plan to prepare executable rules, got %d", len(plan.PreparedRules))
+	}
+	if plan.PreparedRules[0].Rule.RuleKey != "rule-first" {
+		t.Fatalf("expected prepared rules to keep sorted order, got %+v", plan.PreparedRules)
+	}
+	matched, _, err := evaluateRules(plan, map[string]any{"level": "critical"})
+	if err != nil {
+		t.Fatalf("evaluate prepared cached plan: %v", err)
+	}
+	if matched == nil || matched.RuleKey != "rule-first" {
+		t.Fatalf("expected prepared first rule to match, got %+v", matched)
+	}
+}
+
 func TestProcessRoutePlanMessageAcksAfterSuccessfulPlanningWithoutPostgresJob(t *testing.T) {
 	repo := &routePlanMessageRepo{
 		message: MessageRecord{
@@ -256,6 +301,16 @@ func TestProcessRoutePlanMessageAcksAfterSuccessfulPlanningWithoutPostgresJob(t 
 	}
 	if repo.completed.Attempts[0].ChannelID != "channel-1" || repo.completed.Attempts[0].JobPayload == nil {
 		t.Fatalf("unexpected delivery attempt plan: %+v", repo.completed.Attempts[0])
+	}
+	var payload delivery.SendMessageJobPayload
+	if err := json.Unmarshal(repo.completed.Attempts[0].JobPayload, &payload); err != nil {
+		t.Fatalf("decode attempt payload: %v", err)
+	}
+	if payload.RoutePlanStartedAt.IsZero() ||
+		payload.RouteConditionFinishedAt.IsZero() ||
+		payload.TemplateRenderFinishedAt.IsZero() ||
+		payload.SendEventBuiltAt.IsZero() {
+		t.Fatalf("expected planning lifecycle breakdown in send payload, got %+v", payload)
 	}
 }
 

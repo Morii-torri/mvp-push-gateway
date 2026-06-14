@@ -441,6 +441,8 @@ func DecodeCapabilityResolver(raw json.RawMessage, channel Channel) (*TokenResol
 		tokenURL = override
 	} else if baseURL := getCredentialValue(credentials, "token_base_url"); baseURL != "" && strings.Contains(tokenURL, "api.dingtalk.com/v1.0/oauth2/{corp_id}/token") {
 		tokenURL = joinURL(baseURL, "/v1.0/oauth2/{corp_id}/token")
+	} else if baseURL := channelTokenBaseURL(channel); baseURL != "" {
+		tokenURL = deriveTokenURLFromBaseURL(tokenURL, baseURL)
 	}
 	tokenURL = replaceCredentialPlaceholders(tokenURL, credentials)
 	bodyMap := map[string]any{}
@@ -499,6 +501,51 @@ func DecodeCapabilityResolver(raw json.RawMessage, channel Channel) (*TokenResol
 		ExpiresIn:     config.ExpiresInSeconds,
 		RefreshCodes:  append([]any(nil), config.RefreshTokenCodes...),
 	}, strings.TrimSpace(config.Strategy), nil
+}
+
+func channelTokenBaseURL(channel Channel) string {
+	for _, raw := range []json.RawMessage{channel.TokenConfig, channel.SendConfig, channel.AuthConfig} {
+		if value := getCredentialValue(rawObject(raw), "base_url"); value != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+func deriveTokenURLFromBaseURL(tokenURL string, baseURL string) string {
+	tokenURL = strings.TrimSpace(tokenURL)
+	baseURL = strings.TrimSpace(baseURL)
+	if tokenURL == "" || baseURL == "" {
+		return tokenURL
+	}
+	parsedToken, err := url.Parse(tokenURL)
+	if err != nil || parsedToken.Scheme == "" || parsedToken.Host == "" {
+		return tokenURL
+	}
+	parsedBase, err := url.Parse(baseURL)
+	if err != nil || parsedBase.Scheme == "" || parsedBase.Host == "" {
+		return tokenURL
+	}
+	basePath := strings.TrimRight(parsedBase.Path, "/")
+	tokenPath := parsedToken.Path
+	suffix := strings.TrimLeft(tokenPath, "/")
+	if basePath != "" {
+		switch {
+		case tokenPath == basePath:
+			suffix = ""
+		case strings.HasPrefix(tokenPath, basePath+"/"):
+			suffix = strings.TrimLeft(strings.TrimPrefix(tokenPath, basePath+"/"), "/")
+		}
+	}
+	derived := joinURL(baseURL, suffix)
+	if parsedToken.RawQuery != "" {
+		separator := "?"
+		if strings.Contains(derived, "?") {
+			separator = "&"
+		}
+		derived += separator + parsedToken.RawQuery
+	}
+	return derived
 }
 
 func TokenResolverCacheKey(config *TokenResolverConfig) string {

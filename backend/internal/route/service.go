@@ -1101,17 +1101,33 @@ type conditionNode struct {
 	Value        json.RawMessage   `json:"value"`
 	Values       []json.RawMessage `json:"values"`
 	Conditions   []conditionNode   `json:"conditions"`
+
+	pathParts       []string
+	decodedValue    any
+	hasDecodedValue bool
+	decodedValues   []any
+	compiledRegex   *regexp.Regexp
+}
+
+type PreparedConditionTree struct {
+	root conditionNode
 }
 
 func parseConditionNode(raw json.RawMessage) (conditionNode, error) {
 	if len(raw) == 0 || string(raw) == "{}" {
-		return conditionNode{Operator: "always"}, nil
+		return prepareConditionNode(conditionNode{Operator: "always"})
 	}
 	var node conditionNode
 	if err := json.Unmarshal(raw, &node); err != nil {
 		return conditionNode{}, err
 	}
+	return prepareConditionNode(node)
+}
+
+func prepareConditionNode(node conditionNode) (conditionNode, error) {
 	node.Operator = strings.TrimSpace(strings.ToLower(node.Operator))
+	node.Path = strings.TrimSpace(node.Path)
+	node.MatchGroupID = strings.TrimSpace(node.MatchGroupID)
 	switch node.Operator {
 	case "always":
 		return node, nil
@@ -1119,17 +1135,79 @@ func parseConditionNode(raw json.RawMessage) (conditionNode, error) {
 		if len(node.Conditions) == 0 {
 			return conditionNode{}, ErrInvalidConfig
 		}
-		for _, child := range node.Conditions {
-			if err := child.validate(); err != nil {
+		for index := range node.Conditions {
+			child, err := prepareConditionNode(node.Conditions[index])
+			if err != nil {
 				return conditionNode{}, err
 			}
+			node.Conditions[index] = child
 		}
 		return node, nil
 	case "equals", "not_equals", "contains", "not_contains", "regex", "in", "exists", "not_exists", "gt", "gte", "lt", "lte", "greater_than", "greater_than_or_equal", "less_than", "less_than_or_equal", "in_match_group", "not_in_match_group", "match_group", "not_match_group":
-		return node, node.validate()
+		if err := node.validate(); err != nil {
+			return conditionNode{}, err
+		}
+		if node.Path != "" {
+			node.pathParts = splitConditionPath(node.Path)
+		}
+		if node.requiresDecodedValue() {
+			decoded, err := decodeAny(node.Value)
+			if err != nil {
+				return conditionNode{}, err
+			}
+			node.decodedValue = decoded
+			node.hasDecodedValue = true
+			if node.Operator == "regex" {
+				expr, ok := decoded.(string)
+				if !ok || strings.TrimSpace(expr) == "" {
+					return conditionNode{}, ErrInvalidConfig
+				}
+				compiled, err := regexp.Compile(expr)
+				if err != nil {
+					return conditionNode{}, ErrInvalidConfig
+				}
+				node.compiledRegex = compiled
+			}
+		}
+		if node.Operator == "in" && node.MatchGroupID == "" {
+			node.decodedValues = make([]any, 0, len(node.Values))
+			for _, rawValue := range node.Values {
+				decoded, err := decodeAny(rawValue)
+				if err != nil {
+					return conditionNode{}, err
+				}
+				node.decodedValues = append(node.decodedValues, decoded)
+			}
+		}
+		return node, nil
 	default:
 		return conditionNode{}, ErrInvalidConfig
 	}
+}
+
+func (n conditionNode) requiresDecodedValue() bool {
+	switch n.Operator {
+	case "equals", "not_equals", "contains", "not_contains", "regex", "gt", "gte", "lt", "lte", "greater_than", "greater_than_or_equal", "less_than", "less_than_or_equal":
+		return true
+	default:
+		return false
+	}
+}
+
+func PrepareConditionTree(raw json.RawMessage) (PreparedConditionTree, error) {
+	node, err := parseConditionNode(raw)
+	if err != nil {
+		return PreparedConditionTree{}, err
+	}
+	return PreparedConditionTree{root: node}, nil
+}
+
+func (p PreparedConditionTree) Evaluate(scope map[string]any, matchGroups map[string][]string) (bool, error) {
+	return p.root.evaluate(scope, matchGroups)
+}
+
+func (p PreparedConditionTree) CoarseFilter(scope map[string]any) (CoarseFilterResult, error) {
+	return p.root.coarseFilter(scope)
 }
 
 func (n conditionNode) validate() error {
@@ -1202,19 +1280,19 @@ func EvaluateConditionTree(raw json.RawMessage, payload map[string]any) (bool, e
 }
 
 func EvaluateConditionTreeWithMatchGroups(raw json.RawMessage, payload map[string]any, matchGroups map[string][]string) (bool, error) {
-	node, err := parseConditionNode(raw)
+	prepared, err := PrepareConditionTree(raw)
 	if err != nil {
 		return false, err
 	}
-	return node.evaluate(payload, matchGroups)
+	return prepared.Evaluate(payload, matchGroups)
 }
 
 func CoarseFilterConditionTree(raw json.RawMessage, scope map[string]any) (CoarseFilterResult, error) {
-	node, err := parseConditionNode(raw)
+	prepared, err := PrepareConditionTree(raw)
 	if err != nil {
 		return CoarseFilterResult{}, err
 	}
-	return node.coarseFilter(scope)
+	return prepared.CoarseFilter(scope)
 }
 
 func evaluateConditionTree(raw json.RawMessage, payload map[string]any) (bool, error) {
@@ -1261,7 +1339,7 @@ func (n conditionNode) coarseFilter(scope map[string]any) (CoarseFilterResult, e
 	if path == "" {
 		return CoarseFilterResult{}, nil
 	}
-	if _, exists := lookupPath(scope, path); exists {
+	if _, exists := lookupPathParts(scope, n.conditionPathParts()); exists {
 		return CoarseFilterResult{}, nil
 	}
 	return CoarseFilterResult{Skipped: true, Reason: "missing_field:" + path}, nil
@@ -1304,7 +1382,7 @@ func (n conditionNode) evaluate(scope map[string]any, matchGroups map[string][]s
 		return false, nil
 	}
 
-	value, exists := lookupPath(scope, n.Path)
+	value, exists := lookupPathParts(scope, n.conditionPathParts())
 	switch n.Operator {
 	case "exists":
 		return exists, nil
@@ -1314,63 +1392,39 @@ func (n conditionNode) evaluate(scope map[string]any, matchGroups map[string][]s
 		if !exists {
 			return false, nil
 		}
-		expected, err := decodeAny(n.Value)
-		if err != nil {
-			return false, err
-		}
+		expected := n.preparedValue()
 		return valuesEqual(value, expected), nil
 	case "not_equals":
 		if !exists {
 			return true, nil
 		}
-		expected, err := decodeAny(n.Value)
-		if err != nil {
-			return false, err
-		}
+		expected := n.preparedValue()
 		return !valuesEqual(value, expected), nil
 	case "contains":
 		if !exists {
 			return false, nil
 		}
-		needle, err := decodeAny(n.Value)
-		if err != nil {
-			return false, err
-		}
+		needle := n.preparedValue()
 		return containsValue(value, needle), nil
 	case "not_contains":
 		if !exists {
 			return true, nil
 		}
-		needle, err := decodeAny(n.Value)
-		if err != nil {
-			return false, err
-		}
+		needle := n.preparedValue()
 		return !containsValue(value, needle), nil
 	case "regex":
 		if !exists {
 			return false, nil
 		}
-		pattern, err := decodeAny(n.Value)
-		if err != nil {
-			return false, err
-		}
-		expr, ok := pattern.(string)
-		if !ok || strings.TrimSpace(expr) == "" {
+		if n.compiledRegex == nil {
 			return false, ErrInvalidConfig
 		}
-		compiled, err := regexp.Compile(expr)
-		if err != nil {
-			return false, ErrInvalidConfig
-		}
-		return regexMatches(value, compiled), nil
+		return regexMatches(value, n.compiledRegex), nil
 	case "gt", "gte", "lt", "lte", "greater_than", "greater_than_or_equal", "less_than", "less_than_or_equal":
 		if !exists {
 			return false, nil
 		}
-		expected, err := decodeAny(n.Value)
-		if err != nil {
-			return false, err
-		}
+		expected := n.preparedValue()
 		actualNumber, ok := numberValue(value)
 		if !ok {
 			return false, nil
@@ -1396,11 +1450,7 @@ func (n conditionNode) evaluate(scope map[string]any, matchGroups map[string][]s
 		if strings.TrimSpace(n.MatchGroupID) != "" {
 			return valueInMatchGroup(value, matchGroups[strings.TrimSpace(n.MatchGroupID)]), nil
 		}
-		for _, candidateRaw := range n.Values {
-			candidate, err := decodeAny(candidateRaw)
-			if err != nil {
-				return false, err
-			}
+		for _, candidate := range n.preparedValues() {
 			if reflect.DeepEqual(value, candidate) {
 				return true, nil
 			}
@@ -1421,8 +1471,57 @@ func (n conditionNode) evaluate(scope map[string]any, matchGroups map[string][]s
 	}
 }
 
+func (n conditionNode) conditionPathParts() []string {
+	if len(n.pathParts) > 0 {
+		return n.pathParts
+	}
+	return splitConditionPath(n.Path)
+}
+
+func (n conditionNode) preparedValue() any {
+	if n.hasDecodedValue {
+		return n.decodedValue
+	}
+	decoded, _ := decodeAny(n.Value)
+	return decoded
+}
+
+func (n conditionNode) preparedValues() []any {
+	if n.decodedValues != nil {
+		return n.decodedValues
+	}
+	values := make([]any, 0, len(n.Values))
+	for _, rawValue := range n.Values {
+		decoded, err := decodeAny(rawValue)
+		if err != nil {
+			continue
+		}
+		values = append(values, decoded)
+	}
+	return values
+}
+
 func lookupPath(scope map[string]any, path string) (any, bool) {
-	parts := strings.Split(strings.TrimSpace(strings.TrimPrefix(path, "$.")), ".")
+	return lookupPathParts(scope, splitConditionPath(path))
+}
+
+func splitConditionPath(path string) []string {
+	path = strings.TrimSpace(strings.TrimPrefix(path, "$."))
+	if path == "" {
+		return nil
+	}
+	parts := strings.Split(path, ".")
+	result := make([]string, 0, len(parts))
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part != "" {
+			result = append(result, part)
+		}
+	}
+	return result
+}
+
+func lookupPathParts(scope map[string]any, parts []string) (any, bool) {
 	if len(parts) == 0 {
 		return nil, false
 	}

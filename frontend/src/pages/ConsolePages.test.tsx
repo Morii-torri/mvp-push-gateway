@@ -317,6 +317,9 @@ describe("critical console pages", () => {
     expect(monitoringMarkup).toContain("批量重放");
     expect(monitoringMarkup).toContain("标记已处理");
     expect(monitoringMarkup).toContain("批量删除");
+    expect(monitoringMarkup).toContain("Trace ID");
+    expect(monitoringMarkup).toContain("搜索 Trace ID / 错误 / 渠道");
+    expect(monitoringMarkup).not.toContain("Job ID");
   });
 
   it("does not expose a fake status filter on audit logs", () => {
@@ -412,6 +415,7 @@ describe("critical console pages", () => {
 
     expect(markup).toContain("入站 Payload");
     expect(markup).toContain("异步时间线");
+    expect(markup).toContain("message-log-timeline-text");
     expect(markup).toContain("2026-05-20 12:36:21.552225 - 入站请求已接收，用时 0 ms");
     expect(markup).toContain("出站投递已创建，用时 5 ms");
     expect(markup).toContain("上级平台调用结束，用时 20 ms");
@@ -6277,21 +6281,45 @@ describe("critical console pages", () => {
     ).toBe("已选择全部 120 条");
   });
 
-  it("uses all dead-letter selection for replay, handle, and delete", () => {
+  it("uses all pending dead-letter selection for replay and handle", () => {
     expect(
       deadLetterBatchSelectionForAction({
         action: "replay",
         allSelected: true,
         ids: ["dead-1"],
+        status: "pending",
       }),
-    ).toEqual({ all: true });
+    ).toEqual({ all: true, status: "pending" });
     expect(
       deadLetterBatchSelectionForAction({
         action: "handle",
         allSelected: true,
         ids: ["dead-1"],
+        status: "pending",
       }),
-    ).toEqual({ all: true });
+    ).toEqual({ all: true, status: "pending" });
+  });
+
+  it("does not replay handled dead letters when the all-status window is selected", () => {
+    expect(
+      deadLetterBatchSelectionForAction({
+        action: "replay",
+        allSelected: true,
+        ids: ["dead-1"],
+        status: "all",
+      }),
+    ).toEqual([]);
+    expect(
+      deadLetterBatchSelectionForAction({
+        action: "handle",
+        allSelected: true,
+        ids: ["dead-1"],
+        status: "handled",
+      }),
+    ).toEqual([]);
+  });
+
+  it("uses all handled dead-letter selection for delete", () => {
     expect(
       deadLetterBatchSelectionForAction({
         action: "delete",

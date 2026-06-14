@@ -65,10 +65,16 @@ type RoutePlan struct {
 	Flow             route.Flow
 	Version          route.Version
 	Rules            []route.Rule
+	PreparedRules    []PreparedRouteRule
 	MatchGroups      map[string][]string
 	Channels         map[string]provider.Channel
 	TemplateVersions map[string]msgtemplate.TemplateVersion
 	Capabilities     map[string]provider.Capability
+}
+
+type PreparedRouteRule struct {
+	Rule      route.Rule
+	Condition route.PreparedConditionTree
 }
 
 type RuleMetric struct {
@@ -147,6 +153,16 @@ type CompletePlanningParams struct {
 	Attempts          []DeliveryAttemptPlan
 	RuleMetrics       []RuleMetric
 	ExternalSendQueue bool
+}
+
+type planningLifecycleBreakdown struct {
+	RoutePlanStartedAt       time.Time
+	RouteConditionFinishedAt time.Time
+	RouteConditionDurationMS int
+	TemplateRenderFinishedAt time.Time
+	TemplateRenderDurationMS int
+	SendEventBuiltAt         time.Time
+	SendEventBuildDurationMS int
 }
 
 type FinishPlanningParams struct {
@@ -385,6 +401,7 @@ func (w *Worker) processMessage(ctx context.Context, job queue.Job, message Mess
 	if len(startedAtOverride) > 0 && !startedAtOverride[0].IsZero() {
 		startedAt = startedAtOverride[0]
 	}
+	lifecycle := planningLifecycleBreakdown{RoutePlanStartedAt: startedAt.UTC()}
 	payloadMap, err := decodeJSONObject(message.Payload)
 	if err != nil {
 		return w.finishBusinessFailure(ctx, job, message, "", nil, ErrorCodeJob, err, startedAt, nil)
@@ -402,7 +419,10 @@ func (w *Worker) processMessage(ctx context.Context, job queue.Job, message Mess
 
 	conditionStartedAt := time.Now()
 	matchedRule, metrics, err := evaluateRules(plan, payloadMap)
-	recordTiming(ctx, message.TraceID, TimingRouteCondition, time.Since(conditionStartedAt))
+	conditionDuration := time.Since(conditionStartedAt)
+	recordTiming(ctx, message.TraceID, TimingRouteCondition, conditionDuration)
+	lifecycle.RouteConditionFinishedAt = w.now().UTC()
+	lifecycle.RouteConditionDurationMS = int(conditionDuration.Milliseconds())
 	if err != nil {
 		return w.finishBusinessFailure(ctx, job, message, plan.Flow.ID, nil, ErrorCodeRoute, err, startedAt, metrics)
 	}
@@ -410,14 +430,18 @@ func (w *Worker) processMessage(ctx context.Context, job queue.Job, message Mess
 		return w.finishBusinessFailure(ctx, job, message, plan.Flow.ID, nil, ErrorCodeNoRoute, ErrNoRoute, startedAt, metrics)
 	}
 
-	attempts, err := w.buildAttempts(ctx, message, plan, *matchedRule, payloadMap)
+	attempts, err := w.buildAttempts(ctx, message, plan, *matchedRule, payloadMap, &lifecycle)
 	if err != nil {
 		return w.finishBusinessFailure(ctx, job, message, plan.Flow.ID, []string{matchedRule.RuleKey}, planningErrorCode(err), err, startedAt, metrics)
 	}
 
 	finishedAt := w.now()
+	lifecycle.SendEventBuiltAt = finishedAt.UTC()
+	if !lifecycle.TemplateRenderFinishedAt.IsZero() {
+		lifecycle.SendEventBuildDurationMS = durationMS(lifecycle.TemplateRenderFinishedAt, lifecycle.SendEventBuiltAt)
+	}
 	var annotateErr error
-	attempts, annotateErr = annotateAttemptLifecycle(attempts, finishedAt)
+	attempts, annotateErr = annotateAttemptLifecycle(attempts, lifecycle, finishedAt)
 	if annotateErr != nil {
 		return annotateErr
 	}
@@ -491,8 +515,8 @@ func (w *Worker) routePlan(ctx context.Context, sourceID string) (RoutePlan, err
 	if err != nil {
 		return RoutePlan{}, err
 	}
-	w.storeRoutePlan(loaded)
-	return loaded, nil
+	stored := w.storeRoutePlan(loaded)
+	return stored, nil
 }
 
 func (w *Worker) RefreshRoutePlan(ctx context.Context, sourceID string) error {
@@ -592,14 +616,22 @@ func (w *Worker) hydrateRoutePlanTargetResources(ctx context.Context, plan *Rout
 	}
 }
 
-func (w *Worker) storeRoutePlan(plan RoutePlan) {
+func (w *Worker) storeRoutePlan(plan RoutePlan) RoutePlan {
 	sourceID := strings.TrimSpace(plan.Flow.SourceID)
 	if sourceID == "" {
-		return
+		return plan
+	}
+	prepared, err := prepareRoutePlanSnapshot(plan)
+	if err == nil {
+		plan = prepared
+	} else {
+		plan.Rules = sortRoutePlanRules(plan.Rules)
+		plan.PreparedRules = nil
 	}
 	w.cacheMu.Lock()
 	w.routeCache[sourceID] = plan
 	w.cacheMu.Unlock()
+	return plan
 }
 
 func (w *Worker) CacheStats() RouteCacheStats {
@@ -612,20 +644,22 @@ func (w *Worker) CacheStats() RouteCacheStats {
 
 func evaluateRules(plan RoutePlan, payload map[string]any) (*route.Rule, []RuleMetric, error) {
 	scope := map[string]any{"payload": payload}
-	rules := append([]route.Rule(nil), plan.Rules...)
-	sort.SliceStable(rules, func(i, j int) bool {
-		if rules[i].SortOrder == rules[j].SortOrder {
-			return rules[i].RuleKey < rules[j].RuleKey
+	preparedRules := plan.PreparedRules
+	if len(preparedRules) == 0 {
+		prepared, err := prepareRoutePlanSnapshot(plan)
+		if err != nil {
+			return nil, nil, err
 		}
-		return rules[i].SortOrder < rules[j].SortOrder
-	})
+		preparedRules = prepared.PreparedRules
+	}
 
-	metrics := make([]RuleMetric, 0, len(rules))
-	for _, rule := range rules {
+	metrics := make([]RuleMetric, 0, len(preparedRules))
+	for _, prepared := range preparedRules {
+		rule := prepared.Rule
 		if !rule.Enabled {
 			continue
 		}
-		coarse, err := route.CoarseFilterConditionTree(rule.ConditionTree, scope)
+		coarse, err := prepared.Condition.CoarseFilter(scope)
 		if err != nil {
 			return nil, metrics, err
 		}
@@ -642,7 +676,7 @@ func evaluateRules(plan RoutePlan, payload map[string]any) (*route.Rule, []RuleM
 			continue
 		}
 		startedAt := time.Now()
-		matched, err := route.EvaluateConditionTreeWithMatchGroups(rule.ConditionTree, scope, plan.MatchGroups)
+		matched, err := prepared.Condition.Evaluate(scope, plan.MatchGroups)
 		duration := int(time.Since(startedAt).Milliseconds())
 		metrics = append(metrics, RuleMetric{
 			SourceID:       plan.Flow.SourceID,
@@ -664,7 +698,34 @@ func evaluateRules(plan RoutePlan, payload map[string]any) (*route.Rule, []RuleM
 	return nil, metrics, nil
 }
 
-func (w *Worker) buildAttempts(ctx context.Context, message MessageRecord, plan RoutePlan, rule route.Rule, payload map[string]any) ([]DeliveryAttemptPlan, error) {
+func prepareRoutePlanSnapshot(plan RoutePlan) (RoutePlan, error) {
+	plan.Rules = sortRoutePlanRules(plan.Rules)
+	plan.PreparedRules = make([]PreparedRouteRule, 0, len(plan.Rules))
+	for _, rule := range plan.Rules {
+		prepared, err := route.PrepareConditionTree(rule.ConditionTree)
+		if err != nil {
+			return RoutePlan{}, err
+		}
+		plan.PreparedRules = append(plan.PreparedRules, PreparedRouteRule{
+			Rule:      rule,
+			Condition: prepared,
+		})
+	}
+	return plan, nil
+}
+
+func sortRoutePlanRules(rules []route.Rule) []route.Rule {
+	sorted := append([]route.Rule(nil), rules...)
+	sort.SliceStable(sorted, func(i, j int) bool {
+		if sorted[i].SortOrder == sorted[j].SortOrder {
+			return sorted[i].RuleKey < sorted[j].RuleKey
+		}
+		return sorted[i].SortOrder < sorted[j].SortOrder
+	})
+	return sorted
+}
+
+func (w *Worker) buildAttempts(ctx context.Context, message MessageRecord, plan RoutePlan, rule route.Rule, payload map[string]any, lifecycle *planningLifecycleBreakdown) ([]DeliveryAttemptPlan, error) {
 	targets := enabledActionTargets(rule.Action)
 	if len(targets) == 0 {
 		return nil, fmt.Errorf("route rule %s has no delivery targets", rule.RuleKey)
@@ -690,7 +751,12 @@ func (w *Worker) buildAttempts(ctx context.Context, message MessageRecord, plan 
 		}
 		templateStartedAt := time.Now()
 		body, err := renderTemplate(templateVersion, message, payload, w.now())
-		recordTiming(ctx, message.TraceID, TimingTemplateRender, time.Since(templateStartedAt))
+		templateDuration := time.Since(templateStartedAt)
+		recordTiming(ctx, message.TraceID, TimingTemplateRender, templateDuration)
+		if lifecycle != nil {
+			lifecycle.TemplateRenderFinishedAt = w.now().UTC()
+			lifecycle.TemplateRenderDurationMS += int(templateDuration.Milliseconds())
+		}
 		if err != nil {
 			return nil, fmt.Errorf("%w: render template version %s: %w", errTemplatePlanning, templateVersion.ID, err)
 		}
@@ -791,12 +857,19 @@ func (w *Worker) capabilityForPlan(ctx context.Context, plan RoutePlan, provider
 	return w.repo.GetProviderCapability(ctx, providerType, messageType)
 }
 
-func annotateAttemptLifecycle(attempts []DeliveryAttemptPlan, at time.Time) ([]DeliveryAttemptPlan, error) {
+func annotateAttemptLifecycle(attempts []DeliveryAttemptPlan, lifecycle planningLifecycleBreakdown, at time.Time) ([]DeliveryAttemptPlan, error) {
 	for index := range attempts {
 		var payload delivery.SendMessageJobPayload
 		if err := json.Unmarshal(attempts[index].JobPayload, &payload); err != nil {
 			return nil, fmt.Errorf("%w: decode send message job payload: %w", errJobPlanning, err)
 		}
+		payload.RoutePlanStartedAt = lifecycle.RoutePlanStartedAt
+		payload.RouteConditionFinishedAt = lifecycle.RouteConditionFinishedAt
+		payload.RouteConditionDurationMS = lifecycle.RouteConditionDurationMS
+		payload.TemplateRenderFinishedAt = lifecycle.TemplateRenderFinishedAt
+		payload.TemplateRenderDurationMS = lifecycle.TemplateRenderDurationMS
+		payload.SendEventBuiltAt = lifecycle.SendEventBuiltAt
+		payload.SendEventBuildDurationMS = lifecycle.SendEventBuildDurationMS
 		payload.RoutePlannedAt = at
 		payload.DeliveryCreatedAt = at
 		raw, err := json.Marshal(payload)

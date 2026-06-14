@@ -454,6 +454,51 @@ func TestEvaluateConditionTreeSupportsDocumentedOperators(t *testing.T) {
 	}
 }
 
+func TestPreparedConditionTreeMatchesRawEvaluation(t *testing.T) {
+	condition := json.RawMessage(`{
+		"operator":"and",
+		"conditions":[
+			{"operator":"regex","path":"payload.title","value":"disk\\s+alert"},
+			{"operator":"in_match_group","path":"payload.severity","match_group_id":"group-severity"},
+			{"operator":"gte","path":"payload.count","value":10}
+		]
+	}`)
+	scope := map[string]any{
+		"payload": map[string]any{
+			"title":    "critical disk alert",
+			"severity": "critical",
+			"count":    float64(12),
+		},
+	}
+	matchGroups := map[string][]string{"group-severity": {"critical", "high"}}
+
+	prepared, err := PrepareConditionTree(condition)
+	if err != nil {
+		t.Fatalf("prepare condition tree: %v", err)
+	}
+	if len(prepared.root.Conditions) != 3 {
+		t.Fatalf("expected nested prepared conditions, got %+v", prepared.root)
+	}
+	if prepared.root.Conditions[0].compiledRegex == nil {
+		t.Fatalf("expected regex operator to compile once during preparation")
+	}
+	if got := prepared.root.Conditions[1].pathParts; len(got) != 2 || got[0] != "payload" || got[1] != "severity" {
+		t.Fatalf("expected pre-parsed path parts, got %+v", got)
+	}
+
+	rawMatched, err := EvaluateConditionTreeWithMatchGroups(condition, scope, matchGroups)
+	if err != nil {
+		t.Fatalf("evaluate raw condition: %v", err)
+	}
+	preparedMatched, err := prepared.Evaluate(scope, matchGroups)
+	if err != nil {
+		t.Fatalf("evaluate prepared condition: %v", err)
+	}
+	if preparedMatched != rawMatched || !preparedMatched {
+		t.Fatalf("expected prepared evaluation to match raw result, raw=%v prepared=%v", rawMatched, preparedMatched)
+	}
+}
+
 func TestSimulateUsesMatchGroupValuesFromStore(t *testing.T) {
 	store := newMemoryStore()
 	store.matchGroups = map[string][]string{

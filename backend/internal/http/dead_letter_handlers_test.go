@@ -21,6 +21,7 @@ func TestDeadLetterHandlersListAndBatchActions(t *testing.T) {
 				{
 					ID:             "dead-1",
 					JobID:          "job-1",
+					TraceID:        "trace-dead-1",
 					Type:           "send_message",
 					ChannelName:    "Webhook 生产",
 					ErrorCode:      "MGP-SEND-004",
@@ -42,7 +43,7 @@ func TestDeadLetterHandlersListAndBatchActions(t *testing.T) {
 		httpapi.WithDeadLetterService(service),
 	)
 
-	listReq := httptest.NewRequest(http.MethodGet, "/api/v1/dead-letters", nil)
+	listReq := httptest.NewRequest(http.MethodGet, "/api/v1/dead-letters?keyword=trace-dead-1", nil)
 	setAdminSessionCookie(listReq, "admin-session")
 	listRec := httptest.NewRecorder()
 	handler.ServeHTTP(listRec, listReq)
@@ -52,6 +53,7 @@ func TestDeadLetterHandlersListAndBatchActions(t *testing.T) {
 	var listBody struct {
 		DeadLetters []struct {
 			ID           string `json:"id"`
+			TraceID      string `json:"trace_id"`
 			ChannelName  string `json:"channel_name"`
 			ErrorMessage string `json:"error_message"`
 		} `json:"dead_letters"`
@@ -61,6 +63,9 @@ func TestDeadLetterHandlersListAndBatchActions(t *testing.T) {
 	}
 	if len(listBody.DeadLetters) != 1 || listBody.DeadLetters[0].ID != "dead-1" || listBody.DeadLetters[0].ChannelName != "Webhook 生产" {
 		t.Fatalf("unexpected list response: %+v", listBody)
+	}
+	if listBody.DeadLetters[0].TraceID != "trace-dead-1" || service.listFilter.Keyword != "trace-dead-1" {
+		t.Fatalf("expected trace id response and keyword filter, body=%+v filter=%+v", listBody, service.listFilter)
 	}
 
 	replayReq := deadLetterJSONRequest(t, http.MethodPost, "/api/v1/dead-letters/batch-replay", map[string]any{"ids": []string{"dead-1"}})
@@ -117,9 +122,11 @@ type fakeDeadLetterService struct {
 	handleIDs    []string
 	deleteIDs    []string
 	handleReason string
+	listFilter   deadletter.ListFilter
 }
 
-func (f *fakeDeadLetterService) ListDeadLetters(context.Context, deadletter.ListFilter) (deadletter.ListResult, error) {
+func (f *fakeDeadLetterService) ListDeadLetters(_ context.Context, filter deadletter.ListFilter) (deadletter.ListResult, error) {
+	f.listFilter = filter
 	return f.listResult, nil
 }
 

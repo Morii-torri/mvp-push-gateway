@@ -76,24 +76,31 @@ type Attempt struct {
 }
 
 type SendMessageJobPayload struct {
-	DeliveryAttemptID string          `json:"delivery_attempt_id"`
-	MessageID         string          `json:"message_id,omitempty"`
-	SourceID          string          `json:"source_id,omitempty"`
-	ChannelID         string          `json:"channel_id,omitempty"`
-	TemplateVersionID string          `json:"template_version_id,omitempty"`
-	RecipientSnapshot json.RawMessage `json:"recipient_snapshot,omitempty"`
-	RoutePlannedAt    time.Time       `json:"route_planned_at,omitempty"`
-	DeliveryCreatedAt time.Time       `json:"delivery_created_at,omitempty"`
-	DedupeKey         string          `json:"dedupe_key"`
-	DedupeTTLSeconds  int             `json:"dedupe_ttl_seconds"`
-	MessageType       string          `json:"message_type"`
-	TraceID           string          `json:"trace_id,omitempty"`
-	Token             string          `json:"token"`
-	Recipient         any             `json:"recipient"`
-	Body              json.RawMessage `json:"body"`
-	InboundHeaders    json.RawMessage `json:"inbound_headers,omitempty"`
-	InboundPayload    json.RawMessage `json:"inbound_payload,omitempty"`
-	InboundReceivedAt time.Time       `json:"inbound_received_at,omitempty"`
+	DeliveryAttemptID        string          `json:"delivery_attempt_id"`
+	MessageID                string          `json:"message_id,omitempty"`
+	SourceID                 string          `json:"source_id,omitempty"`
+	ChannelID                string          `json:"channel_id,omitempty"`
+	TemplateVersionID        string          `json:"template_version_id,omitempty"`
+	RecipientSnapshot        json.RawMessage `json:"recipient_snapshot,omitempty"`
+	RoutePlanStartedAt       time.Time       `json:"route_plan_started_at,omitempty"`
+	RouteConditionFinishedAt time.Time       `json:"route_condition_finished_at,omitempty"`
+	RouteConditionDurationMS int             `json:"route_condition_duration_ms,omitempty"`
+	TemplateRenderFinishedAt time.Time       `json:"template_render_finished_at,omitempty"`
+	TemplateRenderDurationMS int             `json:"template_render_duration_ms,omitempty"`
+	SendEventBuiltAt         time.Time       `json:"send_event_built_at,omitempty"`
+	SendEventBuildDurationMS int             `json:"send_event_build_duration_ms,omitempty"`
+	RoutePlannedAt           time.Time       `json:"route_planned_at,omitempty"`
+	DeliveryCreatedAt        time.Time       `json:"delivery_created_at,omitempty"`
+	DedupeKey                string          `json:"dedupe_key"`
+	DedupeTTLSeconds         int             `json:"dedupe_ttl_seconds"`
+	MessageType              string          `json:"message_type"`
+	TraceID                  string          `json:"trace_id,omitempty"`
+	Token                    string          `json:"token"`
+	Recipient                any             `json:"recipient"`
+	Body                     json.RawMessage `json:"body"`
+	InboundHeaders           json.RawMessage `json:"inbound_headers,omitempty"`
+	InboundPayload           json.RawMessage `json:"inbound_payload,omitempty"`
+	InboundReceivedAt        time.Time       `json:"inbound_received_at,omitempty"`
 }
 
 type TimingStage string
@@ -776,6 +783,27 @@ func attemptFromDirectPayload(payload SendMessageJobPayload) (Attempt, bool) {
 
 func deliveryLifecycleSnapshot(payload SendMessageJobPayload) map[string]any {
 	lifecycle := map[string]any{}
+	if !payload.RoutePlanStartedAt.IsZero() {
+		lifecycle["route_plan_started_at"] = payload.RoutePlanStartedAt.Format(time.RFC3339Nano)
+	}
+	if !payload.RouteConditionFinishedAt.IsZero() {
+		lifecycle["route_condition_finished_at"] = payload.RouteConditionFinishedAt.Format(time.RFC3339Nano)
+	}
+	if payload.RouteConditionDurationMS > 0 {
+		lifecycle["route_condition_duration_ms"] = payload.RouteConditionDurationMS
+	}
+	if !payload.TemplateRenderFinishedAt.IsZero() {
+		lifecycle["template_render_finished_at"] = payload.TemplateRenderFinishedAt.Format(time.RFC3339Nano)
+	}
+	if payload.TemplateRenderDurationMS > 0 {
+		lifecycle["template_render_duration_ms"] = payload.TemplateRenderDurationMS
+	}
+	if !payload.SendEventBuiltAt.IsZero() {
+		lifecycle["send_event_built_at"] = payload.SendEventBuiltAt.Format(time.RFC3339Nano)
+	}
+	if payload.SendEventBuildDurationMS > 0 {
+		lifecycle["send_event_build_duration_ms"] = payload.SendEventBuildDurationMS
+	}
 	if !payload.RoutePlannedAt.IsZero() {
 		lifecycle["route_planned_at"] = payload.RoutePlannedAt.Format(time.RFC3339Nano)
 	}

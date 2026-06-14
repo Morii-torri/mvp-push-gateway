@@ -188,11 +188,17 @@ func buildTimeline(detail MessageDetail) []TimelineEvent {
 			ErrorCode:   detail.ErrorCode,
 		})
 	} else if len(detail.MatchedRuleIDs) > 0 {
+		routePlanStartedAt := appendRoutePlanningBreakdown(&events, detail)
+		routeDurationMS := 0
+		if !routePlanStartedAt.IsZero() {
+			routeDurationMS = timelineDurationMS(routePlanStartedAt, routePlannedAt)
+		}
 		events = append(events, TimelineEvent{
 			Stage:       "route_planned",
 			At:          routePlannedAt,
 			Status:      detail.InboundStatus,
 			Description: "路由规划完成，命中规则",
+			DurationMS:  routeDurationMS,
 		})
 	}
 	for _, attempt := range detail.Attempts {
@@ -241,6 +247,62 @@ func buildTimeline(detail MessageDetail) []TimelineEvent {
 	})
 	fillTimelineDurations(events)
 	return events
+}
+
+func appendRoutePlanningBreakdown(events *[]TimelineEvent, detail MessageDetail) time.Time {
+	snapshot, ok := firstRequestSnapshot(detail.Attempts)
+	if !ok {
+		return time.Time{}
+	}
+	routePlanStartedAt, hasRoutePlanStartedAt := lifecycleTime(snapshot, "route_plan_started_at")
+	if hasRoutePlanStartedAt {
+		*events = append(*events, TimelineEvent{
+			Stage:       "route_planning_started",
+			At:          routePlanStartedAt,
+			Status:      detail.InboundStatus,
+			Description: "路由规划开始",
+		})
+	}
+	appendLifecycleDurationEvent(events, snapshot, TimelineEvent{
+		Stage:       "route_condition_evaluated",
+		Status:      detail.InboundStatus,
+		Description: "规则判断完成",
+	}, "route_condition_finished_at", "route_condition_duration_ms")
+	appendLifecycleDurationEvent(events, snapshot, TimelineEvent{
+		Stage:       "route_template_rendered",
+		Status:      detail.InboundStatus,
+		Description: "模板渲染完成",
+	}, "template_render_finished_at", "template_render_duration_ms")
+	appendLifecycleDurationEvent(events, snapshot, TimelineEvent{
+		Stage:       "route_send_event_built",
+		Status:      detail.InboundStatus,
+		Description: "出站事件已生成",
+	}, "send_event_built_at", "send_event_build_duration_ms")
+	if hasRoutePlanStartedAt {
+		return routePlanStartedAt
+	}
+	return time.Time{}
+}
+
+func appendLifecycleDurationEvent(events *[]TimelineEvent, snapshot json.RawMessage, event TimelineEvent, timeKey string, durationKey string) {
+	at, ok := lifecycleTime(snapshot, timeKey)
+	if !ok {
+		return
+	}
+	event.At = at
+	if durationMS, ok := lifecycleDurationMS(snapshot, durationKey); ok {
+		event.DurationMS = durationMS
+	}
+	*events = append(*events, event)
+}
+
+func firstRequestSnapshot(attempts []DeliveryAttempt) (json.RawMessage, bool) {
+	for _, attempt := range attempts {
+		if len(strings.TrimSpace(string(attempt.RequestSnapshot))) > 0 && string(attempt.RequestSnapshot) != "null" {
+			return attempt.RequestSnapshot, true
+		}
+	}
+	return nil, false
 }
 
 func fillTimelineDurations(events []TimelineEvent) {

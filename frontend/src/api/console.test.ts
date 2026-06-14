@@ -200,17 +200,20 @@ describe("console api wrappers", () => {
     ]);
   });
 
-  it("passes dead-letter pagination as a server-side window", async () => {
+  it("passes dead-letter pagination and search as a server-side window", async () => {
     tokenStore.set("admin-token");
     const fetchMock = vi.fn(
       async (_input: RequestInfo | URL, _init?: RequestInit) =>
         json({ dead_letters: [], total: 123, limit: 50, offset: 100 }),
     );
 
-    await consoleApi.listDeadLetters({ limit: 50, offset: 100 }, fetchMock);
+    await consoleApi.listDeadLetters(
+      { limit: 50, offset: 100, status: "pending", keyword: "trace-1" },
+      fetchMock,
+    );
 
     expect(fetchMock.mock.calls.map(([input]) => String(input))).toEqual([
-      "/api/v1/dead-letters?limit=50&offset=100",
+      "/api/v1/dead-letters?limit=50&offset=100&status=pending&keyword=trace-1",
     ]);
   });
 

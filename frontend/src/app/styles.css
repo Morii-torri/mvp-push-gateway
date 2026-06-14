@@ -3919,6 +3919,22 @@ body {
   margin-top: 8px;
 }
 
+.message-log-detail-drawer .ant-drawer-body {
+  overflow-x: hidden;
+}
+
+.message-log-detail-drawer .ant-timeline-item-content {
+  min-width: 0;
+  overflow-x: auto;
+}
+
+.message-log-timeline-text {
+  display: inline-block;
+  min-width: max-content;
+  padding-right: 8px;
+  white-space: nowrap;
+}
+
 .message-log-detail-section__body--hidden {
   display: none;
 }

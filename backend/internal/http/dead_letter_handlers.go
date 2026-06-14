@@ -20,6 +20,7 @@ type deadLettersResponse struct {
 type deadLetterResponse struct {
 	ID             string          `json:"id"`
 	JobID          string          `json:"job_id"`
+	TraceID        string          `json:"trace_id"`
 	Type           string          `json:"type"`
 	Payload        json.RawMessage `json:"payload"`
 	ChannelID      string          `json:"channel_id"`
@@ -61,6 +62,7 @@ func (h *Handler) deadLettersHandler(w http.ResponseWriter, r *http.Request) {
 	result, err := h.deadLetters.ListDeadLetters(r.Context(), deadletter.ListFilter{
 		Status:    r.URL.Query().Get("status"),
 		ChannelID: r.URL.Query().Get("channel_id"),
+		Keyword:   r.URL.Query().Get("keyword"),
 		Limit:     queryInt(r, "limit"),
 		Offset:    queryInt(r, "offset"),
 	})
@@ -173,6 +175,7 @@ func toDeadLetterResponse(item deadletter.Job) deadLetterResponse {
 	return deadLetterResponse{
 		ID:             item.ID,
 		JobID:          item.JobID,
+		TraceID:        item.TraceID,
 		Type:           item.Type,
 		Payload:        defaultRawJSON(item.Payload),
 		ChannelID:      item.ChannelID,

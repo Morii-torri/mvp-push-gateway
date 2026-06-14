@@ -53,6 +53,10 @@ func TestListMessagesDerivesLifecycleStatusAndClearsNoRouteMatch(t *testing.T) {
 func TestGetMessageBuildsLifecycleTimeline(t *testing.T) {
 	receivedAt := time.Date(2026, 6, 4, 10, 0, 0, 0, time.UTC)
 	validatedAt := receivedAt.Add(time.Millisecond)
+	routeStartedAt := receivedAt.Add(3 * time.Millisecond)
+	conditionFinishedAt := receivedAt.Add(6 * time.Millisecond)
+	templateRenderedAt := receivedAt.Add(9 * time.Millisecond)
+	sendEventBuiltAt := receivedAt.Add(11 * time.Millisecond)
 	routePlannedAt := receivedAt.Add(12 * time.Millisecond)
 	queuedAt := receivedAt.Add(2 * time.Second)
 	startedAt := receivedAt.Add(3 * time.Second)
@@ -60,9 +64,16 @@ func TestGetMessageBuildsLifecycleTimeline(t *testing.T) {
 	updatedAt := receivedAt.Add(4 * time.Second)
 	requestSnapshot := mustJSON(t, map[string]any{
 		"lifecycle": map[string]any{
-			"route_planned_at":    routePlannedAt.Format(time.RFC3339Nano),
-			"delivery_created_at": queuedAt.Format(time.RFC3339Nano),
-			"request_started_at":  startedAt.Format(time.RFC3339Nano),
+			"route_plan_started_at":        routeStartedAt.Format(time.RFC3339Nano),
+			"route_condition_finished_at":  conditionFinishedAt.Format(time.RFC3339Nano),
+			"route_condition_duration_ms":  2,
+			"template_render_finished_at":  templateRenderedAt.Format(time.RFC3339Nano),
+			"template_render_duration_ms":  3,
+			"send_event_built_at":          sendEventBuiltAt.Format(time.RFC3339Nano),
+			"send_event_build_duration_ms": 2,
+			"route_planned_at":             routePlannedAt.Format(time.RFC3339Nano),
+			"delivery_created_at":          queuedAt.Format(time.RFC3339Nano),
+			"request_started_at":           startedAt.Format(time.RFC3339Nano),
 		},
 	})
 	responseSnapshot := mustJSON(t, map[string]any{
@@ -112,12 +123,28 @@ func TestGetMessageBuildsLifecycleTimeline(t *testing.T) {
 		t.Fatalf("expected last outbound time %s, got %+v", finishedAt, detail.LastOutboundAt)
 	}
 	if !hasTimelineStage(detail.Timeline, "inbound_validated") ||
+		!hasTimelineStage(detail.Timeline, "route_planning_started") ||
+		!hasTimelineStage(detail.Timeline, "route_condition_evaluated") ||
+		!hasTimelineStage(detail.Timeline, "route_template_rendered") ||
+		!hasTimelineStage(detail.Timeline, "route_send_event_built") ||
 		!hasTimelineStage(detail.Timeline, "route_planned") ||
 		!hasTimelineStage(detail.Timeline, "upstream_call_finished") {
 		t.Fatalf("expected route and delivery timeline events, got %+v", detail.Timeline)
 	}
-	if !hasTimelineEvent(detail.Timeline, "route_planned", routePlannedAt, 11) {
-		t.Fatalf("expected route_planned at %s with duration 11ms, got %+v", routePlannedAt, detail.Timeline)
+	if !hasTimelineEvent(detail.Timeline, "route_planning_started", routeStartedAt, 2) {
+		t.Fatalf("expected route planning wait event, got %+v", detail.Timeline)
+	}
+	if !hasTimelineEvent(detail.Timeline, "route_condition_evaluated", conditionFinishedAt, 2) {
+		t.Fatalf("expected route condition duration event, got %+v", detail.Timeline)
+	}
+	if !hasTimelineEvent(detail.Timeline, "route_template_rendered", templateRenderedAt, 3) {
+		t.Fatalf("expected template render duration event, got %+v", detail.Timeline)
+	}
+	if !hasTimelineEvent(detail.Timeline, "route_send_event_built", sendEventBuiltAt, 2) {
+		t.Fatalf("expected send event build duration event, got %+v", detail.Timeline)
+	}
+	if !hasTimelineEvent(detail.Timeline, "route_planned", routePlannedAt, 9) {
+		t.Fatalf("expected route_planned at %s with duration 9ms, got %+v", routePlannedAt, detail.Timeline)
 	}
 	if !hasTimelineEvent(detail.Timeline, "upstream_call_finished", finishedAt, 2000) {
 		t.Fatalf("expected upstream_call_finished at %s with duration 2000ms, got %+v", finishedAt, detail.Timeline)

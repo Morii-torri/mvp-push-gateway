@@ -119,7 +119,11 @@ func main() {
 		templateService := msgtemplate.NewService(repository)
 		matchGroupService := matchgroup.NewService(repository)
 		messageLogService := messagelog.NewService(repository)
-		deadLetterService := deadletter.NewService(repository)
+		deadLetterOptions := []deadletter.Option{}
+		if broker != nil {
+			deadLetterOptions = append(deadLetterOptions, deadletter.WithSendPublisher(broker))
+		}
+		deadLetterService := deadletter.NewService(repository, deadLetterOptions...)
 		auditService := audit.NewService(repository)
 		monitoringOptions := []monitoring.Option{}
 		if natsPublisher != nil {
