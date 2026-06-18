@@ -110,6 +110,12 @@ func TestRepositoryGetQueueMonitoringSnapshotAggregatesOperationalMetrics(t *tes
 	if snapshot.Summary.OldestJobWaitSeconds != int64((18 * time.Minute).Seconds()) {
 		t.Fatalf("expected oldest wait 18 minutes, got %d seconds", snapshot.Summary.OldestJobWaitSeconds)
 	}
+	if snapshot.Summary.RoutePlanOldestQueuedAt == nil || !snapshot.Summary.RoutePlanOldestQueuedAt.Equal(now.Add(-18*time.Minute)) {
+		t.Fatalf("unexpected route plan oldest queued at: %v", snapshot.Summary.RoutePlanOldestQueuedAt)
+	}
+	if snapshot.Summary.SendMessageOldestQueuedAt == nil || !snapshot.Summary.SendMessageOldestQueuedAt.Equal(now.Add(-9*time.Minute)) {
+		t.Fatalf("unexpected send message oldest queued at: %v", snapshot.Summary.SendMessageOldestQueuedAt)
+	}
 	if snapshot.Summary.PlanningAvgDurationMS != 140 || snapshot.Summary.PlanningP99DurationMS != 260 {
 		t.Fatalf("unexpected planning durations: %+v", snapshot.Summary)
 	}
@@ -119,8 +125,14 @@ func TestRepositoryGetQueueMonitoringSnapshotAggregatesOperationalMetrics(t *tes
 	if snapshot.Summary.RateLimitedCount != 4 {
 		t.Fatalf("expected rate limited count 4, got %d", snapshot.Summary.RateLimitedCount)
 	}
+	if snapshot.Summary.RateLimitedLatestAt == nil || !snapshot.Summary.RateLimitedLatestAt.Equal(now.Add(-15*time.Minute)) {
+		t.Fatalf("unexpected rate limited latest at: %v", snapshot.Summary.RateLimitedLatestAt)
+	}
 	if snapshot.Summary.DeadLetterCount != 1 {
 		t.Fatalf("expected dead letter count 1, got %d", snapshot.Summary.DeadLetterCount)
+	}
+	if snapshot.Summary.DeadLetterLatestAt == nil || !snapshot.Summary.DeadLetterLatestAt.Equal(now.Add(-5*time.Minute)) {
+		t.Fatalf("unexpected dead letter latest at: %v", snapshot.Summary.DeadLetterLatestAt)
 	}
 	if snapshot.Summary.PlatformFailureRate != 10 {
 		t.Fatalf("expected platform failure rate 10%%, got %v", snapshot.Summary.PlatformFailureRate)
@@ -146,6 +158,47 @@ func TestRepositoryGetQueueMonitoringSnapshotAggregatesOperationalMetrics(t *tes
 	}
 	if snapshot.CleanupStatus.LastRunAt != nil {
 		t.Fatalf("expected cleanup status to be empty before cleanup, got %+v", snapshot.CleanupStatus)
+	}
+}
+
+func TestRepositoryGetQueueTrendCountsCompletedDeliveryAttemptsWithoutWorkerMetrics(t *testing.T) {
+	pool := openMigratedPool(t)
+	defer pool.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	repository := NewRepository(pool)
+	now := time.Date(2036, 5, 9, 10, 0, 0, 0, time.UTC)
+	channel := createTestChannel(t, ctx, repository, "monitoring-attempt-trend")
+
+	insertDeliveryAttemptForStats(t, ctx, pool, deliveryAttemptRow{
+		SourceID:   testUUID(12051),
+		MessageID:  testUUID(12052),
+		AttemptID:  testUUID(12053),
+		ChannelID:  channel.ID,
+		Status:     "sent",
+		AttemptNo:  1,
+		QueuedAt:   now.Add(-12 * time.Minute),
+		StartedAt:  now.Add(-12*time.Minute + time.Second),
+		FinishedAt: now.Add(-12*time.Minute + 2*time.Second),
+		DurationMS: 1000,
+	})
+
+	snapshot, err := repository.GetQueueMonitoringSnapshot(ctx, monitoring.QueryParams{
+		Now:    now,
+		Window: time.Hour,
+	})
+	if err != nil {
+		t.Fatalf("get queue monitoring snapshot: %v", err)
+	}
+
+	totalSendProcessed := 0
+	for _, point := range snapshot.Trend {
+		totalSendProcessed += point.SendMessageProcessed
+	}
+	if totalSendProcessed != 1 {
+		t.Fatalf("expected trend to count completed delivery attempt, got %d", totalSendProcessed)
 	}
 }
 

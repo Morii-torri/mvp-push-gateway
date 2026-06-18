@@ -523,6 +523,9 @@ export type DeadLetterApiRecord = {
   attempts: number;
   dead_lettered_at: string;
   replayed_at?: string | null;
+  replay_status?: string;
+  replay_message?: string;
+  replay_finished_at?: string | null;
   handled_at?: string | null;
   handled_reason?: string;
   created_at: string;

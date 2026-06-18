@@ -176,6 +176,45 @@ export function StatusTag({ meta }: { meta: TagMeta }) {
   );
 }
 
+export function DetailDotStatus({ meta }: { meta: TagMeta }) {
+  const colorClass = `detail-dot-status--${meta.color || "default"}`;
+  return (
+    <span className={`detail-dot-status ${colorClass}`}>
+      <span className="detail-dot-status__dot" />
+      <span className="detail-dot-status__label">{meta.label}</span>
+    </span>
+  );
+}
+
+export type DetailMetaListItem = {
+  label: ReactNode;
+  value: ReactNode;
+  mono?: boolean;
+};
+
+export function DetailMetaList({
+  items,
+  className,
+}: {
+  items: DetailMetaListItem[];
+  className?: string;
+}) {
+  return (
+    <dl className={["detail-meta-list", className].filter(Boolean).join(" ")}>
+      {items.map((item, index) => (
+        <div className="detail-meta-list__item" key={index}>
+          <dt>{item.label}</dt>
+          <dd className={item.mono ? "detail-meta-list__value--mono" : ""}>
+            {item.value === undefined || item.value === null || item.value === ""
+              ? "-"
+              : item.value}
+          </dd>
+        </div>
+      ))}
+    </dl>
+  );
+}
+
 export function CopyableIdentifier({
   value,
   code = false,
@@ -415,6 +454,7 @@ export function LineChart({
     points: number[];
   }>;
 }) {
+  const [activeIndex, setActiveIndex] = useState<number | null>(null);
   const width = 720;
   const padding = { top: 24, right: 26, bottom: 40, left: 50 };
   const normalizedSeries =
@@ -468,6 +508,30 @@ export function LineChart({
     labels?.length === primarySeries.points.length
       ? Math.max(primarySeries.points.length - 1, 1)
       : Math.max(xLabels.length - 1, 1);
+  const hoverZones = lineHoverZones(
+    primarySeries.points.length,
+    padding.left,
+    innerWidth,
+  );
+  const activeX =
+    activeIndex === null
+      ? null
+      : padding.left +
+        (innerWidth * activeIndex) /
+          Math.max(primarySeries.points.length - 1, 1);
+  const activeTooltip =
+    activeIndex === null
+      ? null
+      : {
+          label: xLabels[activeIndex] ?? String(activeIndex + 1),
+          leftPercent: activeX === null ? 0 : (activeX / width) * 100,
+          items: normalizedSeries.map((item) => ({
+            key: item.key,
+            label: item.label,
+            color: item.color,
+            value: safeChartNumber(item.points[activeIndex] ?? 0),
+          })),
+        };
 
   return (
     <div
@@ -552,29 +616,50 @@ export function LineChart({
             />
           );
         })}
-        {primaryCoords.map(({ x, y, point }, index) =>
-          shouldRenderPointLabel(point, index, primaryCoords.length) ? (
-            <g key={`${point}-${index}`}>
-              <circle
-                cx={x}
-                cy={y}
-                r="2.6"
-                className="chart-point"
-                style={{ fill: primarySeries.color }}
-              />
-              <text
-                x={x}
-                y={y - 10}
-                dx={pointLabelOffset(index, primaryCoords.length)}
-                textAnchor={pointLabelAnchor(index, primaryCoords.length)}
-                className="chart-point-label"
-              >
-                {point}
-              </text>
-            </g>
-          ) : null,
-        )}
+        {activeIndex !== null && activeX !== null ? (
+          <line
+            x1={activeX}
+            x2={activeX}
+            y1={padding.top}
+            y2={padding.top + innerHeight}
+            className="chart-hover-guide"
+          />
+        ) : null}
+        {activeIndex !== null
+          ? seriesCoords.map((item) => {
+              const coord = item.coords[activeIndex];
+              return coord ? (
+                <circle
+                  key={`active-${item.key}`}
+                  cx={coord.x}
+                  cy={coord.y}
+                  r="2.1"
+                  className="chart-point chart-point--active"
+                  style={{ stroke: item.color }}
+                />
+              ) : null;
+            })
+          : null}
+        <g
+          className="chart-hover-targets"
+          onMouseLeave={() => setActiveIndex(null)}
+        >
+          {hoverZones.map((zone, index) => (
+            <rect
+              key={`hover-${index}`}
+              x={zone.x}
+              y={padding.top}
+              width={zone.width}
+              height={innerHeight}
+              className="chart-hover-zone"
+              data-chart-index={index}
+              onMouseEnter={() => setActiveIndex(index)}
+              onFocus={() => setActiveIndex(index)}
+            />
+          ))}
+        </g>
       </svg>
+      {activeTooltip ? <ChartTooltip {...activeTooltip} /> : null}
       {series && series.length > 0 ? (
         <div className="legend-row">
           {normalizedSeries.map((item) => (
@@ -639,6 +724,10 @@ export function GroupedBarChart({
   const xAxisLabels = labels
     .map((label, index) => ({ label, index }))
     .filter((_, index) => shouldRenderAxisLabel(index, labels.length));
+  const xLabelDenominator =
+    labels.length === bucketCount
+      ? bucketCount
+      : Math.max(labels.length - 1, 1);
 
   return (
     <div className="bar-chart" aria-label={ariaLabel}>
@@ -680,7 +769,10 @@ export function GroupedBarChart({
           className="chart-axis"
         />
         {xAxisLabels.map(({ label, index }) => {
-          const x = padding.left + bucketWidth * index + bucketWidth / 2;
+          const x =
+            labels.length === bucketCount
+              ? padding.left + bucketWidth * index + bucketWidth / 2
+              : padding.left + (innerWidth * index) / xLabelDenominator;
           return (
             <text
               key={`${label}-${index}`}
@@ -740,6 +832,237 @@ export function GroupedBarChart({
   );
 }
 
+export function QueueTrendChart({
+  labels,
+  series,
+  ariaLabel = "队列处理趋势",
+  height = 260,
+}: {
+  labels: string[];
+  series: Array<{
+    key: string;
+    label: string;
+    color: string;
+    points: number[];
+  }>;
+  ariaLabel?: string;
+  height?: number;
+}) {
+  const [activeIndex, setActiveIndex] = useState<number | null>(null);
+  const width = 720;
+  const padding = { top: 24, right: 58, bottom: 42, left: 68 };
+  const normalizedSeries = series.length > 0 ? series : [];
+  const lineSeries = normalizedSeries.slice(0, 2);
+  const barSeries = normalizedSeries.slice(2);
+  const bucketCount = Math.max(
+    labels.length,
+    ...normalizedSeries.map((item) => item.points.length),
+    1,
+  );
+  const innerWidth = width - padding.left - padding.right;
+  const innerHeight = height - padding.top - padding.bottom;
+  const bucketWidth = innerWidth / bucketCount;
+  const barWidth = Math.min(Math.max(bucketWidth * 0.14, 4), 9);
+  const maxLine = Math.max(
+    ...lineSeries.flatMap((item) => item.points.map(safeChartNumber)),
+    1,
+  );
+  const maxBar = Math.max(
+    ...barSeries.flatMap((item) => item.points.map(safeChartNumber)),
+    1,
+  );
+  const yTicks = [1, 0.66, 0.33, 0];
+  const xAxisLabels = labels
+    .map((label, index) => ({ label, index }))
+    .filter((_, index) => shouldRenderAxisLabel(index, labels.length));
+  const queueXLabelDenominator =
+    labels.length === bucketCount
+      ? bucketCount
+      : Math.max(labels.length - 1, 1);
+  const hoverZones = bucketHoverZones(bucketCount, padding.left, bucketWidth);
+  const lineCoords = lineSeries.map((item) => ({
+    ...item,
+    coords: item.points.map((point, index) => {
+      const value = safeChartNumber(point);
+      const x = padding.left + bucketWidth * index + bucketWidth / 2;
+      const y = padding.top + innerHeight - (value / maxLine) * innerHeight;
+      return { x, y, value };
+    }),
+  }));
+  const activeX =
+    activeIndex === null
+      ? null
+      : padding.left + bucketWidth * activeIndex + bucketWidth / 2;
+  const activeTooltip =
+    activeIndex === null
+      ? null
+      : {
+          label: labels[activeIndex] ?? String(activeIndex + 1),
+          leftPercent: activeX === null ? 0 : (activeX / width) * 100,
+          items: normalizedSeries.map((item) => ({
+            key: item.key,
+            label: item.label,
+            color: item.color,
+            value: safeChartNumber(item.points[activeIndex] ?? 0),
+          })),
+        };
+
+  return (
+    <div className="queue-trend-chart mixed-chart" aria-label={ariaLabel}>
+      <svg viewBox={`0 0 ${width} ${height}`} role="img">
+        {yTicks.map((ratio) => {
+          const y = padding.top + innerHeight - ratio * innerHeight;
+          return (
+            <g key={ratio}>
+              <line
+                x1={padding.left}
+                x2={padding.left + innerWidth}
+                y1={y}
+                y2={y}
+                className="chart-grid"
+              />
+              <text
+                x={padding.left - 10}
+                y={y + 4}
+                textAnchor="end"
+                className="chart-axis-label"
+              >
+                {formatChartTick(maxLine * ratio)}
+              </text>
+            </g>
+          );
+        })}
+        <line
+          x1={padding.left}
+          x2={padding.left}
+          y1={padding.top}
+          y2={padding.top + innerHeight}
+          className="chart-axis"
+        />
+        <line
+          x1={padding.left}
+          x2={padding.left + innerWidth}
+          y1={padding.top + innerHeight}
+          y2={padding.top + innerHeight}
+          className="chart-axis"
+        />
+        {xAxisLabels.map(({ label, index }) => {
+          const x =
+            labels.length === bucketCount
+              ? padding.left + bucketWidth * index + bucketWidth / 2
+              : padding.left + (innerWidth * index) / queueXLabelDenominator;
+          return (
+            <text
+              key={`${label}-${index}`}
+              x={x}
+              y={height - 14}
+              textAnchor="middle"
+              className="chart-axis-label"
+            >
+              {label}
+            </text>
+          );
+        })}
+        {barSeries.flatMap((item, seriesIndex) =>
+          item.points.map((point, index) => {
+            const value = safeChartNumber(point);
+            if (value <= 0) {
+              return null;
+            }
+            const barHeight = (value / maxBar) * innerHeight;
+            const visibleHeight = Math.max(barHeight, value > 0 ? 2 : 0);
+            const x =
+              padding.left +
+              bucketWidth * index +
+              (bucketWidth - barWidth * barSeries.length) / 2 +
+              seriesIndex * barWidth;
+            const y = padding.top + innerHeight - visibleHeight;
+            return (
+              <path
+                key={`${item.key}-${index}`}
+                d={roundedTopBarPath(x, y, barWidth, visibleHeight, 2)}
+                className="queue-trend-bar"
+                style={{ fill: item.color }}
+              />
+            );
+          }),
+        )}
+        {lineCoords.map((item) => {
+          const path = item.coords
+            .map(({ x, y }, index) => `${index === 0 ? "M" : "L"} ${x} ${y}`)
+            .join(" ");
+          return (
+            <path
+              key={item.key}
+              d={path}
+              className="chart-line"
+              style={{ stroke: item.color }}
+            />
+          );
+        })}
+        {activeIndex !== null && activeX !== null ? (
+          <line
+            x1={activeX}
+            x2={activeX}
+            y1={padding.top}
+            y2={padding.top + innerHeight}
+            className="chart-hover-guide"
+          />
+        ) : null}
+        {activeIndex !== null
+          ? lineCoords.map((item) => {
+              const coord = item.coords[activeIndex];
+              return coord ? (
+                <circle
+                  key={`active-${item.key}`}
+                  cx={coord.x}
+                  cy={coord.y}
+                  r="2.1"
+                  className="chart-point chart-point--active"
+                  style={{ stroke: item.color }}
+                />
+              ) : null;
+            })
+          : null}
+        <g
+          className="chart-hover-targets"
+          onMouseLeave={() => setActiveIndex(null)}
+        >
+          {hoverZones.map((zone, index) => (
+            <rect
+              key={`hover-${index}`}
+              x={zone.x}
+              y={padding.top}
+              width={zone.width}
+              height={innerHeight}
+              className="chart-hover-zone"
+              data-chart-index={index}
+              onMouseEnter={() => setActiveIndex(index)}
+              onFocus={() => setActiveIndex(index)}
+            />
+          ))}
+        </g>
+      </svg>
+      {activeTooltip ? <ChartTooltip {...activeTooltip} /> : null}
+      <div className="chart-inline-legend">
+        {normalizedSeries.map((item) => (
+          <span className="chart-legend-item" key={item.key}>
+            <span
+              className={
+                barSeries.some((barItem) => barItem.key === item.key)
+                  ? "chart-legend-dot chart-legend-dot--bar"
+                  : "chart-legend-dot"
+              }
+              style={{ backgroundColor: item.color }}
+            />
+            <span className="chart-legend-label">{item.label}</span>
+          </span>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 export function MixedLineBarChart({
   labels,
   bars,
@@ -761,6 +1084,7 @@ export function MixedLineBarChart({
   ariaLabel?: string;
   height?: number;
 }) {
+  const [activeIndex, setActiveIndex] = useState<number | null>(null);
   const width = 720;
   const padding = { top: 22, right: 58, bottom: 40, left: 58 };
   const bucketCount = Math.max(
@@ -788,6 +1112,32 @@ export function MixedLineBarChart({
   const linePath = lineCoords
     .map(({ x, y }, index) => `${index === 0 ? "M" : "L"} ${x} ${y}`)
     .join(" ");
+  const hoverZones = bucketHoverZones(bucketCount, padding.left, bucketWidth);
+  const activeX =
+    activeIndex === null
+      ? null
+      : padding.left + bucketWidth * activeIndex + bucketWidth / 2;
+  const activeTooltip =
+    activeIndex === null
+      ? null
+      : {
+          label: labels[activeIndex] ?? String(activeIndex + 1),
+          leftPercent: activeX === null ? 0 : (activeX / width) * 100,
+          items: [
+            {
+              key: "bars",
+              label: bars.label,
+              color: bars.color,
+              value: safeChartNumber(bars.points[activeIndex] ?? 0),
+            },
+            {
+              key: "line",
+              label: line.label,
+              color: line.color,
+              value: safeChartNumber(line.points[activeIndex] ?? 0),
+            },
+          ],
+        };
 
   return (
     <div className="mixed-chart" aria-label={ariaLabel}>
@@ -885,19 +1235,44 @@ export function MixedLineBarChart({
           className="chart-line"
           style={{ stroke: line.color }}
         />
-        {lineCoords.map(({ x, y, value }, index) =>
-          shouldRenderPointLabel(value, index, lineCoords.length) ? (
-            <circle
-              key={`point-${index}`}
-              cx={x}
-              cy={y}
-              r="2.4"
-              className="chart-point"
-              style={{ fill: line.color }}
+        {activeIndex !== null && activeX !== null ? (
+          <line
+            x1={activeX}
+            x2={activeX}
+            y1={padding.top}
+            y2={padding.top + innerHeight}
+            className="chart-hover-guide"
+          />
+        ) : null}
+        {activeIndex !== null && lineCoords[activeIndex] ? (
+          <circle
+            cx={lineCoords[activeIndex].x}
+            cy={lineCoords[activeIndex].y}
+            r="2.1"
+            className="chart-point chart-point--active"
+            style={{ stroke: line.color }}
+          />
+        ) : null}
+        <g
+          className="chart-hover-targets"
+          onMouseLeave={() => setActiveIndex(null)}
+        >
+          {hoverZones.map((zone, index) => (
+            <rect
+              key={`hover-${index}`}
+              x={zone.x}
+              y={padding.top}
+              width={zone.width}
+              height={innerHeight}
+              className="chart-hover-zone"
+              data-chart-index={index}
+              onMouseEnter={() => setActiveIndex(index)}
+              onFocus={() => setActiveIndex(index)}
             />
-          ) : null,
-        )}
+          ))}
+        </g>
       </svg>
+      {activeTooltip ? <ChartTooltip {...activeTooltip} /> : null}
       <div className="chart-inline-legend">
         <span className="chart-legend-item">
           <span
@@ -918,8 +1293,99 @@ export function MixedLineBarChart({
   );
 }
 
+function ChartTooltip({
+  label,
+  leftPercent,
+  items,
+}: {
+  label: string;
+  leftPercent: number;
+  items: Array<{
+    key: string;
+    label: string;
+    color: string;
+    value: number;
+  }>;
+}) {
+  const edgeClass =
+    leftPercent < 18
+      ? " chart-tooltip--left"
+      : leftPercent > 82
+        ? " chart-tooltip--right"
+        : "";
+  return (
+    <div
+      className={`chart-tooltip${edgeClass}`}
+      style={{ left: `${leftPercent}%` }}
+    >
+      <div className="chart-tooltip__title">{label}</div>
+      <div className="chart-tooltip__rows">
+        {items.map((item) => (
+          <div className="chart-tooltip__row" key={item.key}>
+            <span
+              className="chart-tooltip__dot"
+              style={{ backgroundColor: item.color }}
+            />
+            <span className="chart-tooltip__label">{item.label}</span>
+            <span className="chart-tooltip__value">
+              {formatChartTick(item.value)}
+            </span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function safeChartNumber(value: number): number {
   return Math.max(0, Number.isFinite(value) ? value : 0);
+}
+
+function lineHoverZones(count: number, left: number, innerWidth: number) {
+  if (count <= 1) {
+    return [{ x: left, width: innerWidth }];
+  }
+  const centers = Array.from({ length: count }, (_, index) => ({
+    x: left + (innerWidth * index) / Math.max(count - 1, 1),
+  }));
+  return centers.map((center, index) => {
+    const start =
+      index === 0 ? left : (centers[index - 1].x + center.x) / 2;
+    const end =
+      index === centers.length - 1
+        ? left + innerWidth
+        : (center.x + centers[index + 1].x) / 2;
+    return { x: start, width: Math.max(end - start, 1) };
+  });
+}
+
+function bucketHoverZones(count: number, left: number, bucketWidth: number) {
+  return Array.from({ length: count }, (_, index) => ({
+    x: left + bucketWidth * index,
+    width: bucketWidth,
+  }));
+}
+
+function roundedTopBarPath(
+  x: number,
+  y: number,
+  width: number,
+  height: number,
+  radius: number,
+) {
+  if (height <= 0) {
+    return "";
+  }
+  const r = Math.min(radius, width / 2, height);
+  return [
+    `M ${x} ${y + height}`,
+    `L ${x} ${y + r}`,
+    `Q ${x} ${y} ${x + r} ${y}`,
+    `L ${x + width - r} ${y}`,
+    `Q ${x + width} ${y} ${x + width} ${y + r}`,
+    `L ${x + width} ${y + height}`,
+    "Z",
+  ].join(" ");
 }
 
 function shouldRenderAxisLabel(index: number, total: number): boolean {
@@ -931,40 +1397,6 @@ function shouldRenderAxisLabel(index: number, total: number): boolean {
   }
   const interval = Math.ceil((total - 1) / 4);
   return index % interval === 0;
-}
-
-function shouldRenderPointLabel(
-  point: number,
-  index: number,
-  total: number,
-): boolean {
-  if (point <= 0) {
-    return false;
-  }
-  return index % 4 === 0 || index === total - 1;
-}
-
-function pointLabelAnchor(
-  index: number,
-  total: number,
-): "start" | "middle" | "end" {
-  if (index === 0) {
-    return "start";
-  }
-  if (index === total - 1) {
-    return "end";
-  }
-  return "middle";
-}
-
-function pointLabelOffset(index: number, total: number): number {
-  if (index === 0) {
-    return 6;
-  }
-  if (index === total - 1) {
-    return -6;
-  }
-  return 0;
 }
 
 function formatChartTick(value: number): string {

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
 
 	"mvp-push-gateway/backend/internal/deadletter"
 	"mvp-push-gateway/backend/internal/delivery"
@@ -49,6 +50,21 @@ func (r Repository) ListDeadLetters(ctx context.Context, filter deadletter.ListF
 			dead.attempts,
 			dead.dead_lettered_at,
 			dead.replayed_at,
+			CASE
+				WHEN dead.replayed_at IS NULL THEN ''
+				WHEN attempt.status = 'sent' AND attempt.finished_at >= dead.replayed_at THEN 'succeeded'
+				WHEN attempt.dead_lettered_at IS NOT NULL AND attempt.dead_lettered_at > dead.replayed_at THEN 'failed'
+				WHEN attempt.status IN ('failed', 'dead') AND attempt.finished_at >= dead.replayed_at THEN 'failed'
+				WHEN attempt.status IN ('queued', 'processing') AND attempt.updated_at >= dead.replayed_at THEN 'processing'
+				ELSE 'queued'
+			END AS replay_status,
+			CASE
+				WHEN dead.replayed_at IS NULL THEN NULL::timestamptz
+				WHEN attempt.status = 'sent' AND attempt.finished_at >= dead.replayed_at THEN attempt.finished_at
+				WHEN attempt.dead_lettered_at IS NOT NULL AND attempt.dead_lettered_at > dead.replayed_at THEN attempt.dead_lettered_at
+				WHEN attempt.status IN ('failed', 'dead') AND attempt.finished_at >= dead.replayed_at THEN attempt.finished_at
+				ELSE NULL::timestamptz
+			END AS replay_finished_at,
 			dead.handled_at,
 			COALESCE(dead.handled_reason, ''),
 			dead.created_at
@@ -66,6 +82,7 @@ func (r Repository) ListDeadLetters(ctx context.Context, filter deadletter.ListF
 	items := []deadletter.Job{}
 	for rows.Next() {
 		var item deadletter.Job
+		var replayFinishedAt pgtype.Timestamptz
 		if err := rows.Scan(
 			&item.ID,
 			&item.JobID,
@@ -80,18 +97,37 @@ func (r Repository) ListDeadLetters(ctx context.Context, filter deadletter.ListF
 			&item.Attempts,
 			&item.DeadLetteredAt,
 			&item.ReplayedAt,
+			&item.ReplayStatus,
+			&replayFinishedAt,
 			&item.HandledAt,
 			&item.HandledReason,
 			&item.CreatedAt,
 		); err != nil {
 			return deadletter.ListResult{}, fmt.Errorf("scan dead letter: %w", err)
 		}
+		item.ReplayFinishedAt = optionalTime(replayFinishedAt)
+		item.ReplayMessage = deadLetterReplayMessage(item.ReplayStatus)
 		items = append(items, item)
 	}
 	if err := rows.Err(); err != nil {
 		return deadletter.ListResult{}, fmt.Errorf("iterate dead letters: %w", err)
 	}
 	return deadletter.ListResult{Items: items, Total: total, Limit: filter.Limit, Offset: filter.Offset}, nil
+}
+
+func deadLetterReplayMessage(status string) string {
+	switch strings.TrimSpace(status) {
+	case "succeeded":
+		return "发送成功"
+	case "failed":
+		return "再次失败"
+	case "processing":
+		return "发送中"
+	case "queued":
+		return "已发起重放"
+	default:
+		return "未重放"
+	}
 }
 
 func (r Repository) ListExternalReplayEvents(ctx context.Context, input deadletter.BatchInput) ([]deadletter.ExternalReplayEvent, error) {

@@ -22,16 +22,20 @@ type QueryParams struct {
 }
 
 type QueueSummary struct {
-	RoutePlanPending      int     `json:"route_plan_pending"`
-	SendMessagePending    int     `json:"send_message_pending"`
-	OldestJobWaitSeconds  int64   `json:"oldest_job_wait_seconds"`
-	PlanningAvgDurationMS int     `json:"planning_avg_duration_ms"`
-	PlanningP99DurationMS int     `json:"planning_p99_duration_ms"`
-	SendingAvgDurationMS  int     `json:"sending_avg_duration_ms"`
-	SendingP99DurationMS  int     `json:"sending_p99_duration_ms"`
-	PlatformFailureRate   float64 `json:"platform_failure_rate"`
-	RateLimitedCount      int     `json:"rate_limited_count"`
-	DeadLetterCount       int     `json:"dead_letter_count"`
+	RoutePlanPending          int        `json:"route_plan_pending"`
+	SendMessagePending        int        `json:"send_message_pending"`
+	OldestJobWaitSeconds      int64      `json:"oldest_job_wait_seconds"`
+	RoutePlanOldestQueuedAt   *time.Time `json:"route_plan_oldest_queued_at,omitempty"`
+	SendMessageOldestQueuedAt *time.Time `json:"send_message_oldest_queued_at,omitempty"`
+	PlanningAvgDurationMS     int        `json:"planning_avg_duration_ms"`
+	PlanningP99DurationMS     int        `json:"planning_p99_duration_ms"`
+	SendingAvgDurationMS      int        `json:"sending_avg_duration_ms"`
+	SendingP99DurationMS      int        `json:"sending_p99_duration_ms"`
+	PlatformFailureRate       float64    `json:"platform_failure_rate"`
+	RateLimitedCount          int        `json:"rate_limited_count"`
+	RateLimitedLatestAt       *time.Time `json:"rate_limited_latest_at,omitempty"`
+	DeadLetterCount           int        `json:"dead_letter_count"`
+	DeadLetterLatestAt        *time.Time `json:"dead_letter_latest_at,omitempty"`
 }
 
 type PlatformHealth struct {

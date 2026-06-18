@@ -61,6 +61,7 @@ type MessageDetail struct {
 	Payload     json.RawMessage
 	PayloadHash string
 	Attempts    []DeliveryAttempt
+	DeadLetters []DeadLetterEvent
 	Timeline    []TimelineEvent
 }
 
@@ -91,6 +92,17 @@ type DeliveryAttempt struct {
 	FinishedAt         *time.Time
 	CreatedAt          time.Time
 	UpdatedAt          time.Time
+}
+
+type DeadLetterEvent struct {
+	ID             string
+	AttemptID      string
+	ErrorCode      string
+	ErrorMessage   string
+	DeadLetteredAt time.Time
+	ReplayedAt     *time.Time
+	HandledAt      *time.Time
+	HandledReason  string
 }
 
 type TimelineEvent struct {
@@ -242,11 +254,64 @@ func buildTimeline(detail MessageDetail) []TimelineEvent {
 			})
 		}
 	}
+	appendDeadLetterTimelineEvents(&events, detail)
 	sort.SliceStable(events, func(i, j int) bool {
 		return events[i].At.Before(events[j].At)
 	})
 	fillTimelineDurations(events)
 	return events
+}
+
+func appendDeadLetterTimelineEvents(events *[]TimelineEvent, detail MessageDetail) {
+	eventByAttempt := map[string]bool{}
+	for _, item := range detail.DeadLetters {
+		eventByAttempt[item.AttemptID] = true
+		if isTimelineTime(item.DeadLetteredAt) {
+			*events = append(*events, TimelineEvent{
+				Stage:       "delivery_dead_lettered",
+				At:          item.DeadLetteredAt,
+				Status:      "dead",
+				Description: "发送失败，进入死信队列",
+				DurationMS:  0,
+				ErrorCode:   item.ErrorCode,
+			})
+		}
+		if item.ReplayedAt != nil {
+			*events = append(*events, TimelineEvent{
+				Stage:       "dead_letter_replayed",
+				At:          *item.ReplayedAt,
+				Status:      "replayed",
+				Description: "死信已重放，已重新进入发送队列",
+				DurationMS:  0,
+			})
+		}
+		if item.HandledAt != nil {
+			description := "死信已人工处理"
+			if strings.TrimSpace(item.HandledReason) != "" {
+				description += "：" + strings.TrimSpace(item.HandledReason)
+			}
+			*events = append(*events, TimelineEvent{
+				Stage:       "dead_letter_handled",
+				At:          *item.HandledAt,
+				Status:      "handled",
+				Description: description,
+				DurationMS:  0,
+			})
+		}
+	}
+	for _, attempt := range detail.Attempts {
+		if attempt.DeadLetteredAt == nil || eventByAttempt[attempt.ID] {
+			continue
+		}
+		*events = append(*events, TimelineEvent{
+			Stage:       "delivery_dead_lettered",
+			At:          *attempt.DeadLetteredAt,
+			Status:      "dead",
+			Description: "发送失败，进入死信队列",
+			DurationMS:  0,
+			ErrorCode:   attempt.ErrorCode,
+		})
+	}
 }
 
 func appendRoutePlanningBreakdown(events *[]TimelineEvent, detail MessageDetail) time.Time {
@@ -311,10 +376,23 @@ func fillTimelineDurations(events []TimelineEvent) {
 			events[index].DurationMS = 0
 			continue
 		}
+		if timelineDurationFixed(events[index].Stage) {
+			events[index].DurationMS = 0
+			continue
+		}
 		if events[index].DurationMS > 0 {
 			continue
 		}
 		events[index].DurationMS = timelineDurationMS(events[index-1].At, events[index].At)
+	}
+}
+
+func timelineDurationFixed(stage string) bool {
+	switch stage {
+	case "delivery_dead_lettered", "dead_letter_replayed", "dead_letter_handled":
+		return true
+	default:
+		return false
 	}
 }
 

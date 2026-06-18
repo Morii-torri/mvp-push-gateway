@@ -17,22 +17,25 @@ var (
 )
 
 type Job struct {
-	ID             string
-	JobID          string
-	TraceID        string
-	Type           string
-	Payload        json.RawMessage
-	ChannelID      string
-	ChannelName    string
-	ProviderType   string
-	ErrorCode      string
-	ErrorMessage   string
-	Attempts       int
-	DeadLetteredAt time.Time
-	ReplayedAt     *time.Time
-	HandledAt      *time.Time
-	HandledReason  string
-	CreatedAt      time.Time
+	ID               string
+	JobID            string
+	TraceID          string
+	Type             string
+	Payload          json.RawMessage
+	ChannelID        string
+	ChannelName      string
+	ProviderType     string
+	ErrorCode        string
+	ErrorMessage     string
+	Attempts         int
+	DeadLetteredAt   time.Time
+	ReplayedAt       *time.Time
+	ReplayStatus     string
+	ReplayMessage    string
+	ReplayFinishedAt *time.Time
+	HandledAt        *time.Time
+	HandledReason    string
+	CreatedAt        time.Time
 }
 
 type ListFilter struct {

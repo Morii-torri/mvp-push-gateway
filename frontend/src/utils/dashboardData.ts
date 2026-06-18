@@ -64,6 +64,10 @@ export type QueueMonitoringApiResponse = {
     platform_failure_rate: number;
     rate_limited_count: number;
     dead_letter_count: number;
+    route_plan_oldest_queued_at?: string | null;
+    send_message_oldest_queued_at?: string | null;
+    rate_limited_latest_at?: string | null;
+    dead_letter_latest_at?: string | null;
   };
   platform_health: Array<{
     channel_id: string;

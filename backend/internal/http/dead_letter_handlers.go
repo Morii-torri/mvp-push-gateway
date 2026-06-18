@@ -18,22 +18,25 @@ type deadLettersResponse struct {
 }
 
 type deadLetterResponse struct {
-	ID             string          `json:"id"`
-	JobID          string          `json:"job_id"`
-	TraceID        string          `json:"trace_id"`
-	Type           string          `json:"type"`
-	Payload        json.RawMessage `json:"payload"`
-	ChannelID      string          `json:"channel_id"`
-	ChannelName    string          `json:"channel_name"`
-	ProviderType   string          `json:"provider_type"`
-	ErrorCode      string          `json:"error_code"`
-	ErrorMessage   string          `json:"error_message"`
-	Attempts       int             `json:"attempts"`
-	DeadLetteredAt string          `json:"dead_lettered_at"`
-	ReplayedAt     *string         `json:"replayed_at"`
-	HandledAt      *string         `json:"handled_at"`
-	HandledReason  string          `json:"handled_reason"`
-	CreatedAt      string          `json:"created_at"`
+	ID               string          `json:"id"`
+	JobID            string          `json:"job_id"`
+	TraceID          string          `json:"trace_id"`
+	Type             string          `json:"type"`
+	Payload          json.RawMessage `json:"payload"`
+	ChannelID        string          `json:"channel_id"`
+	ChannelName      string          `json:"channel_name"`
+	ProviderType     string          `json:"provider_type"`
+	ErrorCode        string          `json:"error_code"`
+	ErrorMessage     string          `json:"error_message"`
+	Attempts         int             `json:"attempts"`
+	DeadLetteredAt   string          `json:"dead_lettered_at"`
+	ReplayedAt       *string         `json:"replayed_at"`
+	ReplayStatus     string          `json:"replay_status"`
+	ReplayMessage    string          `json:"replay_message"`
+	ReplayFinishedAt *string         `json:"replay_finished_at"`
+	HandledAt        *string         `json:"handled_at"`
+	HandledReason    string          `json:"handled_reason"`
+	CreatedAt        string          `json:"created_at"`
 }
 
 type deadLetterBatchRequest struct {
@@ -173,22 +176,25 @@ func (h *Handler) deadLetterBatchDeleteHandler(w http.ResponseWriter, r *http.Re
 
 func toDeadLetterResponse(item deadletter.Job) deadLetterResponse {
 	return deadLetterResponse{
-		ID:             item.ID,
-		JobID:          item.JobID,
-		TraceID:        item.TraceID,
-		Type:           item.Type,
-		Payload:        defaultRawJSON(item.Payload),
-		ChannelID:      item.ChannelID,
-		ChannelName:    item.ChannelName,
-		ProviderType:   item.ProviderType,
-		ErrorCode:      item.ErrorCode,
-		ErrorMessage:   item.ErrorMessage,
-		Attempts:       item.Attempts,
-		DeadLetteredAt: formatTime(item.DeadLetteredAt),
-		ReplayedAt:     formatOptionalTime(item.ReplayedAt),
-		HandledAt:      formatOptionalTime(item.HandledAt),
-		HandledReason:  item.HandledReason,
-		CreatedAt:      formatTime(item.CreatedAt),
+		ID:               item.ID,
+		JobID:            item.JobID,
+		TraceID:          item.TraceID,
+		Type:             item.Type,
+		Payload:          defaultRawJSON(item.Payload),
+		ChannelID:        item.ChannelID,
+		ChannelName:      item.ChannelName,
+		ProviderType:     item.ProviderType,
+		ErrorCode:        item.ErrorCode,
+		ErrorMessage:     item.ErrorMessage,
+		Attempts:         item.Attempts,
+		DeadLetteredAt:   formatTime(item.DeadLetteredAt),
+		ReplayedAt:       formatOptionalTime(item.ReplayedAt),
+		ReplayStatus:     item.ReplayStatus,
+		ReplayMessage:    item.ReplayMessage,
+		ReplayFinishedAt: formatOptionalTime(item.ReplayFinishedAt),
+		HandledAt:        formatOptionalTime(item.HandledAt),
+		HandledReason:    item.HandledReason,
+		CreatedAt:        formatTime(item.CreatedAt),
 	}
 }
 

@@ -14,7 +14,6 @@ import Avatar from "antd/es/avatar";
 import Badge from "antd/es/badge";
 import Button from "antd/es/button";
 import ConfigProvider from "antd/es/config-provider";
-import Divider from "antd/es/divider";
 import Dropdown from "antd/es/dropdown";
 import Empty from "antd/es/empty";
 import Form from "antd/es/form";
@@ -27,7 +26,6 @@ import Popover from "antd/es/popover";
 import Space from "antd/es/space";
 import Spin from "antd/es/spin";
 import Tabs from "antd/es/tabs";
-import Tag from "antd/es/tag";
 import theme from "antd/es/theme";
 import Typography from "antd/es/typography";
 import zhCN from "antd/es/locale/zh_CN";
@@ -149,12 +147,21 @@ export type HeaderNotificationItem = {
   description: string;
   count: number;
   tone: HeaderNotificationTone;
+  targetPage: PageKey;
+  occurredAt?: string | null;
   badgeCounted?: boolean;
 };
 
 export type HeaderNotificationState = {
   badgeCount: number;
   items: HeaderNotificationItem[];
+};
+
+export type HelpStep = {
+  key: string;
+  title: string;
+  description: string;
+  page: PageKey;
 };
 
 export function createLogoutConfirmConfig(
@@ -168,6 +175,42 @@ export function createLogoutConfirmConfig(
     okButtonProps: { danger: true },
     onOk: logout,
   };
+}
+
+export function createHelpSteps(): HelpStep[] {
+  return [
+    {
+      key: "sources",
+      title: "配置下级接入信息",
+      description:
+        "在来源接入配置下级接入信息。点击来源编码后面的复制按钮，可以直接复制对接说明。",
+      page: "sources",
+    },
+    {
+      key: "providers",
+      title: "新增上级平台信息",
+      description: "在推送渠道新增上级平台信息，保存后先完成测试，确认凭证和接口可用。",
+      page: "providers",
+    },
+    {
+      key: "templates",
+      title: "创建转换模板",
+      description: "在消息模板根据来源 Payload 创建对应的转换模板，把下级字段转换成渠道支持的消息内容。",
+      page: "templates",
+    },
+    {
+      key: "organization",
+      title: "新增接收人信息",
+      description: "在组织人员新增接收人信息，维护手机号、邮箱或平台身份，供路由发送时解析。",
+      page: "organization",
+    },
+    {
+      key: "routes",
+      title: "新增路由条件",
+      description: "在路由策略新增路由条件，选择接收人和发送动作，发布后开始处理真实入站消息。",
+      page: "routes",
+    },
+  ];
 }
 
 export function resolveNavigationPageKey(page: PageKey): PageKey {
@@ -200,6 +243,8 @@ export function buildHeaderNotificationState(
     description: `还有 ${summary?.route_plan_pending ?? 0} 条消息等待路由规划，最老任务等待 ${formatHeaderDuration(summary?.oldest_job_wait_seconds ?? 0)}`,
     count: summary?.route_plan_pending ?? 0,
     tone: "warning",
+    targetPage: "queue",
+    occurredAt: summary?.route_plan_oldest_queued_at,
   });
   addCounted({
     key: "send-message-pending",
@@ -207,13 +252,17 @@ export function buildHeaderNotificationState(
     description: `还有 ${summary?.send_message_pending ?? 0} 条消息等待发送，发送 P99 ${summary?.sending_p99_duration_ms ?? 0} ms`,
     count: summary?.send_message_pending ?? 0,
     tone: "processing",
+    targetPage: "queue",
+    occurredAt: summary?.send_message_oldest_queued_at,
   });
   addCounted({
     key: "dead-letter",
     title: "死信任务",
-    description: "已有任务进入死信队列，请在日志监控中查看失败原因。",
+    description: "已有任务进入死信队列，请查看失败原因。",
     count: summary?.dead_letter_count ?? 0,
     tone: "error",
+    targetPage: "queue",
+    occurredAt: summary?.dead_letter_latest_at,
   });
   addCounted({
     key: "rate-limited",
@@ -221,6 +270,8 @@ export function buildHeaderNotificationState(
     description: "过去窗口内存在主动限流或上级限流，请检查渠道限流配置。",
     count: summary?.rate_limited_count ?? 0,
     tone: "warning",
+    targetPage: "queue",
+    occurredAt: summary?.rate_limited_latest_at,
   });
 
   overview?.recent_anomalies.forEach((item, index) => {
@@ -230,6 +281,8 @@ export function buildHeaderNotificationState(
       description: `${item.level || "未知"}级异常，发生时间 ${formatHeaderDate(item.time)}`,
       count: item.count,
       tone: item.level === "高" ? "error" : "warning",
+      targetPage: "logs",
+      occurredAt: item.time,
     });
   });
 
@@ -255,6 +308,12 @@ export function buildHeaderNotificationState(
     )
       ? "error"
       : "warning",
+    targetPage: "queue",
+    occurredAt:
+      summary?.dead_letter_latest_at ??
+      summary?.rate_limited_latest_at ??
+      summary?.send_message_oldest_queued_at ??
+      summary?.route_plan_oldest_queued_at,
   });
 
   return { badgeCount, items };
@@ -436,11 +495,14 @@ function ConsoleChrome() {
   >(() => readDismissedNotifications());
   const [notificationLoading, setNotificationLoading] = useState(false);
   const [notificationError, setNotificationError] = useState("");
+  const [notificationPopoverOpen, setNotificationPopoverOpen] =
+    useState(false);
   const [profileForm] = Form.useForm();
   const [passwordForm] = Form.useForm();
   const environmentLabel =
     import.meta.env.VITE_APP_ENV_LABEL || import.meta.env.MODE;
   const versionLabel = import.meta.env.VITE_APP_VERSION || packageJson.version;
+  const helpSteps = useMemo(() => createHelpSteps(), []);
 
   useEffect(() => {
     let cancelled = false;
@@ -578,6 +640,14 @@ function ConsoleChrome() {
       setActivePage(nextPage);
     },
     [navigationMap],
+  );
+
+  const openNotificationTarget = useCallback(
+    (item: HeaderNotificationItem) => {
+      openPage(item.targetPage);
+      setNotificationPopoverOpen(false);
+    },
+    [openPage],
   );
 
   useEffect(() => {
@@ -735,12 +805,14 @@ function ConsoleChrome() {
           <Popover
             trigger="click"
             placement="bottomRight"
+            open={notificationPopoverOpen}
+            onOpenChange={setNotificationPopoverOpen}
             content={
               <HeaderNotificationPanel
                 state={visibleNotificationState}
                 loading={notificationLoading}
                 error={notificationError}
-                onOpenMonitoring={() => openPage("monitoring")}
+                onOpenNotification={openNotificationTarget}
                 onDismiss={dismissNotification}
               />
             }
@@ -856,41 +928,31 @@ function ConsoleChrome() {
         width={760}
       >
         <div className="help-panel">
-          <section>
-            <Typography.Title level={5}>下级接入</Typography.Title>
-            <Typography.Paragraph>
-              入站接口为{" "}
-              <Typography.Text code>
-                POST /api/v1/ingest/{"{source_code}"}
-              </Typography.Text>
-              ， 默认使用{" "}
-              <Typography.Text code>
-                Authorization: Bearer &lt;source_token&gt;
-              </Typography.Text>
-              。
-            </Typography.Paragraph>
-          </section>
-          <section>
-            <Typography.Title level={5}>配置顺序</Typography.Title>
-            <Typography.Paragraph>
-              先创建来源和推送渠道，再创建消息模板，最后在路由策略里配置发送动作组和接收人。
-            </Typography.Paragraph>
-          </section>
-          <section>
-            <Typography.Title level={5}>排查入口</Typography.Title>
-            <Typography.Paragraph>
-              入站失败先看消息日志；队列积压、死信和限流看日志监控。通知红点来自实时监控数据，不再使用演示数。
-            </Typography.Paragraph>
-          </section>
-          <Space wrap>
-            <Button onClick={() => openHelpPage("sources")}>来源接入</Button>
-            <Button onClick={() => openHelpPage("providers")}>推送渠道</Button>
-            <Button onClick={() => openHelpPage("templates")}>消息模板</Button>
-            <Button onClick={() => openHelpPage("routes")}>路由策略</Button>
-            <Button onClick={() => openHelpPage("monitoring")}>
-              日志监控
-            </Button>
-          </Space>
+          <div className="help-panel__intro">
+            <Typography.Title level={5}>快速完成一条可发送链路</Typography.Title>
+            <Typography.Text type="secondary">
+              按下面顺序配置，完成后可通过消息日志和实时通知观察入站、路由和出站状态。
+            </Typography.Text>
+          </div>
+          <div className="help-step-list">
+            {helpSteps.map((step, index) => (
+              <button
+                key={step.key}
+                type="button"
+                className="help-step"
+                onClick={() => openHelpPage(step.page)}
+              >
+                <span className="help-step__index">
+                  {String(index + 1).padStart(2, "0")}
+                </span>
+                <span className="help-step__body">
+                  <strong>{step.title}</strong>
+                  <span>{step.description}</span>
+                </span>
+                <span className="help-step__action">进入</span>
+              </button>
+            ))}
+          </div>
         </div>
       </Modal>
       <Modal
@@ -973,45 +1035,77 @@ function HeaderNotificationPanel({
   state,
   loading,
   error,
-  onOpenMonitoring,
+  onOpenNotification,
   onDismiss,
 }: {
   state: HeaderNotificationState;
   loading: boolean;
   error: string;
-  onOpenMonitoring: () => void;
+  onOpenNotification: (item: HeaderNotificationItem) => void;
   onDismiss: (item: HeaderNotificationItem) => void;
 }) {
   return (
     <div className="header-popover-panel notification-panel">
       <div className="notification-panel__heading">
         <Typography.Title level={5}>实时通知</Typography.Title>
-        {loading ? (
-          <Tag color="processing">刷新中</Tag>
-        ) : (
-          <Tag>{state.badgeCount} 条</Tag>
-        )}
+        <span
+          className={
+            loading
+              ? "notification-panel__count notification-panel__count--loading"
+              : "notification-panel__count"
+          }
+        >
+          {loading ? "连接中" : `${state.badgeCount} 条`}
+        </span>
       </div>
       {error ? <Alert type="warning" showIcon message={error} /> : null}
       {state.items.length > 0 ? (
         <div className="notification-list">
           {state.items.map((item) => (
-            <div className="notification-item" key={item.key}>
-              <div>
-                <Typography.Text strong>{item.title}</Typography.Text>
-                <Typography.Paragraph type="secondary">
+            <div
+              className={`notification-item notification-item--${item.tone}`}
+              key={item.key}
+              role="button"
+              tabIndex={0}
+              onClick={() => onOpenNotification(item)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter" || event.key === " ") {
+                  event.preventDefault();
+                  onOpenNotification(item);
+                }
+              }}
+            >
+              <span className="notification-item__dot" aria-hidden="true" />
+              <div className="notification-item__body">
+                <div className="notification-item__title-row">
+                  <Typography.Text strong>{item.title}</Typography.Text>
+                  <span className="notification-item__count">
+                    {item.count}
+                  </span>
+                </div>
+                <Typography.Paragraph
+                  type="secondary"
+                  className="notification-item__description"
+                >
                   {item.description}
                 </Typography.Paragraph>
+                {item.occurredAt ? (
+                  <span className="notification-item__time">
+                    {formatNotificationOccurredAt(item.occurredAt)}
+                  </span>
+                ) : null}
               </div>
               <div className="notification-item__meta">
-                <Tag color={notificationToneColor(item.tone)}>{item.count}</Tag>
                 <Button
                   type="text"
                   size="small"
                   className="notification-dismiss"
                   icon={<CloseOutlined />}
                   aria-label={`标记 ${item.title} 为已读`}
-                  onClick={() => onDismiss(item)}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    onDismiss(item);
+                  }}
                 />
               </div>
             </div>
@@ -1023,27 +1117,8 @@ function HeaderNotificationPanel({
           description="暂无需要处理的通知"
         />
       )}
-      <Divider />
-      <div className="notification-panel__actions">
-        <Button type="primary" onClick={onOpenMonitoring}>
-          查看日志监控
-        </Button>
-      </div>
     </div>
   );
-}
-
-function notificationToneColor(tone: HeaderNotificationTone): string {
-  switch (tone) {
-    case "error":
-      return "red";
-    case "warning":
-      return "orange";
-    case "processing":
-      return "blue";
-    default:
-      return "default";
-  }
 }
 
 function formatHeaderDuration(totalSeconds: number): string {
@@ -1066,4 +1141,20 @@ function formatHeaderDate(value: string): string {
     minute: "2-digit",
     hour12: false,
   }).format(new Date(value));
+}
+
+function formatNotificationOccurredAt(value: string): string {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return value;
+  }
+  return new Intl.DateTimeFormat("zh-CN", {
+    timeZone: "Asia/Shanghai",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false,
+  }).format(date);
 }

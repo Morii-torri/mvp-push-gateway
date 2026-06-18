@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import {
   buildHeaderNotificationState,
+  createHelpSteps,
   createAccountMenuItems,
   createLogoutConfirmConfig,
   createProfileFormValues,
@@ -12,6 +13,21 @@ import {
 } from './AppShell';
 
 describe('app shell logout confirmation', () => {
+  it('describes the onboarding flow as five concrete setup steps', () => {
+    const steps = createHelpSteps();
+
+    expect(steps.map((step) => step.title)).toEqual([
+      '配置下级接入信息',
+      '新增上级平台信息',
+      '创建转换模板',
+      '新增接收人信息',
+      '新增路由条件',
+    ]);
+    expect(steps[0]?.description).toContain('点击来源编码后面的复制按钮');
+    expect(steps[1]?.description).toContain('测试');
+    expect(steps).toHaveLength(5);
+  });
+
   it('requires a second confirmation before logging out', async () => {
     const logout = vi.fn(async () => undefined);
 
@@ -65,6 +81,10 @@ describe('app shell logout confirmation', () => {
           platform_failure_rate: 12.5,
           rate_limited_count: 4,
           dead_letter_count: 1,
+          route_plan_oldest_queued_at: '2026-05-09T09:42:00Z',
+          send_message_oldest_queued_at: '2026-05-09T09:51:00Z',
+          rate_limited_latest_at: '2026-05-09T09:45:00Z',
+          dead_letter_latest_at: '2026-05-09T09:55:00Z',
         },
         platform_health: [
           {
@@ -118,7 +138,24 @@ describe('app shell logout confirmation', () => {
       '模板渲染失败',
       '异常渠道',
     ]);
+    expect(state.items.map((item) => item.targetPage)).toEqual([
+      'queue',
+      'queue',
+      'queue',
+      'queue',
+      'logs',
+      'queue',
+    ]);
+    expect(state.items.map((item) => item.occurredAt)).toEqual([
+      '2026-05-09T09:42:00Z',
+      '2026-05-09T09:51:00Z',
+      '2026-05-09T09:55:00Z',
+      '2026-05-09T09:45:00Z',
+      '2026-05-13T08:00:00Z',
+      '2026-05-09T09:55:00Z',
+    ]);
     expect(state.items[0]?.description).toContain('最老任务等待 1 分钟');
+    expect(state.items[2]?.description).not.toContain('日志监控');
   });
 
   it('filters dismissed header notifications and recalculates the badge', () => {

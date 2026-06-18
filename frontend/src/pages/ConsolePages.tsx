@@ -68,8 +68,11 @@ import {
   MixedLineBarChart,
   MetricCard,
   PageFrame,
+  QueueTrendChart,
   QueryBar,
   StatusTag,
+  DetailDotStatus,
+  DetailMetaList,
   CopyableIdentifier,
 } from "../components/ConsolePrimitives";
 import {
@@ -163,6 +166,7 @@ import {
   defaultQueueMonitoringViewModel,
   fetchOverviewData,
   fetchQueueMonitoringData,
+  type CleanupRow,
   type DashboardWindow,
   type OverviewViewModel,
   type QueueMonitoringViewModel,
@@ -1768,7 +1772,7 @@ export function TemplateVariableCopyText({
       tabIndex={0}
       className="template-variable-token template-variable-copy-token"
       aria-label={`变量 ${variable}，点击复制`}
-      title="点击复制变量"
+      title={variable}
       onClick={handleCopy}
       onKeyDown={handleKeyDown}
     >
@@ -2186,6 +2190,9 @@ type DeadLetterRow = {
   attempts: number;
   deadLetteredAt: string;
   status: "pending" | "replayed" | "handled";
+  replayStatus: string;
+  replayMessage: string;
+  replayFinishedAt: string;
   handledReason?: string;
   raw: DeadLetterApiRecord;
 };
@@ -2206,6 +2213,9 @@ function mapDeadLetter(row: DeadLetterApiRecord): DeadLetterRow {
       : row.replayed_at
         ? "replayed"
         : "pending",
+    replayStatus: row.replay_status || "",
+    replayMessage: row.replay_message || (row.replayed_at ? "已发起重放" : "未重放"),
+    replayFinishedAt: formatApiTime(row.replay_finished_at),
     handledReason: row.handled_reason,
     raw: row,
   };
@@ -2219,6 +2229,21 @@ function deadLetterStatusMeta(status: DeadLetterRow["status"]) {
       return { label: "已处理", color: "default" };
     default:
       return { label: "待处理", color: "error" };
+  }
+}
+
+function deadLetterReplayStatusMeta(row: DeadLetterRow) {
+  switch (row.replayStatus) {
+    case "succeeded":
+      return { label: row.replayMessage || "发送成功", color: "success" };
+    case "failed":
+      return { label: row.replayMessage || "再次失败", color: "error" };
+    case "processing":
+      return { label: row.replayMessage || "发送中", color: "processing" };
+    case "queued":
+      return { label: row.replayMessage || "已发起重放", color: "warning" };
+    default:
+      return { label: row.replayMessage || "未重放", color: "default" };
   }
 }
 
@@ -3650,10 +3675,15 @@ export function IdentityEditor({
       title: "推送渠道实例",
       dataIndex: "channelId",
       className: "identity-channel-cell",
-      width: 300,
+      width: 280,
       render: (_value: string, record, index) => {
         if (readOnly) {
-          return identityChannelDisplay(record, channelOptions);
+          const display = identityChannelDisplay(record, channelOptions);
+          return (
+            <span className="identity-channel-display-text" title={display}>
+              {display}
+            </span>
+          );
         }
         return (
           <Cascader
@@ -3675,7 +3705,7 @@ export function IdentityEditor({
       title: "字段",
       dataIndex: "fieldName",
       className: "identity-kind-cell",
-      width: 140,
+      width: 150,
       render: (value: string, record) => {
         const identityKind =
           value || defaultIdentityKindForPlatform(record.platform);
@@ -3692,10 +3722,14 @@ export function IdentityEditor({
       title: "身份值",
       dataIndex: "value",
       className: "identity-value-cell",
-      width: 220,
+      width: 320,
       render: (value, record, index) => {
         if (readOnly) {
-          return value;
+          return (
+            <span className="identity-value-text" title={value}>
+              {value || "-"}
+            </span>
+          );
         }
         const providerValue = providerValueFromLabel(record.platform);
         const isFeishu = providerValue === "feishu_robot";
@@ -3783,7 +3817,7 @@ export function IdentityEditor({
           pagination={false}
           dataSource={rows}
           columns={identityColumns}
-          scroll={{ x: readOnly ? 640 : 688 }}
+          scroll={{ x: readOnly ? 750 : 808 }}
           sticky
         />
       </div>
@@ -4464,18 +4498,26 @@ export function SourcesPage({ lastUpdated, onRefresh }: ConsolePageProps) {
       >
         <Space direction="vertical" size={12} className="full-width">
           <SourceInboundTestNote />
-          <Descriptions column={1} bordered size="small">
-            <Descriptions.Item label="入站接口">
-              <PlainEndpointText
-                value={`POST /api/v1/ingest/${inboundTestSource?.code || "{source_code}"}`}
-              />
-            </Descriptions.Item>
-            <Descriptions.Item label="鉴权方式">
-              {inboundTestSource
-                ? getAuthModeMeta(inboundTestSource.raw.auth_mode).label
-                : "-"}
-            </Descriptions.Item>
-          </Descriptions>
+          <DetailMetaList
+            className="source-inbound-test-meta"
+            items={[
+              {
+                label: "入站接口",
+                value: (
+                  <PlainEndpointText
+                    value={`POST /api/v1/ingest/${inboundTestSource?.code || "{source_code}"}`}
+                  />
+                ),
+                mono: true,
+              },
+              {
+                label: "鉴权方式",
+                value: inboundTestSource
+                  ? getAuthModeMeta(inboundTestSource.raw.auth_mode).label
+                  : "-",
+              },
+            ]}
+          />
           <Form layout="vertical">
             <Form.Item label="Payload JSON" required>
               <Input.TextArea
@@ -4979,55 +5021,43 @@ export function ProvidersPage({ lastUpdated, onRefresh }: ConsolePageProps) {
         destroyOnHidden
       >
         {selected ? (
-          <>
-            <Descriptions column={1} size="small" bordered>
-              <Descriptions.Item label="推送渠道名称">
-                {selected.name}
-              </Descriptions.Item>
-              <Descriptions.Item label="推送渠道类型">
-                {getProviderTypeLabel(selected.providerType)}
-              </Descriptions.Item>
-              <Descriptions.Item label="描述">
-                {selected.description}
-              </Descriptions.Item>
-              <Descriptions.Item label="消息能力">
-                {selected.capability}
-              </Descriptions.Item>
-              <Descriptions.Item label="接收人字段">
-                {selected.recipientFields}
-              </Descriptions.Item>
-              <Descriptions.Item label="Token 策略">
-                {selected.tokenEndpoint}
-              </Descriptions.Item>
-              <Descriptions.Item label="Token 放置">
-                {selected.tokenPlacement}
-              </Descriptions.Item>
-              <Descriptions.Item label="发送请求">
-                {selected.requestMethod} {selected.requestUrl}
-              </Descriptions.Item>
-              <Descriptions.Item label="主动限流">
-                {selected.rateLimit}
-              </Descriptions.Item>
-              <Descriptions.Item label="发送模式">受控并发</Descriptions.Item>
-              <Descriptions.Item label="渠道并发上限">
-                {selected.concurrency}
-              </Descriptions.Item>
-              <Descriptions.Item label="超时时间">
-                {selected.timeout}
-              </Descriptions.Item>
-              <Descriptions.Item label="允许重试次数">
-                {selected.retryAttempts}
-              </Descriptions.Item>
-              <Descriptions.Item label="重试间隔">
-                {selected.retryIntervalMs} ms
-              </Descriptions.Item>
-              <Descriptions.Item label="最近测试结果">
-                {selected.lastTestResult}
-              </Descriptions.Item>
-            </Descriptions>
+          <div className="detail-drawer-stack">
+            <DetailMetaList
+              className="provider-detail-meta"
+              items={[
+                { label: "推送渠道名称", value: selected.name },
+                {
+                  label: "状态",
+                  value: (
+                    <DetailDotStatus meta={getEnabledMeta(selected.enabled)} />
+                  ),
+                },
+                {
+                  label: "推送渠道类型",
+                  value: getProviderTypeLabel(selected.providerType),
+                },
+                { label: "描述", value: selected.description || "-" },
+                { label: "消息能力", value: selected.capability },
+                { label: "接收人字段", value: selected.recipientFields },
+                { label: "Token 策略", value: selected.tokenEndpoint },
+                { label: "Token 放置", value: selected.tokenPlacement },
+                {
+                  label: "发送请求",
+                  value: `${selected.requestMethod} ${selected.requestUrl}`,
+                  mono: true,
+                },
+                { label: "主动限流", value: selected.rateLimit },
+                { label: "发送模式", value: "受控并发" },
+                { label: "渠道并发上限", value: selected.concurrency },
+                { label: "超时时间", value: selected.timeout },
+                { label: "允许重试次数", value: selected.retryAttempts },
+                { label: "重试间隔", value: `${selected.retryIntervalMs} ms` },
+                { label: "最近测试结果", value: selected.lastTestResult },
+              ]}
+            />
             <Divider />
             <ProviderCapabilityTabs provider={selected} />
-          </>
+          </div>
         ) : (
           <Alert
             type="info"
@@ -5542,6 +5572,164 @@ export function routeGroupTotalHitCount(
     return loadedGroupRules.reduce((sum, rule) => sum + rule.hitCount, 0);
   }
   return group.totalHitCount;
+}
+
+function routeExecutionVersionParts(label: string) {
+  const [version, ...rest] = label.split(" / ");
+  return {
+    version: version?.trim() || label || "未发布",
+    note: rest.join(" / ").trim(),
+  };
+}
+
+export function RouteGroupExecutionSummary({
+  group,
+  currentVersionLabel,
+  ruleCount,
+  hitCount,
+}: {
+  group: RouteGroup;
+  currentVersionLabel: string;
+  ruleCount: number;
+  hitCount: number;
+}) {
+  const version = routeExecutionVersionParts(currentVersionLabel);
+  const enabledMeta = getEnabledMeta(group.enabled);
+  const statusTone = enabledMeta.color === "success" ? "success" : "default";
+
+  return (
+    <section className="route-group-summary">
+      <div className="route-group-summary__main">
+        <div className="route-group-summary__source">
+          <strong>{group.sourceName || "-"}</strong>
+          <span>{group.sourceCode || "-"}</span>
+        </div>
+        <span
+          className={`route-group-summary__status route-group-summary__status--${statusTone}`}
+        >
+          <span className="route-group-summary__status-dot" />
+          <span>{enabledMeta.label}</span>
+        </span>
+      </div>
+      <div className="route-group-summary__metrics">
+        <span>
+          <b>当前执行</b>
+          <strong>{version.version}</strong>
+        </span>
+        <span>
+          <b>规则</b>
+          <strong>{ruleCount}</strong>
+        </span>
+        <span>
+          <b>命中</b>
+          <strong>{formatHitCount(hitCount)}</strong>
+        </span>
+        <span>
+          <b>更新</b>
+          <strong>{group.updatedAt}</strong>
+        </span>
+      </div>
+      {version.note ? (
+        <div className="route-group-summary__note">
+          <span className="route-group-summary__note-dot" />
+          <span>版本说明：{version.note}</span>
+        </div>
+      ) : null}
+    </section>
+  );
+}
+
+export function RouteDetailToolbar({
+  group,
+  currentVersionLabel,
+  ruleCount,
+  hitCount,
+  filters,
+  filterActions,
+  actions,
+  footer,
+}: {
+  group: RouteGroup;
+  currentVersionLabel: string;
+  ruleCount: number;
+  hitCount: number;
+  filters?: ReactNode;
+  filterActions?: ReactNode;
+  actions?: ReactNode;
+  footer?: ReactNode;
+}) {
+  const version = routeExecutionVersionParts(currentVersionLabel);
+  const enabledMeta = getEnabledMeta(group.enabled);
+  const statusTone = enabledMeta.color === "success" ? "success" : "default";
+
+  return (
+    <section className="route-detail-toolbar" aria-label="路由详情工具栏">
+      <div className="route-detail-toolbar__top">
+        <div className="route-detail-toolbar__summary">
+          <div className="route-detail-toolbar__source">
+            <strong>{group.sourceName || "-"}</strong>
+            <span>{group.sourceCode || "-"}</span>
+          </div>
+          <span
+            className={`route-detail-toolbar__status route-detail-toolbar__status--${statusTone}`}
+          >
+            <span className="route-detail-toolbar__status-dot" />
+            <span>{enabledMeta.label}</span>
+          </span>
+          <div className="route-detail-toolbar__metrics">
+            <span>
+              <b>当前执行</b>
+              <strong>{version.version}</strong>
+            </span>
+            <span>
+              <b>规则</b>
+              <strong>{ruleCount}</strong>
+            </span>
+            <span>
+              <b>命中</b>
+              <strong>{formatHitCount(hitCount)}</strong>
+            </span>
+            <span>
+              <b>更新</b>
+              <strong>{group.updatedAt}</strong>
+            </span>
+          </div>
+        </div>
+        {actions ? (
+          <Space wrap className="route-detail-toolbar__actions">
+            {actions}
+          </Space>
+        ) : null}
+      </div>
+      {filters || filterActions || version.note || footer ? (
+        <div className="route-detail-toolbar__bottom">
+          {filters || filterActions ? (
+            <div className="route-detail-toolbar__query">
+              {filters ? (
+                <div className="route-detail-toolbar__filters">{filters}</div>
+              ) : null}
+              {filterActions ? (
+                <Space wrap className="route-detail-toolbar__query-actions">
+                  {filterActions}
+                </Space>
+              ) : null}
+            </div>
+          ) : null}
+          {version.note || footer ? (
+            <div className="route-detail-toolbar__footer">
+              {version.note ? (
+                <span className="route-detail-toolbar__note">
+                  <span className="route-detail-toolbar__note-dot" />
+                  <span>版本说明：{version.note}</span>
+                </span>
+              ) : null}
+              {footer}
+            </div>
+          ) : null}
+        </div>
+      ) : null}
+    </section>
+  );
 }
 
 export function mapRouteGroup(
@@ -7575,53 +7763,115 @@ export function RoutesPage({ lastUpdated, onRefresh }: ConsolePageProps) {
         </Button>
         <Typography.Text>{selectedGroup.name}</Typography.Text>
       </Space>
-      <section className="route-group-summary">
-        <div className="route-group-summary__item">
-          <span>绑定来源</span>
-          <strong>{selectedGroup.sourceName}</strong>
-        </div>
-        <div className="route-group-summary__item">
-          <span>来源编码</span>
-          <strong className="route-group-summary__code">
-            {selectedGroup.sourceCode}
-          </strong>
-        </div>
-        <div className="route-group-summary__item">
-          <span>当前执行版本</span>
-          <strong>
-            {routeVersionLabelById[selectedGroup.currentVersion] ??
-              selectedGroup.currentVersion}
-          </strong>
-        </div>
-        <div className="route-group-summary__item route-group-summary__item--numeric">
-          <span>规则数</span>
-          <strong>{routeGroupRuleCount(selectedGroup, ruleRows)}</strong>
-        </div>
-        <div className="route-group-summary__item route-group-summary__item--numeric">
-          <span>总命中</span>
-          <strong>
-            {formatHitCount(routeGroupTotalHitCount(selectedGroup, ruleRows))}
-          </strong>
-        </div>
-        <div className="route-group-summary__item">
-          <span>更新时间</span>
-          <strong>{selectedGroup.updatedAt}</strong>
-        </div>
-        <div className="route-group-summary__item route-group-summary__item--status">
-          <span>状态</span>
-          <StatusTag meta={getEnabledMeta(selectedGroup.enabled)} />
-        </div>
-      </section>
+      <RouteDetailToolbar
+        group={selectedGroup}
+        currentVersionLabel={
+          routeVersionLabelById[selectedGroup.currentVersion] ??
+          selectedGroup.currentVersion
+        }
+        ruleCount={routeGroupRuleCount(selectedGroup, ruleRows)}
+        hitCount={routeGroupTotalHitCount(selectedGroup, ruleRows)}
+        filters={
+          mode === "table" ? (
+            <>
+              <Input
+                placeholder="规则名称 / 条件"
+                value={routeRuleQuery.draft.keyword}
+                onChange={(event) =>
+                  routeRuleQuery.setFilter("keyword", event.target.value)
+                }
+              />
+              <Select
+                placeholder="推送渠道"
+                value={routeRuleQuery.draft.targetProvider}
+                onChange={(value) =>
+                  routeRuleQuery.setFilter("targetProvider", value)
+                }
+                options={[
+                  { label: "全部推送渠道", value: "all" },
+                  ...uniqueValues(
+                    groupRules.flatMap((rule) => rule.targetProviders),
+                  ).map((target) => ({
+                    label: target,
+                    value: target,
+                  })),
+                ]}
+              />
+              <Select
+                placeholder="状态"
+                value={routeRuleQuery.draft.status}
+                onChange={(value) => routeRuleQuery.setFilter("status", value)}
+                options={[
+                  { label: "全部状态", value: "all" },
+                  { label: "启用", value: "enabled" },
+                  { label: "停用", value: "disabled" },
+                ]}
+              />
+            </>
+          ) : null
+        }
+        filterActions={
+          mode === "table" ? (
+            <>
+              <Button
+                onClick={() => {
+                  routeRuleQuery.resetFilters();
+                  message.info("路由查询条件已重置");
+                }}
+              >
+                重置
+              </Button>
+              <Button
+                type="primary"
+                onClick={() => {
+                  routeRuleQuery.applyFilters();
+                  message.success(
+                    `已筛选出 ${filterRouteRulesByQuery(groupRules, routeRuleQuery.draft).length} 条规则`,
+                  );
+                }}
+              >
+                查询
+              </Button>
+            </>
+          ) : null
+        }
+        actions={
+          mode === "table" ? (
+            <>
+              <Button icon={<PlusOutlined />} onClick={openCreateRule}>
+                新增规则
+              </Button>
+              <Button icon={<PlayCircleOutlined />} onClick={openRouteSimulation}>
+                模拟运行
+              </Button>
+              <Button type="primary" onClick={publishAndActivateRoute}>
+                发布并激活
+              </Button>
+            </>
+          ) : (
+            <>
+              <Button type="primary" icon={<PlusOutlined />} onClick={() => void addRouteRuleRow()}>
+                新增规则
+              </Button>
+              <Button icon={<DeploymentUnitOutlined />} onClick={resetCanvasLayout}>
+                重置布局
+              </Button>
+              <Button icon={<PlayCircleOutlined />} onClick={openRouteSimulation}>
+                模拟运行
+              </Button>
+              <Button onClick={() => void saveCanvas()}>保存画布</Button>
+              <Button type="primary" onClick={publishAndActivateRoute}>
+                发布并激活
+              </Button>
+            </>
+          )
+        }
+        footer={<RouteWorkingCopyNote baseVersionNo={selectedDraftBaseVersionNo} />}
+      />
 
       {mode === "canvas" ? (
         <div className="route-canvas-layout">
           <section className="canvas-surface">
-            <RouteCanvasToolbar
-              onAddRule={() => void addRouteRuleRow()}
-              onResetLayout={resetCanvasLayout}
-              onSimulate={openRouteSimulation}
-              onSaveCanvas={() => void saveCanvas()}
-            />
             <div className="react-flow-shell">
               <ReactFlowProvider>
                 <ReactFlow
@@ -7646,55 +7896,6 @@ export function RoutesPage({ lastUpdated, onRefresh }: ConsolePageProps) {
         </div>
       ) : (
         <>
-          <QueryBar
-            onCreate={openCreateRule}
-            onSearch={() => {
-              routeRuleQuery.applyFilters();
-              message.success(
-                `已筛选出 ${filterRouteRulesByQuery(groupRules, routeRuleQuery.draft).length} 条规则`,
-              );
-            }}
-            onReset={() => {
-              routeRuleQuery.resetFilters();
-              message.info("路由查询条件已重置");
-            }}
-            createText="新增规则"
-          >
-            <Input
-              placeholder="规则名称 / 条件"
-              value={routeRuleQuery.draft.keyword}
-              onChange={(event) =>
-                routeRuleQuery.setFilter("keyword", event.target.value)
-              }
-            />
-            <Input value={selectedGroup.sourceName} readOnly />
-            <Select
-              placeholder="推送渠道"
-              value={routeRuleQuery.draft.targetProvider}
-              onChange={(value) =>
-                routeRuleQuery.setFilter("targetProvider", value)
-              }
-              options={[
-                { label: "全部推送渠道", value: "all" },
-                ...uniqueValues(
-                  groupRules.flatMap((rule) => rule.targetProviders),
-                ).map((target) => ({
-                  label: target,
-                  value: target,
-                })),
-              ]}
-            />
-            <Select
-              placeholder="状态"
-              value={routeRuleQuery.draft.status}
-              onChange={(value) => routeRuleQuery.setFilter("status", value)}
-              options={[
-                { label: "全部状态", value: "all" },
-                { label: "启用", value: "enabled" },
-                { label: "停用", value: "disabled" },
-              ]}
-            />
-          </QueryBar>
           <ListContainer
             title="规则列表"
             total={filteredRules.length}
@@ -7703,22 +7904,7 @@ export function RoutesPage({ lastUpdated, onRefresh }: ConsolePageProps) {
             onPageChange={routeRulePage.onPageChange}
             fill
             scrollY={560}
-            extra={
-              <Space>
-                <RouteWorkingCopyNote
-                  baseVersionNo={selectedDraftBaseVersionNo}
-                />
-                <Button
-                  icon={<PlayCircleOutlined />}
-                  onClick={openRouteSimulation}
-                >
-                  模拟运行
-                </Button>
-                <Button type="primary" onClick={publishAndActivateRoute}>
-                  发布并激活
-                </Button>
-              </Space>
-            }
+            extra={null}
           >
             <Table
               rowKey="id"
@@ -8358,13 +8544,13 @@ export function TemplateVersionDetail({
     <div className="template-version-detail">
       <div className="template-version-main-row">
         <section className="template-version-card">
-          <Typography.Text type="secondary">模板内容</Typography.Text>
+          <span className="template-version-card__title">模板内容</span>
           <div className="template-version-card__body">
             <pre className="code-block">{version.template_body || "-"}</pre>
           </div>
         </section>
         <section className="template-version-card">
-          <Typography.Text type="secondary">接收效果</Typography.Text>
+          <span className="template-version-card__title">接收效果</span>
           <div className="template-version-card__body template-version-card__body--received">
             <TemplateReceivedPreviewBlock preview={receivedPreview} />
           </div>
@@ -8374,7 +8560,7 @@ export function TemplateVersionDetail({
         <summary>查看最近 Payload 与出站 JSON</summary>
         <div className="template-version-debug-row">
           <section className="template-version-card">
-            <Typography.Text type="secondary">最近 Payload</Typography.Text>
+            <span className="template-version-card__title">最近 Payload</span>
             <div className="template-version-card__body">
               <pre className="code-block">
                 {stringifyJSON(recentPayload, "{}")}
@@ -8382,7 +8568,7 @@ export function TemplateVersionDetail({
             </div>
           </section>
           <section className="template-version-card">
-            <Typography.Text type="secondary">出站 JSON</Typography.Text>
+            <span className="template-version-card__title">出站 JSON</span>
             <div className="template-version-card__body">
               <pre className="code-block">
                 {renderVersionPreviewValue(outboundJSON)}
@@ -9260,6 +9446,7 @@ export function TemplatesPage({ lastUpdated, onRefresh }: ConsolePageProps) {
       title: "可用变量",
       dataIndex: "path",
       className: "template-variable-path-column",
+      width: "52%",
       render: (path: string) => (
         <Space className="template-variable-cell">
           <TemplateVariableCopyText
@@ -9273,11 +9460,17 @@ export function TemplatesPage({ lastUpdated, onRefresh }: ConsolePageProps) {
       title: "当前值",
       dataIndex: "sample",
       className: "template-variable-sample",
-      render: (sample: JSONValue) => (
-        <span className="template-variable-sample__text">
-          {typeof sample === "string" ? sample : stringifyJSON(sample)}
-        </span>
-      ),
+      width: "48%",
+      render: (sample: JSONValue) => {
+        const text = typeof sample === "string" ? sample : stringifyJSON(sample);
+        return (
+          <Tooltip title={text}>
+            <span className="template-variable-sample__text" title={text}>
+              {text}
+            </span>
+          </Tooltip>
+        );
+      },
     },
   ];
   const selectedTemplateSource = templateSourceRows.find(
@@ -9412,23 +9605,26 @@ export function TemplatesPage({ lastUpdated, onRefresh }: ConsolePageProps) {
           <section className="template-modal-panel template-payload-panel">
             <div className="panel-heading">
               <Typography.Title level={4}>Payload 预览</Typography.Title>
-              <Tag>{selectedPayloadFields.length} 个字段</Tag>
+              <span className="template-field-count">
+                {selectedPayloadFields.length} 个字段
+              </span>
             </div>
             <div className="template-panel-scroll">
-              <Descriptions
-                size="small"
-                column={1}
+              <DetailMetaList
                 className="template-payload-meta"
-              >
-                <Descriptions.Item label="来源">
-                  {selectedTemplateSource
-                    ? `${selectedTemplateSource.name} / ${selectedTemplateSource.code}`
-                    : "-"}
-                </Descriptions.Item>
-                <Descriptions.Item label="接收时间">
-                  {selectedTemplateSource?.lastInboundAt ?? "-"}
-                </Descriptions.Item>
-              </Descriptions>
+                items={[
+                  {
+                    label: "来源",
+                    value: selectedTemplateSource
+                      ? selectedTemplateSource.name
+                      : "-",
+                  },
+                  {
+                    label: "接收时间",
+                    value: selectedTemplateSource?.lastInboundAt ?? "-",
+                  },
+                ]}
+              />
               <Table
                 rowKey="path"
                 size="small"
@@ -9468,15 +9664,16 @@ export function TemplatesPage({ lastUpdated, onRefresh }: ConsolePageProps) {
           <section className="template-modal-panel template-preview-panel">
             <div className="panel-heading">
               <Typography.Title level={4}>消息预览</Typography.Title>
-              <Space>
-                <Tag>
+              <Space size={10}>
+                <span className="template-preview-provider">
                   {getProviderTypeLabel(templateDraft.targetProviderType)}
-                </Tag>
-                <Tag
-                  color={backendPreviewValue !== null ? "success" : "default"}
-                >
-                  {backendPreviewValue !== null ? "后端结果" : "本地草稿"}
-                </Tag>
+                </span>
+                <DetailDotStatus
+                  meta={{
+                    label: backendPreviewValue !== null ? "后端结果" : "本地草稿",
+                    color: backendPreviewValue !== null ? "success" : "default",
+                  }}
+                />
               </Space>
             </div>
             <div className="template-panel-scroll">
@@ -10629,7 +10826,11 @@ function timelineStageLabel(stage: string) {
     case "delivery_failed":
       return "出站投递失败";
     case "delivery_dead_lettered":
-      return "任务进入死信";
+      return "发送失败，进入死信队列";
+    case "dead_letter_replayed":
+      return "死信已重放，已重新进入发送队列";
+    case "dead_letter_handled":
+      return "死信已人工处理";
     default:
       return "";
   }
@@ -11586,20 +11787,15 @@ export function OrganizationPage({
       >
         {selected ? (
           <Space direction="vertical" className="full-width" size={16}>
-            <Descriptions column={1} size="small" bordered>
-              <Descriptions.Item label="姓名">
-                {selected.name}
-              </Descriptions.Item>
-              <Descriptions.Item label="所属组织">
-                {selected.department}
-              </Descriptions.Item>
-              <Descriptions.Item label="手机号">
-                {selected.mobile}
-              </Descriptions.Item>
-              <Descriptions.Item label="邮箱">
-                {selected.email}
-              </Descriptions.Item>
-            </Descriptions>
+            <DetailMetaList
+              className="user-detail-meta"
+              items={[
+                { label: "姓名", value: <strong>{selected.name}</strong> },
+                { label: "所属组织", value: selected.department },
+                { label: "手机号", value: selected.mobile || "-" },
+                { label: "邮箱", value: selected.email || "-" },
+              ]}
+            />
             <IdentityEditor
               identities={selected.identities}
               channelOptions={identityChannelOptions}
@@ -12525,40 +12721,40 @@ export function MessageLogDetailContent({
 
   return (
     <Space direction="vertical" size={16} className="full-width">
-      <Descriptions column={1} size="small" bordered>
-        <Descriptions.Item label="Trace ID">
-          <span className="trace-id-text">{selected.traceId}</span>
-        </Descriptions.Item>
-        <Descriptions.Item label="状态">
-          <MessageStatusCell value={selected.status} />
-        </Descriptions.Item>
-        <Descriptions.Item label="入站时间">
-          {selected.receivedAt}
-        </Descriptions.Item>
-        <Descriptions.Item label="入站状态">
-          {selected.inboundStatus ? (
-            <InboundStatusCell value={selected.inboundStatus} />
-          ) : (
-            "-"
-          )}
-        </Descriptions.Item>
-        <Descriptions.Item label="命中路由">
-          {selected.matchedRoute}
-        </Descriptions.Item>
-        <Descriptions.Item label="目标平台">
-          {selected.targetProvider ?? "-"}
-        </Descriptions.Item>
-        <Descriptions.Item label="出站时间">
-          {selected.firstOutboundAt ?? "-"}
-        </Descriptions.Item>
-        <Descriptions.Item label="出站状态">
-          {selected.outboundStatus ? (
-            <OutboundStatusCell value={selected.outboundStatus} />
-          ) : (
-            "-"
-          )}
-        </Descriptions.Item>
-      </Descriptions>
+      <DetailMetaList
+        className="message-log-summary-list"
+        items={[
+          {
+            label: "Trace ID",
+            value: <span className="trace-id-text">{selected.traceId}</span>,
+            mono: true,
+          },
+          {
+            label: "状态",
+            value: <DetailDotStatus meta={getMessageStatusMeta(selected.status)} />,
+          },
+          { label: "入站时间", value: selected.receivedAt },
+          {
+            label: "入站状态",
+            value: selected.inboundStatus ? (
+              <DetailDotStatus meta={getInboundStatusMeta(selected.inboundStatus)} />
+            ) : (
+              "-"
+            ),
+          },
+          { label: "命中路由", value: selected.matchedRoute },
+          { label: "目标平台", value: selected.targetProvider ?? "-" },
+          { label: "出站时间", value: selected.firstOutboundAt ?? "-" },
+          {
+            label: "出站状态",
+            value: selected.outboundStatus ? (
+              <DetailDotStatus meta={getOutboundStatusMeta(selected.outboundStatus)} />
+            ) : (
+              "-"
+            ),
+          },
+        ]}
+      />
       <MessageLogDetailSection
         title="入站 Payload"
         sectionKey="payload"
@@ -13077,9 +13273,39 @@ export function DeadLettersPage({ lastUpdated, onRefresh }: ConsolePageProps) {
         width: 130,
         render: (value?: string) => value ?? "-",
       },
-      { title: "失败原因", dataIndex: "errorMessage", width: 260 },
+      {
+        title: "失败原因",
+        dataIndex: "errorMessage",
+        width: 320,
+        render: (value?: string) => (
+          <Typography.Text
+            className="dead-letter-error-message"
+            ellipsis={{ tooltip: value || "-" }}
+          >
+            {value || "-"}
+          </Typography.Text>
+        ),
+      },
       { title: "尝试次数", dataIndex: "attempts", width: 100 },
       { title: "进入死信时间", dataIndex: "deadLetteredAt", width: 170 },
+      {
+        title: "重放结果",
+        dataIndex: "replayStatus",
+        width: 130,
+        render: (_value: string, row: DeadLetterRow) => (
+          <Tooltip
+            title={
+              row.replayFinishedAt && row.replayFinishedAt !== "-"
+                ? `${row.replayMessage}，完成时间 ${row.replayFinishedAt}`
+                : row.replayMessage
+            }
+          >
+            <span>
+              <StatusTag meta={deadLetterReplayStatusMeta(row)} />
+            </span>
+          </Tooltip>
+        ),
+      },
       {
         title: "状态",
         dataIndex: "status",
@@ -13098,6 +13324,7 @@ export function DeadLettersPage({ lastUpdated, onRefresh }: ConsolePageProps) {
       "errorMessage",
       "attempts",
       "deadLetteredAt",
+      "replayStatus",
       "status",
     ],
   );
@@ -13295,6 +13522,64 @@ export function deadLetterBatchSelectionForAction({
   return ids;
 }
 
+function cleanupRowByKey(rows: CleanupRow[], key: string): CleanupRow {
+  return (
+    rows.find((item) => item.key === key) ?? {
+      key,
+      name: "-",
+      value: "-",
+      status: "-",
+    }
+  );
+}
+
+function cleanupStatusTone(row: CleanupRow): "success" | "warning" | "default" {
+  if (row.status.includes("已完成")) {
+    return "success";
+  }
+  if (row.status.includes("未完成") || row.status.includes("剩余")) {
+    return "warning";
+  }
+  return "default";
+}
+
+export function QueueCleanupStatusPanel({ rows }: { rows: CleanupRow[] }) {
+  const retention = cleanupRowByKey(rows, "retention");
+  const batch = cleanupRowByKey(rows, "batch");
+  const state = cleanupRowByKey(rows, "state");
+  const deleted = cleanupRowByKey(rows, "deleted");
+  const statusTone = cleanupStatusTone(state);
+  const items = [
+    { label: "保留期", value: retention.value, note: retention.status },
+    { label: "最近清理", value: state.value, note: state.status },
+    { label: "最近批次", value: batch.value, note: batch.status },
+    { label: "累计删除", value: deleted.value, note: deleted.status },
+  ];
+
+  return (
+    <section className="analytics-panel queue-cleanup-panel">
+      <div className="panel-heading queue-cleanup-panel__heading">
+        <Typography.Title level={4}>保留期清理状态</Typography.Title>
+        <span
+          className={`queue-cleanup-status queue-cleanup-status--${statusTone}`}
+        >
+          <span className="queue-cleanup-status__dot" />
+          <span>{state.status}</span>
+        </span>
+      </div>
+      <div className="queue-cleanup-panel__grid">
+        {items.map((item) => (
+          <div className="queue-cleanup-panel__metric" key={item.label}>
+            <span>{item.label}</span>
+            <strong>{item.value}</strong>
+            <em title={item.note}>{item.note}</em>
+          </div>
+        ))}
+      </div>
+    </section>
+  );
+}
+
 export function QueueMonitorPage({ lastUpdated, onRefresh }: ConsolePageProps) {
   const [viewModel, setViewModel] = useState<QueueMonitoringViewModel>(() =>
     defaultQueueMonitoringViewModel(),
@@ -13421,39 +13706,14 @@ export function QueueMonitorPage({ lastUpdated, onRefresh }: ConsolePageProps) {
               onChange={(value) => setWindowValue(value as DashboardWindow)}
             />
           </div>
-          <GroupedBarChart
+          <QueueTrendChart
             labels={viewModel.trendLabels}
             series={viewModel.trendSeries}
             ariaLabel="队列处理趋势"
           />
         </section>
 
-        <section className="analytics-panel queue-cleanup-panel">
-          <div className="panel-heading">
-            <Typography.Title level={4}>保留期清理状态</Typography.Title>
-            <Tag
-              color={
-                viewModel.cleanupRows[2]?.status.includes("已完成")
-                  ? "success"
-                  : "processing"
-              }
-            >
-              {viewModel.cleanupRows[2]?.status ?? "未知"}
-            </Tag>
-          </div>
-          <Descriptions column={1} size="small" bordered>
-            {viewModel.cleanupRows.map((item) => (
-              <Descriptions.Item key={item.key} label={item.name}>
-                <Space direction="vertical" size={2}>
-                  <span>{item.value}</span>
-                  <Typography.Text type="secondary">
-                    {item.status}
-                  </Typography.Text>
-                </Space>
-              </Descriptions.Item>
-            ))}
-          </Descriptions>
-        </section>
+        <QueueCleanupStatusPanel rows={viewModel.cleanupRows} />
       </div>
 
       <ListContainer

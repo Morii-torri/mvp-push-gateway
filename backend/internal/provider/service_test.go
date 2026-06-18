@@ -108,8 +108,9 @@ func TestDefaultCapabilitiesExposeFirstBatchBuiltInProviders(t *testing.T) {
 func TestEmailCapabilityUsesProviderPresetsAndEncryptedSecurity(t *testing.T) {
 	capability := findCapability(t, ProviderEmail, "email")
 
-	assertJSONField(t, capability.CredentialSchema, "properties.service_provider.default", "qq")
-	assertJSONField(t, capability.CredentialSchema, "properties.host.default", "smtp.qq.com")
+	assertJSONField(t, capability.CredentialSchema, "properties.service_provider.default", "custom")
+	assertJSONField(t, capability.CredentialSchema, "properties.service_provider.enum_labels.aliyun_qiye", "阿里企业邮箱")
+	assertJSONField(t, capability.CredentialSchema, "properties.host.default", "")
 	assertJSONField(t, capability.CredentialSchema, "properties.port.default", float64(465))
 	assertJSONField(t, capability.CredentialSchema, "properties.security.default", "SSL")
 	assertJSONField(t, capability.CredentialSchema, "properties.secure", nil)

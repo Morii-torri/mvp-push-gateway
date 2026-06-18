@@ -183,6 +183,68 @@ func TestGetMessageAddsNoRouteTimelineEvent(t *testing.T) {
 	}
 }
 
+func TestGetMessageAddsDeadLetterAndReplayTimelineEvents(t *testing.T) {
+	receivedAt := time.Date(2026, 6, 14, 8, 0, 0, 0, time.UTC)
+	queuedAt := receivedAt.Add(10 * time.Millisecond)
+	deadLetteredAt := receivedAt.Add(2 * time.Second)
+	replayedAt := deadLetteredAt.Add(8 * time.Hour)
+	requestStartedAt := replayedAt.Add(30 * time.Millisecond)
+	requestFinishedAt := requestStartedAt.Add(40 * time.Millisecond)
+	requestSnapshot := mustJSON(t, map[string]any{
+		"lifecycle": map[string]any{
+			"delivery_created_at": queuedAt.Format(time.RFC3339Nano),
+			"request_started_at":  requestStartedAt.Format(time.RFC3339Nano),
+		},
+	})
+	responseSnapshot := mustJSON(t, map[string]any{
+		"lifecycle": map[string]any{
+			"request_finished_at": requestFinishedAt.Format(time.RFC3339Nano),
+			"request_duration_ms": 40,
+		},
+	})
+	store := &memoryStore{
+		detail: MessageDetail{
+			MessageSummary: MessageSummary{
+				ID:         "message-dead-replay",
+				ReceivedAt: receivedAt,
+				Status:     "planned",
+			},
+			Attempts: []DeliveryAttempt{{
+				ID:               "attempt-1",
+				Status:           "sent",
+				QueuedAt:         &queuedAt,
+				StartedAt:        &requestStartedAt,
+				FinishedAt:       &requestFinishedAt,
+				RequestSnapshot:  requestSnapshot,
+				ResponseSnapshot: responseSnapshot,
+			}},
+			DeadLetters: []DeadLetterEvent{{
+				ID:             "dead-1",
+				AttemptID:      "attempt-1",
+				ErrorCode:      "MGP-SEND-003",
+				ErrorMessage:   "upstream eof",
+				DeadLetteredAt: deadLetteredAt,
+				ReplayedAt:     &replayedAt,
+			}},
+		},
+	}
+	service := NewService(store)
+
+	detail, err := service.GetMessage(context.Background(), "message-dead-replay")
+	if err != nil {
+		t.Fatalf("get message: %v", err)
+	}
+	if !hasTimelineEvent(detail.Timeline, "delivery_dead_lettered", deadLetteredAt, 0) {
+		t.Fatalf("expected delivery dead-letter timeline event with zero duration, got %+v", detail.Timeline)
+	}
+	if !hasTimelineEvent(detail.Timeline, "dead_letter_replayed", replayedAt, 0) {
+		t.Fatalf("expected dead-letter replay timeline event with zero duration, got %+v", detail.Timeline)
+	}
+	if !hasTimelineEvent(detail.Timeline, "upstream_call_finished", requestFinishedAt, 40) {
+		t.Fatalf("expected replay send finish event, got %+v", detail.Timeline)
+	}
+}
+
 func hasTimelineStage(events []TimelineEvent, stage string) bool {
 	for _, event := range events {
 		if event.Stage == stage {

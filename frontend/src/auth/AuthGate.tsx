@@ -1,4 +1,7 @@
-import { LockOutlined, UserOutlined } from "@ant-design/icons";
+import {
+  LockOutlined,
+  UserOutlined,
+} from "@ant-design/icons";
 import Alert from "antd/es/alert";
 import App from "antd/es/app";
 import Button from "antd/es/button";
@@ -173,10 +176,7 @@ export function AuthGate({ children }: { children: ReactNode }) {
 
   if (mode === "setup") {
     return (
-      <AuthPanel
-        title="初始化管理员"
-        subtitle="首次启动需要创建唯一管理员账号。"
-      >
+      <AuthPanel title="初始化管理员">
         <SetupForm
           onDone={() => {
             message.success("管理员已创建，请登录");
@@ -189,10 +189,7 @@ export function AuthGate({ children }: { children: ReactNode }) {
 
   if (mode === "login") {
     return (
-      <AuthPanel
-        title="管理员登录"
-        subtitle="使用管理员账号进入 MVP Push Gateway。"
-      >
+      <AuthPanel title="管理员登录">
         {errorText ? (
           <Alert type="warning" showIcon message={errorText} />
         ) : null}
@@ -211,10 +208,7 @@ export function AuthGate({ children }: { children: ReactNode }) {
 
   if (mode === "change-password") {
     return (
-      <AuthPanel
-        title="修改管理员密码"
-        subtitle="当前账号要求先修改密码后进入管理台。"
-      >
+      <AuthPanel title="修改管理员密码">
         <ChangePasswordForm
           onDone={async () => {
             setAdmin(null);
@@ -256,23 +250,31 @@ export function useAuth() {
 
 function AuthPanel({
   title,
-  subtitle,
   children,
 }: {
   title: string;
-  subtitle: string;
   children: ReactNode;
 }) {
   return (
     <div className="auth-screen">
-      <section className="auth-panel">
-        <Space direction="vertical" size={20} className="full-width">
-          <div>
-            <Typography.Title level={2}>{title}</Typography.Title>
-            <Typography.Text type="secondary">{subtitle}</Typography.Text>
+      <section className="auth-shell" aria-label="管理台认证入口">
+        <div className="auth-brand-panel">
+          <div className="auth-brand-mark">
+            <img src="/icon.png" alt="MVP-PUSH" />
+            <div>
+              <strong>MVP-PUSH</strong>
+              <span>消息网关管理台</span>
+            </div>
           </div>
-          {children}
-        </Space>
+        </div>
+        <div className="auth-panel">
+          <Space direction="vertical" size={22} className="full-width">
+            <div className="auth-panel__heading">
+              <Typography.Title level={2}>{title}</Typography.Title>
+            </div>
+            {children}
+          </Space>
+        </div>
       </section>
     </div>
   );

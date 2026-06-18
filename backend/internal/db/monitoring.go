@@ -8,6 +8,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
 
 	"mvp-push-gateway/backend/internal/monitoring"
 	"mvp-push-gateway/backend/internal/statistics"
@@ -174,12 +175,18 @@ func (r Repository) RunRetentionCleanup(ctx context.Context, params monitoring.R
 
 func (r Repository) getQueueSummary(ctx context.Context, now time.Time, windowStart time.Time) (monitoring.QueueSummary, error) {
 	var summary monitoring.QueueSummary
+	var routePlanOldestQueuedAt pgtype.Timestamptz
+	var sendMessageOldestQueuedAt pgtype.Timestamptz
+	var rateLimitedLatestAt pgtype.Timestamptz
+	var deadLetterLatestAt pgtype.Timestamptz
 	err := r.pool.QueryRow(ctx, `
 		WITH queued_jobs AS (
 			SELECT
 				count(*) FILTER (WHERE type = 'route_plan' AND status = 'queued')::integer AS route_plan_pending,
 				count(*) FILTER (WHERE type = 'send_message' AND status = 'queued')::integer AS send_message_pending,
-				COALESCE(max(EXTRACT(EPOCH FROM ($1 - run_at))) FILTER (WHERE status = 'queued' AND run_at <= $1), 0)::bigint AS oldest_job_wait_seconds
+				COALESCE(max(EXTRACT(EPOCH FROM ($1 - run_at))) FILTER (WHERE status = 'queued' AND run_at <= $1), 0)::bigint AS oldest_job_wait_seconds,
+				min(run_at) FILTER (WHERE type = 'route_plan' AND status = 'queued' AND run_at <= $1) AS route_plan_oldest_queued_at,
+				min(run_at) FILTER (WHERE type = 'send_message' AND status = 'queued' AND run_at <= $1) AS send_message_oldest_queued_at
 			FROM jobs
 		),
 		planning_metrics AS (
@@ -203,14 +210,17 @@ func (r Repository) getQueueSummary(ctx context.Context, now time.Time, windowSt
 				COALESCE(max(p95_duration_ms), 0)::integer AS p99_duration_ms,
 				COALESCE(sum(failed), 0)::integer AS failed_count,
 				COALESCE(sum(success), 0)::integer AS success_count,
-				COALESCE(sum(rate_limited), 0)::integer AS rate_limited_count
+				COALESCE(sum(rate_limited), 0)::integer AS rate_limited_count,
+				max(bucket_start) FILTER (WHERE rate_limited > 0) AS rate_limited_latest_at
 			FROM worker_metrics
 			WHERE worker_type = 'sending'
 				AND job_type = 'send_message'
 				AND bucket_start >= $2
 		),
 		dead_letters AS (
-			SELECT count(*)::integer AS dead_letter_count
+			SELECT
+				count(*)::integer AS dead_letter_count,
+				max(dead_lettered_at) AS dead_letter_latest_at
 			FROM dead_letter_jobs
 			WHERE dead_lettered_at >= $2
 		)
@@ -218,6 +228,8 @@ func (r Repository) getQueueSummary(ctx context.Context, now time.Time, windowSt
 			queued_jobs.route_plan_pending,
 			queued_jobs.send_message_pending,
 			queued_jobs.oldest_job_wait_seconds,
+			queued_jobs.route_plan_oldest_queued_at,
+			queued_jobs.send_message_oldest_queued_at,
 			planning_metrics.avg_duration_ms,
 			planning_metrics.p99_duration_ms,
 			sending_metrics.avg_duration_ms,
@@ -231,23 +243,33 @@ func (r Repository) getQueueSummary(ctx context.Context, now time.Time, windowSt
 				0
 			)::float8 AS platform_failure_rate,
 			sending_metrics.rate_limited_count,
-			dead_letters.dead_letter_count
+			sending_metrics.rate_limited_latest_at,
+			dead_letters.dead_letter_count,
+			dead_letters.dead_letter_latest_at
 		FROM queued_jobs, planning_metrics, sending_metrics, dead_letters
 	`, now, windowStart).Scan(
 		&summary.RoutePlanPending,
 		&summary.SendMessagePending,
 		&summary.OldestJobWaitSeconds,
+		&routePlanOldestQueuedAt,
+		&sendMessageOldestQueuedAt,
 		&summary.PlanningAvgDurationMS,
 		&summary.PlanningP99DurationMS,
 		&summary.SendingAvgDurationMS,
 		&summary.SendingP99DurationMS,
 		&summary.PlatformFailureRate,
 		&summary.RateLimitedCount,
+		&rateLimitedLatestAt,
 		&summary.DeadLetterCount,
+		&deadLetterLatestAt,
 	)
 	if err != nil {
 		return monitoring.QueueSummary{}, fmt.Errorf("query queue summary: %w", err)
 	}
+	summary.RoutePlanOldestQueuedAt = optionalTime(routePlanOldestQueuedAt)
+	summary.SendMessageOldestQueuedAt = optionalTime(sendMessageOldestQueuedAt)
+	summary.RateLimitedLatestAt = optionalTime(rateLimitedLatestAt)
+	summary.DeadLetterLatestAt = optionalTime(deadLetterLatestAt)
 	return summary, nil
 }
 
@@ -383,15 +405,29 @@ func (r Repository) getQueueTrend(ctx context.Context, windowStart, now time.Tim
 			WHERE bucket_start >= $1
 				AND bucket_start <= $2
 			GROUP BY date_bin($3::interval, bucket_start, $4::timestamptz)
+		),
+		send_attempts AS (
+			SELECT
+				date_bin($3::interval, finished_at, $4::timestamptz) AS bucket_start,
+				count(*)::integer AS send_message_processed
+			FROM delivery_attempts
+			WHERE finished_at >= $1
+				AND finished_at <= $2
+				AND status IN ('sent', 'failed', 'deduped', 'skipped')
+			GROUP BY date_bin($3::interval, finished_at, $4::timestamptz)
 		)
 		SELECT
 			buckets.bucket_start,
 			COALESCE(metrics.route_plan_processed, 0)::integer,
-			COALESCE(metrics.send_message_processed, 0)::integer,
+			GREATEST(
+				COALESCE(metrics.send_message_processed, 0),
+				COALESCE(send_attempts.send_message_processed, 0)
+			)::integer,
 			COALESCE(metrics.dead_letters, 0)::integer,
 			COALESCE(metrics.p99_duration_ms, 0)::integer
 		FROM buckets
 		LEFT JOIN metrics ON metrics.bucket_start = buckets.bucket_start
+		LEFT JOIN send_attempts ON send_attempts.bucket_start = buckets.bucket_start
 		ORDER BY buckets.bucket_start ASC
 	`, windowStart, now, bucketInterval, time.Unix(0, 0).UTC())
 	if err != nil {

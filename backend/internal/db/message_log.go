@@ -185,6 +185,11 @@ func (r Repository) GetMessage(ctx context.Context, id string) (messagelog.Messa
 		return messagelog.MessageDetail{}, err
 	}
 	detail.Attempts = attempts
+	deadLetters, err := r.listDeadLettersForMessage(ctx, id)
+	if err != nil {
+		return messagelog.MessageDetail{}, err
+	}
+	detail.DeadLetters = deadLetters
 	detail.AttemptCount = len(attempts)
 	detail.OutboundStatus = outboundStatus(attempts)
 	detail.TargetChannelIDs, detail.TargetChannelNames, detail.TargetProviderTypes = targetChannels(attempts)
@@ -192,6 +197,65 @@ func (r Repository) GetMessage(ctx context.Context, id string) (messagelog.Messa
 		detail.DurationMS = attempts[len(attempts)-1].DurationMS
 	}
 	return detail, nil
+}
+
+func (r Repository) listDeadLettersForMessage(ctx context.Context, messageID string) ([]messagelog.DeadLetterEvent, error) {
+	rows, err := r.pool.Query(ctx, `
+		SELECT
+			dead.id::text,
+			attempt.id::text,
+			COALESCE(dead.error_code, ''),
+			COALESCE(dead.error_message, ''),
+			dead.dead_lettered_at,
+			dead.replayed_at,
+			dead.handled_at,
+			COALESCE(dead.handled_reason, '')
+		FROM dead_letter_jobs AS dead
+		LEFT JOIN jobs AS job ON job.id = dead.job_id
+		LEFT JOIN LATERAL (
+			SELECT
+				CASE
+					WHEN (dead.payload->>'delivery_attempt_id') ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+						THEN (dead.payload->>'delivery_attempt_id')::uuid
+					WHEN (job.payload->>'delivery_attempt_id') ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+						THEN (job.payload->>'delivery_attempt_id')::uuid
+					ELSE NULL
+				END AS attempt_id
+		) AS refs ON true
+		JOIN delivery_attempts AS attempt ON attempt.id = refs.attempt_id
+		WHERE attempt.message_id = $1
+		ORDER BY dead.dead_lettered_at ASC, dead.id ASC
+	`, messageID)
+	if err != nil {
+		return nil, fmt.Errorf("list dead-letter events for message: %w", err)
+	}
+	defer rows.Close()
+
+	items := []messagelog.DeadLetterEvent{}
+	for rows.Next() {
+		var item messagelog.DeadLetterEvent
+		var replayedAt pgtype.Timestamptz
+		var handledAt pgtype.Timestamptz
+		if err := rows.Scan(
+			&item.ID,
+			&item.AttemptID,
+			&item.ErrorCode,
+			&item.ErrorMessage,
+			&item.DeadLetteredAt,
+			&replayedAt,
+			&handledAt,
+			&item.HandledReason,
+		); err != nil {
+			return nil, fmt.Errorf("scan dead-letter event for message: %w", err)
+		}
+		item.ReplayedAt = optionalTime(replayedAt)
+		item.HandledAt = optionalTime(handledAt)
+		items = append(items, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate dead-letter events for message: %w", err)
+	}
+	return items, nil
 }
 
 func (r Repository) listAttemptsForMessage(ctx context.Context, messageID string) ([]messagelog.DeliveryAttempt, error) {

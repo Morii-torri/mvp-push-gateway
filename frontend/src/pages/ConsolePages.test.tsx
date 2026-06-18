@@ -17,6 +17,8 @@ import {
   RouteSimulationResultView,
   RouteSimulationScopeNote,
   RouteGroupRowActions,
+  RouteDetailToolbar,
+  RouteGroupExecutionSummary,
   RouteSourceBindingCell,
   RouteWorkingCopyNote,
   RouteFlowNodeView,
@@ -42,6 +44,7 @@ import {
   OrganizationPage,
   ProvidersPage,
   QueueMonitorPage,
+  QueueCleanupStatusPanel,
   RouteStrategyPage,
   RoutesPage,
   SettingsPage,
@@ -298,10 +301,12 @@ describe("critical console pages", () => {
     expect(overviewMarkup).not.toContain("最近异常");
     expect(queueMarkup).toContain("队列监控");
     expect(queueMarkup).toContain("queue-monitor-overview-grid");
-    expect(queueMarkup).toContain("bar-chart");
+    expect(queueMarkup).toContain("queue-trend-chart");
     expect(queueMarkup).toContain("渠道数据统计");
     expect(queueMarkup).not.toContain("推送渠道健康");
     expect(queueMarkup).toContain("保留期清理状态");
+    expect(queueMarkup).toContain("queue-cleanup-panel__metric");
+    expect(queueMarkup).toContain("最近清理");
     expect(queueMarkup).not.toContain("任务类型：路由规划");
     expect(queueMarkup).not.toContain("任务类型：出站发送");
 
@@ -320,6 +325,45 @@ describe("critical console pages", () => {
     expect(monitoringMarkup).toContain("Trace ID");
     expect(monitoringMarkup).toContain("搜索 Trace ID / 错误 / 渠道");
     expect(monitoringMarkup).not.toContain("Job ID");
+  });
+
+  it("renders retention cleanup status as compact metrics instead of a bordered field table", () => {
+    const markup = renderPage(
+      <QueueCleanupStatusPanel
+        rows={[
+          {
+            key: "retention",
+            name: "日志保留期",
+            value: "30 天",
+            status: "已启用",
+          },
+          {
+            key: "batch",
+            name: "最近批次删除",
+            value: "14",
+            status: "单批上限 200，去重键 2，审计 3",
+          },
+          {
+            key: "state",
+            name: "清理状态",
+            value: "2026-06-08 21:24:12",
+            status: "已完成",
+          },
+          {
+            key: "deleted",
+            name: "累计删除总数",
+            value: "42",
+            status: "当前批次后无剩余",
+          },
+        ]}
+      />,
+    );
+
+    expect(markup).toContain("queue-cleanup-panel__grid");
+    expect(markup).toContain("保留期");
+    expect(markup).toContain("最近清理");
+    expect(markup).toContain("累计删除");
+    expect(markup).not.toContain("ant-descriptions");
   });
 
   it("does not expose a fake status filter on audit logs", () => {
@@ -2778,6 +2822,16 @@ describe("critical console pages", () => {
       serviceField,
       "outlook",
     );
+    const outlookMarkup = renderPage(
+      <ProviderConfigForm
+        value={{
+          ...draft,
+          fieldValues: outlookValues,
+        }}
+        onChange={() => undefined}
+        capabilities={[]}
+      />,
+    );
     const input = channelInputFromProvider({
       ...draft,
       fieldValues: {
@@ -2792,15 +2846,17 @@ describe("critical console pages", () => {
     });
 
     expect(serviceField.options?.map((option) => option.label)).toEqual([
+      "自定义",
       "QQ邮箱",
       "腾讯企业邮箱",
+      "阿里企业邮箱",
       "163邮箱",
       "126邮箱",
       "Gmail",
       "Outlook",
       "Office 365",
-      "自定义",
     ]);
+    expect(draft.fieldValues["auth_config.service_provider"]).toBe("custom");
     expect(defaultMarkup).toContain("邮箱服务商");
     expect(defaultMarkup).toContain("SMTP 主机地址");
     expect(defaultMarkup).toContain("SMTP 端口");
@@ -2816,6 +2872,7 @@ describe("critical console pages", () => {
     expect(customMarkup).toContain("SMTP 主机地址");
     expect(customMarkup).toContain("SMTP 端口");
     expect(customMarkup).toContain("加密方式");
+    expect(outlookMarkup).toContain("已由邮箱服务商自动填充");
     expect(draft.configFields.map((field) => field.label)).toEqual([
       "邮箱服务商",
       "SMTP 主机地址",
@@ -2844,6 +2901,19 @@ describe("critical console pages", () => {
     expect([...renderedLabelOrder].sort((a, b) => a - b)).toEqual(
       renderedLabelOrder,
     );
+    expect(
+      providerFieldValuesAfterChange(
+        "email",
+        draft.configFields,
+        draft.fieldValues,
+        serviceField,
+        "aliyun_qiye",
+      ),
+    ).toMatchObject({
+      "auth_config.host": "smtp.qiye.aliyun.com",
+      "auth_config.port": 465,
+      "auth_config.security": "SSL",
+    });
     expect(input.auth_config).toEqual({
       service_provider: "outlook",
       host: "smtp-mail.outlook.com",
@@ -2903,6 +2973,73 @@ describe("critical console pages", () => {
     expect(markup).toContain("告警来源");
     expect(markup).toContain("alerts");
     expect(markup).toContain("route-source-code-text");
+  });
+
+  it("renders route group execution summary with separated version note", () => {
+    const markup = renderPage(
+      <RouteGroupExecutionSummary
+        group={
+          {
+            id: "flow-1",
+            name: "来源路由",
+            sourceName: "来源-01",
+            sourceCode: "newsource",
+            enabled: true,
+            currentVersion: "version-8",
+            ruleIds: [],
+            ruleCount: 2,
+            totalHitCount: 10,
+            updatedAt: "2026-06-08 21:24:12",
+          } as any
+        }
+        currentVersionLabel="v8 / 模板 Bark-mb 更新到 v6"
+        ruleCount={2}
+        hitCount={10}
+      />,
+    );
+
+    expect(markup).toContain("来源-01");
+    expect(markup).toContain("newsource");
+    expect(markup).toContain("当前执行");
+    expect(markup).toContain("v8");
+    expect(markup).toContain("版本说明：模板 Bark-mb 更新到 v6");
+    expect(markup).not.toContain("来源编码</span>");
+  });
+
+  it("combines route detail context, filters, and actions into one toolbar", () => {
+    const group = {
+      id: "flow-1",
+      name: "来源路由",
+      sourceName: "来源-01",
+      sourceCode: "newsource",
+      enabled: true,
+      currentVersion: "version-8",
+      ruleIds: [],
+      ruleCount: 2,
+      totalHitCount: 10,
+      updatedAt: "2026-06-08 21:24:12",
+    } as any;
+    const markup = renderPage(
+      <RouteDetailToolbar
+        group={group}
+        currentVersionLabel="v8 / 模板 Bark-mb 更新到 v6"
+        ruleCount={2}
+        hitCount={10}
+        filters={<input aria-label="规则名称 / 条件" />}
+        filterActions={<button type="button">查询</button>}
+        actions={<button type="button">新增规则</button>}
+        footer={<RouteWorkingCopyNote baseVersionNo={8} />}
+      />,
+    );
+
+    expect(markup).toContain("route-detail-toolbar");
+    expect(markup).toContain("来源-01");
+    expect(markup).toContain("newsource");
+    expect(markup).toContain("规则名称 / 条件");
+    expect(markup).toContain("查询");
+    expect(markup).toContain("新增规则");
+    expect(markup).toContain("基于 v8 编辑中");
+    expect(markup).toContain("版本说明：模板 Bark-mb 更新到 v6");
   });
 
   it("keeps route group enabled state out of create and edit form", () => {

@@ -2,7 +2,6 @@ import type { ReactNode } from 'react';
 import { Fragment, useState, useEffect } from 'react';
 import App from 'antd/es/app';
 import Button from 'antd/es/button';
-import Descriptions from 'antd/es/descriptions';
 import Divider from 'antd/es/divider';
 import Form from 'antd/es/form';
 import Input from 'antd/es/input';
@@ -13,9 +12,9 @@ import Switch from 'antd/es/switch';
 import Tabs from 'antd/es/tabs';
 import Typography from 'antd/es/typography';
 import Segmented from 'antd/es/segmented';
-import Tag from 'antd/es/tag';
 import { DeleteOutlined, PlusOutlined, ReloadOutlined, SyncOutlined } from '@ant-design/icons';
 
+import { DetailDotStatus, DetailMetaList } from '../../components/ConsolePrimitives';
 
 import {
   consoleApi,
@@ -146,7 +145,7 @@ const barkLevelOptions = [
   { label: 'passive：仅将通知添加到通知列表，不会亮屏提醒', value: 'passive' },
 ];
 
-type EmailServiceProviderKey = 'qq' | 'tencent_exmail' | 'netease_163' | 'netease_126' | 'gmail' | 'outlook' | 'office365' | 'custom';
+type EmailServiceProviderKey = 'custom' | 'qq' | 'tencent_exmail' | 'aliyun_qiye' | 'netease_163' | 'netease_126' | 'gmail' | 'outlook' | 'office365';
 
 type EmailServicePreset = {
   value: EmailServiceProviderKey;
@@ -157,14 +156,15 @@ type EmailServicePreset = {
 };
 
 const emailServicePresets: EmailServicePreset[] = [
+  { value: 'custom', label: '自定义', host: '', port: 465, security: 'SSL' },
   { value: 'qq', label: 'QQ邮箱', host: 'smtp.qq.com', port: 465, security: 'SSL' },
   { value: 'tencent_exmail', label: '腾讯企业邮箱', host: 'smtp.exmail.qq.com', port: 465, security: 'SSL' },
+  { value: 'aliyun_qiye', label: '阿里企业邮箱', host: 'smtp.qiye.aliyun.com', port: 465, security: 'SSL' },
   { value: 'netease_163', label: '163邮箱', host: 'smtp.163.com', port: 465, security: 'SSL' },
   { value: 'netease_126', label: '126邮箱', host: 'smtp.126.com', port: 465, security: 'SSL' },
   { value: 'gmail', label: 'Gmail', host: 'smtp.gmail.com', port: 465, security: 'SSL' },
   { value: 'outlook', label: 'Outlook', host: 'smtp-mail.outlook.com', port: 587, security: 'STARTTLS' },
   { value: 'office365', label: 'Office 365', host: 'smtp.office365.com', port: 587, security: 'STARTTLS' },
-  { value: 'custom', label: '自定义', host: '', port: 465, security: 'SSL' },
 ];
 
 const emailServiceProviderOptions = emailServicePresets.map(({ label, value }) => ({ label, value }));
@@ -946,8 +946,8 @@ function fallbackProviderFields(providerType: ProviderKind): ProviderConfigField
 
   if (providerType === 'email') {
     return [
-      field('service_provider', '邮箱服务商', 'auth_config', 'select', true, '', 'qq', 'string', '', emailServiceProviderOptions),
-      field('host', 'SMTP 主机地址', 'auth_config', 'text', true, '', 'smtp.qq.com'),
+      field('service_provider', '邮箱服务商', 'auth_config', 'select', true, '选择后自动填充 SMTP 参数', 'custom', 'string', '', emailServiceProviderOptions),
+      field('host', 'SMTP 主机地址', 'auth_config', 'text', true),
       field('port', 'SMTP 端口', 'auth_config', 'number', true, '465 / 587', 465),
       field('security', '加密方式', 'auth_config', 'select', true, '', 'SSL', 'string', '', emailSecurityOptions),
       field('username', '用户名', 'auth_config', 'text', true),
@@ -1121,6 +1121,24 @@ function uniqueConfigFields(fields: ProviderConfigField[]): ProviderConfigField[
 
 function providerFieldValueKey(field: Pick<ProviderConfigField, 'target' | 'key'>): string {
   return `${field.target}.${field.key}`;
+}
+
+function emailServiceProviderFromValues(fieldValues: ProviderFieldValues): EmailServiceProviderKey {
+  const value = fieldValues['auth_config.service_provider'];
+  return emailServicePresets.some((preset) => preset.value === value) ? value as EmailServiceProviderKey : 'custom';
+}
+
+function shouldLockEmailSmtpPresetField(
+  providerType: ProviderKind,
+  fieldValues: ProviderFieldValues,
+  field: ProviderConfigField,
+): boolean {
+  return (
+    providerType === 'email' &&
+    field.target === 'auth_config' &&
+    ['host', 'port', 'security'].includes(field.key) &&
+    emailServiceProviderFromValues(fieldValues) !== 'custom'
+  );
 }
 
 export function providerFieldValuesAfterChange(
@@ -1302,7 +1320,13 @@ function coerceDelimitedItems(items: string[], field: ProviderConfigField): JSON
     });
 }
 
-function providerFieldExtra(field: ProviderConfigField): string | undefined {
+function providerFieldExtra(
+  field: ProviderConfigField,
+  lockedByEmailPreset = false,
+): string | undefined {
+  if (lockedByEmailPreset) {
+    return '已由邮箱服务商自动填充；选择自定义后可修改。';
+  }
   if (field.target === 'send_config' && field.key === 'url') {
     return '{{ identity }} 表示当前接收人的平台身份字段值。';
   }
@@ -2175,6 +2199,7 @@ function renderProviderFieldInput(
   field: ProviderConfigField,
   value: ProviderFieldValue | undefined,
   onChange: (field: ProviderConfigField, value: ProviderFieldValue) => void,
+  disabled = false,
 ): ReactNode {
   if (field.target === 'send_config' && field.key === 'headers') {
     return <WebhookHeadersEditor value={value} onChange={(nextValue) => onChange(field, nextValue)} />;
@@ -2182,6 +2207,7 @@ function renderProviderFieldInput(
   if (providerFieldUsesDelimitedList(field)) {
     return (
       <Input
+        disabled={disabled}
         value={typeof value === 'string' ? value : value === undefined ? '' : String(value)}
         placeholder={field.placeholder}
         onChange={(event) => onChange(field, event.target.value)}
@@ -2191,6 +2217,7 @@ function renderProviderFieldInput(
   if (field.options?.length || field.inputType === 'select') {
     return (
       <Select
+        disabled={disabled}
         allowClear={!field.required}
         value={typeof value === 'string' && value ? value : undefined}
         placeholder={field.placeholder}
@@ -2202,6 +2229,7 @@ function renderProviderFieldInput(
   if (field.inputType === 'number') {
     return (
       <InputNumber
+        disabled={disabled}
         min={0}
         value={typeof value === 'number' ? value : value === undefined || value === '' ? undefined : Number(value)}
         className="full-width"
@@ -2213,6 +2241,7 @@ function renderProviderFieldInput(
   if (field.inputType === 'textarea') {
     return (
       <Input.TextArea
+        disabled={disabled}
         rows={4}
         value={typeof value === 'string' ? value : value === undefined ? '' : String(value)}
         placeholder={field.placeholder}
@@ -2223,6 +2252,7 @@ function renderProviderFieldInput(
   if (field.inputType === 'password') {
     return (
       <Input.Password
+        disabled={disabled}
         value={typeof value === 'string' ? value : value === undefined ? '' : String(value)}
         placeholder={field.placeholder}
         onChange={(event) => onChange(field, event.target.value)}
@@ -2231,6 +2261,7 @@ function renderProviderFieldInput(
   }
   return (
     <Input
+      disabled={disabled}
       value={typeof value === 'string' ? value : value === undefined ? '' : String(value)}
       placeholder={field.placeholder}
       onChange={(event) => onChange(field, event.target.value)}
@@ -2417,17 +2448,25 @@ export function ProviderConfigForm({
               </Form.Item>
               <Divider orientation="left">基础配置字段</Divider>
               <div className={`two-column-form provider-field-grid ${value.providerType === 'webhook' ? 'provider-field-grid--webhook' : ''}`}>
-                {visibleConfigFields.map((field) => (
-                  <Form.Item
-                    key={providerFieldValueKey(field)}
-                    label={value.providerType === 'webhook' && field.target === 'send_config' && field.key === 'headers' ? undefined : field.label}
-                    required={field.required}
-                    extra={providerFieldExtra(field)}
-                    className={providerFieldItemClassName(value.providerType, field)}
-                  >
-                    {renderProviderFieldInput(field, value.fieldValues[providerFieldValueKey(field)], updateFieldValue)}
-                  </Form.Item>
-                ))}
+                {visibleConfigFields.map((field) => {
+                  const lockedByEmailPreset = shouldLockEmailSmtpPresetField(value.providerType, value.fieldValues, field);
+                  return (
+                    <Form.Item
+                      key={providerFieldValueKey(field)}
+                      label={value.providerType === 'webhook' && field.target === 'send_config' && field.key === 'headers' ? undefined : field.label}
+                      required={field.required}
+                      extra={providerFieldExtra(field, lockedByEmailPreset)}
+                      className={providerFieldItemClassName(value.providerType, field)}
+                    >
+                      {renderProviderFieldInput(
+                        field,
+                        value.fieldValues[providerFieldValueKey(field)],
+                        updateFieldValue,
+                        lockedByEmailPreset,
+                      )}
+                    </Form.Item>
+                  );
+                })}
               </div>
               <Form.Item label="描述">
                 <Input.TextArea
@@ -2835,7 +2874,7 @@ export function ProviderTestPanel({
         <Form.Item className="form-item-full">
           <div className="provider-token-status-line">
             <Typography.Text strong>AccessToken 状态</Typography.Text>
-            <Tag color={tokenCacheStatusMeta(value).color}>{tokenCacheStatusMeta(value).label}</Tag>
+            <DetailDotStatus meta={tokenCacheStatusMeta(value)} />
             <Typography.Text type="secondary" className="provider-token-status-line__meta">
               {value.token_refreshed_at ? `上次刷新：${new Date(value.token_refreshed_at).toLocaleString()}` : '暂无刷新记录'}
             </Typography.Text>
@@ -3231,12 +3270,14 @@ export function ProviderCapabilityTabs({ provider }: { provider: ProviderRow }) 
           key: 'token',
           label: '令牌获取',
           children: (
-            <Descriptions column={1} size="small" bordered>
-              <Descriptions.Item label="获取方式">{provider.tokenEndpoint}</Descriptions.Item>
-              <Descriptions.Item label="返回字段">{provider.tokenResponsePath}</Descriptions.Item>
-              <Descriptions.Item label="放置方式">{provider.tokenPlacement}</Descriptions.Item>
-              <Descriptions.Item label="刷新策略">{provider.refreshStrategy}</Descriptions.Item>
-            </Descriptions>
+            <DetailMetaList
+              items={[
+                { label: '获取方式', value: provider.tokenEndpoint },
+                { label: '返回字段', value: provider.tokenResponsePath, mono: true },
+                { label: '放置方式', value: provider.tokenPlacement },
+                { label: '刷新策略', value: provider.refreshStrategy },
+              ]}
+            />
           ),
         },
         {
@@ -3244,21 +3285,35 @@ export function ProviderCapabilityTabs({ provider }: { provider: ProviderRow }) 
           label: '请求映射',
           forceRender: true,
           children: (
-            <Descriptions column={1} size="small" bordered>
-              <Descriptions.Item label="发送接口">{provider.sendEndpoint}</Descriptions.Item>
-              <Descriptions.Item label="接收人映射">{provider.recipientMapping}</Descriptions.Item>
-              <Descriptions.Item label="Body 模板">{provider.bodyMapping}</Descriptions.Item>
-            </Descriptions>
+            <DetailMetaList
+              items={[
+                { label: '发送接口', value: provider.sendEndpoint, mono: true },
+                { label: '接收人映射', value: provider.recipientMapping },
+                { label: 'Body 模板', value: provider.bodyMapping, mono: true },
+              ]}
+            />
           ),
         },
         {
           key: 'rate',
           label: '限流配置',
           children: (
-            <Descriptions column={1} size="small" bordered>
-              <Descriptions.Item label="主动限流">{provider.rateLimitEnabled ? '开启' : '关闭'}</Descriptions.Item>
-              <Descriptions.Item label="QPS">{provider.qps}</Descriptions.Item>
-            </Descriptions>
+            <DetailMetaList
+              items={[
+                {
+                  label: '主动限流',
+                  value: (
+                    <DetailDotStatus
+                      meta={{
+                        label: provider.rateLimitEnabled ? '开启' : '关闭',
+                        color: provider.rateLimitEnabled ? 'success' : 'default',
+                      }}
+                    />
+                  ),
+                },
+                { label: 'QPS', value: provider.qps },
+              ]}
+            />
           ),
         },
         {
@@ -3266,21 +3321,25 @@ export function ProviderCapabilityTabs({ provider }: { provider: ProviderRow }) 
           label: '发送模式',
           forceRender: true,
           children: (
-            <Descriptions column={1} size="small" bordered>
-              <Descriptions.Item label="执行方式">受控并发</Descriptions.Item>
-              <Descriptions.Item label="渠道并发上限">{provider.concurrency}</Descriptions.Item>
-            </Descriptions>
+            <DetailMetaList
+              items={[
+                { label: '执行方式', value: '受控并发' },
+                { label: '渠道并发上限', value: provider.concurrency },
+              ]}
+            />
           ),
         },
         {
           key: 'retry',
           label: '超时与重试',
           children: (
-            <Descriptions column={1} size="small" bordered>
-              <Descriptions.Item label="超时">{provider.timeoutMs} ms</Descriptions.Item>
-              <Descriptions.Item label="允许重试次数">{provider.retryAttempts}</Descriptions.Item>
-              <Descriptions.Item label="重试间隔（毫秒）">{provider.retryIntervalMs}</Descriptions.Item>
-            </Descriptions>
+            <DetailMetaList
+              items={[
+                { label: '超时', value: `${provider.timeoutMs} ms` },
+                { label: '允许重试次数', value: provider.retryAttempts },
+                { label: '重试间隔', value: `${provider.retryIntervalMs} ms` },
+              ]}
+            />
           ),
         },
       ]}

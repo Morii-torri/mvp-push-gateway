@@ -1,10 +1,9 @@
-import Descriptions from 'antd/es/descriptions';
 import Space from 'antd/es/space';
 import Typography from 'antd/es/typography';
 
 import type { DeliveryAttemptApiRecord, JSONValue } from '../../api/console';
-import { StatusTag } from '../../components/ConsolePrimitives';
-import { getOutboundStatusMeta } from '../../utils/labels';
+import { DetailDotStatus, DetailMetaList } from '../../components/ConsolePrimitives';
+import { getOutboundStatusMeta, getProviderTypeLabel, type ProviderType } from '../../utils/labels';
 import { isRecord, normalizeOutboundStatus, stringField, stringifyJSON } from './shared';
 
 export function MessageLogAttemptBlocks({ attempts }: { attempts: DeliveryAttemptApiRecord[] }) {
@@ -36,23 +35,29 @@ export function MessageLogAttemptBlocks({ attempts }: { attempts: DeliveryAttemp
           <section className="message-log-attempt" key={attempt.id || `${attempt.channel_id}-${index}`}>
             <div className="panel-heading">
               <Typography.Title level={5}>{title}</Typography.Title>
-              <StatusTag meta={getOutboundStatusMeta(status)} />
+              <DetailDotStatus meta={getOutboundStatusMeta(status)} />
             </div>
-            <Descriptions column={1} size="small" bordered>
-              <Descriptions.Item label="推送渠道实例">{channelLabel}</Descriptions.Item>
-              <Descriptions.Item label="Provider Type">{providerType}</Descriptions.Item>
-              <Descriptions.Item label="Template Version">{templateVersionID}</Descriptions.Item>
-              <Descriptions.Item label="Message Type">{messageType || '-'}</Descriptions.Item>
-              <Descriptions.Item label="状态">
-                <StatusTag meta={getOutboundStatusMeta(status)} />
-              </Descriptions.Item>
-              <Descriptions.Item label="耗时">
-                {typeof attempt.duration_ms === 'number' ? `${attempt.duration_ms} ms` : '-'}
-              </Descriptions.Item>
-              <Descriptions.Item label="错误">
-                {[attempt.error_code, attempt.error_message].filter(Boolean).join(' / ') || '-'}
-              </Descriptions.Item>
-            </Descriptions>
+            <DetailMetaList
+              className="message-log-attempt-meta"
+              items={[
+                { label: '推送渠道实例', value: channelLabel },
+                {
+                  label: '平台类型',
+                  value: providerType === '-' ? '-' : getProviderTypeLabel(providerType as ProviderType),
+                },
+                { label: '模板版本', value: templateVersionID, mono: true },
+                { label: '消息类型', value: messageType || '-' },
+                { label: '状态', value: <DetailDotStatus meta={getOutboundStatusMeta(status)} /> },
+                {
+                  label: '耗时',
+                  value: typeof attempt.duration_ms === 'number' ? `${attempt.duration_ms} ms` : '-',
+                },
+                {
+                  label: '错误',
+                  value: [attempt.error_code, attempt.error_message].filter(Boolean).join(' / ') || '-',
+                },
+              ]}
+            />
             <div className="message-log-attempt-grid">
               <section>
                 <Typography.Text strong>渲染后消息</Typography.Text>
