@@ -695,6 +695,7 @@ export function GroupedBarChart({
   activeLabel?: string;
   onPointClick?: (label: string, index: number) => void;
 }) {
+  const [activeIndex, setActiveIndex] = useState<number | null>(null);
   const width = 720;
   const height = 260;
   const padding = { top: 24, right: 26, bottom: 42, left: 68 };
@@ -716,7 +717,7 @@ export function GroupedBarChart({
     groupWidth / Math.max(normalizedSeries.length, 1) - seriesGap,
     3,
   );
-  const barWidth = Math.min(rawBarWidth, 28);
+  const barWidth = Math.min(rawBarWidth, 16);
   const renderedGroupWidth =
     normalizedSeries.length * barWidth +
     Math.max(normalizedSeries.length - 1, 0) * seriesGap;
@@ -728,6 +729,24 @@ export function GroupedBarChart({
     labels.length === bucketCount
       ? bucketCount
       : Math.max(labels.length - 1, 1);
+  const hoverZones = bucketHoverZones(bucketCount, padding.left, bucketWidth);
+  const activeX =
+    activeIndex === null
+      ? null
+      : padding.left + bucketWidth * activeIndex + bucketWidth / 2;
+  const activeTooltip =
+    activeIndex === null
+      ? null
+      : {
+          label: labels[activeIndex] ?? String(activeIndex + 1),
+          leftPercent: activeX === null ? 0 : (activeX / width) * 100,
+          items: normalizedSeries.map((item) => ({
+            key: item.key,
+            label: item.label,
+            color: item.color,
+            value: safeChartNumber(item.points[activeIndex] ?? 0),
+          })),
+        };
 
   return (
     <div className="bar-chart" aria-label={ariaLabel}>
@@ -789,22 +808,19 @@ export function GroupedBarChart({
           item.points.map((point, index) => {
             const value = Math.max(0, Number.isFinite(point) ? point : 0);
             const barHeight = (value / max) * innerHeight;
+            const visibleHeight = Math.max(barHeight, value > 0 ? 2 : 0);
             const x =
               padding.left +
               bucketWidth * index +
               (bucketWidth - renderedGroupWidth) / 2 +
               seriesIndex * (barWidth + seriesGap);
-            const y = padding.top + innerHeight - barHeight;
+            const y = padding.top + innerHeight - visibleHeight;
             const label = labels[index] ?? String(index + 1);
             const active = activeLabel === label;
             return (
-              <rect
+              <path
                 key={`${item.key}-${index}`}
-                x={x}
-                y={y}
-                width={barWidth}
-                height={Math.max(barHeight, value > 0 ? 2 : 0)}
-                rx="1.5"
+                d={roundedTopBarPath(x, y, barWidth, visibleHeight, 2.5)}
                 className={`chart-bar${active ? " chart-bar--active" : ""}${onPointClick ? " chart-bar--clickable" : ""}`}
                 style={{ fill: item.color }}
                 onClick={() => onPointClick?.(label, index)}
@@ -812,11 +828,42 @@ export function GroupedBarChart({
                 <title>
                   {`${label} / ${item.label}: ${formatChartTick(value)}`}
                 </title>
-              </rect>
+              </path>
             );
           }),
         )}
+        {activeIndex !== null && activeX !== null ? (
+          <line
+            x1={activeX}
+            x2={activeX}
+            y1={padding.top}
+            y2={padding.top + innerHeight}
+            className="chart-hover-guide"
+          />
+        ) : null}
+        <g
+          className="chart-hover-targets"
+          onMouseLeave={() => setActiveIndex(null)}
+        >
+          {hoverZones.map((zone, index) => (
+            <rect
+              key={`hover-${index}`}
+              x={zone.x}
+              y={padding.top}
+              width={zone.width}
+              height={innerHeight}
+              className="chart-hover-zone"
+              data-chart-index={index}
+              onMouseEnter={() => setActiveIndex(index)}
+              onFocus={() => setActiveIndex(index)}
+              onClick={() =>
+                onPointClick?.(labels[index] ?? String(index + 1), index)
+              }
+            />
+          ))}
+        </g>
       </svg>
+      {activeTooltip ? <ChartTooltip {...activeTooltip} /> : null}
       <div className="chart-inline-legend">
         {normalizedSeries.map((item) => (
           <span className="chart-legend-item" key={item.key}>
@@ -1096,7 +1143,7 @@ export function MixedLineBarChart({
   const innerWidth = width - padding.left - padding.right;
   const innerHeight = height - padding.top - padding.bottom;
   const bucketWidth = innerWidth / bucketCount;
-  const barWidth = Math.min(Math.max(bucketWidth * 0.34, 4), 18);
+  const barWidth = Math.min(Math.max(bucketWidth * 0.3, 4), 12);
   const maxBar = Math.max(...bars.points.map(safeChartNumber), 1);
   const maxLine = Math.max(...line.points.map(safeChartNumber), 1);
   const yTicks = [1, 0.66, 0.33, 0];
@@ -1210,24 +1257,21 @@ export function MixedLineBarChart({
         {bars.points.map((point, index) => {
           const value = safeChartNumber(point);
           const barHeight = (value / maxBar) * innerHeight;
+          const visibleHeight = Math.max(barHeight, value > 0 ? 2 : 0);
           const x =
             padding.left + bucketWidth * index + (bucketWidth - barWidth) / 2;
-          const y = padding.top + innerHeight - barHeight;
+          const y = padding.top + innerHeight - visibleHeight;
           return (
-            <rect
+            <path
               key={`bar-${index}`}
-              x={x}
-              y={y}
-              width={barWidth}
-              height={Math.max(barHeight, value > 0 ? 2 : 0)}
-              rx="1.5"
+              d={roundedTopBarPath(x, y, barWidth, visibleHeight, 2.5)}
               className="chart-bar"
               style={{ fill: bars.color }}
             >
               <title>
                 {`${labels[index] ?? index + 1} / ${bars.label}: ${formatChartTick(value)}`}
               </title>
-            </rect>
+            </path>
           );
         })}
         <path

@@ -193,6 +193,7 @@ import {
   RouteRecipientEditor,
   RouteRuleForm,
   RouteTargetsEditor,
+  createCanvasAutoRouteRuleDraft,
   createRouteRuleDraft,
   mapRouteRule,
   routeRuleDraftFromRow,
@@ -255,6 +256,7 @@ export {
   RouteRecipientEditor,
   RouteRuleForm,
   RouteTargetsEditor,
+  createCanvasAutoRouteRuleDraft,
   createRouteRuleDraft,
   mapRouteRule,
   routeRuleDraftFromRow,
@@ -7021,14 +7023,7 @@ export function RoutesPage({ lastUpdated, onRefresh }: ConsolePageProps) {
     if (!selectedGroup) {
       return;
     }
-    const draft = createRouteRuleDraft(
-      templateRows,
-      channelRows,
-      routePayloadFieldOptions,
-    );
-    if (!draft.conditions.some((condition) => condition.fieldPath.trim())) {
-      draft.conditions = [];
-    }
+    const draft = createCanvasAutoRouteRuleDraft(templateRows, channelRows);
     draft.targets = draft.targets.filter(
       (target) => target.channelId.trim() && target.templateVersionId.trim(),
     );

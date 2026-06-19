@@ -101,6 +101,16 @@ export function createRouteRuleDraft(
   };
 }
 
+export function createCanvasAutoRouteRuleDraft(
+  templateRows: Array<TemplateRecord & { raw?: TemplateApiRecord }>,
+  channelRows: ProviderRow[],
+): RouteRuleDraft {
+  return {
+    ...createRouteRuleDraft(templateRows, channelRows),
+    conditions: [],
+  };
+}
+
 export function RouteRuleForm({
   value,
   onChange,
