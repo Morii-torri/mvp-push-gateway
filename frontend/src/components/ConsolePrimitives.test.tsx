@@ -1,7 +1,14 @@
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 
-import { DetailDotStatus, DetailMetaList, LineChart, MixedLineBarChart, QueueTrendChart } from './ConsolePrimitives';
+import {
+  DetailDotStatus,
+  DetailMetaList,
+  GroupedBarChart,
+  LineChart,
+  MixedLineBarChart,
+  QueueTrendChart,
+} from './ConsolePrimitives';
 
 describe('LineChart', () => {
   it('renders supplied x-axis labels instead of fixed 24 hour labels', () => {
@@ -70,6 +77,42 @@ describe('MixedLineBarChart', () => {
     expect(markup).toContain('chart-hover-targets');
     expect(markup).toContain('data-chart-index="1"');
     expect(markup).not.toContain('class="chart-point"');
+  });
+
+  it('renders bars as top-rounded paths instead of rounded rectangles', () => {
+    const markup = renderToStaticMarkup(
+      <MixedLineBarChart
+        labels={['16:10', '16:15']}
+        bars={{ label: '平均耗时', color: '#94a3b8', points: [12, 20] }}
+        line={{ label: 'QPS', color: '#1677ff', points: [1.2, 2.4] }}
+        ariaLabel="QPS 耗时趋势"
+      />,
+    );
+
+    expect(markup).toContain('class="chart-bar"');
+    expect(markup).toContain('<path');
+    expect(markup).not.toContain('rx=');
+  });
+});
+
+describe('GroupedBarChart', () => {
+  it('renders slim top-rounded bars and hover capture zones', () => {
+    const markup = renderToStaticMarkup(
+      <GroupedBarChart
+        labels={['100', '200']}
+        activeLabel="100"
+        series={[
+          { key: 'dispatch', label: '出站 QPS', color: '#1677ff', points: [10, 12] },
+          { key: 'accepted', label: '接收 QPS', color: '#12b76a', points: [9, 11] },
+        ]}
+      />,
+    );
+
+    expect(markup).toContain('chart-hover-targets');
+    expect(markup).toContain('data-chart-index="1"');
+    expect(markup).toContain('chart-bar chart-bar--active');
+    expect(markup).toContain('<path');
+    expect(markup).not.toContain('rx=');
   });
 });
 

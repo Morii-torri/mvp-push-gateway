@@ -57,6 +57,7 @@ import {
   createChildOrgDraft,
   createProviderDraft,
   createSourceDraft,
+  createCanvasAutoRouteRuleDraft,
   createRouteRuleDraft,
   createTemplateDraft,
   deadLetterBatchSelectionForAction,
@@ -4015,6 +4016,60 @@ describe("critical console pages", () => {
     expect(markup).toContain("模拟范围");
     expect(markup).toContain("不会创建入站日志");
     expect(markup).not.toContain("模拟运行只调用后端路由判断");
+  });
+
+  it("creates canvas auto-added route rules with an always condition", () => {
+    const templateRows = [
+      {
+        id: "tpl-1",
+        name: "模板",
+        version: "v1",
+        raw: { current_version_id: "version-1" },
+      },
+    ] as any;
+    const channelRows = [{ id: "channel-1", name: "渠道", providerType: "webhook" }] as any;
+    const fieldDraft = createRouteRuleDraft(templateRows, channelRows, [
+      { label: "级别", value: "payload.level", type: "string" },
+    ]);
+
+    expect(validateRouteConditionDraft(fieldDraft)).toBe("请补齐条件字段、操作符和值或匹配组");
+
+    const draft = createCanvasAutoRouteRuleDraft(templateRows, channelRows);
+
+    expect(draft.conditions).toEqual([]);
+    expect(validateRouteConditionDraft(draft)).toBe("");
+
+    const row = routeRuleDraftToRow(
+      {
+        ...draft,
+        targets: [
+          {
+            id: "target-1",
+            channelId: "channel-1",
+            templateVersionId: "version-1",
+            enabled: true,
+          },
+        ],
+      },
+      {
+        id: "flow-1",
+        name: "路由组",
+        sourceName: "来源 A",
+        sourceCode: "source-a",
+        enabled: true,
+        currentVersion: "v1",
+        ruleIds: [],
+        totalHitCount: 0,
+        updatedAt: "2026-05-12 09:00:00",
+      },
+      null,
+      1,
+      [],
+      templateRows,
+      channelRows,
+    );
+
+    expect(row.conditionTree).toEqual({ operator: "always" });
   });
 
   it("round trips documented route condition operators through route rule drafts", () => {
