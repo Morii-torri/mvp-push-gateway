@@ -82,6 +82,7 @@ func main() {
 				LatestPayloadKVBucket: cfg.Queue.NATS.LatestPayloadKVBucket,
 				InboundDedupeKVPrefix: cfg.Queue.NATS.InboundDedupeKVPrefix,
 				HMACNonceKVPrefix:     cfg.Queue.NATS.HMACNonceKVPrefix,
+				LoginCaptchaKVBucket:  cfg.Queue.NATS.LoginCaptchaKVBucket,
 			})
 			if err != nil {
 				log.Fatalf("nats jetstream connection failed: %v", err)
@@ -203,6 +204,9 @@ func main() {
 			httpapi.WithAuditService(auditService),
 			httpapi.WithSettingsService(settingsService),
 		)
+		if natsPublisher != nil {
+			handlerOptions = append(handlerOptions, httpapi.WithLoginCaptchaStateStore(natsPublisher))
+		}
 	}
 
 	server := &http.Server{

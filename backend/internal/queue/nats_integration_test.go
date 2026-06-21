@@ -2,6 +2,7 @@ package queue
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"os"
@@ -205,6 +206,48 @@ func TestNATSPublisherHMACNonceUsesKVCreateCAS(t *testing.T) {
 	}
 	if !first || second {
 		t.Fatalf("expected first hmac nonce reservation true and duplicate false, got first=%v second=%v", first, second)
+	}
+}
+
+func TestNATSPublisherLoginCaptchaConsumesOnce(t *testing.T) {
+	url := os.Getenv("MGP_NATS_TEST_URL")
+	if url == "" {
+		t.Skip("set MGP_NATS_TEST_URL to run JetStream integration test")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	conn, err := nats.Connect(url, nats.Name("mvp-push-gateway-test"), nats.Timeout(2*time.Second))
+	if err != nil {
+		t.Fatalf("connect nats: %v", err)
+	}
+	defer conn.Close()
+
+	suffix := strconv.FormatInt(time.Now().UnixNano(), 10)
+	publisher, err := NewNATSPublisherFromConn(conn, NATSOptions{
+		LatestPayloadKVBucket: "MGP_TEST_SOURCE_LATEST_" + suffix,
+		InboundDedupeKVPrefix: "MGP_TEST_INBOUND_DEDUPE_" + suffix,
+		HMACNonceKVPrefix:     "MGP_TEST_HMAC_NONCE_" + suffix,
+		LoginCaptchaKVBucket:  "MGP_TEST_LOGIN_CAPTCHA_" + suffix,
+	})
+	if err != nil {
+		t.Fatalf("create publisher: %v", err)
+	}
+	answerHash := sha256.Sum256([]byte("ABC234"))
+	id := "captcha-" + suffix
+	if err := publisher.StoreLoginCaptcha(ctx, id, answerHash, time.Now().Add(2*time.Minute)); err != nil {
+		t.Fatalf("store login captcha: %v", err)
+	}
+	first, err := publisher.ConsumeLoginCaptcha(ctx, id, answerHash, time.Now())
+	if err != nil {
+		t.Fatalf("first captcha consume: %v", err)
+	}
+	second, err := publisher.ConsumeLoginCaptcha(ctx, id, answerHash, time.Now())
+	if err != nil {
+		t.Fatalf("second captcha consume: %v", err)
+	}
+	if !first || second {
+		t.Fatalf("expected first captcha consume true and second false, got first=%v second=%v", first, second)
 	}
 }
 

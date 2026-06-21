@@ -45,9 +45,59 @@ describe("auth api", () => {
       ),
     );
 
-    await authApi.login({ username: "admin", password: "ChangeMe2026!" }, fetchMock);
+    await authApi.login(
+      {
+        username: "admin",
+        password: "ChangeMe2026!",
+        captcha_id: "captcha-1",
+        captcha_code: "ABC234",
+      },
+      fetchMock,
+    );
 
     expect(storage.getItem(ADMIN_TOKEN_KEY)).toBeNull();
+  });
+
+  it("sends the server captcha fields with login requests", async () => {
+    const fetchMock = vi.fn(async () =>
+      new Response(
+        JSON.stringify({
+          expires_at: "2026-06-09T00:00:00Z",
+          admin: {
+            id: "admin-1",
+            username: "admin",
+            display_name: "Admin",
+            must_change_password: false,
+            enabled: true,
+          },
+        }),
+        {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        },
+      ),
+    );
+
+    await authApi.login(
+      {
+        username: "admin",
+        password: "ChangeMe2026!",
+        captcha_id: "captcha-1",
+        captcha_code: "ABC234",
+      },
+      fetchMock,
+    );
+
+    const [, init] = fetchMock.mock.calls[0] as unknown as [
+      string,
+      RequestInit,
+    ];
+    expect(JSON.parse(String(init?.body))).toMatchObject({
+      username: "admin",
+      password: "ChangeMe2026!",
+      captcha_id: "captcha-1",
+      captcha_code: "ABC234",
+    });
   });
 });
 

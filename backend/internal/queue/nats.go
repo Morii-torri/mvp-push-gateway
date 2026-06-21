@@ -17,6 +17,7 @@ const defaultNakDelay = time.Second
 const defaultLatestPayloadKVBucket = "MGP_SOURCE_LATEST_PAYLOAD"
 const defaultInboundDedupeKVBucketPrefix = "MGP_INBOUND_DEDUPE"
 const defaultHMACNonceKVBucketPrefix = "MGP_HMAC_NONCE"
+const defaultLoginCaptchaKVBucket = "MGP_LOGIN_CAPTCHA"
 
 type NATSOptions struct {
 	URL                    string
@@ -29,6 +30,7 @@ type NATSOptions struct {
 	LatestPayloadKVBucket  string
 	InboundDedupeKVPrefix  string
 	HMACNonceKVPrefix      string
+	LoginCaptchaKVBucket   string
 }
 
 func NormalizeNATSOptions(options NATSOptions) NATSOptions {
@@ -59,6 +61,9 @@ func NormalizeNATSOptions(options NATSOptions) NATSOptions {
 	}
 	if strings.TrimSpace(options.HMACNonceKVPrefix) == "" {
 		options.HMACNonceKVPrefix = defaultHMACNonceKVBucketPrefix
+	}
+	if strings.TrimSpace(options.LoginCaptchaKVBucket) == "" {
+		options.LoginCaptchaKVBucket = defaultLoginCaptchaKVBucket
 	}
 	return options
 }

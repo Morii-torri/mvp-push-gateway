@@ -86,6 +86,7 @@ func TestLoadUsesJetStreamQueueDefaults(t *testing.T) {
 	t.Setenv("MGP_NATS_ROUTE_CONSUMERS", "")
 	t.Setenv("MGP_NATS_SEND_CONSUMERS", "")
 	t.Setenv("MGP_NATS_RESULT_CONSUMERS", "")
+	t.Setenv("MGP_NATS_LOGIN_CAPTCHA_KV_BUCKET", "")
 	t.Setenv("MGP_RESULT_WRITER_BATCH_SIZE", "")
 	t.Setenv("MGP_RESULT_WRITER_FLUSH_INTERVAL_MS", "")
 
@@ -118,6 +119,7 @@ func TestLoadAllowsJetStreamQueueEnvironmentOverrides(t *testing.T) {
 	t.Setenv("MGP_NATS_ROUTE_CONSUMERS", "12")
 	t.Setenv("MGP_NATS_SEND_CONSUMERS", "24")
 	t.Setenv("MGP_NATS_RESULT_CONSUMERS", "6")
+	t.Setenv("MGP_NATS_LOGIN_CAPTCHA_KV_BUCKET", "MGP_CUSTOM_CAPTCHA")
 	t.Setenv("MGP_RESULT_WRITER_BATCH_SIZE", "250")
 	t.Setenv("MGP_RESULT_WRITER_FLUSH_INTERVAL_MS", "25")
 
@@ -130,6 +132,7 @@ func TestLoadAllowsJetStreamQueueEnvironmentOverrides(t *testing.T) {
 		cfg.Queue.NATS.RouteConsumers != 12 ||
 		cfg.Queue.NATS.SendConsumers != 24 ||
 		cfg.Queue.NATS.ResultConsumers != 6 ||
+		cfg.Queue.NATS.LoginCaptchaKVBucket != "MGP_CUSTOM_CAPTCHA" ||
 		cfg.Queue.ResultWriter.BatchSize != 250 ||
 		cfg.Queue.ResultWriter.FlushIntervalMS != 25 {
 		t.Fatalf("expected JetStream queue overrides, got %+v", cfg.Queue)

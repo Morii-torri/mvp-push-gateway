@@ -53,6 +53,7 @@ type Handler struct {
 	perfRuns      *performanceTestRunStore
 	perfUpstream  *performanceTestUpstreamStore
 	loginFailures *loginFailureLimiter
+	loginCaptcha  *captchaStore
 }
 
 type Option func(*Handler)
@@ -298,6 +299,27 @@ func WithSettingsService(service settingsService) Option {
 	}
 }
 
+func WithLoginCaptchaAnswerForTesting(answer string) Option {
+	return func(h *Handler) {
+		if h.loginCaptcha == nil {
+			h.loginCaptcha = newCaptchaStore()
+		}
+		h.loginCaptcha.answerOverride = normalizeCaptchaAnswer(answer)
+	}
+}
+
+func WithLoginCaptchaStateStore(store LoginCaptchaStateStore) Option {
+	return func(h *Handler) {
+		if store == nil {
+			return
+		}
+		if h.loginCaptcha == nil {
+			h.loginCaptcha = newCaptchaStore()
+		}
+		h.loginCaptcha.state = store
+	}
+}
+
 type healthResponse struct {
 	Status      string `json:"status"`
 	AppName     string `json:"app_name"`
@@ -311,6 +333,7 @@ func NewHandler(cfg config.Config, options ...Option) http.Handler {
 		perfRuns:      newPerformanceTestRunStore(),
 		perfUpstream:  newPerformanceTestUpstreamStore(),
 		loginFailures: newLoginFailureLimiter(),
+		loginCaptcha:  newCaptchaStore(),
 	}
 	for _, option := range options {
 		option(handler)
@@ -320,6 +343,7 @@ func NewHandler(cfg config.Config, options ...Option) http.Handler {
 	mux.HandleFunc(cfg.Server.APIPrefix+"/health", handler.healthHandler)
 	mux.HandleFunc(cfg.Server.APIPrefix+"/setup/status", handler.setupStatusHandler)
 	mux.HandleFunc(cfg.Server.APIPrefix+"/setup/admin", handler.setupAdminHandler)
+	mux.HandleFunc(cfg.Server.APIPrefix+"/auth/captcha", handler.captchaHandler)
 	mux.HandleFunc(cfg.Server.APIPrefix+"/auth/login", handler.loginHandler)
 	mux.HandleFunc(cfg.Server.APIPrefix+"/auth/logout", handler.logoutHandler)
 	mux.HandleFunc(cfg.Server.APIPrefix+"/auth/me", handler.meHandler)

@@ -33,6 +33,7 @@ func run(ctx context.Context) error {
 		LatestPayloadKVBucket: cfg.Queue.NATS.LatestPayloadKVBucket,
 		InboundDedupeKVPrefix: cfg.Queue.NATS.InboundDedupeKVPrefix,
 		HMACNonceKVPrefix:     cfg.Queue.NATS.HMACNonceKVPrefix,
+		LoginCaptchaKVBucket:  cfg.Queue.NATS.LoginCaptchaKVBucket,
 	})
 	if err != nil {
 		return err

@@ -65,6 +65,7 @@ type NATSConfig struct {
 	LatestPayloadKVBucket string
 	InboundDedupeKVPrefix string
 	HMACNonceKVPrefix     string
+	LoginCaptchaKVBucket  string
 }
 
 type ResultWriterConfig struct {
@@ -109,6 +110,7 @@ func Load() Config {
 				LatestPayloadKVBucket: strings.TrimSpace(os.Getenv("MGP_NATS_LATEST_PAYLOAD_KV_BUCKET")),
 				InboundDedupeKVPrefix: strings.TrimSpace(os.Getenv("MGP_NATS_INBOUND_DEDUPE_KV_PREFIX")),
 				HMACNonceKVPrefix:     strings.TrimSpace(os.Getenv("MGP_NATS_HMAC_NONCE_KV_PREFIX")),
+				LoginCaptchaKVBucket:  strings.TrimSpace(os.Getenv("MGP_NATS_LOGIN_CAPTCHA_KV_BUCKET")),
 			},
 			ResultWriter: ResultWriterConfig{
 				BatchSize:       envIntOrDefault("MGP_RESULT_WRITER_BATCH_SIZE", 500),

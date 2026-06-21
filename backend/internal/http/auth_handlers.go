@@ -64,8 +64,10 @@ type setupAdminResponse struct {
 }
 
 type loginRequest struct {
-	Username string `json:"username"`
-	Password string `json:"password"`
+	Username    string `json:"username"`
+	Password    string `json:"password"`
+	CaptchaID   string `json:"captcha_id"`
+	CaptchaCode string `json:"captcha_code"`
 }
 
 type loginResponse struct {
@@ -162,6 +164,23 @@ func (h *Handler) loginHandler(w http.ResponseWriter, r *http.Request) {
 	if h.loginFailures != nil && !h.loginFailures.allow(request.Username, loginIP, time.Now()) {
 		h.recordLoginFailureAudit(r, request.Username, http.StatusTooManyRequests, "MGP-AUTH-004")
 		writeAPIError(w, http.StatusTooManyRequests, "MGP-AUTH-004", "登录失败次数过多，请稍后重试")
+		return
+	}
+	captchaOK := false
+	if h.loginCaptcha != nil {
+		var captchaErr error
+		captchaOK, captchaErr = h.loginCaptcha.verify(r.Context(), request.CaptchaID, request.CaptchaCode)
+		if captchaErr != nil {
+			writeAPIError(w, http.StatusInternalServerError, "MGP-AUTH-999", "认证服务内部错误")
+			return
+		}
+	}
+	if !captchaOK {
+		if h.loginFailures != nil {
+			h.loginFailures.recordFailure(request.Username, loginIP, time.Now())
+		}
+		h.recordLoginFailureAudit(r, request.Username, http.StatusBadRequest, "MGP-AUTH-006")
+		writeAPIError(w, http.StatusBadRequest, "MGP-AUTH-006", "验证码错误或已过期")
 		return
 	}
 

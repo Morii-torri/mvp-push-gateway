@@ -41,6 +41,7 @@ func TestFreshEnvironmentHTTPFlowCoversSetupAuthSourceTemplateRouteAndIngest(t *
 
 	handler := httpapi.NewHandler(
 		integrationTestConfig(),
+		httpapi.WithLoginCaptchaAnswerForTesting("ABC234"),
 		httpapi.WithAuthService(auth.NewService(repository)),
 		httpapi.WithSourceService(source.NewService(
 			repository,
@@ -82,10 +83,10 @@ func TestFreshEnvironmentHTTPFlowCoversSetupAuthSourceTemplateRouteAndIngest(t *
 		"confirm_password": "valid-password-456",
 	}, http.StatusConflict)
 
-	login, loginRec := doJSONWithResponse[loginBody](t, handler, http.MethodPost, "/api/v1/auth/login", "", map[string]any{
+	login, loginRec := doJSONWithResponse[loginBody](t, handler, http.MethodPost, "/api/v1/auth/login", "", loginPayload(t, handler, map[string]any{
 		"username": "admin",
 		"password": "valid-password-123",
-	}, http.StatusOK)
+	}), http.StatusOK)
 	if login.Token != "" || login.TokenType != "" {
 		t.Fatalf("unexpected login result: %+v", login)
 	}
@@ -105,15 +106,15 @@ func TestFreshEnvironmentHTTPFlowCoversSetupAuthSourceTemplateRouteAndIngest(t *
 	}
 	assertStatusCode(t, handler, http.MethodGet, "/api/v1/auth/me", sessionToken, nil, http.StatusUnauthorized)
 
-	assertStatusCode(t, handler, http.MethodPost, "/api/v1/auth/login", "", map[string]any{
+	assertStatusCode(t, handler, http.MethodPost, "/api/v1/auth/login", "", loginPayload(t, handler, map[string]any{
 		"username": "admin",
 		"password": "valid-password-123",
-	}, http.StatusUnauthorized)
+	}), http.StatusUnauthorized)
 
-	rotatedLogin, rotatedLoginRec := doJSONWithResponse[loginBody](t, handler, http.MethodPost, "/api/v1/auth/login", "", map[string]any{
+	rotatedLogin, rotatedLoginRec := doJSONWithResponse[loginBody](t, handler, http.MethodPost, "/api/v1/auth/login", "", loginPayload(t, handler, map[string]any{
 		"username": "admin",
 		"password": "rotated-password-456",
-	}, http.StatusOK)
+	}), http.StatusOK)
 	if rotatedLogin.Token != "" || rotatedLogin.TokenType != "" {
 		t.Fatalf("expected rotated password login to keep bearer token out of JSON, got %+v", rotatedLogin)
 	}
@@ -417,6 +418,16 @@ func doJSON[T any](t *testing.T, handler http.Handler, method string, path strin
 	t.Helper()
 	body, _ := doJSONWithResponse[T](t, handler, method, path, bearerToken, requestBody, expectedStatus)
 	return body
+}
+
+func loginPayload(t *testing.T, handler http.Handler, payload map[string]any) map[string]any {
+	t.Helper()
+	captcha := doJSON[struct {
+		CaptchaID string `json:"captcha_id"`
+	}](t, handler, http.MethodGet, "/api/v1/auth/captcha", "", nil, http.StatusOK)
+	payload["captcha_id"] = captcha.CaptchaID
+	payload["captcha_code"] = "ABC234"
+	return payload
 }
 
 func doJSONWithResponse[T any](t *testing.T, handler http.Handler, method string, path string, bearerToken string, requestBody any, expectedStatus int) (T, *httptest.ResponseRecorder) {

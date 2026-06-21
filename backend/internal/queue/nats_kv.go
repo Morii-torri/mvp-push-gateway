@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -19,12 +20,14 @@ import (
 )
 
 const maxLatestPayloadKVBytes = 16 * 1024
+const loginCaptchaKVTTL = 3 * time.Minute
 
 type natsKeyValueCache struct {
-	mu     sync.Mutex
-	latest nats.KeyValue
-	dedupe map[int64]nats.KeyValue
-	hmac   map[int64]nats.KeyValue
+	mu      sync.Mutex
+	latest  nats.KeyValue
+	captcha nats.KeyValue
+	dedupe  map[int64]nats.KeyValue
+	hmac    map[int64]nats.KeyValue
 }
 
 type latestPayloadKVValue struct {
@@ -32,11 +35,20 @@ type latestPayloadKVValue struct {
 	SampledAt time.Time       `json:"sampled_at"`
 }
 
+type loginCaptchaKVValue struct {
+	AnswerHash string    `json:"answer_hash"`
+	ExpiresAt  time.Time `json:"expires_at"`
+	Consumed   bool      `json:"consumed,omitempty"`
+}
+
 func (p *NATSPublisher) EnsureKeyValueBuckets(ctx context.Context) error {
 	if p == nil || p.js == nil {
 		return ErrInvalidInput
 	}
-	_, err := p.latestPayloadKV(ctx)
+	if _, err := p.latestPayloadKV(ctx); err != nil {
+		return err
+	}
+	_, err := p.loginCaptchaKV(ctx)
 	return err
 }
 
@@ -217,6 +229,74 @@ func (p *NATSPublisher) ReserveHMACNonce(ctx context.Context, sourceID string, n
 	return true, nil
 }
 
+func (p *NATSPublisher) StoreLoginCaptcha(ctx context.Context, id string, answerHash [32]byte, expiresAt time.Time) error {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return ErrInvalidInput
+	}
+	kv, err := p.loginCaptchaKV(ctx)
+	if err != nil {
+		return err
+	}
+	value, err := json.Marshal(loginCaptchaKVValue{
+		AnswerHash: hex.EncodeToString(answerHash[:]),
+		ExpiresAt:  expiresAt.UTC(),
+	})
+	if err != nil {
+		return err
+	}
+	_, err = kv.Create(loginCaptchaKey(id), value)
+	return err
+}
+
+func (p *NATSPublisher) ConsumeLoginCaptcha(ctx context.Context, id string, answerHash [32]byte, now time.Time) (bool, error) {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return false, ErrInvalidInput
+	}
+	kv, err := p.loginCaptchaKV(ctx)
+	if err != nil {
+		return false, err
+	}
+	key := loginCaptchaKey(id)
+	entry, err := kv.Get(key)
+	if err != nil {
+		if errors.Is(err, nats.ErrKeyNotFound) {
+			return false, nil
+		}
+		return false, err
+	}
+	var value loginCaptchaKVValue
+	if err := json.Unmarshal(entry.Value(), &value); err != nil {
+		return false, err
+	}
+	value.ExpiresAt = value.ExpiresAt.UTC()
+	if value.Consumed || !now.Before(value.ExpiresAt) {
+		_ = kv.Purge(key, nats.LastRevision(entry.Revision()))
+		return false, nil
+	}
+
+	consumed := value
+	consumed.Consumed = true
+	consumedBytes, err := json.Marshal(consumed)
+	if err != nil {
+		return false, err
+	}
+	if _, err := kv.Update(key, consumedBytes, entry.Revision()); err != nil {
+		if errors.Is(err, nats.ErrKeyExists) || errors.Is(err, nats.ErrKeyNotFound) {
+			return false, nil
+		}
+		return false, err
+	}
+
+	providedHash := hex.EncodeToString(answerHash[:])
+	ok := subtle.ConstantTimeCompare([]byte(providedHash), []byte(value.AnswerHash)) == 1
+	if ok {
+		_ = kv.Purge(key)
+	}
+	return ok, nil
+}
+
 func (p *NATSPublisher) latestPayloadKV(ctx context.Context) (nats.KeyValue, error) {
 	if p == nil || p.js == nil {
 		return nil, ErrInvalidInput
@@ -239,6 +319,32 @@ func (p *NATSPublisher) latestPayloadKV(ctx context.Context) (nats.KeyValue, err
 		return nil, err
 	}
 	p.kv.latest = kv
+	return kv, nil
+}
+
+func (p *NATSPublisher) loginCaptchaKV(ctx context.Context) (nats.KeyValue, error) {
+	if p == nil || p.js == nil {
+		return nil, ErrInvalidInput
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	p.kv.mu.Lock()
+	defer p.kv.mu.Unlock()
+	if p.kv.captcha != nil {
+		return p.kv.captcha, nil
+	}
+	kv, err := p.keyValue(ctx, p.options.LoginCaptchaKVBucket, nats.KeyValueConfig{
+		Bucket:   p.options.LoginCaptchaKVBucket,
+		History:  1,
+		TTL:      loginCaptchaKVTTL,
+		Storage:  nats.FileStorage,
+		Replicas: p.options.StreamReplicas,
+	})
+	if err != nil {
+		return nil, err
+	}
+	p.kv.captcha = kv
 	return kv, nil
 }
 
@@ -353,6 +459,11 @@ func inboundDedupeKey(sourceID string, dedupeKey string) string {
 func hmacNonceKey(sourceID string, nonce string) string {
 	sum := sha256.Sum256([]byte(strings.TrimSpace(sourceID) + "\x00" + strings.TrimSpace(nonce)))
 	return "source." + sanitizeKVToken(sourceID) + "." + hex.EncodeToString(sum[:])
+}
+
+func loginCaptchaKey(id string) string {
+	sum := sha256.Sum256([]byte(strings.TrimSpace(id)))
+	return "captcha." + hex.EncodeToString(sum[:])
 }
 
 func ttlBucketSeconds(expiresAt time.Time) int64 {

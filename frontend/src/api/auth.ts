@@ -21,9 +21,21 @@ export type LoginResult = {
   admin: AdminUser;
 };
 
+export type CaptchaChallenge = {
+  captcha_id: string;
+  image_data_url: string;
+  expires_in_seconds: number;
+};
+
 export const authApi = {
   getSetupStatus(fetcher?: ApiFetcher) {
     return apiRequest<SetupStatus>("/setup/status", { auth: false, fetcher });
+  },
+  getCaptcha(fetcher?: ApiFetcher) {
+    return apiRequest<CaptchaChallenge>("/auth/captcha", {
+      auth: false,
+      fetcher,
+    });
   },
   setupAdmin(
     input: {
@@ -42,7 +54,12 @@ export const authApi = {
     });
   },
   async login(
-    input: { username: string; password: string },
+    input: {
+      username: string;
+      password: string;
+      captcha_id: string;
+      captcha_code: string;
+    },
     fetcher?: ApiFetcher,
   ) {
     return apiRequest<LoginResult>("/auth/login", {

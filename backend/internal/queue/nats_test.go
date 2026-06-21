@@ -40,6 +40,9 @@ func TestNormalizeNATSOptionsUsesDurableQueueDefaults(t *testing.T) {
 	if options.HMACNonceKVPrefix != "MGP_HMAC_NONCE" {
 		t.Fatalf("expected default hmac nonce kv prefix, got %q", options.HMACNonceKVPrefix)
 	}
+	if options.LoginCaptchaKVBucket != "MGP_LOGIN_CAPTCHA" {
+		t.Fatalf("expected default login captcha kv bucket, got %q", options.LoginCaptchaKVBucket)
+	}
 }
 
 func TestLatestPayloadKVValueIsMinimizedBeforeStorage(t *testing.T) {

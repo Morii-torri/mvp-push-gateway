@@ -57,7 +57,7 @@ describe("admin password frontend validation", () => {
 });
 
 describe("login page visual shell", () => {
-  it("uses the one-card layout from the login reference artwork", async () => {
+  it("keeps the login card and header actions over the banner background", async () => {
     const [authGateSource, styles] = await Promise.all([
       readTextFile("./AuthGate.tsx"),
       readTextFile("../app/styles.css"),
@@ -66,21 +66,20 @@ describe("login page visual shell", () => {
     expect(authGateSource).toContain('className="mg-header-actions"');
     expect(authGateSource).toContain("安全接入");
     expect(authGateSource).toContain("分发路由");
-    expect(authGateSource).toContain('className="mg-hero-panel"');
+    expect(authGateSource).not.toContain('className="mg-hero-panel"');
+    expect(authGateSource).not.toContain('className="mg-diagram-stage"');
     expect(authGateSource).not.toContain('className="mg-hero-card"');
-    expect(authGateSource).toContain('className="mg-login-page-footer"');
+    expect(authGateSource).not.toContain('className="mg-login-page-footer"');
 
     expect(styles).toContain(".mg-login-shell");
     expect(styles).toContain(
-      "grid-template-columns: minmax(0, 1fr) minmax(360px, 520px);",
+      'url("/login-assets/login-banner.png")',
     );
-    expect(styles).toContain(".mg-hero-panel");
     expect(styles).not.toContain(".mg-hero-card {");
-    expect(styles).toContain(".mg-login-page-footer");
     expect(styles).toContain("@media (max-width: 980px)");
   });
 
-  it("uses one complete background and hand-drawn login artwork", async () => {
+  it("does not render the previous hand-drawn login artwork elements", async () => {
     const [authGateSource, styles] = await Promise.all([
       readTextFile("./AuthGate.tsx"),
       readTextFile("../app/styles.css"),
@@ -95,16 +94,23 @@ describe("login page visual shell", () => {
       "/login-assets/login-shield.png",
     ];
 
-    expect(authGateSource).toContain(
+    expect(authGateSource).not.toContain(
       "© 2026 MVP Push Gateway. All Rights Reserved.",
     );
-    expect(styles).toContain('url("/login-assets/login-background.png")');
+    expect(styles).not.toContain('url("/login-assets/login-background.png")');
+    expect(styles).toContain('url("/login-assets/login-banner.png")');
     expect(styles).not.toContain(
       "linear-gradient(90deg, rgba(255, 255, 255, 0.78) 0 49%",
     );
-    expect(authGateSource).toContain('className="mg-diagram-stage"');
     expect(authGateSource).toContain('className="mg-security-illustration"');
+    expect(authGateSource).toContain(
+      'src="/login-assets/login-card-shield.png"',
+    );
+    expect(styles).toContain(".mg-security-art");
     expect(authGateSource).not.toContain('className="mg-asset-stage"');
+    await expect(
+      fileExists("../../public/login-assets/login-card-shield.png"),
+    ).resolves.toBe(true);
 
     for (const assetPath of removedAssetPaths) {
       expect(combinedSource).not.toContain(assetPath);
@@ -112,18 +118,21 @@ describe("login page visual shell", () => {
     }
   });
 
-  it("does not render the login captcha field", async () => {
+  it("renders a server-backed login captcha field", async () => {
     const [authGateSource, styles] = await Promise.all([
       readTextFile("./AuthGate.tsx"),
       readTextFile("../app/styles.css"),
     ]);
 
-    expect(authGateSource).not.toContain('label="验证码"');
-    expect(authGateSource).not.toContain('name="captcha"');
-    expect(authGateSource).not.toContain('className="mg-captcha-row"');
+    expect(authGateSource).toContain('label="验证码"');
+    expect(authGateSource).toContain('name="captcha_code"');
+    expect(authGateSource).toContain('className="mg-captcha-row"');
+    expect(authGateSource).toContain("authApi.getCaptcha");
+    expect(authGateSource).toContain("captcha_id");
+    expect(authGateSource).toContain("captcha_code");
     expect(authGateSource).not.toContain("M8K2");
-    expect(authGateSource).not.toContain("换一张");
-    expect(styles).not.toContain(".mg-captcha-");
+    expect(authGateSource).toContain("换一张");
+    expect(styles).toContain(".mg-captcha-row");
   });
 });
 
