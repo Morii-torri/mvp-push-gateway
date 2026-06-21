@@ -1,0 +1,60 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="196" height="196" viewBox="0 0 196 196" fill="none" style="font-family:Noto Sans CJK SC, PingFang SC, Microsoft YaHei, Arial, sans-serif;">
+
+<defs>
+  <linearGradient id="blueMain" x1="0" y1="0" x2="1" y2="1">
+    <stop offset="0" stop-color="#1A67FF"/>
+    <stop offset="0.52" stop-color="#208BFF"/>
+    <stop offset="1" stop-color="#31D4FF"/>
+  </linearGradient>
+  <linearGradient id="blueDeep" x1="0" y1="0" x2="1" y2="1">
+    <stop offset="0" stop-color="#0B55E8"/>
+    <stop offset="1" stop-color="#25B8FF"/>
+  </linearGradient>
+  <linearGradient id="blueSoft" x1="0" y1="0" x2="1" y2="1">
+    <stop offset="0" stop-color="#F8FCFF"/>
+    <stop offset="0.54" stop-color="#EEF7FF"/>
+    <stop offset="1" stop-color="#DCEEFF"/>
+  </linearGradient>
+  <linearGradient id="glass" x1="0" y1="0" x2="1" y2="1">
+    <stop offset="0" stop-color="#FFFFFF" stop-opacity="0.96"/>
+    <stop offset="1" stop-color="#ECF6FF" stop-opacity="0.76"/>
+  </linearGradient>
+  <linearGradient id="cubeTop" x1="0" y1="0" x2="1" y2="1">
+    <stop offset="0" stop-color="#56E0FF"/>
+    <stop offset="1" stop-color="#1979FF"/>
+  </linearGradient>
+  <linearGradient id="cubeFront" x1="0" y1="0" x2="1" y2="1">
+    <stop offset="0" stop-color="#27C8FF"/>
+    <stop offset="0.55" stop-color="#1E86FF"/>
+    <stop offset="1" stop-color="#125EE8"/>
+  </linearGradient>
+  <linearGradient id="cubeSide" x1="0" y1="0" x2="1" y2="1">
+    <stop offset="0" stop-color="#2B9CFF"/>
+    <stop offset="1" stop-color="#0649D8"/>
+  </linearGradient>
+  <radialGradient id="aura" cx="50%" cy="50%" r="60%">
+    <stop offset="0" stop-color="#2ED8FF" stop-opacity="0.65"/>
+    <stop offset="0.55" stop-color="#1B7CFF" stop-opacity="0.16"/>
+    <stop offset="1" stop-color="#1B7CFF" stop-opacity="0"/>
+  </radialGradient>
+  <filter id="softShadow" x="-35%" y="-35%" width="170%" height="170%">
+    <feDropShadow dx="0" dy="18" stdDeviation="18" flood-color="#286FC8" flood-opacity="0.22"/>
+  </filter>
+  <filter id="smallShadow" x="-35%" y="-35%" width="170%" height="170%">
+    <feDropShadow dx="0" dy="8" stdDeviation="8" flood-color="#1B6ED0" flood-opacity="0.18"/>
+  </filter>
+  <filter id="glow" x="-80%" y="-80%" width="260%" height="260%">
+    <feGaussianBlur stdDeviation="8" result="blur"/>
+    <feColorMatrix in="blur" type="matrix" values="0 0 0 0 0.1  0 0 0 0 0.62  0 0 0 0 1  0 0 0 .6 0" result="glow"/>
+    <feMerge><feMergeNode in="glow"/><feMergeNode in="SourceGraphic"/></feMerge>
+  </filter>
+</defs>
+
+
+
+<g filter="url(#smallShadow)">
+  <rect x="40" y="40" width="116" height="116" rx="28" fill="url(#blueDeep)"/>
+  <path d="M65 96 L133 61 C142 56 151 64 147 74 L119 139 C116 148 104 149 100 141 L88 117 L65 108 C57 105 57 100 65 96 Z" fill="#FFFFFF" opacity="0.96"/>
+  <path d="M92 116 L134 72 L104 127" stroke="#D6EBFF" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
+</g>
+</svg>

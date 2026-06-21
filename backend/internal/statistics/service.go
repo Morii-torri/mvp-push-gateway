@@ -50,11 +50,12 @@ type FailureRanking struct {
 }
 
 type RecentAnomaly struct {
-	Level string    `json:"level"`
-	Title string    `json:"title"`
-	Time  time.Time `json:"time"`
-	Count int       `json:"count"`
-	Ratio float64   `json:"ratio"`
+	Level   string    `json:"level"`
+	Title   string    `json:"title"`
+	Time    time.Time `json:"time"`
+	Count   int       `json:"count"`
+	Ratio   float64   `json:"ratio"`
+	TraceID string    `json:"trace_id,omitempty"`
 }
 
 type Overview struct {

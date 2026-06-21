@@ -1,0 +1,104 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1920" height="1080" viewBox="0 0 1920 1080" fill="none" style="font-family:Noto Sans CJK SC, PingFang SC, Microsoft YaHei, Arial, sans-serif;">
+
+<defs>
+  <linearGradient id="blueMain" x1="0" y1="0" x2="1" y2="1">
+    <stop offset="0" stop-color="#1A67FF"/>
+    <stop offset="0.52" stop-color="#208BFF"/>
+    <stop offset="1" stop-color="#31D4FF"/>
+  </linearGradient>
+  <linearGradient id="blueDeep" x1="0" y1="0" x2="1" y2="1">
+    <stop offset="0" stop-color="#0B55E8"/>
+    <stop offset="1" stop-color="#25B8FF"/>
+  </linearGradient>
+  <linearGradient id="blueSoft" x1="0" y1="0" x2="1" y2="1">
+    <stop offset="0" stop-color="#F8FCFF"/>
+    <stop offset="0.54" stop-color="#EEF7FF"/>
+    <stop offset="1" stop-color="#DCEEFF"/>
+  </linearGradient>
+  <linearGradient id="glass" x1="0" y1="0" x2="1" y2="1">
+    <stop offset="0" stop-color="#FFFFFF" stop-opacity="0.96"/>
+    <stop offset="1" stop-color="#ECF6FF" stop-opacity="0.76"/>
+  </linearGradient>
+  <linearGradient id="cubeTop" x1="0" y1="0" x2="1" y2="1">
+    <stop offset="0" stop-color="#56E0FF"/>
+    <stop offset="1" stop-color="#1979FF"/>
+  </linearGradient>
+  <linearGradient id="cubeFront" x1="0" y1="0" x2="1" y2="1">
+    <stop offset="0" stop-color="#27C8FF"/>
+    <stop offset="0.55" stop-color="#1E86FF"/>
+    <stop offset="1" stop-color="#125EE8"/>
+  </linearGradient>
+  <linearGradient id="cubeSide" x1="0" y1="0" x2="1" y2="1">
+    <stop offset="0" stop-color="#2B9CFF"/>
+    <stop offset="1" stop-color="#0649D8"/>
+  </linearGradient>
+  <radialGradient id="aura" cx="50%" cy="50%" r="60%">
+    <stop offset="0" stop-color="#2ED8FF" stop-opacity="0.65"/>
+    <stop offset="0.55" stop-color="#1B7CFF" stop-opacity="0.16"/>
+    <stop offset="1" stop-color="#1B7CFF" stop-opacity="0"/>
+  </radialGradient>
+  <filter id="softShadow" x="-35%" y="-35%" width="170%" height="170%">
+    <feDropShadow dx="0" dy="18" stdDeviation="18" flood-color="#286FC8" flood-opacity="0.22"/>
+  </filter>
+  <filter id="smallShadow" x="-35%" y="-35%" width="170%" height="170%">
+    <feDropShadow dx="0" dy="8" stdDeviation="8" flood-color="#1B6ED0" flood-opacity="0.18"/>
+  </filter>
+  <filter id="glow" x="-80%" y="-80%" width="260%" height="260%">
+    <feGaussianBlur stdDeviation="8" result="blur"/>
+    <feColorMatrix in="blur" type="matrix" values="0 0 0 0 0.1  0 0 0 0 0.62  0 0 0 0 1  0 0 0 .6 0" result="glow"/>
+    <feMerge><feMergeNode in="glow"/><feMergeNode in="SourceGraphic"/></feMerge>
+  </filter>
+</defs>
+
+
+
+<defs>
+  <linearGradient id="bgGrad" x1="0" y1="0" x2="1" y2="1">
+    <stop offset="0" stop-color="#FFFFFF"/>
+    <stop offset="0.38" stop-color="#F3FAFF"/>
+    <stop offset="0.72" stop-color="#E3F1FF"/>
+    <stop offset="1" stop-color="#CFE4FF"/>
+  </linearGradient>
+  <radialGradient id="bgGlow1" cx="0.06" cy="0.1" r="0.55">
+    <stop offset="0" stop-color="#FFFFFF" stop-opacity="1"/>
+    <stop offset="1" stop-color="#FFFFFF" stop-opacity="0"/>
+  </radialGradient>
+  <radialGradient id="bgGlow2" cx="0.78" cy="0.18" r="0.42">
+    <stop offset="0" stop-color="#B8D8FF" stop-opacity="0.72"/>
+    <stop offset="1" stop-color="#B8D8FF" stop-opacity="0"/>
+  </radialGradient>
+  <filter id="blur" x="-20%" y="-20%" width="140%" height="140%"><feGaussianBlur stdDeviation="8"/></filter>
+</defs>
+<rect width="1920" height="1080" fill="url(#bgGrad)"/>
+<rect width="1920" height="1080" fill="url(#bgGlow1)"/>
+<rect width="1920" height="1080" fill="url(#bgGlow2)"/>
+<g opacity="0.38" stroke="#9BC3F4" stroke-width="1">
+  <path d="M0 675 H1920"/><path d="M0 775 H1920"/><path d="M0 875 H1920"/>
+  <path d="M0 970 H1920"/><path d="M240 620 V1080"/><path d="M520 590 V1080"/><path d="M820 530 V1080"/>
+  <path d="M1120 520 V1080"/><path d="M1420 500 V1080"/><path d="M1700 480 V1080"/>
+  <path d="M0 820 C360 790 680 760 960 742 C1260 722 1580 696 1920 650" opacity="0.35"/>
+  <path d="M0 940 C400 875 750 835 1070 810 C1390 785 1660 752 1920 690" opacity="0.27"/>
+</g>
+<g opacity="0.36" fill="#FFFFFF">
+  <rect x="1320" y="58" width="26" height="510" rx="6"/>
+  <rect x="1384" y="0" width="32" height="610" rx="7"/>
+  <rect x="1452" y="18" width="28" height="560" rx="6"/>
+  <rect x="1512" y="0" width="36" height="660" rx="8"/>
+  <rect x="1590" y="300" width="230" height="28" rx="8"/>
+  <rect x="1580" y="570" width="290" height="34" rx="8"/>
+</g>
+<g stroke="#FFFFFF" stroke-width="2" opacity="0.6">
+  <path d="M1165 346 H1630 L1740 300"/>
+  <path d="M1020 540 H1390 V388"/>
+  <path d="M1490 710 H1760"/>
+  <circle cx="1165" cy="346" r="4" fill="#fff"/>
+  <circle cx="1630" cy="346" r="4" fill="#fff"/>
+  <circle cx="1390" cy="388" r="4" fill="#fff"/>
+  <circle cx="1760" cy="710" r="4" fill="#fff"/>
+</g>
+<g opacity="0.42" stroke="#7DB7FF" stroke-width="1.5" fill="none">
+  <ellipse cx="640" cy="940" rx="500" ry="112"/>
+  <ellipse cx="640" cy="940" rx="350" ry="78"/>
+</g>
+
+</svg>

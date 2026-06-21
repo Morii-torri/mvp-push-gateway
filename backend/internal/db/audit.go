@@ -165,5 +165,8 @@ func auditWhere(filter audit.ListFilter) (string, []any) {
 	if strings.TrimSpace(filter.ResourceType) != "" {
 		add("resource_type = $%d", filter.ResourceType)
 	}
+	if strings.TrimSpace(filter.ResourceName) != "" {
+		add("COALESCE(resource_id, '') ILIKE '%%' || $%d || '%%'", filter.ResourceName)
+	}
 	return strings.Join(clauses, " AND "), args
 }

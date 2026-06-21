@@ -6,6 +6,9 @@
 !.env.example
 .worktrees/
 
+# Local-only design/security notes
+docs/plans/2026-06-21-multi-tenant-registration-encryption-design.md
+
 # Build outputs
 dist/
 build/
@@ -25,6 +28,17 @@ logs/
 data/
 output/
 *.log
+deploy/data/**
+!deploy/data/.gitkeep
+!deploy/data/**/.gitkeep
+
+# Local private keys and certificates
+*.pem
+*.key
+*.p12
+*.pfx
+id_rsa*
+id_ed25519*
 
 # Editor
 .idea/

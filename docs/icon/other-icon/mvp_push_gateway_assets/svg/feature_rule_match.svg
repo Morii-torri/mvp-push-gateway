@@ -1,0 +1,70 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="522" height="196" viewBox="0 0 522 196" fill="none" style="font-family:Noto Sans CJK SC, PingFang SC, Microsoft YaHei, Arial, sans-serif;">
+
+<defs>
+  <linearGradient id="blueMain" x1="0" y1="0" x2="1" y2="1">
+    <stop offset="0" stop-color="#1A67FF"/>
+    <stop offset="0.52" stop-color="#208BFF"/>
+    <stop offset="1" stop-color="#31D4FF"/>
+  </linearGradient>
+  <linearGradient id="blueDeep" x1="0" y1="0" x2="1" y2="1">
+    <stop offset="0" stop-color="#0B55E8"/>
+    <stop offset="1" stop-color="#25B8FF"/>
+  </linearGradient>
+  <linearGradient id="blueSoft" x1="0" y1="0" x2="1" y2="1">
+    <stop offset="0" stop-color="#F8FCFF"/>
+    <stop offset="0.54" stop-color="#EEF7FF"/>
+    <stop offset="1" stop-color="#DCEEFF"/>
+  </linearGradient>
+  <linearGradient id="glass" x1="0" y1="0" x2="1" y2="1">
+    <stop offset="0" stop-color="#FFFFFF" stop-opacity="0.96"/>
+    <stop offset="1" stop-color="#ECF6FF" stop-opacity="0.76"/>
+  </linearGradient>
+  <linearGradient id="cubeTop" x1="0" y1="0" x2="1" y2="1">
+    <stop offset="0" stop-color="#56E0FF"/>
+    <stop offset="1" stop-color="#1979FF"/>
+  </linearGradient>
+  <linearGradient id="cubeFront" x1="0" y1="0" x2="1" y2="1">
+    <stop offset="0" stop-color="#27C8FF"/>
+    <stop offset="0.55" stop-color="#1E86FF"/>
+    <stop offset="1" stop-color="#125EE8"/>
+  </linearGradient>
+  <linearGradient id="cubeSide" x1="0" y1="0" x2="1" y2="1">
+    <stop offset="0" stop-color="#2B9CFF"/>
+    <stop offset="1" stop-color="#0649D8"/>
+  </linearGradient>
+  <radialGradient id="aura" cx="50%" cy="50%" r="60%">
+    <stop offset="0" stop-color="#2ED8FF" stop-opacity="0.65"/>
+    <stop offset="0.55" stop-color="#1B7CFF" stop-opacity="0.16"/>
+    <stop offset="1" stop-color="#1B7CFF" stop-opacity="0"/>
+  </radialGradient>
+  <filter id="softShadow" x="-35%" y="-35%" width="170%" height="170%">
+    <feDropShadow dx="0" dy="18" stdDeviation="18" flood-color="#286FC8" flood-opacity="0.22"/>
+  </filter>
+  <filter id="smallShadow" x="-35%" y="-35%" width="170%" height="170%">
+    <feDropShadow dx="0" dy="8" stdDeviation="8" flood-color="#1B6ED0" flood-opacity="0.18"/>
+  </filter>
+  <filter id="glow" x="-80%" y="-80%" width="260%" height="260%">
+    <feGaussianBlur stdDeviation="8" result="blur"/>
+    <feColorMatrix in="blur" type="matrix" values="0 0 0 0 0.1  0 0 0 0 0.62  0 0 0 0 1  0 0 0 .6 0" result="glow"/>
+    <feMerge><feMergeNode in="glow"/><feMergeNode in="SourceGraphic"/></feMerge>
+  </filter>
+</defs>
+
+
+
+    
+    <rect x="24" y="24" width="474" height="148" rx="28" fill="url(#glass)" stroke="#C0DAFF" stroke-width="3" filter="url(#softShadow)"/>
+    <rect x="34" y="34" width="454" height="128" rx="20" fill="#FFFFFF" opacity="0.22"/>
+    
+    
+    <g filter="url(#smallShadow)" fill="none" stroke="url(#blueDeep)" stroke-width="6.2">
+      <circle cx="115" cy="90" r="34.1" opacity="0.24"/>
+      <circle cx="115" cy="90" r="22.32"/>
+      <circle cx="115" cy="90" r="8.06" fill="#1F7AFF"/>
+      <path d="M 134.84 70.16 L 153.44 51.56" stroke-linecap="round"/>
+      <path d="M 150.96 39.160000000000004 L 153.44 51.56 L 165.84 54.04" stroke-linecap="round" stroke-linejoin="round"/>
+    </g>
+    <text x="205" y="86" font-size="38" font-weight="800" fill="#102A55">条件匹配</text>
+    <text x="205" y="128" font-size="23" font-weight="500" fill="#63718B">多维规则引擎</text>
+    
+</svg>

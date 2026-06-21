@@ -1,0 +1,224 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1400" height="1000" viewBox="0 0 1400 1000" fill="none" style="font-family:Noto Sans CJK SC, PingFang SC, Microsoft YaHei, Arial, sans-serif;">
+
+<defs>
+  <linearGradient id="blueMain" x1="0" y1="0" x2="1" y2="1">
+    <stop offset="0" stop-color="#1A67FF"/>
+    <stop offset="0.52" stop-color="#208BFF"/>
+    <stop offset="1" stop-color="#31D4FF"/>
+  </linearGradient>
+  <linearGradient id="blueDeep" x1="0" y1="0" x2="1" y2="1">
+    <stop offset="0" stop-color="#0B55E8"/>
+    <stop offset="1" stop-color="#25B8FF"/>
+  </linearGradient>
+  <linearGradient id="blueSoft" x1="0" y1="0" x2="1" y2="1">
+    <stop offset="0" stop-color="#F8FCFF"/>
+    <stop offset="0.54" stop-color="#EEF7FF"/>
+    <stop offset="1" stop-color="#DCEEFF"/>
+  </linearGradient>
+  <linearGradient id="glass" x1="0" y1="0" x2="1" y2="1">
+    <stop offset="0" stop-color="#FFFFFF" stop-opacity="0.96"/>
+    <stop offset="1" stop-color="#ECF6FF" stop-opacity="0.76"/>
+  </linearGradient>
+  <linearGradient id="cubeTop" x1="0" y1="0" x2="1" y2="1">
+    <stop offset="0" stop-color="#56E0FF"/>
+    <stop offset="1" stop-color="#1979FF"/>
+  </linearGradient>
+  <linearGradient id="cubeFront" x1="0" y1="0" x2="1" y2="1">
+    <stop offset="0" stop-color="#27C8FF"/>
+    <stop offset="0.55" stop-color="#1E86FF"/>
+    <stop offset="1" stop-color="#125EE8"/>
+  </linearGradient>
+  <linearGradient id="cubeSide" x1="0" y1="0" x2="1" y2="1">
+    <stop offset="0" stop-color="#2B9CFF"/>
+    <stop offset="1" stop-color="#0649D8"/>
+  </linearGradient>
+  <radialGradient id="aura" cx="50%" cy="50%" r="60%">
+    <stop offset="0" stop-color="#2ED8FF" stop-opacity="0.65"/>
+    <stop offset="0.55" stop-color="#1B7CFF" stop-opacity="0.16"/>
+    <stop offset="1" stop-color="#1B7CFF" stop-opacity="0"/>
+  </radialGradient>
+  <filter id="softShadow" x="-35%" y="-35%" width="170%" height="170%">
+    <feDropShadow dx="0" dy="18" stdDeviation="18" flood-color="#286FC8" flood-opacity="0.22"/>
+  </filter>
+  <filter id="smallShadow" x="-35%" y="-35%" width="170%" height="170%">
+    <feDropShadow dx="0" dy="8" stdDeviation="8" flood-color="#1B6ED0" flood-opacity="0.18"/>
+  </filter>
+  <filter id="glow" x="-80%" y="-80%" width="260%" height="260%">
+    <feGaussianBlur stdDeviation="8" result="blur"/>
+    <feColorMatrix in="blur" type="matrix" values="0 0 0 0 0.1  0 0 0 0 0.62  0 0 0 0 1  0 0 0 .6 0" result="glow"/>
+    <feMerge><feMergeNode in="glow"/><feMergeNode in="SourceGraphic"/></feMerge>
+  </filter>
+</defs>
+
+
+
+<ellipse cx="650" cy="675" rx="610" ry="210" fill="url(#aura)" opacity="0.65"/>
+<g transform="translate(40,285) scale(.45)">
+
+
+<rect x="155" y="80" width="590" height="560" rx="54" fill="url(#glass)" stroke="#BBD8FF" stroke-width="5" filter="url(#softShadow)"/>
+<rect x="175" y="100" width="550" height="520" rx="42" fill="#FFFFFF" opacity="0.25"/>
+<text x="450" y="210" text-anchor="middle" font-size="54" font-weight="800" fill="#102A55">消息接入</text>
+<text x="450" y="300" text-anchor="middle" font-size="40" font-weight="500" fill="#5D6D8A">API / Event / Alert</text>
+
+    <g filter="url(#smallShadow)">
+      <ellipse cx="450" cy="495.0" rx="115.0" ry="27.5" fill="#B7D8FF" opacity="0.25"/>
+      <path d="M 345.0 467.5 C 345.0 437.5 370.0 413.75 402.5 418.75 C 415.0 377.5 467.5 360.0 502.5 388.75 C 515.0 382.5 532.5 387.5 545.0 400.0 C 581.25 402.5 610.0 430.0 610.0 466.25 C 610.0 502.5 582.5 527.5 543.75 527.5 H 387.5 C 362.5 527.5 345.0 503.75 345.0 467.5 Z" fill="url(#blueDeep)"/>
+      <path d="M 345.0 467.5 C 345.0 437.5 370.0 413.75 402.5 418.75 C 415.0 377.5 467.5 360.0 502.5 388.75 C 515.0 382.5 532.5 387.5 545.0 400.0" stroke="#FFFFFF" stroke-opacity="0.55" stroke-width="6.25" stroke-linecap="round"/>
+    </g>
+    
+
+</g>
+<g transform="translate(360,165) scale(.56)">
+
+
+<ellipse cx="500" cy="740" rx="390" ry="100" fill="url(#aura)"/>
+<ellipse cx="500" cy="760" rx="330" ry="74" fill="#BEDBFF" opacity="0.22"/>
+<ellipse cx="500" cy="700" rx="305" ry="82" fill="#F6FCFF" stroke="#B2D4FF" stroke-width="4" filter="url(#softShadow)"/>
+<ellipse cx="500" cy="700" rx="252" ry="60" fill="none" stroke="#18CBFF" stroke-width="16" stroke-opacity="0.82"/>
+<rect x="310" y="510" width="380" height="132" rx="32" fill="url(#glass)" stroke="#B8D7FF" stroke-width="4" filter="url(#smallShadow)"/>
+<rect x="374" y="470" width="252" height="90" rx="24" fill="#DDEEFF" stroke="#9EC8FF" stroke-width="3" opacity="0.9"/>
+<g filter="url(#softShadow)">
+  <polygon points="380,362 500,292 700,360 574,438" fill="url(#cubeTop)"/>
+  <polygon points="380,362 574,438 574,598 380,520" fill="url(#cubeFront)"/>
+  <polygon points="574,438 700,360 700,520 574,598" fill="url(#cubeSide)"/>
+  <path d="M380 362 L574 438 L700 360" stroke="#BDF4FF" stroke-width="5" stroke-linejoin="round" opacity="0.82"/>
+  <path d="M574 438 V598" stroke="#BDF4FF" stroke-width="4" opacity="0.58"/>
+  <circle cx="500" cy="318" r="13" fill="#EBFFFF" filter="url(#glow)"/>
+  <g><line x1="434.75" y1="488.5" x2="475" y2="456.3" stroke="#FFFFFF" stroke-width="9.2" stroke-linecap="round" opacity="0.95"/><line x1="475" y1="456.3" x2="521.0" y2="511.5" stroke="#FFFFFF" stroke-width="9.2" stroke-linecap="round" opacity="0.95"/><line x1="521.0" y1="511.5" x2="463.5" y2="540.25" stroke="#FFFFFF" stroke-width="9.2" stroke-linecap="round" opacity="0.95"/><circle cx="434.75" cy="488.5" r="11.5" fill="#FFFFFF"/><circle cx="475" cy="456.3" r="11.5" fill="#FFFFFF"/><circle cx="521.0" cy="511.5" r="11.5" fill="#FFFFFF"/><circle cx="463.5" cy="540.25" r="11.5" fill="#FFFFFF"/></g>
+</g>
+<g filter="url(#smallShadow)">
+  <rect x="266" y="62" width="470" height="170" rx="34" fill="url(#glass)" stroke="#BBD7FF" stroke-width="3"/>
+  <path d="M460 232 L505 280 L550 232" fill="url(#glass)" stroke="#BBD7FF" stroke-width="3"/>
+  <text x="500" y="130" text-anchor="middle" font-size="45" font-weight="800" fill="#1C6DFF">Route Engine</text>
+  <text x="500" y="185" text-anchor="middle" font-size="29" font-weight="500" fill="#5D7193">规则匹配 · 标签路由</text>
+</g>
+
+</g>
+<g stroke="#25AFFF" stroke-width="4" fill="none" stroke-linecap="round" stroke-linejoin="round" filter="url(#glow)">
+  <path d="M420 530 C505 530 548 528 598 523"/>
+  <path d="M740 440 C850 270 925 180 1050 170"/>
+  <path d="M765 510 C870 500 945 490 1050 485"/>
+  <path d="M750 590 C850 675 925 720 1050 725"/>
+  <path d="M630 620 C565 765 470 815 295 815"/>
+</g>
+<g fill="#1F73FF"><path d="M598 523 L573 510 V536 Z"/><path d="M1050 170 L1025 158 L1028 186 Z"/><path d="M1050 485 L1024 472 L1024 499 Z"/><path d="M1050 725 L1024 711 L1026 739 Z"/><path d="M295 815 L320 802 V828 Z"/></g>
+<g transform="translate(970,80) scale(.47)">
+
+
+    
+    <rect x="50" y="50" width="680" height="260" rx="38" fill="url(#glass)" stroke="#C0DAFF" stroke-width="3" filter="url(#softShadow)"/>
+    <rect x="60" y="60" width="660" height="240" rx="30" fill="#FFFFFF" opacity="0.22"/>
+    
+    
+    <ellipse cx="225" cy="249" rx="106" ry="26" fill="#BCD8FF" opacity="0.24"/>
+    <rect x="147" y="211" width="156" height="64*s" rx="18" fill="url(#glass)" stroke="#B8D7FF" stroke-width="3"/>
+    <path d="M 161 265 H 289" stroke="#1E88FF" stroke-width="5" stroke-linecap="round" opacity="0.65"/>
+    
+    <g filter="url(#smallShadow)">
+      <rect x="190" y="110" width="85.80000000000001" height="129.8" rx="22.0" fill="url(#blueDeep)"/>
+      <rect x="207.6" y="123.2" width="50.6" height="88.0" rx="8.8" fill="#D9ECFF" opacity="0.72"/>
+      <rect x="218.6" y="140.8" width="50.6" height="24.200000000000003" rx="8.8" fill="#217DFF"/>
+      <rect x="217.5" y="176.0" width="37.400000000000006" height="8.8" rx="4.4" fill="#FFFFFF" opacity="0.85"/>
+      <circle cx="232.9" cy="223.3" r="6.6000000000000005" fill="#FFFFFF" opacity="0.9"/>
+    </g>
+    <text x="390" y="154" font-size="54" font-weight="800" fill="#102A55">短信通道</text>
+    <text x="390" y="223" font-size="34" font-weight="500" fill="#63718B">验证码 / 通知</text>
+    
+</g>
+<g transform="translate(970,270) scale(.47)">
+
+
+    
+    <rect x="50" y="50" width="680" height="260" rx="38" fill="url(#glass)" stroke="#C0DAFF" stroke-width="3" filter="url(#softShadow)"/>
+    <rect x="60" y="60" width="660" height="240" rx="30" fill="#FFFFFF" opacity="0.22"/>
+    
+    
+    <ellipse cx="225" cy="249" rx="106" ry="26" fill="#BCD8FF" opacity="0.24"/>
+    <rect x="147" y="211" width="156" height="64*s" rx="18" fill="url(#glass)" stroke="#B8D7FF" stroke-width="3"/>
+    <path d="M 161 265 H 289" stroke="#1E88FF" stroke-width="5" stroke-linecap="round" opacity="0.65"/>
+    
+    <g filter="url(#smallShadow)">
+      <rect x="168" y="132" width="121.00000000000001" height="90.2" rx="17.6" fill="url(#blueDeep)"/>
+      <path d="M 183.4 151.8 L 228.5 189.2 L 273.6 151.8" stroke="#FFFFFF" stroke-width="8.8" stroke-linecap="round" stroke-linejoin="round" opacity="0.94"/>
+      <path d="M 183.4 202.4 L 214.2 178.2 M 273.6 202.4 L 242.8 178.2" stroke="#BFE4FF" stroke-width="5.5" stroke-linecap="round" opacity="0.6"/>
+    </g>
+    <text x="390" y="154" font-size="54" font-weight="800" fill="#102A55">邮件通道</text>
+    <text x="390" y="223" font-size="34" font-weight="500" fill="#63718B">审批 / 报表</text>
+    
+</g>
+<g transform="translate(970,460) scale(.47)">
+
+
+    
+    <rect x="50" y="50" width="680" height="260" rx="38" fill="url(#glass)" stroke="#C0DAFF" stroke-width="3" filter="url(#softShadow)"/>
+    <rect x="60" y="60" width="660" height="240" rx="30" fill="#FFFFFF" opacity="0.22"/>
+    
+    
+    <ellipse cx="225" cy="249" rx="106" ry="26" fill="#BCD8FF" opacity="0.24"/>
+    <rect x="147" y="211" width="156" height="64*s" rx="18" fill="url(#glass)" stroke="#B8D7FF" stroke-width="3"/>
+    <path d="M 161 265 H 289" stroke="#1E88FF" stroke-width="5" stroke-linecap="round" opacity="0.65"/>
+    
+    <g filter="url(#smallShadow)">
+      <path d="M 181.0 126.0 H 283.0 C 308.0 126.0 325.0 145.0 325.0 170.0 V 182.0 C 325.0 208.0 305.0 226.0 278.0 226.0 H 241.0 L 209.0 252.0 L 215.0 226.0 H 181.0 C 155.0 226.0 137.0 207.0 137.0 182.0 V 170.0 C 137.0 145.0 156.0 126.0 181.0 126.0 Z" fill="url(#blueDeep)"/>
+      <circle cx="193.0" cy="178.0" r="8.0" fill="#FFFFFF" opacity="0.92"/>
+      <circle cx="231.0" cy="178.0" r="8.0" fill="#FFFFFF" opacity="0.92"/>
+      <circle cx="269.0" cy="178.0" r="8.0" fill="#FFFFFF" opacity="0.92"/>
+    </g>
+    <text x="390" y="154" font-size="54" font-weight="800" fill="#102A55">IM 通道</text>
+    <text x="390" y="223" font-size="34" font-weight="500" fill="#63718B">企微 / 钉钉</text>
+    
+</g>
+<g transform="translate(970,650) scale(.47)">
+
+
+    
+    <rect x="50" y="50" width="680" height="260" rx="38" fill="url(#glass)" stroke="#C0DAFF" stroke-width="3" filter="url(#softShadow)"/>
+    <rect x="60" y="60" width="660" height="240" rx="30" fill="#FFFFFF" opacity="0.22"/>
+    
+    
+    <ellipse cx="225" cy="249" rx="106" ry="26" fill="#BCD8FF" opacity="0.24"/>
+    <rect x="147" y="211" width="156" height="64*s" rx="18" fill="url(#glass)" stroke="#B8D7FF" stroke-width="3"/>
+    <path d="M 161 265 H 289" stroke="#1E88FF" stroke-width="5" stroke-linecap="round" opacity="0.65"/>
+    
+    <g filter="url(#smallShadow)" stroke="url(#blueDeep)" stroke-width="15.0" stroke-linecap="round" stroke-linejoin="round" fill="none">
+      <path d="M 251.0 140.0 C 287.0 164.0 289.0 209.0 253.0 234.0"/>
+      <path d="M 233.0 235.0 C 193.0 234.0 169.0 202.0 180.0 165.0"/>
+      <path d="M 197.0 154.0 C 220.0 121.0 269.0 122.0 291.0 156.0" opacity="0.55"/>
+      <circle cx="245.0" cy="142.0" r="16.0" fill="#F6FBFF" stroke="url(#blueDeep)"/>
+      <circle cx="185.0" cy="172.0" r="16.0" fill="#F6FBFF" stroke="url(#blueDeep)"/>
+      <circle cx="259.0" cy="232.0" r="16.0" fill="#F6FBFF" stroke="url(#blueDeep)"/>
+    </g>
+    <text x="390" y="154" font-size="54" font-weight="800" fill="#102A55">Webhook</text>
+    <text x="390" y="223" font-size="34" font-weight="500" fill="#63718B">系统回调</text>
+    
+</g>
+<g transform="translate(150,790) scale(.52)">
+
+
+<g transform="translate(0,0)">
+  <rect x="24" y="24" width="474" height="148" rx="28" fill="url(#glass)" stroke="#C0DAFF" stroke-width="3" filter="url(#softShadow)"/>
+  
+    <g filter="url(#smallShadow)" fill="none" stroke="url(#blueDeep)" stroke-width="6.2">
+      <circle cx="115" cy="90" r="34.1" opacity="0.24"/>
+      <circle cx="115" cy="90" r="22.32"/>
+      <circle cx="115" cy="90" r="8.06" fill="#1F7AFF"/>
+      <path d="M 134.84 70.16 L 153.44 51.56" stroke-linecap="round"/>
+      <path d="M 150.96 39.160000000000004 L 153.44 51.56 L 165.84 54.04" stroke-linecap="round" stroke-linejoin="round"/>
+    </g><text x="205" y="86" font-size="38" font-weight="800" fill="#102A55">条件匹配</text><text x="205" y="128" font-size="23" fill="#63718B">多维规则引擎</text></g>
+<g transform="translate(530,0)"><rect x="24" y="24" width="474" height="148" rx="28" fill="url(#glass)" stroke="#C0DAFF" stroke-width="3" filter="url(#softShadow)"/>
+    <g filter="url(#smallShadow)">
+      <rect x="80" y="32" width="66.24" height="83.52" rx="11.52" fill="url(#blueDeep)"/>
+      <rect x="97.28" y="52.16" width="31.68" height="5.76" rx="2.88" fill="#FFFFFF" opacity="0.9"/>
+      <rect x="97.28" y="70.88" width="31.68" height="5.76" rx="2.88" fill="#FFFFFF" opacity="0.72"/>
+      <rect x="97.28" y="89.6" width="24.48" height="5.76" rx="2.88" fill="#FFFFFF" opacity="0.58"/>
+    </g><text x="205" y="86" font-size="38" font-weight="800" fill="#102A55">模板渲染</text><text x="205" y="128" font-size="23" fill="#63718B">变量灵活替换</text></g>
+<g transform="translate(1060,0)"><rect x="24" y="24" width="474" height="148" rx="28" fill="url(#glass)" stroke="#C0DAFF" stroke-width="3" filter="url(#softShadow)"/>
+    <g filter="url(#smallShadow)">
+      <path d="M 105.80000000000001 28 C 122.7 39.05 138.3 40.35 148.7 42.3 V 71.55000000000001 C 148.7 98.2 131.15 117.05 105.80000000000001 126.8 C 80.45 117.05 62.9 98.2 62.9 71.55000000000001 V 42.3 C 72.65 40.35 88.9 39.05 105.80000000000001 28 Z" fill="url(#blueDeep)"/>
+      <path d="M 111.0 52.05 L 96.7 79.35 H 112.30000000000001 L 102.55 103.4 L 129.85 68.30000000000001 H 114.9 L 124.0 52.05 Z" fill="#FFFFFF" opacity="0.95"/>
+    </g><text x="205" y="86" font-size="38" font-weight="800" fill="#102A55">失败重试</text><text x="205" y="128" font-size="23" fill="#63718B">保障可靠投递</text></g>
+
+</g>
+
+</svg>

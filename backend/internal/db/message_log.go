@@ -17,10 +17,10 @@ import (
 func (r Repository) ListMessages(ctx context.Context, filter messagelog.ListFilter) (messagelog.ListResult, error) {
 	whereSQL, args := messageLogWhere(filter)
 	countSQL := `
-		SELECT count(DISTINCT message.id)::integer
+		SELECT count(*)::integer
 		FROM message_records AS message
 		JOIN inbound_sources AS source ON source.id = message.source_id
-		LEFT JOIN delivery_attempts AS attempt ON attempt.message_id = message.id
+		LEFT JOIN route_flows AS flow ON flow.id = message.matched_flow_id
 		WHERE ` + whereSQL
 	var total int
 	if err := r.pool.QueryRow(ctx, countSQL, args...).Scan(&total); err != nil {
@@ -31,6 +31,15 @@ func (r Repository) ListMessages(ctx context.Context, filter messagelog.ListFilt
 	offsetArg := len(args) + 2
 	queryArgs := append(args, filter.Limit, filter.Offset)
 	rows, err := r.pool.Query(ctx, `
+		WITH page AS (
+			SELECT message.id
+			FROM message_records AS message
+			JOIN inbound_sources AS source ON source.id = message.source_id
+			LEFT JOIN route_flows AS flow ON flow.id = message.matched_flow_id
+			WHERE `+whereSQL+`
+			ORDER BY message.received_at DESC, message.id DESC
+			LIMIT $`+strconv.Itoa(limitArg)+` OFFSET $`+strconv.Itoa(offsetArg)+`
+		)
 		SELECT
 			message.id,
 			message.trace_id,
@@ -69,15 +78,15 @@ func (r Repository) ListMessages(ctx context.Context, filter messagelog.ListFilt
 			END AS duration_ms,
 			message.created_at,
 			message.updated_at
-		FROM message_records AS message
+		FROM page
+		JOIN message_records AS message ON message.id = page.id
 		JOIN inbound_sources AS source ON source.id = message.source_id
 		LEFT JOIN route_flows AS flow ON flow.id = message.matched_flow_id
 		LEFT JOIN delivery_attempts AS attempt ON attempt.message_id = message.id
 		LEFT JOIN delivery_channels AS channel ON channel.id = attempt.channel_id
-		WHERE `+whereSQL+`
 		GROUP BY message.id, source.name, flow.id, flow.name
 		ORDER BY message.received_at DESC, message.id DESC
-		LIMIT $`+strconv.Itoa(limitArg)+` OFFSET $`+strconv.Itoa(offsetArg),
+		`,
 		queryArgs...,
 	)
 	if err != nil {
@@ -316,21 +325,92 @@ func messageLogWhere(filter messagelog.ListFilter) (string, []any) {
 	if strings.TrimSpace(filter.TraceID) != "" {
 		add("message.trace_id ILIKE '%%' || $%d || '%%'", filter.TraceID)
 	}
+	if strings.TrimSpace(filter.Keyword) != "" {
+		args = append(args, strings.TrimSpace(filter.Keyword))
+		index := len(args)
+		clauses = append(clauses, fmt.Sprintf(`(
+			message.trace_id ILIKE '%%' || $%[1]d || '%%'
+			OR source.name ILIKE '%%' || $%[1]d || '%%'
+			OR COALESCE(flow.name, '') ILIKE '%%' || $%[1]d || '%%'
+			OR COALESCE(message.error_code, '') ILIKE '%%' || $%[1]d || '%%'
+			OR EXISTS (
+				SELECT 1
+				FROM delivery_attempts AS attempt_filter
+				JOIN delivery_channels AS channel_filter ON channel_filter.id = attempt_filter.channel_id
+				WHERE attempt_filter.message_id = message.id
+					AND (
+						channel_filter.name ILIKE '%%' || $%[1]d || '%%'
+						OR channel_filter.provider_type ILIKE '%%' || $%[1]d || '%%'
+						OR COALESCE(attempt_filter.error_code, '') ILIKE '%%' || $%[1]d || '%%'
+					)
+			)
+		)`, index))
+	}
 	if strings.TrimSpace(filter.SourceID) != "" {
 		add("message.source_id = $%d", filter.SourceID)
+	}
+	if strings.TrimSpace(filter.SourceName) != "" {
+		add("source.name = $%d", filter.SourceName)
 	}
 	if strings.TrimSpace(filter.Status) != "" {
 		status := strings.TrimSpace(filter.Status)
 		args = append(args, status)
 		index := len(args)
 		if status == "dead" {
-			clauses = append(clauses, fmt.Sprintf("(message.status = $%d OR attempt.dead_lettered_at IS NOT NULL)", index))
+			clauses = append(clauses, fmt.Sprintf(`(
+				message.status = $%[1]d
+				OR EXISTS (
+					SELECT 1
+					FROM delivery_attempts AS attempt_filter
+					WHERE attempt_filter.message_id = message.id
+						AND attempt_filter.dead_lettered_at IS NOT NULL
+				)
+			)`, index))
 		} else {
-			clauses = append(clauses, fmt.Sprintf("(message.status = $%d OR attempt.status = $%d)", index, index))
+			clauses = append(clauses, fmt.Sprintf(`(
+				message.status = $%[1]d
+				OR EXISTS (
+					SELECT 1
+					FROM delivery_attempts AS attempt_filter
+					WHERE attempt_filter.message_id = message.id
+						AND attempt_filter.status = $%[1]d
+				)
+			)`, index))
 		}
 	}
 	if strings.TrimSpace(filter.ChannelID) != "" {
-		add("attempt.channel_id = $%d", filter.ChannelID)
+		args = append(args, filter.ChannelID)
+		index := len(args)
+		clauses = append(clauses, fmt.Sprintf(`EXISTS (
+			SELECT 1
+			FROM delivery_attempts AS attempt_filter
+			WHERE attempt_filter.message_id = message.id
+				AND attempt_filter.channel_id = $%[1]d
+		)`, index))
+	}
+	if strings.TrimSpace(filter.TargetProvider) != "" {
+		args = append(args, strings.TrimSpace(filter.TargetProvider))
+		index := len(args)
+		clauses = append(clauses, fmt.Sprintf(`EXISTS (
+			SELECT 1
+			FROM delivery_attempts AS attempt_filter
+			JOIN delivery_channels AS channel_filter ON channel_filter.id = attempt_filter.channel_id
+			WHERE attempt_filter.message_id = message.id
+				AND (channel_filter.name = $%[1]d OR channel_filter.provider_type = $%[1]d)
+		)`, index))
+	}
+	if strings.TrimSpace(filter.ErrorCode) != "" {
+		args = append(args, strings.TrimSpace(filter.ErrorCode))
+		index := len(args)
+		clauses = append(clauses, fmt.Sprintf(`(
+			message.error_code = $%[1]d
+			OR EXISTS (
+				SELECT 1
+				FROM delivery_attempts AS attempt_filter
+				WHERE attempt_filter.message_id = message.id
+					AND attempt_filter.error_code = $%[1]d
+			)
+		)`, index))
 	}
 	return strings.Join(clauses, " AND "), args
 }

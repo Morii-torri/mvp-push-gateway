@@ -125,7 +125,16 @@ describe('app shell logout confirmation', () => {
         trend: [],
         platform_rankings: [],
         failure_rankings: [],
-        recent_anomalies: [{ level: '高', title: '模板渲染失败', time: '2026-05-13T08:00:00Z', count: 2, ratio: 20 }],
+        recent_anomalies: [
+          {
+            level: '高',
+            title: '模板渲染失败',
+            time: '2026-05-13T08:00:00Z',
+            count: 2,
+            ratio: 20,
+            trace_id: 'trace-template-failed',
+          },
+        ],
       },
     );
 
@@ -155,7 +164,39 @@ describe('app shell logout confirmation', () => {
       '2026-05-09T09:55:00Z',
     ]);
     expect(state.items[0]?.description).toContain('最老任务等待 1 分钟');
+    expect(state.items[4]?.description).toContain('严重失败');
+    expect(state.items[4]?.description).not.toContain('高级异常');
+    expect(state.items[4]?.messageTraceId).toBe('trace-template-failed');
     expect(state.items[2]?.description).not.toContain('日志监控');
+  });
+
+  it('describes low-level anomaly notifications as normal failures instead of low-class errors', () => {
+    const state = buildHeaderNotificationState(null, {
+      summary: {
+        total_sent: 1,
+        successful: 0,
+        failed: 1,
+        success_rate: 0,
+        average_duration_ms: 0,
+        average_qps: 0,
+        total_received: 1,
+      },
+      trend: [],
+      platform_rankings: [],
+      failure_rankings: [],
+      recent_anomalies: [
+        {
+          level: '低',
+          title: 'connection refused',
+          time: '2026-06-20T00:34:46Z',
+          count: 1,
+          ratio: 100,
+        },
+      ],
+    });
+
+    expect(state.items[0]?.description).toContain('一般失败');
+    expect(state.items[0]?.description).not.toContain('低级异常');
   });
 
   it('filters dismissed header notifications and recalculates the badge', () => {

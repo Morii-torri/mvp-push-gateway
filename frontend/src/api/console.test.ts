@@ -272,17 +272,32 @@ describe("console api wrappers", () => {
     });
 
     await consoleApi.listMessageLogs(
-      { limit: 50, offset: 50, status: "failed", traceId: "trace-1" },
+      {
+        limit: 50,
+        offset: 50,
+        status: "failed",
+        traceId: "trace-1",
+        keyword: "critical",
+        sourceName: "来源 A",
+        targetProvider: "企业微信",
+        errorCode: "MGP-SEND-001",
+      },
       fetchMock,
     );
     await consoleApi.listAuditLogs(
-      { limit: 20, offset: 40, action: "login", actor: "admin" },
+      {
+        limit: 20,
+        offset: 40,
+        action: "login",
+        actor: "admin",
+        resourceName: "source-1",
+      },
       fetchMock,
     );
 
     expect(fetchMock.mock.calls.map(([input]) => String(input))).toEqual([
-      "/api/v1/messages?limit=50&offset=50&status=failed&trace_id=trace-1",
-      "/api/v1/audit-logs?limit=20&offset=40&actor=admin&action=login",
+      "/api/v1/messages?limit=50&offset=50&status=failed&trace_id=trace-1&keyword=critical&source_name=%E6%9D%A5%E6%BA%90+A&target_provider=%E4%BC%81%E4%B8%9A%E5%BE%AE%E4%BF%A1&error_code=MGP-SEND-001",
+      "/api/v1/audit-logs?limit=20&offset=40&actor=admin&action=login&resource_name=source-1",
     ]);
   });
 

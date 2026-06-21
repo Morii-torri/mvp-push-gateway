@@ -49,6 +49,7 @@ export type OverviewApiResponse = {
     time: string;
     count: number;
     ratio: number;
+    trace_id?: string;
   }>;
 };
 
@@ -159,6 +160,7 @@ export type RecentAnomalyRow = {
   time: string;
   count: string;
   ratio: number;
+  traceId?: string;
 };
 
 export type OverviewViewModel = {
@@ -412,6 +414,7 @@ export function buildOverviewViewModel(
       time: formatTime(item.time),
       count: formatInteger(item.count),
       ratio: item.ratio,
+      traceId: item.trace_id,
     })),
   };
 }

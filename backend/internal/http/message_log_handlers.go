@@ -100,12 +100,16 @@ func (h *Handler) messagesHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	result, err := h.messageLogs.ListMessages(r.Context(), messagelog.ListFilter{
-		TraceID:   r.URL.Query().Get("trace_id"),
-		SourceID:  r.URL.Query().Get("source_id"),
-		Status:    r.URL.Query().Get("status"),
-		ChannelID: r.URL.Query().Get("channel_id"),
-		Limit:     queryInt(r, "limit"),
-		Offset:    queryInt(r, "offset"),
+		TraceID:        r.URL.Query().Get("trace_id"),
+		Keyword:        r.URL.Query().Get("keyword"),
+		SourceID:       r.URL.Query().Get("source_id"),
+		SourceName:     r.URL.Query().Get("source_name"),
+		Status:         r.URL.Query().Get("status"),
+		ChannelID:      r.URL.Query().Get("channel_id"),
+		TargetProvider: r.URL.Query().Get("target_provider"),
+		ErrorCode:      r.URL.Query().Get("error_code"),
+		Limit:          queryInt(r, "limit"),
+		Offset:         queryInt(r, "offset"),
 	})
 	if err != nil {
 		status, code, message := messageLogErrorStatus(err)

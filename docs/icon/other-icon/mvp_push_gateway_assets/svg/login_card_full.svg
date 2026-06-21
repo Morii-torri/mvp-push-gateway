@@ -1,0 +1,85 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="830" height="1120" viewBox="0 0 830 1120" fill="none" style="font-family:Noto Sans CJK SC, PingFang SC, Microsoft YaHei, Arial, sans-serif;">
+
+<defs>
+  <linearGradient id="blueMain" x1="0" y1="0" x2="1" y2="1">
+    <stop offset="0" stop-color="#1A67FF"/>
+    <stop offset="0.52" stop-color="#208BFF"/>
+    <stop offset="1" stop-color="#31D4FF"/>
+  </linearGradient>
+  <linearGradient id="blueDeep" x1="0" y1="0" x2="1" y2="1">
+    <stop offset="0" stop-color="#0B55E8"/>
+    <stop offset="1" stop-color="#25B8FF"/>
+  </linearGradient>
+  <linearGradient id="blueSoft" x1="0" y1="0" x2="1" y2="1">
+    <stop offset="0" stop-color="#F8FCFF"/>
+    <stop offset="0.54" stop-color="#EEF7FF"/>
+    <stop offset="1" stop-color="#DCEEFF"/>
+  </linearGradient>
+  <linearGradient id="glass" x1="0" y1="0" x2="1" y2="1">
+    <stop offset="0" stop-color="#FFFFFF" stop-opacity="0.96"/>
+    <stop offset="1" stop-color="#ECF6FF" stop-opacity="0.76"/>
+  </linearGradient>
+  <linearGradient id="cubeTop" x1="0" y1="0" x2="1" y2="1">
+    <stop offset="0" stop-color="#56E0FF"/>
+    <stop offset="1" stop-color="#1979FF"/>
+  </linearGradient>
+  <linearGradient id="cubeFront" x1="0" y1="0" x2="1" y2="1">
+    <stop offset="0" stop-color="#27C8FF"/>
+    <stop offset="0.55" stop-color="#1E86FF"/>
+    <stop offset="1" stop-color="#125EE8"/>
+  </linearGradient>
+  <linearGradient id="cubeSide" x1="0" y1="0" x2="1" y2="1">
+    <stop offset="0" stop-color="#2B9CFF"/>
+    <stop offset="1" stop-color="#0649D8"/>
+  </linearGradient>
+  <radialGradient id="aura" cx="50%" cy="50%" r="60%">
+    <stop offset="0" stop-color="#2ED8FF" stop-opacity="0.65"/>
+    <stop offset="0.55" stop-color="#1B7CFF" stop-opacity="0.16"/>
+    <stop offset="1" stop-color="#1B7CFF" stop-opacity="0"/>
+  </radialGradient>
+  <filter id="softShadow" x="-35%" y="-35%" width="170%" height="170%">
+    <feDropShadow dx="0" dy="18" stdDeviation="18" flood-color="#286FC8" flood-opacity="0.22"/>
+  </filter>
+  <filter id="smallShadow" x="-35%" y="-35%" width="170%" height="170%">
+    <feDropShadow dx="0" dy="8" stdDeviation="8" flood-color="#1B6ED0" flood-opacity="0.18"/>
+  </filter>
+  <filter id="glow" x="-80%" y="-80%" width="260%" height="260%">
+    <feGaussianBlur stdDeviation="8" result="blur"/>
+    <feColorMatrix in="blur" type="matrix" values="0 0 0 0 0.1  0 0 0 0 0.62  0 0 0 0 1  0 0 0 .6 0" result="glow"/>
+    <feMerge><feMergeNode in="glow"/><feMergeNode in="SourceGraphic"/></feMerge>
+  </filter>
+</defs>
+
+
+
+<rect x="80" y="50" width="670" height="930" rx="54" fill="url(#glass)" stroke="#C0DAFF" stroke-width="3" filter="url(#softShadow)"/>
+<text x="150" y="155" font-size="54" font-weight="850" fill="#102A55">欢迎登录</text>
+<text x="150" y="217" font-size="28" font-weight="500" fill="#63718B">统一消息推送网关后台</text>
+<g transform="translate(560,88)">
+  <ellipse cx="82" cy="150" rx="96" ry="28" fill="#B7D8FF" opacity="0.22"/>
+  <rect x="12" y="116" width="140" height="56" rx="18" fill="url(#glass)" stroke="#B8D7FF" stroke-width="2" filter="url(#smallShadow)"/>
+  <path d="M 82 12 C 113 31 143 34 160 38 V 89 C 160 134 126 165 82 181 C 38 165 4 134 4 89 V 38 C 21 34 51 31 82 12 Z" fill="url(#blueSoft)" stroke="#95C2FF" stroke-width="3" filter="url(#smallShadow)"/>
+  <path d="M 82 30 C 106 46 130 50 144 52 V 90 C 144 122 120 148 82 164 C 44 148 20 122 20 90 V 52 C 34 50 58 46 82 30 Z" fill="url(#blueMain)" opacity="0.22"/>
+  <path d="M 52 91 L 74 113 L 119 68" stroke="#18B9FF" stroke-width="12" stroke-linecap="round" stroke-linejoin="round"/>
+</g>
+<text x="150" y="335" font-size="25" font-weight="800" fill="#102A55">账号</text>
+<rect x="150" y="365" width="520" height="70" rx="14" fill="#FFFFFF" stroke="#CAD8EA" stroke-width="2"/>
+<g transform="translate(186,383)" stroke="#8292AA" stroke-width="4" fill="none" stroke-linecap="round"><circle cx="20" cy="17" r="13"/><path d="M0 55 C4 35 17 30 31 30 C45 30 58 35 62 55"/></g>
+<text x="260" y="411" font-size="25" fill="#9AA8BD">请输入账号 / LDAP 用户名</text>
+<text x="150" y="520" font-size="25" font-weight="800" fill="#102A55">密码</text>
+<rect x="150" y="550" width="520" height="70" rx="14" fill="#FFFFFF" stroke="#CAD8EA" stroke-width="2"/>
+<g transform="translate(190,565)" stroke="#8292AA" stroke-width="4" fill="none" stroke-linecap="round"><rect x="0" y="22" width="42" height="30" rx="5"/><path d="M8 22 V12 C8 3 15 -4 21 -4 C33 -4 40 3 40 12 V22"/></g>
+<text x="260" y="596" font-size="25" fill="#9AA8BD">请输入密码</text>
+<text x="150" y="705" font-size="25" font-weight="800" fill="#102A55">验证码</text>
+<rect x="150" y="735" width="340" height="70" rx="14" fill="#FFFFFF" stroke="#CAD8EA" stroke-width="2"/>
+<rect x="510" y="735" width="160" height="70" rx="14" fill="#F7FBFF" stroke="#D5E2F2" stroke-width="2"/>
+<text x="185" y="780" font-size="25" fill="#9AA8BD">请输入验证码</text>
+<text x="590" y="780" text-anchor="middle" font-size="34" font-weight="800" font-style="italic" letter-spacing="8" fill="#1B70FF">M8K2</text>
+<rect x="150" y="870" width="24" height="24" rx="5" fill="#1B70FF"/><path d="M156 882 L163 889 L176 874" stroke="#fff" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+<text x="195" y="892" font-size="25" fill="#102A55">记住账号</text>
+<text x="540" y="892" font-size="25" fill="#1B70FF">忘记密码?</text>
+<rect x="150" y="945" width="520" height="74" rx="16" fill="url(#blueDeep)" filter="url(#smallShadow)"/>
+<text x="410" y="992" text-anchor="middle" font-size="30" font-weight="800" fill="#FFFFFF" letter-spacing="10">登 录</text>
+<text x="410" y="1080" text-anchor="middle" font-size="23" fill="#63718B">支持 LDAP / 本地账号 / 单点登录扩展</text>
+
+</svg>

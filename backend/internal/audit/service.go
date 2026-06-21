@@ -19,6 +19,7 @@ type ListFilter struct {
 	Actor        string
 	Action       string
 	ResourceType string
+	ResourceName string
 	Limit        int
 	Offset       int
 }
@@ -74,6 +75,7 @@ func (s *Service) ListLogs(ctx context.Context, filter ListFilter) (ListResult, 
 	filter.Actor = strings.TrimSpace(filter.Actor)
 	filter.Action = strings.TrimSpace(filter.Action)
 	filter.ResourceType = strings.TrimSpace(filter.ResourceType)
+	filter.ResourceName = strings.TrimSpace(filter.ResourceName)
 	if filter.Limit <= 0 {
 		filter.Limit = 50
 	}

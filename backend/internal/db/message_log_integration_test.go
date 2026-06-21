@@ -86,6 +86,67 @@ func TestRepositoryGetMessageScansDetailSummaryColumns(t *testing.T) {
 	}
 }
 
+func TestRepositoryListMessagesFiltersByServerSideFields(t *testing.T) {
+	pool := openMigratedPool(t)
+	defer pool.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	repository := NewRepository(pool)
+	channel := createTestChannel(t, ctx, repository, "日志测试渠道")
+	sourceID := testUUID(24021)
+	matchedMessageID := testUUID(24022)
+	otherMessageID := testUUID(24023)
+	receivedAt := time.Date(2026, 6, 18, 9, 30, 0, 0, time.UTC)
+
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO inbound_sources (id, code, name, auth_mode)
+		VALUES ($1, 'message-log-filter-source', '消息日志过滤来源', 'none')
+	`, sourceID); err != nil {
+		t.Fatalf("insert source: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO message_records (
+			id, trace_id, source_id, received_at, headers, payload, payload_hash, status, created_at, updated_at
+		)
+		VALUES
+			($1, 'trace-filter-hit', $3, $5, '{}'::jsonb, '{}'::jsonb, 'hash-filter-hit', 'planned', $5, $5),
+			($2, 'trace-filter-miss', $3, $5 + interval '1 second', '{}'::jsonb, '{}'::jsonb, 'hash-filter-miss', 'planned', $5, $5)
+	`, matchedMessageID, otherMessageID, sourceID, channel.ID, receivedAt); err != nil {
+		t.Fatalf("insert message records: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO delivery_attempts (
+			id, message_id, channel_id, recipient_snapshot, request_snapshot, response_snapshot,
+			status, error_code, error_message, duration_ms, attempt_no, queued_at, started_at, finished_at
+		)
+		VALUES
+			($1, $3, $5, '{}'::jsonb, '{}'::jsonb, '{}'::jsonb, 'failed', 'MGP-SEND-FILTER', 'failed', 12, 1, $6, $6, $6),
+			($2, $4, $5, '{}'::jsonb, '{}'::jsonb, '{}'::jsonb, 'sent', NULL, '', 5, 1, $6, $6, $6)
+	`, testUUID(24024), testUUID(24025), matchedMessageID, otherMessageID, channel.ID, receivedAt); err != nil {
+		t.Fatalf("insert delivery attempts: %v", err)
+	}
+
+	result, err := repository.ListMessages(ctx, messagelog.ListFilter{
+		Keyword:        "filter-hit",
+		SourceName:     "消息日志过滤来源",
+		TargetProvider: "日志测试渠道",
+		Status:         "failed",
+		ErrorCode:      "MGP-SEND-FILTER",
+		Limit:          50,
+	})
+	if err != nil {
+		t.Fatalf("list messages with server-side filters: %v", err)
+	}
+	if result.Total != 1 || len(result.Messages) != 1 || result.Messages[0].ID != matchedMessageID {
+		t.Fatalf("expected one filtered message, got total=%d rows=%+v", result.Total, result.Messages)
+	}
+	if result.Messages[0].OutboundStatus != "failed" || result.Messages[0].AttemptCount != 1 {
+		t.Fatalf("expected failed attempt aggregation on filtered page, got %+v", result.Messages[0])
+	}
+}
+
 func TestRepositoryListMessagesHandlesLongOpenDurations(t *testing.T) {
 	pool := openMigratedPool(t)
 	defer pool.Close()

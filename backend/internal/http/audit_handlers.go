@@ -48,6 +48,7 @@ func (h *Handler) auditLogsHandler(w http.ResponseWriter, r *http.Request) {
 		Actor:        r.URL.Query().Get("actor"),
 		Action:       r.URL.Query().Get("action"),
 		ResourceType: r.URL.Query().Get("resource_type"),
+		ResourceName: r.URL.Query().Get("resource_name"),
 		Limit:        queryInt(r, "limit"),
 		Offset:       queryInt(r, "offset"),
 	})

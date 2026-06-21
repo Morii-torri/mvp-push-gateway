@@ -140,6 +140,8 @@ type LogoutConfirmConfig = {
 type HeaderNotificationTone = "error" | "warning" | "processing" | "default";
 
 const NOTIFICATION_DISMISSED_KEY = "mgp_header_notification_dismissed";
+const MESSAGE_LOG_TRACE_FILTER_KEY = "mgp_message_log_trace_filter";
+const MESSAGE_LOG_TRACE_FILTER_EVENT = "mgp:message-log-trace-filter";
 
 export type HeaderNotificationItem = {
   key: string;
@@ -148,6 +150,7 @@ export type HeaderNotificationItem = {
   count: number;
   tone: HeaderNotificationTone;
   targetPage: PageKey;
+  messageTraceId?: string;
   occurredAt?: string | null;
   badgeCounted?: boolean;
 };
@@ -217,6 +220,36 @@ export function resolveNavigationPageKey(page: PageKey): PageKey {
   return legacyPageKeyMap[page] ?? page;
 }
 
+export function anomalyNotificationLevelLabel(level?: string | null) {
+  switch ((level ?? "").trim()) {
+    case "高":
+      return "严重失败";
+    case "中":
+      return "中等失败";
+    case "低":
+      return "一般失败";
+    default:
+      return "异常记录";
+  }
+}
+
+function dispatchMessageLogTraceFilter(traceId: string) {
+  const normalized = traceId.trim();
+  if (!normalized) {
+    return;
+  }
+  try {
+    window.sessionStorage.setItem(MESSAGE_LOG_TRACE_FILTER_KEY, normalized);
+  } catch {
+    // Ignore private-mode or storage-disabled browsers; the live event still works.
+  }
+  window.dispatchEvent(
+    new CustomEvent(MESSAGE_LOG_TRACE_FILTER_EVENT, {
+      detail: { traceId: normalized },
+    }),
+  );
+}
+
 export function buildHeaderNotificationState(
   queue?: QueueMonitoringApiResponse | null,
   overview?: OverviewApiResponse | null,
@@ -278,10 +311,11 @@ export function buildHeaderNotificationState(
     addCounted({
       key: `anomaly-${index}`,
       title: item.title,
-      description: `${item.level || "未知"}级异常，发生时间 ${formatHeaderDate(item.time)}`,
+      description: `${anomalyNotificationLevelLabel(item.level)}，发生时间 ${formatHeaderDate(item.time)}`,
       count: item.count,
       tone: item.level === "高" ? "error" : "warning",
       targetPage: "logs",
+      messageTraceId: item.trace_id,
       occurredAt: item.time,
     });
   });
@@ -644,6 +678,9 @@ function ConsoleChrome() {
 
   const openNotificationTarget = useCallback(
     (item: HeaderNotificationItem) => {
+      if (item.messageTraceId) {
+        dispatchMessageLogTraceFilter(item.messageTraceId);
+      }
       openPage(item.targetPage);
       setNotificationPopoverOpen(false);
     },

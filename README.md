@@ -1,164 +1,134 @@
 # MVP Push Gateway
 
-Runtime and packaging documentation for the new `mvp-push-gateway/` implementation. This repository currently provides:
+MVP Push Gateway is a low-latency message ingress, routing, templating, and delivery gateway.
 
-- PostgreSQL-backed Go API server
-- React + Vite + Ant Design frontend build output
-- migrations, integration tests, queue/monitoring endpoints, runtime workers, and local startup scripts
+It gives downstream systems one stable HTTP ingress API, then routes each payload through configurable rules, renders channel-specific templates, resolves recipients, and dispatches the message to upstream push channels such as enterprise IM, email, SMS, webhooks, and open-source push services.
 
-This README only documents the current repository state. It does not assume hidden defaults or built-in admin passwords.
+The project is built for operational use: route visualization, message logs, delivery timelines, dead-letter handling, queue monitoring, provider capability metadata, and a full web console are included.
 
-## Image Deployment
+> Status: active development. The current baseline is suitable for local, lab, and controlled private deployments. Review the security notes before exposing it directly to the public internet.
 
-1. Copy environment variables:
+## Highlights
+
+- **Unified ingress API** for downstream systems.
+- **Token / HMAC / token+HMAC source authentication** with nonce replay protection.
+- **Tenant-ready architecture plan** for future SaaS and private-enterprise modes.
+- **Visual route strategy** with source-bound route groups and compiled runtime route cache.
+- **Provider-aware templates** using Jinja-like syntax.
+- **Recipient model** with organization tree, users, groups, and provider identities.
+- **NATS JetStream hot path** for route planning, sending, and result persistence queues.
+- **PostgreSQL source of truth** for configuration, logs, audit, metrics, and searchable state.
+- **Real-time console notifications** via SSE.
+- **Dead-letter queue** with replay / handled / delete operations.
+- **Performance test console** for ingress, route, queue, worker, and delivery measurements.
+- **Secret field encryption support** for source tokens, HMAC secrets, provider credentials, token cache, and sensitive send configuration.
+
+## Architecture
+
+```text
+Downstream system
+  -> Ingest API
+  -> source authentication / dedupe / quiet hours
+  -> JetStream route-plan event
+  -> route worker
+  -> template render + recipient resolution
+  -> JetStream send event
+  -> delivery worker
+  -> upstream provider
+  -> JetStream result event
+  -> result writer
+  -> PostgreSQL logs / metrics / audit
+```
+
+Main components:
+
+- `backend/`: Go API server, workers, provider adapters, migrations, and tests.
+- `frontend/`: React + Vite + Ant Design console.
+- `docker-compose.yml`: PostgreSQL, NATS JetStream, backend, frontend, and migration service.
+- `backend/migrations/`: PostgreSQL schema migrations.
+- `docs/`: architecture, API, data model, operations, and implementation notes.
+
+## Supported Channel Families
+
+The provider registry currently includes these channel families:
+
+- Enterprise IM: WeCom, DingTalk, Feishu
+- Email: SMTP
+- SMS: Aliyun, Tencent Cloud, Baidu Cloud
+- Webhook and self-hosted HTTP callbacks
+- Open-source / personal push: PushPlus, WxPusher, ServerChan, Bark, PushMe, ntfy, Gotify
+
+Some providers are configuration-dependent and may require real accounts, tokens, or network access before live delivery can be verified.
+
+## Quick Start With Docker Compose
+
+Requirements:
+
+- Docker Engine or Docker Desktop
+- Git
+
+Clone the repository:
+
+```bash
+git clone https://github.com/<owner>/mvp-push-gateway.git
+cd mvp-push-gateway
+```
+
+Create local environment file:
 
 ```bash
 cp .env.example .env
 ```
 
-2. Edit `.env` and set at least:
-
-- `MGP_POSTGRES_PASSWORD`
-- optional host ports if `5432`, `18080`, or `5173` are already occupied
-
-### Single-Image Product Mode
-
-This mode packages PostgreSQL, the Go backend, the frontend static site, Nginx, migrations, and healthcheck into one product image. It does not require the user to install or deploy PostgreSQL separately.
+Edit `.env` and set at least:
 
 ```bash
-docker compose --profile all-in-one up --build all-in-one
+MGP_POSTGRES_PASSWORD=<use-a-strong-password>
+MGP_SECRET_ENCRYPTION_KEY=<base64-32-byte-key>
 ```
 
-Keep the trailing service name `all-in-one`; it starts only the single-image product service instead of also starting the split-image services.
-
-Service:
-
-- console and API proxy: `http://127.0.0.1:18080`
-- backend health through proxy: `http://127.0.0.1:18080/api/v1/health`
-
-Mapped paths:
-
-- config: `.env`
-- PostgreSQL data: `./deploy/data/all-in-one/postgres`
-
-Direct image run:
+Generate a local encryption key:
 
 ```bash
-docker build -f docker/all-in-one/Dockerfile -t mvp-push-gateway:all-in-one .
-docker run --rm -p 18080:80 \
-  -e POSTGRES_DB=mvp_push_gateway_dev \
-  -e POSTGRES_USER=mvp_push_gateway \
-  -e POSTGRES_PASSWORD=change-me-dev-password \
-  -v "$PWD/deploy/data/all-in-one/postgres:/var/lib/postgresql/data" \
-  mvp-push-gateway:all-in-one
+openssl rand -base64 32
 ```
 
-### Split-Image Compose Mode
-
-This mode starts three containers from three images: backend, frontend, and PostgreSQL. It is still one-command deployment, but keeps database lifecycle separate from application image upgrades.
+Start the recommended split deployment:
 
 ```bash
 docker compose up --build
 ```
 
-Services:
+Default addresses:
 
-- frontend: `http://127.0.0.1:5173`
-- backend health: `http://127.0.0.1:18080/api/v1/health`
+- Console: `http://127.0.0.1:5173`
+- Backend API: `http://127.0.0.1:18080/api/v1`
 - PostgreSQL: `127.0.0.1:5432`
+- NATS monitor: `http://127.0.0.1:8222`
 
-Compose behavior:
-
-- PostgreSQL creates the main dev database and a separate test database on first boot.
-- `migrate` runs `backend/migrations/*.sql` through the bundled `mgp-migrate` binary before backend starts.
-- backend runs from a slim Alpine runtime image and uses the bundled `mgp-healthcheck` binary.
-- frontend is built once and served by Nginx with `/api/v1/*` proxied to the backend container.
-
-Mapped paths:
-
-- config: `.env`, `./deploy/env/backend.env`
-- PostgreSQL data: `./deploy/data/postgres`
-
-Image size notes:
-
-- backend runtime image uses Alpine with static Go binaries and SQL migrations; it does not include bash, curl, or psql.
-- frontend runtime image contains only Nginx and the built static assets.
-- PostgreSQL uses the official `postgres:16-alpine` image and persists data outside the container.
-- base images are configurable through `.env` (`MGP_GO_BUILDER_IMAGE`, `MGP_NODE_BUILDER_IMAGE`, `MGP_BACKEND_RUNTIME_IMAGE`, `MGP_FRONTEND_RUNTIME_IMAGE`, `MGP_ALL_IN_ONE_RUNTIME_IMAGE`) so an internal registry or mirror can be used without editing Dockerfiles.
-
-Stop and clean up:
+Stop services:
 
 ```bash
 docker compose down
+```
+
+Remove local PostgreSQL and NATS data as well:
+
+```bash
 docker compose down -v
 ```
 
-Use `-v` only when you want to remove the PostgreSQL data volume.
+Use `-v` only when you intentionally want to remove local data.
 
-## Local Development
+## First-Run Setup
 
-### Dependencies
-
-- Go `1.22+`
-- Node.js `20+` and npm
-- PostgreSQL `16+`
-- `psql`
-- Docker Desktop or Docker Engine if you want the Compose path
-
-### PostgreSQL Initialization
-
-If you are not using Compose, create a dedicated role and two databases first:
-
-```sql
-CREATE ROLE mvp_push_gateway LOGIN PASSWORD 'change-me-dev-password';
-CREATE DATABASE mvp_push_gateway_dev OWNER mvp_push_gateway;
-CREATE DATABASE mvp_push_gateway_test OWNER mvp_push_gateway;
-```
-
-Then copy `.env.example` to `.env` and make sure these values point to that role and those databases:
-
-- `MGP_POSTGRES_DSN`
-- `MGP_TEST_DATABASE_URL`
-
-### Apply Migrations
-
-```bash
-./scripts/apply-migrations.sh
-```
-
-### Start Backend
-
-```bash
-./scripts/dev-backend.sh
-```
-
-Default backend address:
-
-```text
-http://127.0.0.1:18080/api/v1
-```
-
-### Start Frontend
-
-```bash
-./scripts/dev-frontend.sh
-```
-
-Default frontend address:
-
-```text
-http://127.0.0.1:5173
-```
-
-## First-Run Admin Initialization
-
-Check setup state:
+After the backend is running, check setup status:
 
 ```bash
 curl http://127.0.0.1:18080/api/v1/setup/status
 ```
 
-Create the first admin:
+Create the first administrator:
 
 ```bash
 curl -X POST http://127.0.0.1:18080/api/v1/setup/admin \
@@ -166,324 +136,154 @@ curl -X POST http://127.0.0.1:18080/api/v1/setup/admin \
   -d '{
     "username": "admin",
     "password": "ChangeMe-Init-123!",
+    "confirm_password": "ChangeMe-Init-123!",
     "display_name": "System Admin"
   }'
 ```
 
-Login and save the bearer token:
+Then open the console and sign in:
+
+```text
+http://127.0.0.1:5173
+```
+
+There is no hard-coded default admin password. The setup endpoint can be used only once.
+
+## Basic Usage
+
+The normal setup flow is:
+
+1. **Create a source** in Source Access.
+2. **Create a push channel** in Push Channels and test the configuration.
+3. **Create a message template** for the source payload and provider message type.
+4. **Create recipients** in Organization.
+5. **Create and publish a route strategy** that matches payload conditions and sends to the selected channel.
+6. **Send a downstream payload** to the source ingress API.
+7. **Inspect logs and monitoring** in Log Monitor.
+
+Example downstream ingest call:
 
 ```bash
-curl -X POST http://127.0.0.1:18080/api/v1/auth/login \
+curl -X POST 'http://127.0.0.1:18080/api/v1/ingest/orders' \
   -H 'Content-Type: application/json' \
+  -H 'Authorization: Bearer <source-token>' \
   -d '{
-    "username": "admin",
-    "password": "ChangeMe-Init-123!"
+    "title": "Payment latency alert",
+    "level": "critical",
+    "content": "p99 latency exceeded threshold",
+    "biz_id": "order-10001",
+    "route_key": "payment",
+    "timestamp": "2026-06-21 10:00:00"
   }'
 ```
 
-Export the returned `token` for later calls:
+Successful ingest returns a trace id:
 
-```bash
-export ADMIN_TOKEN='replace-with-login-token'
+```json
+{
+  "trace_id": "9f5d4a78-7f7b-41ad-a6f1-3a2f3e8e0d3b",
+  "status": "accepted",
+  "message": "accepted"
+}
 ```
 
-## Fresh Environment Verification Path
+Use this trace id in Message Logs to inspect route planning, delivery attempts, upstream response snapshots, and dead-letter state.
 
-This path verifies that a clean environment can boot, initialize, ingest a payload, configure core objects, and read monitoring data.
+## Local Development
 
-For a complete copy-paste runbook, including a local webhook receiver and a smoke script, see `docs/operations/end-to-end-smoke.md`.
+Requirements:
 
-### 1. Create a Source
+- Go `1.22+`
+- Node.js `20+`
+- npm
+- PostgreSQL `16+`
+- NATS `2.10+` with JetStream enabled
+
+Copy environment:
 
 ```bash
-curl -X POST http://127.0.0.1:18080/api/v1/sources \
-  -H "Authorization: Bearer ${ADMIN_TOKEN}" \
-  -H 'Content-Type: application/json' \
-  -d '{
-    "code": "orders",
-    "name": "订单中心",
-    "auth_mode": "token",
-    "auth_token": "srcordersdevtoken",
-    "enabled": true
-  }'
+cp .env.example .env
 ```
 
-Save both:
-
-- source `id`
-- source `auth_token`
-
-### 2. Send a Sample Payload
+Apply migrations:
 
 ```bash
-curl -X POST http://127.0.0.1:18080/api/v1/ingest/orders \
-  -H 'Authorization: Bearer srcordersdevtoken' \
-  -H 'Content-Type: application/json' \
-  -d '{
-    "title": "订单已支付",
-    "content": "订单 2026-0001 已完成支付",
-    "severity": "info"
-  }'
-```
-
-Expected result:
-
-- HTTP `202`
-- response contains `trace_id`
-- source detail later shows `latest_payload_sample`
-
-### 3. Create and Publish a Template
-
-Create the template shell:
-
-```bash
-curl -X POST http://127.0.0.1:18080/api/v1/templates \
-  -H "Authorization: Bearer ${ADMIN_TOKEN}" \
-  -H 'Content-Type: application/json' \
-  -d '{
-    "name": "订单通知模板",
-    "description": "Webhook 验证模板",
-    "source_id": "replace-with-source-id",
-    "enabled": true
-  }'
-```
-
-Publish a version:
-
-```bash
-curl -X POST http://127.0.0.1:18080/api/v1/templates/replace-with-template-id/publish \
-  -H "Authorization: Bearer ${ADMIN_TOKEN}" \
-  -H 'Content-Type: application/json' \
-  -d '{
-    "message_type": "json",
-    "target_provider_type": "webhook",
-    "template_body": "{\"title\":\"{{ payload.title }}\",\"content\":\"{{ payload.content }}\",\"severity\":\"{{ payload.severity }}\"}",
-    "message_body_schema": {"type": "object"},
-    "sample_payload": {
-      "title": "订单已支付",
-      "content": "订单 2026-0001 已完成支付",
-      "severity": "info"
-    }
-  }'
-```
-
-Save the returned template version `id`.
-
-### 4. Create a Webhook Channel
-
-```bash
-curl -X POST http://127.0.0.1:18080/api/v1/channels \
-  -H "Authorization: Bearer ${ADMIN_TOKEN}" \
-  -H 'Content-Type: application/json' \
-  -d '{
-    "provider_type": "webhook",
-    "name": "HTTPBin Webhook",
-    "enabled": true,
-    "send_config": {
-      "method": "POST",
-      "url": "http://127.0.0.1:18081/webhook",
-      "headers": {
-        "Content-Type": "application/json"
-      },
-      "body": {
-        "gateway": "mvp-push"
-      },
-      "recipient": {
-        "location": "none"
-      }
-    }
-  }'
-```
-
-### 5. Create, Publish, and Activate a Route Flow
-
-Create the flow:
-
-```bash
-curl -X POST http://127.0.0.1:18080/api/v1/route-flows \
-  -H "Authorization: Bearer ${ADMIN_TOKEN}" \
-  -H 'Content-Type: application/json' \
-  -d '{
-    "source_id": "replace-with-source-id",
-    "name": "订单路由",
-    "enabled": true,
-    "mode": "table"
-  }'
-```
-
-Save one rule:
-
-```bash
-curl -X PUT http://127.0.0.1:18080/api/v1/route-flows/replace-with-flow-id/rules \
-  -H "Authorization: Bearer ${ADMIN_TOKEN}" \
-  -H 'Content-Type: application/json' \
-  -d '{
-    "rules": [
-      {
-        "sort_order": 10,
-        "name": "默认订单通知",
-        "enabled": true,
-        "condition_tree": {
-          "operator": "always"
-        },
-        "action": {
-          "template_version_id": "replace-with-template-version-id",
-          "channel_ids": ["replace-with-channel-id"],
-          "recipient_strategy": {"mode": "none"},
-          "send_dedupe_config": {},
-          "failure_policy": {}
-        }
-      }
-    ]
-}'
-```
-
-If `rule_key` is omitted, the backend generates a stable UUID rule key in the save response.
-
-Publish the draft:
-
-```bash
-curl -X POST http://127.0.0.1:18080/api/v1/route-flows/replace-with-flow-id/publish \
-  -H "Authorization: Bearer ${ADMIN_TOKEN}"
-```
-
-Activate the published version:
-
-```bash
-curl -X POST http://127.0.0.1:18080/api/v1/route-flows/replace-with-flow-id/versions/replace-with-version-id/activate \
-  -H "Authorization: Bearer ${ADMIN_TOKEN}"
-```
-
-Optional rule simulation:
-
-```bash
-curl -X POST http://127.0.0.1:18080/api/v1/route-flows/replace-with-flow-id/simulate \
-  -H "Authorization: Bearer ${ADMIN_TOKEN}" \
-  -H 'Content-Type: application/json' \
-  -d '{
-    "payload": {
-      "title": "订单已支付",
-      "content": "订单 2026-0001 已完成支付",
-      "severity": "info"
-    }
-  }'
-```
-
-### 6. Check Monitoring
-
-Queue metrics:
-
-```bash
-curl http://127.0.0.1:18080/api/v1/monitor/queues \
-  -H "Authorization: Bearer ${ADMIN_TOKEN}"
-```
-
-Overview metrics:
-
-```bash
-curl http://127.0.0.1:18080/api/v1/stats/overview \
-  -H "Authorization: Bearer ${ADMIN_TOKEN}"
-```
-
-### 7. Send a Routed Payload and Check Message Logs
-
-```bash
-curl -X POST http://127.0.0.1:18080/api/v1/ingest/orders \
-  -H 'Authorization: Bearer srcordersdevtoken' \
-  -H 'Content-Type: application/json' \
-  -d '{
-    "title": "订单已支付",
-    "content": "订单 2026-0002 已完成支付",
-    "severity": "info"
-  }'
-```
-
-The response returns `202 Accepted` and a `trace_id`. Query the message log after a few seconds:
-
-```bash
-curl "http://127.0.0.1:18080/api/v1/messages?trace_id=replace-with-trace-id" \
-  -H "Authorization: Bearer ${ADMIN_TOKEN}"
-
-curl "http://127.0.0.1:18080/api/v1/messages/replace-with-message-id" \
-  -H "Authorization: Bearer ${ADMIN_TOKEN}"
-```
-
-Expected detail fields include the inbound payload, matched route flow/rule, outbound request snapshot, outbound response snapshot and timeline durations.
-
-## Test Commands
-
-Backend:
-
-```bash
-./scripts/test-backend.sh
-```
-
-Frontend:
-
-```bash
-./scripts/test-frontend.sh
-```
-
-Migration constraints:
-
-```bash
-./scripts/test-migrations.sh
-```
-
-Shell script syntax check:
-
-```bash
-./scripts/check-shell-scripts.sh
-```
-
-Compose file expansion:
-
-```bash
-docker compose config
-docker compose --profile all-in-one config
-```
-
-`./scripts/test-migrations.sh` and backend integration tests require a writable PostgreSQL database referenced by `MGP_TEST_DATABASE_URL`.
-
-## Common Issues
-
-### `database connection failed`
-
-Usually one of these is wrong:
-
-- PostgreSQL is not running
-- `MGP_POSTGRES_DSN` points to the wrong host, port, user, or password
-- migrations were not applied and the backend cannot seed/query expected tables
-
-Check:
-
-```bash
-psql "$MGP_POSTGRES_DSN" -c 'SELECT 1'
 ./scripts/apply-migrations.sh
 ```
 
-### Docker build cannot pull base image metadata
-
-If Docker reports `failed to resolve source metadata` or `EOF` while pulling `golang`, `node`, `nginx`, `postgres`, or `alpine`, the local Docker engine cannot reach Docker Hub reliably. Configure Docker Desktop registry mirrors, or point the `.env` base image variables at your internal registry:
+Start backend:
 
 ```bash
-MGP_GO_BUILDER_IMAGE=registry.example.com/library/golang:1.22-alpine
-MGP_NODE_BUILDER_IMAGE=registry.example.com/library/node:20-alpine
-MGP_BACKEND_RUNTIME_IMAGE=registry.example.com/library/alpine:3.20
-MGP_FRONTEND_RUNTIME_IMAGE=registry.example.com/library/nginx:1.27-alpine
-MGP_ALL_IN_ONE_RUNTIME_IMAGE=registry.example.com/library/postgres:16-alpine
+./scripts/dev-backend.sh
 ```
 
-### `setup/admin` returns conflict
-
-`POST /api/v1/setup/admin` is one-time initialization. Check the current state:
+Start frontend:
 
 ```bash
-curl http://127.0.0.1:18080/api/v1/setup/status
+./scripts/dev-frontend.sh
 ```
 
-If `setup_open` is `false`, log in with the existing admin instead of trying to initialize again.
+Run common checks:
 
-### Queue metrics show pending jobs after ingest
+```bash
+cd backend
+go test ./internal/db ./internal/http ./internal/messagelog ./internal/audit
+```
 
-Ingest enqueues asynchronous `route_plan` and `send_message` jobs. A small amount of pending work is normal immediately after ingest. If the same jobs remain pending for more than a few polling cycles, check backend logs, database connectivity, and whether the runtime worker harness is running.
+```bash
+cd frontend
+npm test
+npm run build
+```
+
+## Configuration
+
+Important environment variables:
+
+| Variable | Purpose |
+| --- | --- |
+| `MGP_PORT` | Backend port, default `18080` locally |
+| `MGP_POSTGRES_DSN` | PostgreSQL connection string |
+| `MGP_NATS_URL` | NATS JetStream URL |
+| `MGP_QUEUE_BACKEND` | Queue backend, default `jetstream` |
+| `MGP_SECRET_ENCRYPTION_KEY` | Base64 secret field encryption key |
+| `MGP_TRUSTED_PROXIES` | Trusted reverse proxy CIDRs / IPs for real client IP parsing |
+| `MGP_PPROF_PORT` | Optional local pprof port, disabled when empty |
+
+Never commit `.env` or real deployment secrets. Use `.env.example` only for safe placeholders.
+
+## Security Notes
+
+Before deploying to an internet-facing server:
+
+- Set a strong `MGP_POSTGRES_PASSWORD`.
+- Set `MGP_SECRET_ENCRYPTION_KEY` and run secret backfill for existing plaintext data if needed.
+- Put the console behind HTTPS.
+- Restrict admin access with firewall, VPN, or a trusted reverse proxy.
+- Configure `MGP_TRUSTED_PROXIES` if the service runs behind a load balancer.
+- Rotate source tokens, HMAC secrets, provider credentials, and SMTP passwords before public exposure.
+- Review message logs before sharing data because payload and request/response snapshots are intentionally not encrypted in the current baseline.
+
+Current baseline:
+
+- Source tokens, HMAC secrets, provider credentials, token cache, and sensitive send config can be encrypted.
+- Payload logs and request/response snapshots remain visible to administrators for troubleshooting.
+- The repository ignores `.env`, local data directories, logs, private keys, and the local multi-tenant security design note.
+
+## Documentation
+
+- Architecture: `docs/architecture/system-design.md`
+- Data model: `docs/data-model/schema-design.md`
+- API design: `docs/api/api-design.md`
+- Downstream integration guide: `docs/api/downstream-integration-guide.md`
+- Operations guide: `docs/operations/operator-guide.md`
+- End-to-end smoke test: `docs/operations/end-to-end-smoke.md`
+- JetStream architecture: `docs/plans/2026-06-07-nats-jetstream-queue-architecture-plan.md`
+
+## Project Status
+
+This project is evolving quickly. The current codebase focuses on a powerful single-admin operations console and high-throughput gateway runtime. Multi-user SaaS mode, public registration, tenant isolation, and broader field encryption are designed but not yet fully merged into the product baseline.
+
+## License
+
+No license has been declared yet. Add a license before publishing if you want others to use, modify, or redistribute the project.

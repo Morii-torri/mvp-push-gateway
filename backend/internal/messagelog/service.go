@@ -15,12 +15,16 @@ var (
 )
 
 type ListFilter struct {
-	TraceID   string
-	SourceID  string
-	Status    string
-	ChannelID string
-	Limit     int
-	Offset    int
+	TraceID        string
+	Keyword        string
+	SourceID       string
+	SourceName     string
+	Status         string
+	ChannelID      string
+	TargetProvider string
+	ErrorCode      string
+	Limit          int
+	Offset         int
 }
 
 type ListResult struct {
@@ -156,9 +160,13 @@ func (s *Service) GetMessage(ctx context.Context, id string) (MessageDetail, err
 
 func normalizeFilter(filter ListFilter) ListFilter {
 	filter.TraceID = strings.TrimSpace(filter.TraceID)
+	filter.Keyword = strings.TrimSpace(filter.Keyword)
 	filter.SourceID = strings.TrimSpace(filter.SourceID)
+	filter.SourceName = strings.TrimSpace(filter.SourceName)
 	filter.Status = strings.TrimSpace(filter.Status)
 	filter.ChannelID = strings.TrimSpace(filter.ChannelID)
+	filter.TargetProvider = strings.TrimSpace(filter.TargetProvider)
+	filter.ErrorCode = strings.TrimSpace(filter.ErrorCode)
 	if filter.Limit <= 0 {
 		filter.Limit = 50
 	}

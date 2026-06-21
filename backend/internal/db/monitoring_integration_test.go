@@ -396,6 +396,9 @@ func TestRepositoryGetOverviewStatisticsBuildsStable24hDashboard(t *testing.T) {
 	if len(overview.FailureRankings) == 0 || overview.FailureRankings[0].Reason != "目标平台超时" {
 		t.Fatalf("expected timeout in failure rankings, got %+v", overview.FailureRankings)
 	}
+	if len(overview.RecentAnomalies) == 0 || overview.RecentAnomalies[0].TraceID != "trace-2107" {
+		t.Fatalf("expected recent anomaly to carry latest failed trace id, got %+v", overview.RecentAnomalies)
+	}
 }
 
 func TestRepositoryRunRetentionCleanupDeletesSmallBatchesAndPersistsLatestStatus(t *testing.T) {

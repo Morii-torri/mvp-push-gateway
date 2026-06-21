@@ -159,7 +159,7 @@ const emailServicePresets: EmailServicePreset[] = [
   { value: 'custom', label: '自定义', host: '', port: 465, security: 'SSL' },
   { value: 'qq', label: 'QQ邮箱', host: 'smtp.qq.com', port: 465, security: 'SSL' },
   { value: 'tencent_exmail', label: '腾讯企业邮箱', host: 'smtp.exmail.qq.com', port: 465, security: 'SSL' },
-  { value: 'aliyun_qiye', label: '阿里企业邮箱', host: 'smtp.qiye.aliyun.com', port: 465, security: 'SSL' },
+  { value: 'aliyun_qiye', label: '阿里邮箱', host: 'smtp.qiye.aliyun.com', port: 465, security: 'SSL' },
   { value: 'netease_163', label: '163邮箱', host: 'smtp.163.com', port: 465, security: 'SSL' },
   { value: 'netease_126', label: '126邮箱', host: 'smtp.126.com', port: 465, security: 'SSL' },
   { value: 'gmail', label: 'Gmail', host: 'smtp.gmail.com', port: 465, security: 'SSL' },
@@ -583,7 +583,7 @@ function providerVisibleConfigFields(providerType: ProviderKind, fields: Provide
     pushme: new Set(['push_key', 'temp_key', 'type', 'method', 'content_type']),
   };
   const hidden = hiddenKeysByProvider[providerType];
-  return fields
+  const visibleFields = fields
     .filter((field) => {
       if (providerType === 'self' && field.target === 'send_config' && field.key === 'source_code') {
         return false;
@@ -594,9 +594,44 @@ function providerVisibleConfigFields(providerType: ProviderKind, fields: Provide
       return hidden ? !hidden.has(field.key) : true;
     })
     .map((field) => normalizeProviderConfigField(providerType, field));
+  return sortProviderConfigFields(providerType, visibleFields);
 }
 
 function normalizeProviderConfigField(providerType: ProviderKind, field: ProviderConfigField): ProviderConfigField {
+  if (providerType === 'email') {
+    if (field.target === 'auth_config' && field.key === 'service_provider') {
+      return {
+        ...field,
+        label: '邮件服务商',
+        inputType: 'select',
+        defaultValue: field.defaultValue ?? 'custom',
+        options: emailServiceProviderOptions,
+      };
+    }
+    if (field.target === 'auth_config' && field.key === 'host') {
+      return { ...field, label: 'SMTP 主机地址' };
+    }
+    if (field.target === 'auth_config' && field.key === 'port') {
+      return {
+        ...field,
+        label: 'SMTP 端口',
+        inputType: 'number',
+        defaultValue: field.defaultValue ?? 465,
+      };
+    }
+    if (field.target === 'auth_config' && field.key === 'security') {
+      return {
+        ...field,
+        label: '加密方式',
+        inputType: 'select',
+        defaultValue: field.defaultValue ?? 'SSL',
+        options: emailSecurityOptions,
+      };
+    }
+    if (field.target === 'auth_config' && field.key === 'password') {
+      return { ...field, label: '授权码 / 密码', inputType: 'password' };
+    }
+  }
   if (providerType === 'webhook') {
     if (field.key === 'url') {
       return {
@@ -642,6 +677,32 @@ function normalizeProviderConfigField(providerType: ProviderKind, field: Provide
     }
   }
   return field;
+}
+
+function sortProviderConfigFields(providerType: ProviderKind, fields: ProviderConfigField[]): ProviderConfigField[] {
+  if (providerType !== 'email') {
+    return fields;
+  }
+  const order = new Map<string, number>([
+    ['auth_config.service_provider', 0],
+    ['auth_config.host', 1],
+    ['auth_config.port', 2],
+    ['auth_config.security', 3],
+    ['auth_config.username', 4],
+    ['auth_config.password', 5],
+    ['send_config.from', 6],
+    ['send_config.cc', 7],
+    ['send_config.bcc', 8],
+    ['send_config.reply_to', 9],
+  ]);
+  return fields
+    .map((field, index) => ({ field, index }))
+    .sort((left, right) => {
+      const leftOrder = order.get(providerFieldValueKey(left.field)) ?? 1000 + left.index;
+      const rightOrder = order.get(providerFieldValueKey(right.field)) ?? 1000 + right.index;
+      return leftOrder - rightOrder;
+    })
+    .map(({ field }) => field);
 }
 
 function capabilityMessageTypes(providerType: ProviderKind, records: ProviderCapabilityApiRecord[]): string[] {
@@ -891,7 +952,7 @@ export function providerFieldLabel(key: string): string {
     signature_id: '签名 ID',
     sms_sdk_app_id: '短信 SDK App ID',
     server_url: '服务地址',
-    service_provider: '邮箱服务商',
+    service_provider: '邮件服务商',
     source_code: '上级来源编码',
     source_token: '上级来源 Token',
     spt: 'WxPusher SPT',
@@ -946,7 +1007,7 @@ function fallbackProviderFields(providerType: ProviderKind): ProviderConfigField
 
   if (providerType === 'email') {
     return [
-      field('service_provider', '邮箱服务商', 'auth_config', 'select', true, '选择后自动填充 SMTP 参数', 'custom', 'string', '', emailServiceProviderOptions),
+      field('service_provider', '邮件服务商', 'auth_config', 'select', true, '选择后自动填充 SMTP 参数', 'custom', 'string', '', emailServiceProviderOptions),
       field('host', 'SMTP 主机地址', 'auth_config', 'text', true),
       field('port', 'SMTP 端口', 'auth_config', 'number', true, '465 / 587', 465),
       field('security', '加密方式', 'auth_config', 'select', true, '', 'SSL', 'string', '', emailSecurityOptions),
@@ -1325,7 +1386,7 @@ function providerFieldExtra(
   lockedByEmailPreset = false,
 ): string | undefined {
   if (lockedByEmailPreset) {
-    return '已由邮箱服务商自动填充；选择自定义后可修改。';
+    return '已由邮件服务商自动填充；选择自定义后可修改。';
   }
   if (field.target === 'send_config' && field.key === 'url') {
     return '{{ identity }} 表示当前接收人的平台身份字段值。';

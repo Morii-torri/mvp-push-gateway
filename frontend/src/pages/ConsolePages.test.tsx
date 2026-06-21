@@ -2850,7 +2850,7 @@ describe("critical console pages", () => {
       "自定义",
       "QQ邮箱",
       "腾讯企业邮箱",
-      "阿里企业邮箱",
+      "阿里邮箱",
       "163邮箱",
       "126邮箱",
       "Gmail",
@@ -2858,7 +2858,7 @@ describe("critical console pages", () => {
       "Office 365",
     ]);
     expect(draft.fieldValues["auth_config.service_provider"]).toBe("custom");
-    expect(defaultMarkup).toContain("邮箱服务商");
+    expect(defaultMarkup).toContain("邮件服务商");
     expect(defaultMarkup).toContain("SMTP 主机地址");
     expect(defaultMarkup).toContain("SMTP 端口");
     expect(defaultMarkup).toContain("加密方式");
@@ -2873,9 +2873,9 @@ describe("critical console pages", () => {
     expect(customMarkup).toContain("SMTP 主机地址");
     expect(customMarkup).toContain("SMTP 端口");
     expect(customMarkup).toContain("加密方式");
-    expect(outlookMarkup).toContain("已由邮箱服务商自动填充");
+    expect(outlookMarkup).toContain("已由邮件服务商自动填充");
     expect(draft.configFields.map((field) => field.label)).toEqual([
-      "邮箱服务商",
+      "邮件服务商",
       "SMTP 主机地址",
       "SMTP 端口",
       "加密方式",
@@ -2887,7 +2887,7 @@ describe("critical console pages", () => {
       "指定回复地址",
     ]);
     const renderedLabelOrder = [
-      "邮箱服务商",
+      "邮件服务商",
       "SMTP 主机地址",
       "SMTP 端口",
       "加密方式",
@@ -2929,6 +2929,75 @@ describe("critical console pages", () => {
       bcc: ["security@example.com"],
       reply_to: "reply@example.com",
     });
+  });
+
+  it("keeps SMTP email capability fields in a stable display order", () => {
+    const capabilities: ProviderCapabilityApiRecord[] = [
+      {
+        provider_type: "email",
+        display_name: "SMTP 邮件",
+        category: "邮件",
+        credential_schema: {
+          type: "object",
+          required: [
+            "service_provider",
+            "host",
+            "port",
+            "security",
+            "username",
+            "password",
+          ],
+          properties: {
+            security: {
+              type: "string",
+              title: "加密方式",
+              enum: ["SSL", "STARTTLS"],
+            },
+            password: {
+              type: "string",
+              title: "密码",
+              format: "password",
+            },
+            username: { type: "string", title: "用户名" },
+            service_provider: {
+              type: "string",
+              title: "邮箱服务商",
+              enum: ["custom"],
+            },
+            port: { type: "integer", title: "SMTP 端口" },
+            host: { type: "string", title: "SMTP 主机" },
+          },
+        },
+        channel_config_schema: {
+          type: "object",
+          properties: {
+            reply_to: { type: "string", title: "指定回复地址" },
+            bcc: { type: "array", title: "密送收件人地址" },
+            cc: { type: "array", title: "抄送收件人地址" },
+            from: { type: "string", title: "发件人显示名" },
+          },
+        },
+      },
+    ];
+    const draft = createProviderDraft("email", 1, capabilities);
+
+    expect(draft.configFields.map((field) => field.label)).toEqual([
+      "邮件服务商",
+      "SMTP 主机地址",
+      "SMTP 端口",
+      "加密方式",
+      "用户名",
+      "授权码 / 密码",
+      "发件人显示名",
+      "抄送收件人地址",
+      "密送收件人地址",
+      "指定回复地址",
+    ]);
+    expect(
+      draft.configFields
+        .find((field) => field.key === "service_provider")
+        ?.options?.map((option) => option.label),
+    ).toContain("阿里邮箱");
   });
 
   it("maps persistent token cache statuses for provider rows", () => {

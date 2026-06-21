@@ -109,7 +109,8 @@ func TestEmailCapabilityUsesProviderPresetsAndEncryptedSecurity(t *testing.T) {
 	capability := findCapability(t, ProviderEmail, "email")
 
 	assertJSONField(t, capability.CredentialSchema, "properties.service_provider.default", "custom")
-	assertJSONField(t, capability.CredentialSchema, "properties.service_provider.enum_labels.aliyun_qiye", "阿里企业邮箱")
+	assertJSONField(t, capability.CredentialSchema, "properties.service_provider.title", "邮件服务商")
+	assertJSONField(t, capability.CredentialSchema, "properties.service_provider.enum_labels.aliyun_qiye", "阿里邮箱")
 	assertJSONField(t, capability.CredentialSchema, "properties.host.default", "")
 	assertJSONField(t, capability.CredentialSchema, "properties.port.default", float64(465))
 	assertJSONField(t, capability.CredentialSchema, "properties.security.default", "SSL")

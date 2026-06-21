@@ -544,8 +544,12 @@ export type MessageLogListQueryApi = {
   offset?: number;
   status?: string;
   traceId?: string;
+  keyword?: string;
   sourceId?: string;
+  sourceName?: string;
   channelId?: string;
+  targetProvider?: string;
+  errorCode?: string;
 };
 
 export type AuditLogListQueryApi = {
@@ -554,6 +558,7 @@ export type AuditLogListQueryApi = {
   actor?: string;
   action?: string;
   resourceType?: string;
+  resourceName?: string;
 };
 
 export type DeadLetterBatchSelection =
@@ -1357,11 +1362,23 @@ export const consoleApi = {
     if (options?.traceId) {
       params.set("trace_id", options.traceId);
     }
+    if (options?.keyword) {
+      params.set("keyword", options.keyword);
+    }
     if (options?.sourceId) {
       params.set("source_id", options.sourceId);
     }
+    if (options?.sourceName) {
+      params.set("source_name", options.sourceName);
+    }
     if (options?.channelId) {
       params.set("channel_id", options.channelId);
+    }
+    if (options?.targetProvider) {
+      params.set("target_provider", options.targetProvider);
+    }
+    if (options?.errorCode) {
+      params.set("error_code", options.errorCode);
     }
     const query = params.toString();
     return apiRequest<{
@@ -1469,6 +1486,9 @@ export const consoleApi = {
     }
     if (options?.resourceType) {
       params.set("resource_type", options.resourceType);
+    }
+    if (options?.resourceName) {
+      params.set("resource_name", options.resourceName);
     }
     const query = params.toString();
     return apiRequest<{

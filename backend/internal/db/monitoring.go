@@ -413,7 +413,7 @@ func (r Repository) getQueueTrend(ctx context.Context, windowStart, now time.Tim
 			FROM delivery_attempts
 			WHERE finished_at >= $1
 				AND finished_at <= $2
-				AND status IN ('sent', 'failed', 'deduped', 'skipped')
+				AND status IN ('sent', 'failed')
 			GROUP BY date_bin($3::interval, finished_at, $4::timestamptz)
 		)
 		SELECT
@@ -864,10 +864,21 @@ func (r Repository) getRecentAnomalies(ctx context.Context, windowStart, now tim
 	rows, err := r.pool.Query(ctx, `
 		WITH totals AS (
 			SELECT count(*)::integer AS total_failed
-			FROM delivery_attempts
-			WHERE status = 'failed'
-				AND COALESCE(finished_at, queued_at) >= $1
-				AND COALESCE(finished_at, queued_at) <= $2
+			FROM delivery_attempts AS attempt
+			WHERE attempt.status = 'failed'
+				AND COALESCE(attempt.finished_at, attempt.queued_at) >= $1
+				AND COALESCE(attempt.finished_at, attempt.queued_at) <= $2
+		),
+		failed_attempts AS (
+			SELECT
+				COALESCE(NULLIF(attempt.error_message, ''), '未知错误') AS title,
+				message.trace_id,
+				COALESCE(attempt.finished_at, attempt.queued_at) AS event_at
+			FROM delivery_attempts AS attempt
+			JOIN message_records AS message ON message.id = attempt.message_id
+			WHERE attempt.status = 'failed'
+				AND COALESCE(attempt.finished_at, attempt.queued_at) >= $1
+				AND COALESCE(attempt.finished_at, attempt.queued_at) <= $2
 		)
 		SELECT
 			CASE
@@ -875,15 +886,14 @@ func (r Repository) getRecentAnomalies(ctx context.Context, windowStart, now tim
 				WHEN count(*) >= 5 THEN '中'
 				ELSE '低'
 			END AS level,
-			COALESCE(NULLIF(error_message, ''), '未知错误') AS title,
-			max(COALESCE(finished_at, queued_at)) AS latest_at,
+			failed.title,
+			max(failed.event_at) AS latest_at,
 			count(*)::integer AS anomaly_count,
-			COALESCE(round((count(*)::numeric * 100.0) / NULLIF(totals.total_failed::numeric, 0), 2), 0)::float8 AS ratio
-		FROM delivery_attempts, totals
-		WHERE status = 'failed'
-			AND COALESCE(finished_at, queued_at) >= $1
-			AND COALESCE(finished_at, queued_at) <= $2
-		GROUP BY title, totals.total_failed
+			COALESCE(round((count(*)::numeric * 100.0) / NULLIF(totals.total_failed::numeric, 0), 2), 0)::float8 AS ratio,
+			(array_agg(failed.trace_id ORDER BY failed.event_at DESC, failed.trace_id ASC))[1] AS trace_id
+		FROM failed_attempts AS failed
+		CROSS JOIN totals
+		GROUP BY failed.title, totals.total_failed
 		ORDER BY latest_at DESC, anomaly_count DESC
 		LIMIT 5
 	`, windowStart, now)
@@ -895,7 +905,7 @@ func (r Repository) getRecentAnomalies(ctx context.Context, windowStart, now tim
 	items := make([]statistics.RecentAnomaly, 0)
 	for rows.Next() {
 		var item statistics.RecentAnomaly
-		if err := rows.Scan(&item.Level, &item.Title, &item.Time, &item.Count, &item.Ratio); err != nil {
+		if err := rows.Scan(&item.Level, &item.Title, &item.Time, &item.Count, &item.Ratio, &item.TraceID); err != nil {
 			return nil, fmt.Errorf("scan recent anomaly: %w", err)
 		}
 		items = append(items, item)

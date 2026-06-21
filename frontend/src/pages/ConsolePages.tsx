@@ -398,6 +398,25 @@ const emptyLoadState: ApiLoadState = {
   error: "",
 };
 
+const MESSAGE_LOG_TRACE_FILTER_KEY = "mgp_message_log_trace_filter";
+const MESSAGE_LOG_TRACE_FILTER_EVENT = "mgp:message-log-trace-filter";
+
+function consumePendingMessageLogTraceFilter() {
+  if (typeof window === "undefined") {
+    return "";
+  }
+  try {
+    const traceId = window.sessionStorage.getItem(MESSAGE_LOG_TRACE_FILTER_KEY);
+    if (traceId) {
+      window.sessionStorage.removeItem(MESSAGE_LOG_TRACE_FILTER_KEY);
+      return traceId.trim();
+    }
+  } catch {
+    return "";
+  }
+  return "";
+}
+
 const dashboardWindowOptions: Array<{ label: string; value: DashboardWindow }> =
   [
     { label: "近 15 分钟", value: "15m" },
@@ -12801,8 +12820,9 @@ export function MessageLogsPage({ lastUpdated, onRefresh }: ConsolePageProps) {
   const [pageSize, setPageSize] = useState(50);
   const [loadState, setLoadState] = useState<ApiLoadState>(emptyLoadState);
   const isFirstLoad = useRef(true);
+  const [initialTraceId] = useState(() => consumePendingMessageLogTraceFilter());
   const messageLogQuery = useAppliedFilters<MessageLogListQuery>({
-    traceId: "",
+    traceId: initialTraceId,
     keyword: "",
     source: "all",
     targetProvider: "all",
@@ -12810,8 +12830,7 @@ export function MessageLogsPage({ lastUpdated, onRefresh }: ConsolePageProps) {
     errorCode: "all",
   });
   const messageLogSort = useTableSort<MessageLog>();
-  const filteredRows = filterMessageLogsByQuery(rows, messageLogQuery.applied);
-  const sortedRows = sortRowsByTableState(filteredRows, messageLogSort.state);
+  const sortedRows = sortRowsByTableState(rows, messageLogSort.state);
   const loadMessageLogs = useCallback(
     async (silent = false) => {
       if (!silent) {
@@ -12826,6 +12845,19 @@ export function MessageLogsPage({ lastUpdated, onRefresh }: ConsolePageProps) {
               ? undefined
               : messageLogQuery.applied.status,
           traceId: messageLogQuery.applied.traceId || undefined,
+          keyword: messageLogQuery.applied.keyword || undefined,
+          sourceName:
+            messageLogQuery.applied.source === "all"
+              ? undefined
+              : messageLogQuery.applied.source,
+          targetProvider:
+            messageLogQuery.applied.targetProvider === "all"
+              ? undefined
+              : messageLogQuery.applied.targetProvider,
+          errorCode:
+            messageLogQuery.applied.errorCode === "all"
+              ? undefined
+              : messageLogQuery.applied.errorCode,
         });
         setRows(result.messages.map(mapMessageLog));
         setTotal(result.total);
@@ -12838,11 +12870,58 @@ export function MessageLogsPage({ lastUpdated, onRefresh }: ConsolePageProps) {
     },
     [
       currentPage,
+      messageLogQuery.applied.errorCode,
+      messageLogQuery.applied.keyword,
+      messageLogQuery.applied.source,
       messageLogQuery.applied.status,
+      messageLogQuery.applied.targetProvider,
       messageLogQuery.applied.traceId,
       pageSize,
     ],
   );
+  const { applyPatch: applyMessageLogQueryPatch } = messageLogQuery;
+
+  const applyMessageTraceFilter = useCallback(
+    (traceId: string) => {
+      const normalized = traceId.trim();
+      if (!normalized) {
+        return;
+      }
+      try {
+        window.sessionStorage.removeItem(MESSAGE_LOG_TRACE_FILTER_KEY);
+      } catch {
+        // Ignore storage-disabled browsers; filtering still applies in memory.
+      }
+      applyMessageLogQueryPatch({
+        traceId: normalized,
+        keyword: "",
+        source: "all",
+        targetProvider: "all",
+        status: "all",
+        errorCode: "all",
+      });
+      setCurrentPage(1);
+    },
+    [applyMessageLogQueryPatch],
+  );
+
+  useEffect(() => {
+    const pendingTraceId = consumePendingMessageLogTraceFilter();
+    if (pendingTraceId) {
+      applyMessageTraceFilter(pendingTraceId);
+    }
+    const handler = (event: Event) => {
+      const traceId = (
+        event as CustomEvent<{ traceId?: string | null }>
+      ).detail?.traceId;
+      if (traceId) {
+        applyMessageTraceFilter(traceId);
+      }
+    };
+    window.addEventListener(MESSAGE_LOG_TRACE_FILTER_EVENT, handler);
+    return () =>
+      window.removeEventListener(MESSAGE_LOG_TRACE_FILTER_EVENT, handler);
+  }, [applyMessageTraceFilter]);
 
   useEffect(() => {
     const silent = !isFirstLoad.current;
@@ -12945,8 +13024,8 @@ export function MessageLogsPage({ lastUpdated, onRefresh }: ConsolePageProps) {
         extra={
           <Button
             onClick={() => {
-              if (exportRowsAsJSON("message-logs", filteredRows)) {
-                message.success(`已导出 ${filteredRows.length} 条消息日志`);
+              if (exportRowsAsJSON("message-logs", rows)) {
+                message.success(`已导出当前页 ${rows.length} 条消息日志`);
               } else {
                 message.warning("当前运行环境不支持浏览器文件导出");
               }
@@ -13766,8 +13845,7 @@ export function AuditPage({ lastUpdated, onRefresh }: ConsolePageProps) {
     resourceName: "",
   });
   const auditSort = useTableSort<AuditLogRow>();
-  const filteredRows = filterAuditLogsByQuery(rows, auditQuery.applied);
-  const sortedRows = sortRowsByTableState(filteredRows, auditSort.state);
+  const sortedRows = sortRowsByTableState(rows, auditSort.state);
   const loadAuditLogs = useCallback(
     async (silent = false) => {
       if (!silent) {
@@ -13782,6 +13860,7 @@ export function AuditPage({ lastUpdated, onRefresh }: ConsolePageProps) {
             auditQuery.applied.action === "all"
               ? undefined
               : auditQuery.applied.action,
+          resourceName: auditQuery.applied.resourceName || undefined,
         });
         setRows(result.audit_logs.map(mapAuditLog));
         setTotal(result.total);
@@ -13795,6 +13874,7 @@ export function AuditPage({ lastUpdated, onRefresh }: ConsolePageProps) {
     [
       auditQuery.applied.action,
       auditQuery.applied.actor,
+      auditQuery.applied.resourceName,
       currentPage,
       pageSize,
     ],
@@ -13888,8 +13968,8 @@ export function AuditPage({ lastUpdated, onRefresh }: ConsolePageProps) {
         extra={
           <Button
             onClick={() => {
-              if (exportRowsAsJSON("audit-logs", filteredRows)) {
-                message.success(`已导出 ${filteredRows.length} 条审计记录`);
+              if (exportRowsAsJSON("audit-logs", rows)) {
+                message.success(`已导出当前页 ${rows.length} 条审计记录`);
               } else {
                 message.warning("当前运行环境不支持浏览器文件导出");
               }

@@ -1829,6 +1829,12 @@ body {
   width: min(100%, 900px);
 }
 
+.query-fields .ant-select,
+.query-fields .ant-picker,
+.query-fields .ant-input-number {
+  width: 100%;
+}
+
 .query-actions {
   justify-content: flex-end;
 }
@@ -2374,6 +2380,13 @@ body {
 }
 
 .full-width {
+  width: 100%;
+}
+
+.ant-form .ant-select,
+.ant-form .ant-tree-select,
+.ant-form .ant-picker,
+.ant-form .ant-input-number {
   width: 100%;
 }
 
