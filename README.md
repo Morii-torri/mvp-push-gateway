@@ -17,6 +17,7 @@ MVP Push Gateway 是一个低延迟的消息接入、路由分发、模板转换
 - **消息模板转换**：使用 Jinja-like 语法把下级 Payload 转换成不同推送渠道支持的消息内容。
 - **组织人员与接收人**：支持组织树、人员、接收人组和不同平台身份字段。
 - **NATS JetStream 热链路**：用于路由规划、出站发送和结果落库队列。
+- **NATS KV 多实例状态**：用于来源最近 Payload、入站去重、HMAC nonce 和登录图片验证码状态。
 - **PostgreSQL 数据基线**：保存配置、日志、审计、监控指标和可检索状态。
 - **实时通知**：管理台右上角通过 SSE 接收实时通知。
 - **死信处理**：支持死信查看、批量重放、标记处理和删除。
@@ -147,7 +148,7 @@ curl -X POST http://127.0.0.1:18080/api/v1/setup/admin \
 http://127.0.0.1:5173
 ```
 
-项目没有内置默认管理员密码。初始化接口只能成功调用一次。
+项目没有内置默认管理员密码。初始化接口只能成功调用一次。登录页会请求服务端图片验证码；JetStream 模式下验证码状态写入 NATS KV，多实例负载均衡不需要依赖 sticky session。
 
 ## 基本使用流程
 
@@ -246,6 +247,10 @@ npm run build
 | `MGP_POSTGRES_DSN` | PostgreSQL 连接串 |
 | `MGP_NATS_URL` | NATS JetStream 地址 |
 | `MGP_QUEUE_BACKEND` | 队列后端，默认 `jetstream` |
+| `MGP_NATS_LATEST_PAYLOAD_KV_BUCKET` | 来源最近 Payload KV bucket，可选 |
+| `MGP_NATS_INBOUND_DEDUPE_KV_PREFIX` | 入站去重 KV bucket 前缀，可选 |
+| `MGP_NATS_HMAC_NONCE_KV_PREFIX` | HMAC nonce KV bucket 前缀，可选 |
+| `MGP_NATS_LOGIN_CAPTCHA_KV_BUCKET` | 登录图片验证码状态 KV bucket，可选，默认 `MGP_LOGIN_CAPTCHA` |
 | `MGP_SECRET_ENCRYPTION_KEY` | Base64 格式字段加密密钥 |
 | `MGP_TRUSTED_PROXIES` | 可信反向代理 CIDR / IP，用于解析真实客户端 IP |
 | `MGP_PPROF_PORT` | 可选 pprof 端口，留空则关闭 |

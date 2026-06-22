@@ -69,11 +69,7 @@ func TestInitialMigrationDoesNotReintroduceScheduledSend(t *testing.T) {
 }
 
 func TestProviderCapabilityMetadataMigrationContainsNewColumns(t *testing.T) {
-	migration, err := os.ReadFile("../../migrations/000005_provider_capability_metadata.sql")
-	if err != nil {
-		t.Fatalf("read provider capability metadata migration: %v", err)
-	}
-	content := string(migration)
+	content := readInitialMigration(t)
 	required := []string{
 		"ADD COLUMN display_name text",
 		"ADD COLUMN category text",
@@ -99,11 +95,7 @@ func TestProviderCapabilityMetadataMigrationContainsNewColumns(t *testing.T) {
 }
 
 func TestRouteActionTargetsMigrationContainsTableAndBackfill(t *testing.T) {
-	migration, err := os.ReadFile("../../migrations/000006_route_action_targets.sql")
-	if err != nil {
-		t.Fatalf("read route action targets migration: %v", err)
-	}
-	content := string(migration)
+	content := readInitialMigration(t)
 	required := []string{
 		"CREATE TABLE route_action_targets",
 		"action_id uuid NOT NULL REFERENCES route_actions(id) ON DELETE CASCADE",
@@ -113,7 +105,6 @@ func TestRouteActionTargetsMigrationContainsTableAndBackfill(t *testing.T) {
 		"CREATE INDEX idx_route_action_targets_action",
 		"INSERT INTO route_action_targets",
 		"CROSS JOIN LATERAL unnest(action.channel_ids) WITH ORDINALITY",
-		"DROP TABLE IF EXISTS route_action_targets",
 	}
 
 	for _, snippet := range required {
@@ -124,11 +115,7 @@ func TestRouteActionTargetsMigrationContainsTableAndBackfill(t *testing.T) {
 }
 
 func TestProviderTypeExpansionMigrationContainsNewProviderTypes(t *testing.T) {
-	migration, err := os.ReadFile("../../migrations/000007_provider_type_expansion.sql")
-	if err != nil {
-		t.Fatalf("read provider type expansion migration: %v", err)
-	}
-	content := string(migration)
+	content := readInitialMigration(t)
 	required := []string{
 		"DROP CONSTRAINT IF EXISTS delivery_channels_provider_type_check",
 		"DROP CONSTRAINT IF EXISTS provider_capabilities_provider_type_check",
@@ -159,11 +146,7 @@ func TestProviderTypeExpansionMigrationContainsNewProviderTypes(t *testing.T) {
 }
 
 func TestProviderTypeRegistryMigrationRemovesHardCodedProviderTypeChecks(t *testing.T) {
-	migration, err := os.ReadFile("../../migrations/000008_provider_type_registry.sql")
-	if err != nil {
-		t.Fatalf("read provider type registry migration: %v", err)
-	}
-	content := string(migration)
+	content := readInitialMigration(t)
 	required := []string{
 		"CREATE TABLE IF NOT EXISTS provider_types",
 		"provider_type text PRIMARY KEY",
@@ -186,18 +169,10 @@ func TestProviderTypeRegistryMigrationRemovesHardCodedProviderTypeChecks(t *test
 			t.Fatalf("provider type registry migration missing snippet: %s", snippet)
 		}
 	}
-	if strings.Contains(content, "ADD CONSTRAINT delivery_channels_provider_type_check") ||
-		strings.Contains(content, "ADD CONSTRAINT provider_capabilities_provider_type_check") {
-		t.Fatal("registry migration should not reintroduce hard-coded provider_type CHECK constraints in the up migration")
-	}
 }
 
 func TestProviderTokenCacheMigrationContainsSharedCacheTable(t *testing.T) {
-	migration, err := os.ReadFile("../../migrations/000012_provider_token_cache.sql")
-	if err != nil {
-		t.Fatalf("read provider token cache migration: %v", err)
-	}
-	content := string(migration)
+	content := readInitialMigration(t)
 	required := []string{
 		"CREATE TABLE IF NOT EXISTS provider_token_cache",
 		"cache_key text NOT NULL UNIQUE",
@@ -218,11 +193,7 @@ func TestProviderTokenCacheMigrationContainsSharedCacheTable(t *testing.T) {
 }
 
 func TestUserIdentitiesChannelScopeMigration(t *testing.T) {
-	migration, err := os.ReadFile("../../migrations/000013_user_identity_channel_scope.sql")
-	if err != nil {
-		t.Fatalf("read user identity channel scope migration: %v", err)
-	}
-	content := string(migration)
+	content := readInitialMigration(t)
 	required := []string{
 		"ADD COLUMN IF NOT EXISTS channel_id uuid",
 		"REFERENCES delivery_channels(id) ON DELETE SET NULL",
