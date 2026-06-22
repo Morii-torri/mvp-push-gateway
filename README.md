@@ -47,7 +47,6 @@ MVP Push Gateway 是一个低延迟的消息接入、路由分发、模板转换
 - `frontend/`：React + Vite + Ant Design 管理台。
 - `docker-compose.yml`：PostgreSQL、NATS JetStream、后端、前端和迁移服务。
 - `backend/migrations/`：PostgreSQL 数据库迁移。
-- `docs/`：架构、API、数据模型、运维和实施文档。
 
 ## 支持的推送渠道类型
 
@@ -274,16 +273,6 @@ npm run build
 - 来源 Token、HMAC Secret、渠道凭证、Token 缓存和敏感 send_config 字段支持加密。
 - Payload 日志和请求/响应快照仍对管理员明文可见，方便排障。
 - 仓库已忽略 `.env`、本地数据目录、日志、私钥文件和本地安全设计笔记。
-
-## 文档入口
-
-- 架构设计：`docs/architecture/system-design.md`
-- 数据模型：`docs/data-model/schema-design.md`
-- API 设计：`docs/api/api-design.md`
-- 下级对接指南：`docs/api/downstream-integration-guide.md`
-- 运维指南：`docs/operations/operator-guide.md`
-- 端到端 smoke 测试：`docs/operations/end-to-end-smoke.md`
-- JetStream 架构计划：`docs/plans/2026-06-07-nats-jetstream-queue-architecture-plan.md`
 
 ## 项目状态
 

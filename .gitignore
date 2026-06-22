@@ -6,6 +6,10 @@
 !.env.example
 .worktrees/
 
+# Local agent state and private project notes
+.agent/
+docs/
+
 # Local-only design/security notes
 docs/plans/2026-06-21-multi-tenant-registration-encryption-design.md
 
