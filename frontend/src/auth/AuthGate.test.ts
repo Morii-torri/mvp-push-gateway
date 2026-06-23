@@ -7,6 +7,9 @@ import {
   adminPasswordRules,
   createConfirmPasswordRules,
   createConfirmNewPasswordRules,
+  readRememberedAdminUsername,
+  REMEMBERED_ADMIN_USERNAME_KEY,
+  writeRememberedAdminUsername,
 } from "./AuthGate";
 
 describe("admin password frontend validation", () => {
@@ -134,6 +137,48 @@ describe("login page visual shell", () => {
     expect(authGateSource).toContain("换一张");
     expect(styles).toContain(".mg-captcha-row");
   });
+
+  it("renders the backend unavailable panel instead of a warning alert", async () => {
+    const [authGateSource, styles] = await Promise.all([
+      readTextFile("./AuthGate.tsx"),
+      readTextFile("../app/styles.css"),
+    ]);
+
+    expect(authGateSource).toContain("BackendUnavailableView");
+    expect(authGateSource).toContain("无法连接后端服务");
+    expect(authGateSource).toContain("返回登录");
+    expect(authGateSource).toContain("如问题持续存在，请联系管理员。");
+    expect(authGateSource).not.toContain("<Alert");
+    expect(authGateSource).not.toContain("FrownOutlined");
+    expect(authGateSource).not.toContain("auth-unavailable-icon");
+    expect(authGateSource).toContain("QuestionCircleOutlined");
+    expect(styles).toContain(".auth-unavailable-card");
+    expect(styles).toContain(".auth-unavailable-actions");
+    expect(styles).not.toContain(".auth-unavailable-icon");
+    expect(styles).toContain(".auth-screen--unavailable");
+    expect(styles).toContain(
+      'url("/login-assets/backend-unavailable-background.png")',
+    );
+    await expect(
+      fileExists("../../public/login-assets/backend-unavailable-background.png"),
+    ).resolves.toBe(true);
+  });
+});
+
+describe("remembered login username", () => {
+  it("persists and clears the remembered account name", () => {
+    const storage = memoryStorage();
+
+    writeRememberedAdminUsername(" admin ", true, storage);
+
+    expect(storage.getItem(REMEMBERED_ADMIN_USERNAME_KEY)).toBe("admin");
+    expect(readRememberedAdminUsername(storage)).toBe("admin");
+
+    writeRememberedAdminUsername("admin", false, storage);
+
+    expect(storage.getItem(REMEMBERED_ADMIN_USERNAME_KEY)).toBeNull();
+    expect(readRememberedAdminUsername(storage)).toBe("");
+  });
 });
 
 async function readTextFile(relativePath: string): Promise<string> {
@@ -160,4 +205,18 @@ async function fileExists(relativePath: string): Promise<boolean> {
   const existsSync = fsModule.existsSync as (path: string) => boolean;
   const fileURLToPath = urlModule.fileURLToPath as (url: URL) => string;
   return existsSync(fileURLToPath(new URL(relativePath, import.meta.url)));
+}
+
+function memoryStorage(): Storage {
+  const values = new Map<string, string>();
+  return {
+    get length() {
+      return values.size;
+    },
+    clear: () => values.clear(),
+    getItem: (key: string) => values.get(key) ?? null,
+    key: (index: number) => Array.from(values.keys())[index] ?? null,
+    removeItem: (key: string) => values.delete(key),
+    setItem: (key: string, value: string) => values.set(key, value),
+  };
 }

@@ -55,6 +55,96 @@ body {
   pointer-events: none;
 }
 
+.auth-screen--unavailable {
+  justify-items: end;
+  padding: clamp(48px, 8vw, 128px);
+  background:
+    linear-gradient(90deg, rgba(247, 251, 255, 0.02) 0%, rgba(247, 251, 255, 0.06) 45%, rgba(247, 251, 255, 0.68) 72%, rgba(247, 251, 255, 0.94) 100%),
+    url("/login-assets/backend-unavailable-background.png") center center / cover no-repeat,
+    #f4f8ff;
+}
+
+.auth-screen--unavailable::before {
+  display: none;
+}
+
+.auth-unavailable-card {
+  position: relative;
+  width: min(500px, 38vw);
+  margin-right: clamp(24px, 5.6vw, 94px);
+  color: #12294e;
+  text-align: left;
+  background: transparent;
+  border: 0;
+  box-shadow: none;
+}
+
+.auth-unavailable-card .ant-typography {
+  margin-bottom: 0;
+}
+
+.auth-unavailable-card h2.ant-typography {
+  margin: 0 0 20px;
+  color: #142845;
+  font-size: clamp(38px, 2.9vw, 54px);
+  font-weight: 900;
+  line-height: 1.18;
+  letter-spacing: 0;
+}
+
+.auth-unavailable-copy {
+  width: max-content;
+  max-width: min(720px, 48vw);
+  color: #5c6f8d;
+  font-size: 19px;
+  line-height: 1.86;
+  white-space: nowrap;
+}
+
+.auth-unavailable-actions {
+  display: flex;
+  gap: 18px;
+  align-items: center;
+  justify-content: flex-start;
+  margin: 44px 0 32px;
+}
+
+.auth-unavailable-actions .ant-btn {
+  min-width: 146px;
+  height: 52px;
+  color: #344967;
+  font-size: 17px;
+  font-weight: 750;
+  background: rgba(255, 255, 255, 0.74);
+  border-color: rgba(174, 196, 226, 0.78);
+  border-radius: 9px;
+  box-shadow: 0 12px 24px rgba(56, 96, 159, 0.08);
+}
+
+.auth-unavailable-actions .ant-btn-primary {
+  color: #fff;
+  font-weight: 800;
+  background: linear-gradient(135deg, #377bff, #236cff);
+  border-color: transparent;
+  box-shadow: 0 18px 32px rgba(35, 108, 255, 0.22);
+}
+
+.auth-unavailable-hint {
+  display: inline-flex;
+  gap: 10px;
+  align-items: center;
+  max-width: 420px;
+  color: #6a7e9a;
+  font-size: 16px;
+  line-height: 1.7;
+}
+
+.auth-unavailable-hint .anticon {
+  flex: none;
+  color: #4778ee;
+  font-size: 20px;
+}
+
 .mg-login-page {
   position: relative;
   display: grid;
@@ -450,6 +540,16 @@ body {
 }
 
 @media (max-width: 760px) {
+  .auth-screen--unavailable {
+    justify-items: center;
+    align-items: end;
+    padding: 42vh 20px 34px;
+    background:
+      linear-gradient(180deg, rgba(247, 251, 255, 0.08) 0%, rgba(247, 251, 255, 0.32) 42%, rgba(247, 251, 255, 0.94) 74%, rgba(247, 251, 255, 0.98) 100%),
+      url("/login-assets/backend-unavailable-background.png") center top / cover no-repeat,
+      #f4f8ff;
+  }
+
   .mg-login-page {
     padding: 18px;
   }
@@ -477,6 +577,31 @@ body {
   .mg-login-card {
     padding: 30px 24px;
     border-radius: 18px;
+  }
+
+  .auth-unavailable-card {
+    width: min(430px, 100%);
+    margin-right: 0;
+  }
+
+  .auth-unavailable-actions {
+    flex-direction: column;
+    align-items: stretch;
+    margin: 26px 0 22px;
+  }
+
+  .auth-unavailable-actions .ant-btn {
+    width: 100%;
+  }
+
+  .auth-unavailable-card h2.ant-typography {
+    font-size: 32px;
+  }
+
+  .auth-unavailable-copy {
+    width: auto;
+    max-width: 100%;
+    white-space: normal;
   }
 
   .mg-captcha-row {

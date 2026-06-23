@@ -4,6 +4,7 @@ import {
   ADMIN_TOKEN_KEY,
   API_BASE_PATH,
   AUTH_EXPIRED_EVENT,
+  BACKEND_UNAVAILABLE_EVENT,
   ApiClientError,
   apiRequest,
   tokenStore,
@@ -131,7 +132,7 @@ describe('api client', () => {
     expect(dispatchEventMock).toHaveBeenCalledWith(expect.objectContaining({ type: AUTH_EXPIRED_EVENT }));
   });
 
-  it('returns to login without service-unavailable copy on backend gateway failures', async () => {
+  it('dispatches backend unavailable events on gateway failures', async () => {
     tokenStore.set('admin-token');
     const fetchMock = vi.fn(async () =>
       new Response('', {
@@ -142,12 +143,28 @@ describe('api client', () => {
 
     await expect(apiRequest('/sources', { fetcher: fetchMock })).rejects.toMatchObject({
       status: 503,
-      authExpired: true,
-      userMessage: '请重新登录',
+      authExpired: false,
+      backendUnavailable: true,
+      userMessage: '如问题持续存在，请联系管理员。',
     } satisfies Partial<ApiClientError>);
 
     expect(storage.getItem(ADMIN_TOKEN_KEY)).toBeNull();
-    expect(dispatchEventMock).toHaveBeenCalledWith(expect.objectContaining({ type: AUTH_EXPIRED_EVENT }));
+    expect(dispatchEventMock).toHaveBeenCalledWith(expect.objectContaining({ type: BACKEND_UNAVAILABLE_EVENT }));
+  });
+
+  it('dispatches backend unavailable events on network failures', async () => {
+    const fetchMock = vi.fn(async () => {
+      throw new TypeError('Failed to fetch');
+    });
+
+    await expect(apiRequest('/sources', { fetcher: fetchMock })).rejects.toMatchObject({
+      status: 0,
+      authExpired: false,
+      backendUnavailable: true,
+      userMessage: '如问题持续存在，请联系管理员。',
+    } satisfies Partial<ApiClientError>);
+
+    expect(dispatchEventMock).toHaveBeenCalledWith(expect.objectContaining({ type: BACKEND_UNAVAILABLE_EVENT }));
   });
 });
 

@@ -129,7 +129,11 @@ import {
   type UserInput,
   type UserProfileInput,
 } from "../api/console";
-import { ApiClientError, isAuthExpiredError } from "../api/client";
+import {
+  ApiClientError,
+  isAuthExpiredError,
+  isBackendUnavailableError,
+} from "../api/client";
 import {
   formatHitCount,
   getAuditActionLabel,
@@ -746,6 +750,9 @@ function uniqueValues(values: Array<string | undefined | null>) {
 
 function userFacingError(error: unknown): string {
   if (isAuthExpiredError(error)) {
+    return "";
+  }
+  if (isBackendUnavailableError(error)) {
     return "";
   }
   if (error instanceof ApiClientError) {

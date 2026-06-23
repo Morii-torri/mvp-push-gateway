@@ -1,6 +1,10 @@
 import React from 'react';
 import type { JSONValue } from '../../api/console';
-import { ApiClientError, isAuthExpiredError } from '../../api/client';
+import {
+  ApiClientError,
+  isAuthExpiredError,
+  isBackendUnavailableError,
+} from '../../api/client';
 import type { MessageLog, ProviderRecord } from '../../data/demoData';
 
 export type ProviderKind = ProviderRecord['providerType'];
@@ -228,6 +232,9 @@ export function providerKindFromString(value: string | undefined): ProviderKind 
 
 export function userFacingError(error: unknown): string {
   if (isAuthExpiredError(error)) {
+    return '';
+  }
+  if (isBackendUnavailableError(error)) {
     return '';
   }
   if (error instanceof ApiClientError) {

@@ -1,18 +1,17 @@
 import {
   BranchesOutlined,
   LockOutlined,
+  QuestionCircleOutlined,
   ReloadOutlined,
   SafetyCertificateOutlined,
   UserOutlined,
 } from "@ant-design/icons";
-import Alert from "antd/es/alert";
 import App from "antd/es/app";
 import Button from "antd/es/button";
 import Checkbox from "antd/es/checkbox";
 import ConfigProvider from "antd/es/config-provider";
 import Form from "antd/es/form";
 import Input from "antd/es/input";
-import Result from "antd/es/result";
 import Space from "antd/es/space";
 import Spin from "antd/es/spin";
 import Typography from "antd/es/typography";
@@ -28,7 +27,9 @@ import {
 
 import {
   AUTH_EXPIRED_EVENT,
+  BACKEND_UNAVAILABLE_EVENT,
   ApiClientError,
+  isBackendUnavailableError,
   isAuthExpiredError,
 } from "../api/client";
 import { authApi, type AdminUser } from "../api/auth";
@@ -40,6 +41,7 @@ type AuthContextValue = {
 };
 
 const AuthContext = createContext<AuthContextValue | null>(null);
+export const REMEMBERED_ADMIN_USERNAME_KEY = "mgp_remembered_admin_username";
 export const ADMIN_PASSWORD_MIN_LENGTH = 10;
 export const ADMIN_PASSWORD_MAX_LENGTH = 128;
 export const adminPasswordRules = [
@@ -96,13 +98,19 @@ export function AuthGate({ children }: { children: ReactNode }) {
   const { message } = App.useApp();
   const [mode, setMode] = useState<AuthMode>("checking");
   const [admin, setAdmin] = useState<AdminUser | null>(null);
-  const [errorText, setErrorText] = useState("");
+  const [, setErrorText] = useState("");
 
-  const redirectToLogin = () => {
+  const redirectToLogin = useCallback(() => {
     setAdmin(null);
     setErrorText("");
     setMode("login");
-  };
+  }, []);
+
+  const showBackendUnavailable = useCallback((event?: Event) => {
+    setAdmin(null);
+    setErrorText(backendUnavailableEventMessage(event));
+    setMode("error");
+  }, []);
 
   const refreshMe = async () => {
     const result = await authApi.me();
@@ -112,10 +120,15 @@ export function AuthGate({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     window.addEventListener(AUTH_EXPIRED_EVENT, redirectToLogin);
+    window.addEventListener(BACKEND_UNAVAILABLE_EVENT, showBackendUnavailable);
     return () => {
       window.removeEventListener(AUTH_EXPIRED_EVENT, redirectToLogin);
+      window.removeEventListener(
+        BACKEND_UNAVAILABLE_EVENT,
+        showBackendUnavailable,
+      );
     };
-  }, []);
+  }, [redirectToLogin, showBackendUnavailable]);
 
   useEffect(() => {
     let cancelled = false;
@@ -145,6 +158,10 @@ export function AuthGate({ children }: { children: ReactNode }) {
           redirectToLogin();
           return;
         }
+        if (isBackendUnavailableError(error)) {
+          showBackendUnavailable();
+          return;
+        }
         setErrorText(errorMessage(error));
         setMode("error");
       }
@@ -153,7 +170,7 @@ export function AuthGate({ children }: { children: ReactNode }) {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [redirectToLogin, showBackendUnavailable]);
 
   const logout = async () => {
     await authApi.logout().catch(() => undefined);
@@ -196,9 +213,6 @@ export function AuthGate({ children }: { children: ReactNode }) {
   if (mode === "login") {
     return (
       <AuthPanel title="欢迎登录">
-        {errorText ? (
-          <Alert type="warning" showIcon message={errorText} />
-        ) : null}
         <LoginForm
           onDone={(nextAdmin) => {
             setAdmin(nextAdmin);
@@ -228,14 +242,13 @@ export function AuthGate({ children }: { children: ReactNode }) {
 
   if (mode === "error") {
     return (
-      <div className="auth-screen">
-        <Result
-          status="warning"
-          title="无法连接后端服务"
-          subTitle={errorText || "请确认后端已启动并暴露 /api/v1。"}
-          extra={
-            <Button onClick={() => window.location.reload()}>重新检查</Button>
-          }
+      <div className="auth-screen auth-screen--unavailable">
+        <BackendUnavailableView
+          onRetry={() => window.location.reload()}
+          onReturnLogin={() => {
+            setErrorText("");
+            setMode("login");
+          }}
         />
       </div>
     );
@@ -328,6 +341,40 @@ function SecurityIllustration() {
   );
 }
 
+function BackendUnavailableView({
+  onRetry,
+  onReturnLogin,
+}: {
+  onRetry: () => void;
+  onReturnLogin: () => void;
+}) {
+  return (
+    <section className="auth-unavailable-card">
+      <Typography.Title level={2}>无法连接后端服务</Typography.Title>
+      <Typography.Paragraph className="auth-unavailable-copy">
+        抱歉，当前无法连接到后端服务，请检查网络连接或稍后重试。
+      </Typography.Paragraph>
+      <div className="auth-unavailable-actions">
+        <Button
+          type="primary"
+          size="large"
+          icon={<ReloadOutlined />}
+          onClick={onRetry}
+        >
+          重新检查
+        </Button>
+        <Button size="large" icon={<UserOutlined />} onClick={onReturnLogin}>
+          返回登录
+        </Button>
+      </div>
+      <div className="auth-unavailable-hint">
+        <QuestionCircleOutlined />
+        <span>如问题持续存在，请联系管理员。</span>
+      </div>
+    </section>
+  );
+}
+
 function SetupForm({ onDone }: { onDone: () => void }) {
   const { message } = App.useApp();
   const [form] = Form.useForm();
@@ -414,6 +461,7 @@ function LoginForm({ onDone }: { onDone: (admin: AdminUser) => void }) {
     captcha_id: string;
     image_data_url: string;
   } | null>(null);
+  const rememberedUsername = useMemo(() => readRememberedAdminUsername(), []);
 
   const refreshCaptcha = useCallback(async () => {
     setCaptchaLoading(true);
@@ -442,7 +490,7 @@ function LoginForm({ onDone }: { onDone: (admin: AdminUser) => void }) {
       layout="vertical"
       className="mg-login-form"
       requiredMark={false}
-      initialValues={{ remember: true }}
+      initialValues={{ remember: true, username: rememberedUsername }}
       onFinish={async (values) => {
         if (!captcha?.captcha_id) {
           message.error("请先获取验证码");
@@ -456,6 +504,10 @@ function LoginForm({ onDone }: { onDone: (admin: AdminUser) => void }) {
             captcha_id: captcha.captcha_id,
             captcha_code: values.captcha_code,
           });
+          writeRememberedAdminUsername(
+            values.username,
+            values.remember === true,
+          );
           onDone(result.admin);
         } catch (error) {
           showAuthError(message, error);
@@ -627,6 +679,9 @@ function errorMessage(error: unknown): string {
   if (isAuthExpiredError(error)) {
     return "";
   }
+  if (isBackendUnavailableError(error)) {
+    return "";
+  }
   if (error instanceof ApiClientError) {
     return error.userMessage;
   }
@@ -644,4 +699,58 @@ function showAuthError(
   if (text) {
     messageApi.error(text);
   }
+}
+
+export function readRememberedAdminUsername(storage = browserLocalStorage()) {
+  if (!storage) {
+    return "";
+  }
+  try {
+    return storage.getItem(REMEMBERED_ADMIN_USERNAME_KEY) ?? "";
+  } catch {
+    return "";
+  }
+}
+
+export function writeRememberedAdminUsername(
+  username: string | undefined,
+  remember: boolean,
+  storage = browserLocalStorage(),
+) {
+  if (!storage) {
+    return;
+  }
+  try {
+    if (remember) {
+      storage.setItem(
+        REMEMBERED_ADMIN_USERNAME_KEY,
+        String(username ?? "").trim(),
+      );
+    } else {
+      storage.removeItem(REMEMBERED_ADMIN_USERNAME_KEY);
+    }
+  } catch {
+    // Some browsers block localStorage in private or hardened contexts.
+  }
+}
+
+function browserLocalStorage(): Storage | null {
+  if (typeof window === "undefined") {
+    return null;
+  }
+  try {
+    return window.localStorage ?? null;
+  } catch {
+    return null;
+  }
+}
+
+function backendUnavailableEventMessage(event?: Event) {
+  if (event instanceof CustomEvent) {
+    const message = event.detail?.message;
+    if (typeof message === "string" && message.trim()) {
+      return message;
+    }
+  }
+  return "如问题持续存在，请联系管理员。";
 }

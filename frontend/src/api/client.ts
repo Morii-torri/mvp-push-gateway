@@ -1,6 +1,7 @@
 export const API_BASE_PATH = '/api/v1';
 export const ADMIN_TOKEN_KEY = 'mgp_admin_token';
 export const AUTH_EXPIRED_EVENT = 'mgp-auth-expired';
+export const BACKEND_UNAVAILABLE_EVENT = 'mgp-backend-unavailable';
 const CSRF_COOKIE_NAME = 'mgp_csrf_token';
 const CSRF_HEADER_NAME = 'X-MGP-CSRF-Token';
 
@@ -24,14 +25,21 @@ export class ApiClientError extends Error {
   readonly code: string;
   readonly userMessage: string;
   readonly authExpired: boolean;
+  readonly backendUnavailable: boolean;
 
-  constructor(status: number, code: string, message: string, options: { authExpired?: boolean } = {}) {
+  constructor(
+    status: number,
+    code: string,
+    message: string,
+    options: { authExpired?: boolean; backendUnavailable?: boolean } = {},
+  ) {
     super(message);
     this.name = 'ApiClientError';
     this.status = status;
     this.code = code;
     this.userMessage = message || fallbackErrorMessage(status);
     this.authExpired = options.authExpired === true;
+    this.backendUnavailable = options.backendUnavailable === true;
   }
 }
 
@@ -70,23 +78,33 @@ export async function apiRequest<T>(path: string, options: ApiRequestOptions = {
     }
   }
 
-  const response = await fetcher(normalizeApiPath(path), {
-    ...init,
-    method,
-    credentials: init.credentials ?? 'same-origin',
-    headers,
-    body: requestBody,
-  });
+  let response: Response;
+  try {
+    response = await fetcher(normalizeApiPath(path), {
+      ...init,
+      method,
+      credentials: init.credentials ?? 'same-origin',
+      headers,
+      body: requestBody,
+    });
+  } catch {
+    const error = new ApiClientError(0, 'MGP-NETWORK-000', fallbackErrorMessage(0), {
+      backendUnavailable: true,
+    });
+    notifyBackendUnavailable(error.userMessage);
+    throw error;
+  }
 
   if (!response.ok) {
     const authExpired = auth && response.status === 401;
-    const returnToLogin = authExpired || isBackendGatewayFailure(response.status);
-    const error = await parseError(response, returnToLogin);
-    if (response.status === 401 || returnToLogin) {
+    const backendUnavailable = isBackendGatewayFailure(response.status);
+    const error = await parseError(response, authExpired, backendUnavailable);
+    if (authExpired) {
       tokenStore.clear();
-      if (returnToLogin) {
-        notifyAuthExpired();
-      }
+      notifyAuthExpired();
+    }
+    if (backendUnavailable) {
+      notifyBackendUnavailable(error.userMessage);
     }
     throw error;
   }
@@ -139,11 +157,20 @@ export function normalizeApiPath(path: string): string {
     : `${API_BASE_PATH}${normalizedPath}`;
 }
 
-async function parseError(response: Response, authExpired = false): Promise<ApiClientError> {
+async function parseError(
+  response: Response,
+  authExpired = false,
+  backendUnavailable = false,
+): Promise<ApiClientError> {
   const body = await safeJSON<BackendErrorBody>(response);
   const code = body?.error?.code ?? `HTTP-${response.status}`;
-  const message = authExpired ? fallbackErrorMessage(response.status) : (body?.error?.message ?? fallbackErrorMessage(response.status));
-  return new ApiClientError(response.status, code, message, { authExpired });
+  const message = authExpired || backendUnavailable
+    ? fallbackErrorMessage(response.status)
+    : (body?.error?.message ?? fallbackErrorMessage(response.status));
+  return new ApiClientError(response.status, code, message, {
+    authExpired,
+    backendUnavailable,
+  });
 }
 
 async function safeJSON<T>(response: Response): Promise<T | null> {
@@ -159,6 +186,9 @@ async function safeJSON<T>(response: Response): Promise<T | null> {
 }
 
 function fallbackErrorMessage(status: number): string {
+  if (status === 0) {
+    return '如问题持续存在，请联系管理员。';
+  }
   if (status === 400) {
     return '请求参数不合法';
   }
@@ -178,13 +208,17 @@ function fallbackErrorMessage(status: number): string {
     return '请求过于频繁，请稍后重试';
   }
   if (isBackendGatewayFailure(status)) {
-    return '请重新登录';
+    return '如问题持续存在，请联系管理员。';
   }
   return '请求失败，请稍后重试';
 }
 
 export function isAuthExpiredError(error: unknown): error is ApiClientError {
   return error instanceof ApiClientError && error.authExpired;
+}
+
+export function isBackendUnavailableError(error: unknown): error is ApiClientError {
+  return error instanceof ApiClientError && error.backendUnavailable;
 }
 
 function isBackendGatewayFailure(status: number): boolean {
@@ -196,4 +230,15 @@ function notifyAuthExpired() {
     return;
   }
   window.dispatchEvent(new CustomEvent(AUTH_EXPIRED_EVENT));
+}
+
+function notifyBackendUnavailable(message: string) {
+  if (typeof window === 'undefined' || typeof window.dispatchEvent !== 'function') {
+    return;
+  }
+  window.dispatchEvent(
+    new CustomEvent(BACKEND_UNAVAILABLE_EVENT, {
+      detail: { message },
+    }),
+  );
 }
